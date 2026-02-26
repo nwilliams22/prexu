@@ -1,0 +1,189 @@
+/**
+ * Plex library API functions.
+ *
+ * All functions take serverUri + serverToken explicitly and delegate
+ * to the existing serverFetch helper from plex-api.ts.
+ */
+
+import { serverFetch } from "./plex-api";
+import type {
+  LibrarySection,
+  PlexMediaContainer,
+  PlexMediaItem,
+  PaginatedResult,
+  PlexHub,
+} from "../types/library";
+
+// ── JSON fetch helper ──
+
+async function fetchJson<T>(
+  serverUri: string,
+  serverToken: string,
+  path: string
+): Promise<T> {
+  const response = await serverFetch(serverUri, serverToken, path);
+  if (!response.ok) {
+    throw new Error(
+      `Plex API error: ${response.status} ${response.statusText}`
+    );
+  }
+  return response.json() as Promise<T>;
+}
+
+// ── Library Sections ──
+
+export async function getLibrarySections(
+  serverUri: string,
+  serverToken: string
+): Promise<LibrarySection[]> {
+  const data = await fetchJson<PlexMediaContainer<never>>(
+    serverUri,
+    serverToken,
+    "/library/sections"
+  );
+  return data.MediaContainer.Directory ?? [];
+}
+
+// ── Library Items (paginated) ──
+
+export async function getLibraryItems(
+  serverUri: string,
+  serverToken: string,
+  sectionId: string,
+  options: {
+    start?: number;
+    size?: number;
+    sort?: string;
+    type?: number;
+  } = {}
+): Promise<PaginatedResult<PlexMediaItem>> {
+  const params = new URLSearchParams();
+  if (options.start !== undefined)
+    params.set("X-Plex-Container-Start", String(options.start));
+  if (options.size !== undefined)
+    params.set("X-Plex-Container-Size", String(options.size));
+  if (options.sort) params.set("sort", options.sort);
+  if (options.type) params.set("type", String(options.type));
+
+  const query = params.toString();
+  const path = `/library/sections/${sectionId}/all${query ? `?${query}` : ""}`;
+
+  const data = await fetchJson<PlexMediaContainer<PlexMediaItem>>(
+    serverUri,
+    serverToken,
+    path
+  );
+
+  const mc = data.MediaContainer;
+  const items = mc.Metadata ?? [];
+  const totalSize = mc.totalSize ?? mc.size;
+  const offset = mc.offset ?? 0;
+
+  return {
+    items,
+    totalSize,
+    offset,
+    hasMore: offset + items.length < totalSize,
+  };
+}
+
+// ── Item Detail ──
+
+export async function getItemMetadata<T extends PlexMediaItem>(
+  serverUri: string,
+  serverToken: string,
+  ratingKey: string
+): Promise<T> {
+  const data = await fetchJson<PlexMediaContainer<T>>(
+    serverUri,
+    serverToken,
+    `/library/metadata/${ratingKey}`
+  );
+  const items = data.MediaContainer.Metadata;
+  if (!items || items.length === 0) {
+    throw new Error(`No metadata found for ratingKey ${ratingKey}`);
+  }
+  return items[0];
+}
+
+// ── Children (seasons of show, episodes of season) ──
+
+export async function getItemChildren<T extends PlexMediaItem>(
+  serverUri: string,
+  serverToken: string,
+  ratingKey: string
+): Promise<T[]> {
+  const data = await fetchJson<PlexMediaContainer<T>>(
+    serverUri,
+    serverToken,
+    `/library/metadata/${ratingKey}/children`
+  );
+  return data.MediaContainer.Metadata ?? [];
+}
+
+// ── Recently Added ──
+
+export async function getRecentlyAdded(
+  serverUri: string,
+  serverToken: string,
+  limit: number = 50
+): Promise<PlexMediaItem[]> {
+  const data = await fetchJson<PlexMediaContainer<PlexMediaItem>>(
+    serverUri,
+    serverToken,
+    `/library/recentlyAdded?X-Plex-Container-Size=${limit}`
+  );
+  return data.MediaContainer.Metadata ?? [];
+}
+
+// ── On Deck / Continue Watching ──
+
+export async function getOnDeck(
+  serverUri: string,
+  serverToken: string
+): Promise<PlexMediaItem[]> {
+  const data = await fetchJson<PlexMediaContainer<PlexMediaItem>>(
+    serverUri,
+    serverToken,
+    "/library/onDeck"
+  );
+  return data.MediaContainer.Metadata ?? [];
+}
+
+// ── Search ──
+
+export async function searchLibrary(
+  serverUri: string,
+  serverToken: string,
+  query: string,
+  limit: number = 10
+): Promise<PlexHub[]> {
+  const params = new URLSearchParams({ query, limit: String(limit) });
+  const data = await fetchJson<PlexMediaContainer<never>>(
+    serverUri,
+    serverToken,
+    `/hubs/search?${params.toString()}`
+  );
+  return data.MediaContainer.Hub ?? [];
+}
+
+// ── Image URL Construction ──
+
+export function getImageUrl(
+  serverUri: string,
+  serverToken: string,
+  imagePath: string,
+  width: number,
+  height: number
+): string {
+  if (!imagePath) return "";
+  const params = new URLSearchParams({
+    url: imagePath,
+    width: String(width),
+    height: String(height),
+    minSize: "1",
+    upscale: "1",
+    "X-Plex-Token": serverToken,
+  });
+  return `${serverUri}/photo/:/transcode?${params.toString()}`;
+}

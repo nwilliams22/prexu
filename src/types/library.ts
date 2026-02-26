@@ -1,0 +1,198 @@
+// ── Library Section (from /library/sections) ──
+
+export type LibraryType = "movie" | "show" | "artist" | "photo";
+
+export interface LibrarySection {
+  key: string;
+  title: string;
+  type: LibraryType;
+  agent: string;
+  scanner: string;
+  thumb: string;
+  art: string;
+  updatedAt: number;
+}
+
+// ── Shared sub-types ──
+
+export interface PlexTag {
+  tag: string;
+}
+
+export interface PlexRole {
+  tag: string;
+  role: string;
+  thumb?: string;
+}
+
+export interface PlexMediaPart {
+  id: number;
+  key: string;
+  duration: number;
+  file: string;
+  size: number;
+  container: string;
+}
+
+export interface PlexMediaInfo {
+  id: number;
+  duration: number;
+  bitrate: number;
+  videoResolution: string;
+  videoCodec: string;
+  audioCodec: string;
+  audioChannels: number;
+  Part?: PlexMediaPart[];
+}
+
+// ── Base media item ──
+
+export interface PlexMediaItem {
+  ratingKey: string;
+  key: string;
+  type: string;
+  title: string;
+  summary: string;
+  thumb: string;
+  art: string;
+  addedAt: number;
+  updatedAt: number;
+}
+
+// ── Movies ──
+
+export interface PlexMovie extends PlexMediaItem {
+  type: "movie";
+  year: number;
+  rating: number;
+  audienceRating: number;
+  contentRating: string;
+  duration: number;
+  tagline: string;
+  studio: string;
+  viewOffset?: number;
+  viewCount?: number;
+  lastViewedAt?: number;
+  Genre?: PlexTag[];
+  Director?: PlexTag[];
+  Writer?: PlexTag[];
+  Role?: PlexRole[];
+  Media?: PlexMediaInfo[];
+}
+
+// ── TV Shows ──
+
+export interface PlexShow extends PlexMediaItem {
+  type: "show";
+  year: number;
+  rating: number;
+  audienceRating: number;
+  contentRating: string;
+  childCount: number;
+  leafCount: number;
+  viewedLeafCount: number;
+  studio: string;
+  Genre?: PlexTag[];
+  Role?: PlexRole[];
+}
+
+export interface PlexSeason extends PlexMediaItem {
+  type: "season";
+  index: number;
+  parentRatingKey: string;
+  parentTitle: string;
+  leafCount: number;
+  viewedLeafCount: number;
+  parentThumb: string;
+}
+
+export interface PlexEpisode extends PlexMediaItem {
+  type: "episode";
+  index: number;
+  parentIndex: number;
+  parentRatingKey: string;
+  grandparentRatingKey: string;
+  grandparentTitle: string;
+  grandparentThumb: string;
+  grandparentArt: string;
+  parentTitle: string;
+  year: number;
+  contentRating: string;
+  duration: number;
+  viewOffset?: number;
+  viewCount?: number;
+  originallyAvailableAt: string;
+  Media?: PlexMediaInfo[];
+  Role?: PlexRole[];
+  Director?: PlexTag[];
+  Writer?: PlexTag[];
+}
+
+// ── Music ──
+
+export interface PlexArtist extends PlexMediaItem {
+  type: "artist";
+  Genre?: PlexTag[];
+}
+
+export interface PlexAlbum extends PlexMediaItem {
+  type: "album";
+  year: number;
+  parentTitle: string;
+  parentRatingKey: string;
+  parentThumb: string;
+  leafCount: number;
+  Genre?: PlexTag[];
+}
+
+// ── API Response Wrappers ──
+
+export interface PlexMediaContainer<T> {
+  MediaContainer: {
+    size: number;
+    totalSize?: number;
+    offset?: number;
+    Metadata?: T[];
+    Directory?: LibrarySection[];
+    Hub?: PlexHub[];
+  };
+}
+
+export interface PlexHub {
+  hubKey: string;
+  key: string;
+  title: string;
+  type: string;
+  hubIdentifier: string;
+  size: number;
+  more: boolean;
+  Metadata?: PlexMediaItem[];
+}
+
+// ── Grouped Recently Added (for dashboard) ──
+
+export interface GroupedRecentItem {
+  kind: "movie" | "show-group";
+  representativeItem: PlexEpisode | PlexMovie;
+  groupKey: string;
+  title: string;
+  thumb: string;
+  episodes: PlexEpisode[];
+  episodeCount: number;
+}
+
+// ── Pagination ──
+
+export interface PaginatedResult<T> {
+  items: T[];
+  totalSize: number;
+  offset: number;
+  hasMore: boolean;
+}
+
+// ── Sort ──
+
+export interface SortOption {
+  label: string;
+  value: string;
+}

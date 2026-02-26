@@ -1,0 +1,670 @@
+import { useState, useEffect } from "react";
+import { useParams, useNavigate } from "react-router-dom";
+import { useAuth } from "../hooks/useAuth";
+import {
+  getItemMetadata,
+  getItemChildren,
+  getImageUrl,
+} from "../services/plex-library";
+import type {
+  PlexMediaItem,
+  PlexMovie,
+  PlexShow,
+  PlexSeason,
+  PlexEpisode,
+  PlexTag,
+  PlexRole,
+} from "../types/library";
+
+function ItemDetail() {
+  const { ratingKey } = useParams<{ ratingKey: string }>();
+  const { server } = useAuth();
+  const navigate = useNavigate();
+  const [item, setItem] = useState<PlexMediaItem | null>(null);
+  const [seasons, setSeasons] = useState<PlexSeason[]>([]);
+  const [episodes, setEpisodes] = useState<PlexEpisode[]>([]);
+  const [selectedSeason, setSelectedSeason] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Fetch item metadata
+  useEffect(() => {
+    if (!server || !ratingKey) return;
+    let cancelled = false;
+
+    (async () => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const metadata = await getItemMetadata<PlexMediaItem>(
+          server.uri,
+          server.accessToken,
+          ratingKey
+        );
+        if (!cancelled) {
+          setItem(metadata);
+
+          // If it's a show, also fetch seasons
+          if (metadata.type === "show") {
+            const seasonList = await getItemChildren<PlexSeason>(
+              server.uri,
+              server.accessToken,
+              ratingKey
+            );
+            if (!cancelled) {
+              setSeasons(seasonList);
+              // Auto-select first season
+              if (seasonList.length > 0) {
+                setSelectedSeason(seasonList[0].ratingKey);
+              }
+            }
+          }
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(
+            err instanceof Error ? err.message : "Failed to load item"
+          );
+        }
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [server, ratingKey]);
+
+  // Fetch episodes when season changes
+  useEffect(() => {
+    if (!server || !selectedSeason) return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const epList = await getItemChildren<PlexEpisode>(
+          server.uri,
+          server.accessToken,
+          selectedSeason
+        );
+        if (!cancelled) setEpisodes(epList);
+      } catch {
+        // Silently fail for episode fetch
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [server, selectedSeason]);
+
+  if (!server) return null;
+
+  const artUrl = (path: string) =>
+    getImageUrl(server.uri, server.accessToken, path, 1920, 1080);
+  const posterUrl = (path: string) =>
+    getImageUrl(server.uri, server.accessToken, path, 300, 450);
+  const episodeThumbUrl = (path: string) =>
+    getImageUrl(server.uri, server.accessToken, path, 400, 225);
+
+  const formatDuration = (ms: number): string => {
+    const mins = Math.round(ms / 60000);
+    if (mins < 60) return `${mins}m`;
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  };
+
+  const renderTags = (tags: PlexTag[] | undefined): string =>
+    tags?.map((t) => t.tag).join(", ") ?? "";
+
+  if (isLoading) {
+    return (
+      <div style={styles.loadingContainer}>
+        <div className="loading-spinner" />
+      </div>
+    );
+  }
+
+  if (error || !item) {
+    return (
+      <div style={styles.container}>
+        <p style={styles.error}>{error ?? "Item not found"}</p>
+        <button onClick={() => navigate(-1)} style={styles.backButton}>
+          Go Back
+        </button>
+      </div>
+    );
+  }
+
+  // ── Movie Detail ──
+  if (item.type === "movie") {
+    const movie = item as PlexMovie;
+    return (
+      <div style={styles.container}>
+        {/* Hero */}
+        <div style={styles.hero}>
+          {movie.art && (
+            <div
+              style={{
+                ...styles.heroArt,
+                backgroundImage: `url(${artUrl(movie.art)})`,
+              }}
+            />
+          )}
+          <div style={styles.heroOverlay} />
+          <div style={styles.heroContent}>
+            <img
+              src={posterUrl(movie.thumb)}
+              alt={movie.title}
+              style={styles.heroPoster}
+            />
+            <div style={styles.heroInfo}>
+              <h1 style={styles.heroTitle}>{movie.title}</h1>
+              <div style={styles.metaRow}>
+                {movie.year && <span>{movie.year}</span>}
+                {movie.contentRating && (
+                  <span style={styles.rating}>{movie.contentRating}</span>
+                )}
+                {movie.duration && <span>{formatDuration(movie.duration)}</span>}
+                {movie.rating > 0 && <span>★ {movie.rating.toFixed(1)}</span>}
+              </div>
+              {movie.Genre && movie.Genre.length > 0 && (
+                <div style={styles.genreRow}>
+                  {movie.Genre.map((g) => (
+                    <span key={g.tag} style={styles.genreTag}>
+                      {g.tag}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {movie.tagline && (
+                <p style={styles.tagline}>{movie.tagline}</p>
+              )}
+              <button style={styles.playButton}>▶ Play</button>
+            </div>
+          </div>
+        </div>
+
+        {/* Summary */}
+        {movie.summary && (
+          <div style={styles.section}>
+            <p style={styles.summary}>{movie.summary}</p>
+          </div>
+        )}
+
+        {/* Cast */}
+        {movie.Role && movie.Role.length > 0 && (
+          <div style={styles.section}>
+            <h3 style={styles.sectionTitle}>Cast</h3>
+            <div style={styles.castGrid}>
+              {movie.Role.slice(0, 12).map((role: PlexRole) => (
+                <div key={`${role.tag}-${role.role}`} style={styles.castItem}>
+                  <span style={styles.castName}>{role.tag}</span>
+                  {role.role && (
+                    <span style={styles.castRole}>{role.role}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Crew */}
+        <div style={styles.section}>
+          {movie.Director && movie.Director.length > 0 && (
+            <p style={styles.crewLine}>
+              <strong>Director:</strong> {renderTags(movie.Director)}
+            </p>
+          )}
+          {movie.Writer && movie.Writer.length > 0 && (
+            <p style={styles.crewLine}>
+              <strong>Writer:</strong> {renderTags(movie.Writer)}
+            </p>
+          )}
+          {movie.studio && (
+            <p style={styles.crewLine}>
+              <strong>Studio:</strong> {movie.studio}
+            </p>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Show Detail ──
+  if (item.type === "show") {
+    const show = item as PlexShow;
+    return (
+      <div style={styles.container}>
+        {/* Hero */}
+        <div style={styles.hero}>
+          {show.art && (
+            <div
+              style={{
+                ...styles.heroArt,
+                backgroundImage: `url(${artUrl(show.art)})`,
+              }}
+            />
+          )}
+          <div style={styles.heroOverlay} />
+          <div style={styles.heroContent}>
+            <img
+              src={posterUrl(show.thumb)}
+              alt={show.title}
+              style={styles.heroPoster}
+            />
+            <div style={styles.heroInfo}>
+              <h1 style={styles.heroTitle}>{show.title}</h1>
+              <div style={styles.metaRow}>
+                {show.year && <span>{show.year}</span>}
+                {show.contentRating && (
+                  <span style={styles.rating}>{show.contentRating}</span>
+                )}
+                <span>
+                  {show.childCount} season{show.childCount !== 1 ? "s" : ""}
+                </span>
+                <span>{show.leafCount} episodes</span>
+                {show.rating > 0 && <span>★ {show.rating.toFixed(1)}</span>}
+              </div>
+              {show.Genre && show.Genre.length > 0 && (
+                <div style={styles.genreRow}>
+                  {show.Genre.map((g) => (
+                    <span key={g.tag} style={styles.genreTag}>
+                      {g.tag}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Summary */}
+        {show.summary && (
+          <div style={styles.section}>
+            <p style={styles.summary}>{show.summary}</p>
+          </div>
+        )}
+
+        {/* Season selector + Episode list */}
+        <div style={styles.section}>
+          <div style={styles.seasonTabs}>
+            {seasons.map((season) => (
+              <button
+                key={season.ratingKey}
+                onClick={() => setSelectedSeason(season.ratingKey)}
+                style={{
+                  ...styles.seasonTab,
+                  ...(selectedSeason === season.ratingKey
+                    ? styles.seasonTabActive
+                    : {}),
+                }}
+              >
+                {season.title}
+              </button>
+            ))}
+          </div>
+
+          <div style={styles.episodeList}>
+            {episodes.map((ep) => (
+              <button
+                key={ep.ratingKey}
+                onClick={() => navigate(`/item/${ep.ratingKey}`)}
+                style={styles.episodeItem}
+              >
+                <img
+                  src={episodeThumbUrl(ep.thumb)}
+                  alt={ep.title}
+                  style={styles.episodeThumb}
+                  loading="lazy"
+                />
+                <div style={styles.episodeInfo}>
+                  <span style={styles.episodeNumber}>
+                    E{String(ep.index).padStart(2, "0")}
+                  </span>
+                  <span style={styles.episodeTitle}>{ep.title}</span>
+                  <div style={styles.episodeMeta}>
+                    {ep.originallyAvailableAt && (
+                      <span>{ep.originallyAvailableAt}</span>
+                    )}
+                    {ep.duration && (
+                      <span>{formatDuration(ep.duration)}</span>
+                    )}
+                  </div>
+                  {ep.summary && (
+                    <p style={styles.episodeSummary}>{ep.summary}</p>
+                  )}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Episode Detail ──
+  if (item.type === "episode") {
+    const ep = item as PlexEpisode;
+    return (
+      <div style={styles.container}>
+        <div style={styles.hero}>
+          {(ep.grandparentArt || ep.art) && (
+            <div
+              style={{
+                ...styles.heroArt,
+                backgroundImage: `url(${artUrl(ep.grandparentArt || ep.art)})`,
+              }}
+            />
+          )}
+          <div style={styles.heroOverlay} />
+          <div style={styles.heroContent}>
+            <img
+              src={episodeThumbUrl(ep.thumb)}
+              alt={ep.title}
+              style={styles.episodeHeroThumb}
+            />
+            <div style={styles.heroInfo}>
+              <button
+                onClick={() => navigate(`/item/${ep.grandparentRatingKey}`)}
+                style={styles.showLink}
+              >
+                {ep.grandparentTitle}
+              </button>
+              <h1 style={styles.heroTitle}>{ep.title}</h1>
+              <div style={styles.metaRow}>
+                <span>
+                  S{String(ep.parentIndex).padStart(2, "0")}E
+                  {String(ep.index).padStart(2, "0")}
+                </span>
+                {ep.originallyAvailableAt && (
+                  <span>{ep.originallyAvailableAt}</span>
+                )}
+                {ep.duration && <span>{formatDuration(ep.duration)}</span>}
+                {ep.contentRating && (
+                  <span style={styles.rating}>{ep.contentRating}</span>
+                )}
+              </div>
+              <button style={styles.playButton}>▶ Play</button>
+            </div>
+          </div>
+        </div>
+
+        {ep.summary && (
+          <div style={styles.section}>
+            <p style={styles.summary}>{ep.summary}</p>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── Fallback for other types ──
+  return (
+    <div style={styles.container}>
+      <h2>{item.title}</h2>
+      <p style={{ color: "var(--text-secondary)" }}>
+        Detail view for type "{item.type}" is not yet supported.
+      </p>
+      <button onClick={() => navigate(-1)} style={styles.backButton}>
+        Go Back
+      </button>
+    </div>
+  );
+}
+
+const styles: Record<string, React.CSSProperties> = {
+  container: {
+    paddingBottom: "2rem",
+  },
+  loadingContainer: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "4rem",
+  },
+  error: {
+    color: "var(--error)",
+    padding: "1.5rem",
+  },
+  backButton: {
+    background: "var(--bg-card)",
+    color: "var(--text-primary)",
+    padding: "0.5rem 1rem",
+    borderRadius: "6px",
+    fontSize: "0.9rem",
+    margin: "1rem 1.5rem",
+    border: "1px solid var(--border)",
+  },
+
+  // Hero
+  hero: {
+    position: "relative",
+    minHeight: "320px",
+    display: "flex",
+    alignItems: "flex-end",
+    overflow: "hidden",
+  },
+  heroArt: {
+    position: "absolute",
+    inset: 0,
+    backgroundSize: "cover",
+    backgroundPosition: "center top",
+    filter: "blur(2px) brightness(0.4)",
+  },
+  heroOverlay: {
+    position: "absolute",
+    inset: 0,
+    background:
+      "linear-gradient(to top, var(--bg-primary) 0%, transparent 60%)",
+  },
+  heroContent: {
+    position: "relative",
+    display: "flex",
+    gap: "1.5rem",
+    padding: "2rem 1.5rem 1.5rem",
+    width: "100%",
+    zIndex: 1,
+  },
+  heroPoster: {
+    width: "180px",
+    borderRadius: "8px",
+    boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
+    flexShrink: 0,
+    objectFit: "cover",
+  },
+  episodeHeroThumb: {
+    width: "280px",
+    borderRadius: "8px",
+    boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
+    flexShrink: 0,
+    objectFit: "cover",
+  },
+  heroInfo: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "0.5rem",
+    justifyContent: "flex-end",
+  },
+  heroTitle: {
+    fontSize: "1.75rem",
+    fontWeight: 700,
+    lineHeight: 1.2,
+  },
+  metaRow: {
+    display: "flex",
+    gap: "0.75rem",
+    fontSize: "0.85rem",
+    color: "var(--text-secondary)",
+    flexWrap: "wrap",
+  },
+  rating: {
+    border: "1px solid var(--text-secondary)",
+    padding: "0 4px",
+    borderRadius: "3px",
+    fontSize: "0.8rem",
+  },
+  genreRow: {
+    display: "flex",
+    gap: "0.5rem",
+    flexWrap: "wrap",
+  },
+  genreTag: {
+    background: "rgba(255,255,255,0.1)",
+    color: "var(--text-secondary)",
+    fontSize: "0.75rem",
+    padding: "3px 8px",
+    borderRadius: "12px",
+  },
+  tagline: {
+    fontStyle: "italic",
+    color: "var(--text-secondary)",
+    fontSize: "0.9rem",
+  },
+  playButton: {
+    background: "var(--accent)",
+    color: "#000",
+    fontSize: "1rem",
+    fontWeight: 600,
+    padding: "0.6rem 1.5rem",
+    borderRadius: "6px",
+    width: "fit-content",
+    marginTop: "0.5rem",
+  },
+  showLink: {
+    background: "transparent",
+    color: "var(--accent)",
+    fontSize: "0.9rem",
+    padding: 0,
+    textAlign: "left",
+  },
+
+  // Sections
+  section: {
+    padding: "1rem 1.5rem",
+  },
+  sectionTitle: {
+    fontSize: "1.1rem",
+    fontWeight: 600,
+    marginBottom: "0.75rem",
+  },
+  summary: {
+    color: "var(--text-secondary)",
+    fontSize: "0.9rem",
+    lineHeight: 1.6,
+    maxWidth: "800px",
+  },
+
+  // Cast
+  castGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
+    gap: "0.5rem",
+  },
+  castItem: {
+    display: "flex",
+    flexDirection: "column",
+    padding: "0.4rem 0",
+  },
+  castName: {
+    fontSize: "0.85rem",
+    fontWeight: 500,
+  },
+  castRole: {
+    fontSize: "0.75rem",
+    color: "var(--text-secondary)",
+  },
+  crewLine: {
+    fontSize: "0.85rem",
+    color: "var(--text-secondary)",
+    marginBottom: "0.3rem",
+  },
+
+  // Seasons
+  seasonTabs: {
+    display: "flex",
+    gap: "0.25rem",
+    overflowX: "auto",
+    marginBottom: "1rem",
+    paddingBottom: "4px",
+  },
+  seasonTab: {
+    background: "var(--bg-card)",
+    color: "var(--text-secondary)",
+    fontSize: "0.85rem",
+    padding: "0.5rem 1rem",
+    borderRadius: "6px",
+    whiteSpace: "nowrap",
+    border: "1px solid var(--border)",
+    flexShrink: 0,
+  },
+  seasonTabActive: {
+    background: "var(--accent)",
+    color: "#000",
+    borderColor: "var(--accent)",
+    fontWeight: 600,
+  },
+
+  // Episodes
+  episodeList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "0.5rem",
+  },
+  episodeItem: {
+    display: "flex",
+    gap: "1rem",
+    padding: "0.75rem",
+    background: "var(--bg-card)",
+    borderRadius: "8px",
+    border: "1px solid var(--border)",
+    textAlign: "left",
+    color: "var(--text-primary)",
+    width: "100%",
+    transition: "border-color 0.15s",
+  },
+  episodeThumb: {
+    width: "180px",
+    height: "100px",
+    borderRadius: "6px",
+    objectFit: "cover",
+    flexShrink: 0,
+    background: "var(--bg-secondary)",
+  },
+  episodeInfo: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "0.2rem",
+    overflow: "hidden",
+    flex: 1,
+  },
+  episodeNumber: {
+    fontSize: "0.75rem",
+    color: "var(--accent)",
+    fontWeight: 600,
+  },
+  episodeTitle: {
+    fontSize: "0.95rem",
+    fontWeight: 500,
+  },
+  episodeMeta: {
+    display: "flex",
+    gap: "0.75rem",
+    fontSize: "0.8rem",
+    color: "var(--text-secondary)",
+  },
+  episodeSummary: {
+    fontSize: "0.8rem",
+    color: "var(--text-secondary)",
+    lineHeight: 1.4,
+    overflow: "hidden",
+    display: "-webkit-box",
+    WebkitLineClamp: 2,
+    WebkitBoxOrient: "vertical" as never,
+    marginTop: "0.25rem",
+  },
+};
+
+export default ItemDetail;

@@ -1,11 +1,30 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import Login from "./pages/Login";
 import ServerSelect from "./pages/ServerSelect";
-import Home from "./pages/Home";
+import Dashboard from "./pages/Dashboard";
+import LibraryView from "./pages/LibraryView";
+import ItemDetail from "./pages/ItemDetail";
+import SearchResults from "./pages/SearchResults";
+import AppLayout from "./components/AppLayout";
 import { useAuth, useAuthState, AuthProvider } from "./hooks/useAuth";
 
+/** Route guard for unauthenticated routes */
+function PublicRoute({ children }: { children: React.ReactNode }) {
+  const { isAuthenticated } = useAuth();
+  if (isAuthenticated) return <Navigate to="/servers" replace />;
+  return <>{children}</>;
+}
+
+/** Route guard for server selection */
+function ServerRoute({ children }: { children: React.ReactNode }) {
+  const { isAuthenticated, serverSelected } = useAuth();
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  if (serverSelected) return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
 function AppRoutes() {
-  const { isAuthenticated, isLoading, serverSelected } = useAuth();
+  const { isLoading } = useAuth();
 
   if (isLoading) {
     return (
@@ -18,36 +37,35 @@ function AppRoutes() {
 
   return (
     <Routes>
+      {/* Unauthenticated */}
       <Route
         path="/login"
         element={
-          isAuthenticated ? <Navigate to="/servers" replace /> : <Login />
+          <PublicRoute>
+            <Login />
+          </PublicRoute>
         }
       />
+
+      {/* Server selection */}
       <Route
         path="/servers"
         element={
-          !isAuthenticated ? (
-            <Navigate to="/login" replace />
-          ) : serverSelected ? (
-            <Navigate to="/" replace />
-          ) : (
+          <ServerRoute>
             <ServerSelect />
-          )
+          </ServerRoute>
         }
       />
-      <Route
-        path="/"
-        element={
-          !isAuthenticated ? (
-            <Navigate to="/login" replace />
-          ) : !serverSelected ? (
-            <Navigate to="/servers" replace />
-          ) : (
-            <Home />
-          )
-        }
-      />
+
+      {/* Authenticated app shell with sidebar */}
+      <Route element={<AppLayout />}>
+        <Route index element={<Dashboard />} />
+        <Route path="/library/:sectionId" element={<LibraryView />} />
+        <Route path="/item/:ratingKey" element={<ItemDetail />} />
+        <Route path="/search" element={<SearchResults />} />
+      </Route>
+
+      {/* Catch-all */}
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
