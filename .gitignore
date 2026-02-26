@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Rust build output
+src-tauri/target/
+
+# Environment files
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Tauri WIX/NSIS tooling (downloaded during build)
+src-tauri/WixTools/
+src-tauri/NSIS/
