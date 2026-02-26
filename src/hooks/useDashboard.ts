@@ -5,21 +5,54 @@ import { groupRecentlyAdded } from "../utils/groupRecentlyAdded";
 import type { PlexMediaItem, GroupedRecentItem } from "../types/library";
 
 export interface UseDashboardResult {
-  recentlyAdded: GroupedRecentItem[];
+  recentMovies: PlexMediaItem[];
+  recentShows: GroupedRecentItem[];
   onDeck: PlexMediaItem[];
   isLoading: boolean;
   error: string | null;
 }
 
+/** Simple in-memory cache keyed by server URI */
+interface DashboardCache {
+  serverUri: string;
+  recentMovies: PlexMediaItem[];
+  recentShows: GroupedRecentItem[];
+  onDeck: PlexMediaItem[];
+  timestamp: number;
+}
+
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+let cache: DashboardCache | null = null;
+
 export function useDashboard(): UseDashboardResult {
   const { server } = useAuth();
-  const [recentlyAdded, setRecentlyAdded] = useState<GroupedRecentItem[]>([]);
-  const [onDeck, setOnDeck] = useState<PlexMediaItem[]>([]);
+  const [recentMovies, setRecentMovies] = useState<PlexMediaItem[]>(
+    () => cache?.recentMovies ?? []
+  );
+  const [recentShows, setRecentShows] = useState<GroupedRecentItem[]>(
+    () => cache?.recentShows ?? []
+  );
+  const [onDeck, setOnDeck] = useState<PlexMediaItem[]>(
+    () => cache?.onDeck ?? []
+  );
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!server) return;
+
+    // If cache is fresh for this server, use it and skip fetch
+    if (
+      cache &&
+      cache.serverUri === server.uri &&
+      Date.now() - cache.timestamp < CACHE_TTL_MS
+    ) {
+      setRecentMovies(cache.recentMovies);
+      setRecentShows(cache.recentShows);
+      setOnDeck(cache.onDeck);
+      setIsLoading(false);
+      return;
+    }
 
     let cancelled = false;
 
@@ -33,8 +66,23 @@ export function useDashboard(): UseDashboardResult {
         ]);
 
         if (!cancelled) {
-          setRecentlyAdded(groupRecentlyAdded(recentItems));
+          const movies = recentItems.filter((i) => i.type === "movie");
+          const tvItems = recentItems.filter(
+            (i) => i.type === "season" || i.type === "episode"
+          );
+          const shows = groupRecentlyAdded(tvItems);
+
+          setRecentMovies(movies);
+          setRecentShows(shows);
           setOnDeck(deckItems);
+
+          cache = {
+            serverUri: server.uri,
+            recentMovies: movies,
+            recentShows: shows,
+            onDeck: deckItems,
+            timestamp: Date.now(),
+          };
         }
       } catch (err) {
         if (!cancelled) {
@@ -56,5 +104,5 @@ export function useDashboard(): UseDashboardResult {
     };
   }, [server]);
 
-  return { recentlyAdded, onDeck, isLoading, error };
+  return { recentMovies, recentShows, onDeck, isLoading, error };
 }

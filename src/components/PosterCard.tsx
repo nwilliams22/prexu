@@ -128,7 +128,7 @@ const styles: Record<string, React.CSSProperties> = {
     bottom: 0,
     left: 0,
     right: 0,
-    height: "3px",
+    height: "5px",
     background: "rgba(255,255,255,0.2)",
   },
   progressBar: {
