@@ -119,6 +119,29 @@ a:hover {
   display: none;
 }
 
+/* Video player — custom volume slider styling */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.3);
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #e5a00d;
+  margin-top: -4px;
+  cursor: pointer;
+}
+
 /* Screen reader only (accessible labels) */
 .sr-only {
   position: absolute;

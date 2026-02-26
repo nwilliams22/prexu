@@ -25,6 +25,29 @@ export interface PlexRole {
   thumb?: string;
 }
 
+export interface PlexStream {
+  id: number;
+  streamType: number; // 1=video, 2=audio, 3=subtitle
+  codec: string;
+  index: number;
+  displayTitle: string;
+  language?: string;
+  languageCode?: string;
+  selected?: boolean;
+  default?: boolean;
+  forced?: boolean;
+  // Subtitle-specific
+  key?: string; // URL to download external subtitle
+  format?: string; // "srt", "ass", etc.
+  // Audio-specific
+  channels?: number;
+  audioChannelLayout?: string;
+  // Video-specific
+  width?: number;
+  height?: number;
+  bitrate?: number;
+}
+
 export interface PlexMediaPart {
   id: number;
   key: string;
@@ -32,6 +55,7 @@ export interface PlexMediaPart {
   file: string;
   size: number;
   container: string;
+  Stream?: PlexStream[];
 }
 
 export interface PlexMediaInfo {

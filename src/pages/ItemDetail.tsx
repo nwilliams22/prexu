@@ -182,7 +182,12 @@ function ItemDetail() {
               {movie.tagline && (
                 <p style={styles.tagline}>{movie.tagline}</p>
               )}
-              <button style={styles.playButton}>▶ Play</button>
+              <button
+                onClick={() => navigate(`/play/${movie.ratingKey}`)}
+                style={styles.playButton}
+              >
+                ▶ Play
+              </button>
             </div>
           </div>
         </div>
@@ -387,7 +392,12 @@ function ItemDetail() {
                   <span style={styles.rating}>{ep.contentRating}</span>
                 )}
               </div>
-              <button style={styles.playButton}>▶ Play</button>
+              <button
+                onClick={() => navigate(`/play/${ep.ratingKey}`)}
+                style={styles.playButton}
+              >
+                ▶ Play
+              </button>
             </div>
           </div>
         </div>

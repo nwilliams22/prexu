@@ -5,6 +5,7 @@ import Dashboard from "./pages/Dashboard";
 import LibraryView from "./pages/LibraryView";
 import ItemDetail from "./pages/ItemDetail";
 import SearchResults from "./pages/SearchResults";
+import Player from "./pages/Player";
 import AppLayout from "./components/AppLayout";
 import { useAuth, useAuthState, AuthProvider } from "./hooks/useAuth";
 
@@ -56,6 +57,9 @@ function AppRoutes() {
           </ServerRoute>
         }
       />
+
+      {/* Player route — no sidebar/header */}
+      <Route path="/play/:ratingKey" element={<Player />} />
 
       {/* Authenticated app shell with sidebar */}
       <Route element={<AppLayout />}>
