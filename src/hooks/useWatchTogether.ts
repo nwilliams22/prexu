@@ -6,7 +6,9 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
+import { useAuth } from "./useAuth";
 import { watchSync } from "../services/watch-sync";
+import { getPlexUser } from "../services/plex-api";
 import type { UsePlayerResult } from "./usePlayer";
 import type { WatchParticipant } from "../types/watch-together";
 
@@ -35,7 +37,8 @@ export interface UseWatchTogetherResult {
 export function useWatchTogether(
   player: UsePlayerResult,
   sessionId: string | null,
-  isHost: boolean
+  isHost: boolean,
+  relayUrl?: string | null
 ): UseWatchTogetherResult {
   const navigate = useNavigate();
   const location = useLocation();
@@ -59,29 +62,61 @@ export function useWatchTogether(
     localTimestamp: number;
   } | null>(null);
 
+  const { authToken } = useAuth();
   const isInSession = sessionId !== null;
 
-  // ── Join session on mount ──
+  // ── Join session on mount (connect to relay if needed) ──
   useEffect(() => {
     if (!sessionId) return;
 
-    if (!watchSync.isConnected) {
-      setSyncStatus("disconnected");
-      return;
-    }
+    let cancelled = false;
 
-    // If not host, join the session
-    if (!isHost) {
-      watchSync.send({ type: "join_session", session_id: sessionId });
-    }
+    const joinSession = async () => {
+      // If not connected but we have a relay URL (from invite), connect first
+      if (!watchSync.isConnected && relayUrl && authToken) {
+        try {
+          const user = await getPlexUser(authToken);
+          watchSync.connect(relayUrl, user.username, user.thumb);
 
-    setSyncStatus("synced");
+          // Wait briefly for connection to establish
+          await new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error("Connection timeout")), 5000);
+            const unsub = watchSync.on("connected", () => {
+              clearTimeout(timeout);
+              unsub();
+              resolve();
+            });
+          });
+        } catch (err) {
+          console.error("[useWatchTogether] Failed to connect via invite relay URL:", err);
+          if (!cancelled) setSyncStatus("disconnected");
+          return;
+        }
+      }
+
+      if (cancelled) return;
+
+      if (!watchSync.isConnected) {
+        setSyncStatus("disconnected");
+        return;
+      }
+
+      // If not host, join the session
+      if (!isHost) {
+        watchSync.send({ type: "join_session", session_id: sessionId });
+      }
+
+      setSyncStatus("synced");
+    };
+
+    joinSession();
 
     return () => {
+      cancelled = true;
       // Leave session on unmount (navigating away from player)
       watchSync.send({ type: "leave_session" });
     };
-  }, [sessionId, isHost]);
+  }, [sessionId, isHost, relayUrl, authToken]);
 
   // ── Broadcast local play/pause changes ──
   useEffect(() => {

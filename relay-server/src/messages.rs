@@ -27,6 +27,7 @@ pub enum ClientMessage {
         media_type: String,
         sender_username: String,
         sender_thumb: String,
+        relay_url: String,
     },
     Play {
         current_time: f64,
@@ -90,6 +91,7 @@ pub enum ServerMessage {
         sender_username: String,
         sender_thumb: String,
         sent_at: u64,
+        relay_url: String,
     },
     PendingInvites {
         invites: Vec<PendingInviteInfo>,
@@ -142,4 +144,5 @@ pub struct PendingInviteInfo {
     pub sender_username: String,
     pub sender_thumb: String,
     pub sent_at: u64,
+    pub relay_url: String,
 }

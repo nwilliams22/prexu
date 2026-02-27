@@ -80,7 +80,7 @@ function AppRoutes() {
 
 function App() {
   const auth = useAuthState();
-  const inviteState = useInviteState(auth.authToken);
+  const inviteState = useInviteState(auth.authToken, auth.server?.uri ?? null);
 
   return (
     <AuthProvider value={auth}>

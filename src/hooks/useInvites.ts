@@ -28,7 +28,10 @@ export function useInvites(): InviteContextValue {
  * Manages relay connection and invite state at the app level.
  * Returns a value suitable for InviteProvider.
  */
-export function useInviteState(authToken: string | null): InviteContextValue {
+export function useInviteState(
+  authToken: string | null,
+  serverUri: string | null = null
+): InviteContextValue {
   const [invites, setInvites] = useState<WatchInvite[]>([]);
   const [isRelayConnected, setIsRelayConnected] = useState(false);
 
@@ -38,14 +41,14 @@ export function useInviteState(authToken: string | null): InviteContextValue {
     try {
       const [user, relayUrl] = await Promise.all([
         getPlexUser(authToken),
-        getRelayUrl(),
+        getRelayUrl(serverUri),
       ]);
 
       watchSync.connect(relayUrl, user.username, user.thumb);
     } catch (err) {
       console.error("[useInvites] Failed to connect to relay:", err);
     }
-  }, [authToken]);
+  }, [authToken, serverUri]);
 
   const dismissInvite = useCallback((sessionId: string) => {
     setInvites((prev) => prev.filter((inv) => inv.sessionId !== sessionId));
@@ -89,6 +92,7 @@ export function useInviteState(authToken: string | null): InviteContextValue {
           senderUsername: data.sender_username as string,
           senderThumb: data.sender_thumb as string,
           sentAt: data.sent_at as number,
+          relayUrl: (data.relay_url as string) ?? "",
         };
         setInvites((prev) => {
           // Avoid duplicate invites for same session
@@ -110,6 +114,7 @@ export function useInviteState(authToken: string | null): InviteContextValue {
             senderUsername: inv.sender_username as string,
             senderThumb: inv.sender_thumb as string,
             sentAt: inv.sent_at as number,
+            relayUrl: (inv.relay_url as string) ?? "",
           })
         );
         setInvites((prev) => {

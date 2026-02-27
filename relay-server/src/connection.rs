@@ -179,6 +179,7 @@ fn handle_client_message(
             media_type,
             sender_username,
             sender_thumb,
+            relay_url,
         } => {
             session::handle_invite(
                 state,
@@ -189,6 +190,7 @@ fn handle_client_message(
                 &media_type,
                 &sender_username,
                 &sender_thumb,
+                &relay_url,
             );
         }
 

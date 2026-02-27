@@ -28,7 +28,8 @@ function Player() {
   // Watch Together session from URL query params
   const sessionId = searchParams.get("session");
   const isHost = searchParams.get("host") === "true";
-  const wt = useWatchTogether(player, sessionId, isHost);
+  const relayUrl = searchParams.get("relay");
+  const wt = useWatchTogether(player, sessionId, isHost, relayUrl);
 
   const { server } = useAuth();
 

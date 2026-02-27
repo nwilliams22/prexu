@@ -16,7 +16,7 @@ const STORAGE_KEYS = {
   RELAY_URL: "prexu_relay_url",
 } as const;
 
-const DEFAULT_RELAY_URL = "ws://localhost:8080/ws";
+const DEFAULT_RELAY_PORT = 9847;
 
 // For now, use localStorage as the storage backend.
 // When tauri-plugin-store is integrated with the Rust backend,
@@ -83,13 +83,49 @@ export async function clearServer(): Promise<void> {
 
 // ── Relay Server URL ──
 
-/** Get stored relay server URL */
-export async function getRelayUrl(): Promise<string> {
-  const url = await storage.get<string>(STORAGE_KEYS.RELAY_URL);
-  return url ?? DEFAULT_RELAY_URL;
+/**
+ * Derive the relay URL from a Plex server URI.
+ * Since the relay runs on the same machine as Plex, we extract the hostname
+ * from the Plex server address and use the default relay port.
+ * This means friends don't need to configure anything — it "just works".
+ */
+export function deriveRelayUrl(serverUri: string): string {
+  try {
+    const url = new URL(serverUri);
+    return `ws://${url.hostname}:${DEFAULT_RELAY_PORT}/ws`;
+  } catch {
+    return `ws://localhost:${DEFAULT_RELAY_PORT}/ws`;
+  }
 }
 
-/** Save relay server URL */
+/**
+ * Get the relay URL to use.
+ * Priority: manual override > auto-derived from server URI > localhost fallback.
+ */
+export async function getRelayUrl(serverUri?: string | null): Promise<string> {
+  // Check for manual override first
+  const manual = await storage.get<string>(STORAGE_KEYS.RELAY_URL);
+  if (manual) return manual;
+
+  // Auto-derive from Plex server URI
+  if (serverUri) return deriveRelayUrl(serverUri);
+
+  // Fallback
+  return `ws://localhost:${DEFAULT_RELAY_PORT}/ws`;
+}
+
+/** Save a manual relay server URL override */
 export async function saveRelayUrl(url: string): Promise<void> {
   await storage.set(STORAGE_KEYS.RELAY_URL, url);
+}
+
+/** Clear the manual relay URL override (revert to auto-discovery) */
+export async function clearRelayUrl(): Promise<void> {
+  await storage.remove(STORAGE_KEYS.RELAY_URL);
+}
+
+/** Check if user has set a manual relay URL override */
+export async function hasManualRelayUrl(): Promise<boolean> {
+  const url = await storage.get<string>(STORAGE_KEYS.RELAY_URL);
+  return url !== null;
 }

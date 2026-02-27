@@ -13,6 +13,7 @@ export interface WatchInvite {
   senderUsername: string;
   senderThumb: string;
   sentAt: number;
+  relayUrl: string;
 }
 
 export interface WatchSession {

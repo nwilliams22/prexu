@@ -1,24 +1,51 @@
 import { useState, useEffect } from "react";
-import { getRelayUrl, saveRelayUrl } from "../services/storage";
+import {
+  getRelayUrl,
+  saveRelayUrl,
+  clearRelayUrl,
+  hasManualRelayUrl,
+  deriveRelayUrl,
+} from "../services/storage";
+import { useAuth } from "../hooks/useAuth";
 import { useInvites } from "../hooks/useInvites";
 
 function Settings() {
-  const [relayUrl, setRelayUrl] = useState("");
-  const [saved, setSaved] = useState(false);
+  const { server } = useAuth();
   const { isRelayConnected, refreshInvites } = useInvites();
+
+  const [manualUrl, setManualUrl] = useState("");
+  const [hasOverride, setHasOverride] = useState(false);
+  const [showOverride, setShowOverride] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  const autoUrl = server?.uri ? deriveRelayUrl(server.uri) : null;
 
   useEffect(() => {
     (async () => {
-      const url = await getRelayUrl();
-      setRelayUrl(url);
+      const isManual = await hasManualRelayUrl();
+      setHasOverride(isManual);
+      setShowOverride(isManual);
+      if (isManual) {
+        const url = await getRelayUrl();
+        setManualUrl(url);
+      }
     })();
   }, []);
 
-  const handleSave = async () => {
-    await saveRelayUrl(relayUrl);
+  const handleSaveOverride = async () => {
+    await saveRelayUrl(manualUrl);
+    setHasOverride(true);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
-    // Reconnect to the new URL
+    refreshInvites();
+  };
+
+  const handleResetToAuto = async () => {
+    await clearRelayUrl();
+    setHasOverride(false);
+    setShowOverride(false);
+    setManualUrl("");
+    setSaved(false);
     refreshInvites();
   };
 
@@ -31,23 +58,27 @@ function Settings() {
         <h3 style={styles.sectionTitle}>Watch Together</h3>
 
         <div style={styles.field}>
-          <label style={styles.label}>Relay Server URL</label>
+          <label style={styles.label}>Relay Server</label>
           <p style={styles.description}>
-            The WebSocket URL of your Prexu relay server. This server
-            coordinates Watch Together sessions between clients.
+            The relay server coordinates Watch Together sessions. By default,
+            Prexu auto-detects the relay from your Plex server address — no
+            configuration needed.
           </p>
-          <div style={styles.inputRow}>
-            <input
-              type="text"
-              value={relayUrl}
-              onChange={(e) => setRelayUrl(e.target.value)}
-              placeholder="ws://localhost:8080/ws"
-              style={styles.input}
-            />
-            <button onClick={handleSave} style={styles.saveButton}>
-              {saved ? "Saved!" : "Save"}
-            </button>
+
+          {/* Auto-derived URL display */}
+          <div style={styles.autoRow}>
+            <span style={styles.autoLabel}>
+              {hasOverride ? "Auto-detected:" : "Connected via:"}
+            </span>
+            <code style={styles.autoUrl}>
+              {autoUrl ?? "No server selected"}
+            </code>
+            {!hasOverride && (
+              <span style={styles.autoBadge}>Auto</span>
+            )}
           </div>
+
+          {/* Connection status */}
           <div style={styles.statusRow}>
             <div
               style={{
@@ -56,11 +87,51 @@ function Settings() {
               }}
             />
             <span style={styles.statusText}>
-              {isRelayConnected
-                ? "Connected to relay"
-                : "Not connected"}
+              {isRelayConnected ? "Connected to relay" : "Not connected"}
             </span>
           </div>
+
+          {/* Manual override section */}
+          {!showOverride ? (
+            <button
+              onClick={() => setShowOverride(true)}
+              style={styles.overrideToggle}
+            >
+              Use custom relay URL
+            </button>
+          ) : (
+            <div style={styles.overrideSection}>
+              <label style={styles.overrideLabel}>Custom Relay URL</label>
+              <div style={styles.inputRow}>
+                <input
+                  type="text"
+                  value={manualUrl}
+                  onChange={(e) => setManualUrl(e.target.value)}
+                  placeholder="ws://your-server:9847/ws"
+                  style={styles.input}
+                />
+                <button onClick={handleSaveOverride} style={styles.saveButton}>
+                  {saved ? "Saved!" : "Save"}
+                </button>
+              </div>
+              {hasOverride && (
+                <button
+                  onClick={handleResetToAuto}
+                  style={styles.resetButton}
+                >
+                  Reset to auto-detect
+                </button>
+              )}
+              {!hasOverride && (
+                <button
+                  onClick={() => setShowOverride(false)}
+                  style={styles.resetButton}
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </section>
     </div>
@@ -101,6 +172,69 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: "0.75rem",
     lineHeight: 1.4,
   },
+  autoRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.5rem",
+    marginBottom: "0.5rem",
+  },
+  autoLabel: {
+    fontSize: "0.8rem",
+    color: "var(--text-secondary)",
+  },
+  autoUrl: {
+    fontSize: "0.8rem",
+    color: "var(--text-primary)",
+    background: "var(--bg-card)",
+    padding: "0.2rem 0.5rem",
+    borderRadius: "4px",
+    fontFamily: "monospace",
+  },
+  autoBadge: {
+    fontSize: "0.7rem",
+    fontWeight: 600,
+    color: "#000",
+    background: "var(--accent)",
+    padding: "0.1rem 0.4rem",
+    borderRadius: "4px",
+  },
+  statusRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.5rem",
+    marginBottom: "0.75rem",
+  },
+  statusDot: {
+    width: "8px",
+    height: "8px",
+    borderRadius: "50%",
+  },
+  statusText: {
+    fontSize: "0.8rem",
+    color: "var(--text-secondary)",
+  },
+  overrideToggle: {
+    background: "transparent",
+    color: "var(--text-secondary)",
+    border: "none",
+    fontSize: "0.8rem",
+    textDecoration: "underline",
+    cursor: "pointer",
+    padding: 0,
+  },
+  overrideSection: {
+    marginTop: "0.5rem",
+    padding: "0.75rem",
+    background: "var(--bg-card)",
+    borderRadius: "8px",
+    border: "1px solid var(--border)",
+  },
+  overrideLabel: {
+    fontSize: "0.85rem",
+    fontWeight: 500,
+    marginBottom: "0.5rem",
+    display: "block",
+  },
   inputRow: {
     display: "flex",
     gap: "0.5rem",
@@ -110,7 +244,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "0.5rem 0.75rem",
     borderRadius: "6px",
     border: "1px solid var(--border)",
-    background: "var(--bg-card)",
+    background: "var(--bg-primary)",
     color: "var(--text-primary)",
     fontSize: "0.9rem",
     outline: "none",
@@ -126,20 +260,16 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
     whiteSpace: "nowrap",
   },
-  statusRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: "0.5rem",
-    marginTop: "0.5rem",
-  },
-  statusDot: {
-    width: "8px",
-    height: "8px",
-    borderRadius: "50%",
-  },
-  statusText: {
-    fontSize: "0.8rem",
+  resetButton: {
+    background: "transparent",
     color: "var(--text-secondary)",
+    border: "none",
+    fontSize: "0.8rem",
+    textDecoration: "underline",
+    cursor: "pointer",
+    padding: 0,
+    marginTop: "0.5rem",
+    display: "block",
   },
 };
 

@@ -49,9 +49,13 @@ function InviteBanner({
   if (!visible) return null;
 
   const handleJoin = () => {
-    navigate(
-      `/play/${invite.mediaRatingKey}?session=${invite.sessionId}`
-    );
+    const params = new URLSearchParams({
+      session: invite.sessionId,
+    });
+    if (invite.relayUrl) {
+      params.set("relay", invite.relayUrl);
+    }
+    navigate(`/play/${invite.mediaRatingKey}?${params.toString()}`);
     onDismiss();
   };
 

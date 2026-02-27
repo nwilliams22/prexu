@@ -240,6 +240,7 @@ pub fn handle_invite(
     media_type: &str,
     sender_username: &str,
     sender_thumb: &str,
+    relay_url: &str,
 ) {
     let invite_msg = ServerMessage::InviteReceived {
         session_id: session_id.to_string(),
@@ -249,6 +250,7 @@ pub fn handle_invite(
         sender_username: sender_username.to_string(),
         sender_thumb: sender_thumb.to_string(),
         sent_at: now_ms(),
+        relay_url: relay_url.to_string(),
     };
 
     // If user is connected, deliver immediately
@@ -270,6 +272,7 @@ pub fn handle_invite(
             sender_username: sender_username.to_string(),
             sender_thumb: sender_thumb.to_string(),
             sent_at: now_ms(),
+            relay_url: relay_url.to_string(),
         };
         state
             .pending_invites

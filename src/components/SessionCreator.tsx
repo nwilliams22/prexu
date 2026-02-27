@@ -4,6 +4,7 @@ import { useAuth } from "../hooks/useAuth";
 import { getPlexFriends, getPlexUser } from "../services/plex-api";
 import type { PlexFriend } from "../services/plex-api";
 import { watchSync } from "../services/watch-sync";
+import { getRelayUrl } from "../services/storage";
 
 interface SessionCreatorProps {
   ratingKey: string;
@@ -18,7 +19,7 @@ function SessionCreator({
   mediaType,
   onClose,
 }: SessionCreatorProps) {
-  const { authToken } = useAuth();
+  const { authToken, server } = useAuth();
   const navigate = useNavigate();
 
   const [friends, setFriends] = useState<PlexFriend[]>([]);
@@ -118,7 +119,8 @@ function SessionCreator({
 
       await sessionCreated;
 
-      // Send invites to selected friends
+      // Send invites to selected friends (include relay URL so they can auto-connect)
+      const relayUrl = await getRelayUrl(server?.uri);
       for (const username of selectedUsernames) {
         watchSync.send({
           type: "invite",
@@ -129,6 +131,7 @@ function SessionCreator({
           media_type: mediaType,
           sender_username: user.username,
           sender_thumb: user.thumb,
+          relay_url: relayUrl,
         });
       }
 
