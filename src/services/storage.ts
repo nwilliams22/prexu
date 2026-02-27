@@ -13,7 +13,10 @@ const STORAGE_KEYS = {
   AUTH: "auth_data",
   SERVER: "server_data",
   CLIENT_ID: "client_identifier",
+  RELAY_URL: "prexu_relay_url",
 } as const;
+
+const DEFAULT_RELAY_URL = "ws://localhost:8080/ws";
 
 // For now, use localStorage as the storage backend.
 // When tauri-plugin-store is integrated with the Rust backend,
@@ -76,4 +79,17 @@ export async function getServer(): Promise<ServerData | null> {
 /** Clear selected server (to re-pick) */
 export async function clearServer(): Promise<void> {
   await storage.remove(STORAGE_KEYS.SERVER);
+}
+
+// ── Relay Server URL ──
+
+/** Get stored relay server URL */
+export async function getRelayUrl(): Promise<string> {
+  const url = await storage.get<string>(STORAGE_KEYS.RELAY_URL);
+  return url ?? DEFAULT_RELAY_URL;
+}
+
+/** Save relay server URL */
+export async function saveRelayUrl(url: string): Promise<void> {
+  await storage.set(STORAGE_KEYS.RELAY_URL, url);
 }

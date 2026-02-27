@@ -11,6 +11,7 @@ interface PlayerControlsProps {
   player: UsePlayerResult;
   onBack: () => void;
   visible: boolean;
+  syncIndicator?: React.ReactNode;
 }
 
 function formatTime(seconds: number): string {
@@ -23,7 +24,7 @@ function formatTime(seconds: number): string {
   return `${m}:${String(sec).padStart(2, "0")}`;
 }
 
-function PlayerControls({ player, onBack, visible }: PlayerControlsProps) {
+function PlayerControls({ player, onBack, visible, syncIndicator }: PlayerControlsProps) {
   const seekBarRef = useRef<HTMLDivElement>(null);
   const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [hoverX, setHoverX] = useState(0);
@@ -226,6 +227,9 @@ function PlayerControls({ player, onBack, visible }: PlayerControlsProps) {
 
           {/* Right controls */}
           <div style={styles.controlsRight}>
+            {/* Watch Together sync indicator */}
+            {syncIndicator}
+
             {/* Subtitle button */}
             {player.subtitleTracks.length > 0 && (
               <button

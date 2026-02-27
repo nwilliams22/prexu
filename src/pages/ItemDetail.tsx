@@ -6,6 +6,7 @@ import {
   getItemChildren,
   getImageUrl,
 } from "../services/plex-library";
+import WatchTogetherButton from "../components/WatchTogetherButton";
 import type {
   PlexMediaItem,
   PlexMovie,
@@ -182,12 +183,19 @@ function ItemDetail() {
               {movie.tagline && (
                 <p style={styles.tagline}>{movie.tagline}</p>
               )}
-              <button
-                onClick={() => navigate(`/play/${movie.ratingKey}`)}
-                style={styles.playButton}
-              >
-                ▶ Play
-              </button>
+              <div style={styles.buttonRow}>
+                <button
+                  onClick={() => navigate(`/play/${movie.ratingKey}`)}
+                  style={styles.playButton}
+                >
+                  ▶ Play
+                </button>
+                <WatchTogetherButton
+                  ratingKey={movie.ratingKey}
+                  title={movie.title}
+                  mediaType="movie"
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -392,12 +400,19 @@ function ItemDetail() {
                   <span style={styles.rating}>{ep.contentRating}</span>
                 )}
               </div>
-              <button
-                onClick={() => navigate(`/play/${ep.ratingKey}`)}
-                style={styles.playButton}
-              >
-                ▶ Play
-              </button>
+              <div style={styles.buttonRow}>
+                <button
+                  onClick={() => navigate(`/play/${ep.ratingKey}`)}
+                  style={styles.playButton}
+                >
+                  ▶ Play
+                </button>
+                <WatchTogetherButton
+                  ratingKey={ep.ratingKey}
+                  title={`${ep.grandparentTitle} — ${ep.title}`}
+                  mediaType="episode"
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -533,6 +548,12 @@ const styles: Record<string, React.CSSProperties> = {
     color: "var(--text-secondary)",
     fontSize: "0.9rem",
   },
+  buttonRow: {
+    display: "flex",
+    gap: "0.75rem",
+    marginTop: "0.5rem",
+    alignItems: "center",
+  },
   playButton: {
     background: "var(--accent)",
     color: "#000",
@@ -541,7 +562,6 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "0.6rem 1.5rem",
     borderRadius: "6px",
     width: "fit-content",
-    marginTop: "0.5rem",
   },
   showLink: {
     background: "transparent",

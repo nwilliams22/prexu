@@ -3,6 +3,7 @@ import { Outlet, Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import Sidebar from "./Sidebar";
 import SearchBar from "./SearchBar";
+import InviteNotification from "./InviteNotification";
 
 function AppLayout() {
   const { isAuthenticated, serverSelected, server, logout, changeServer } =
@@ -29,6 +30,12 @@ function AppLayout() {
 
         <div style={styles.headerRight}>
           <span style={styles.serverName}>{server?.name}</span>
+          <button
+            onClick={() => navigate("/settings")}
+            style={styles.headerButton}
+          >
+            Settings
+          </button>
           <button onClick={changeServer} style={styles.headerButton}>
             Change Server
           </button>
@@ -45,6 +52,7 @@ function AppLayout() {
           onToggle={() => setSidebarCollapsed((c) => !c)}
         />
         <main style={styles.main}>
+          <InviteNotification />
           <Outlet />
         </main>
       </div>

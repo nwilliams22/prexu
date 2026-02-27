@@ -5,9 +5,11 @@ import Dashboard from "./pages/Dashboard";
 import LibraryView from "./pages/LibraryView";
 import ItemDetail from "./pages/ItemDetail";
 import SearchResults from "./pages/SearchResults";
+import Settings from "./pages/Settings";
 import Player from "./pages/Player";
 import AppLayout from "./components/AppLayout";
 import { useAuth, useAuthState, AuthProvider } from "./hooks/useAuth";
+import { useInviteState, InviteProvider } from "./hooks/useInvites";
 
 /** Route guard for unauthenticated routes */
 function PublicRoute({ children }: { children: React.ReactNode }) {
@@ -67,6 +69,7 @@ function AppRoutes() {
         <Route path="/library/:sectionId" element={<LibraryView />} />
         <Route path="/item/:ratingKey" element={<ItemDetail />} />
         <Route path="/search" element={<SearchResults />} />
+        <Route path="/settings" element={<Settings />} />
       </Route>
 
       {/* Catch-all */}
@@ -77,10 +80,13 @@ function AppRoutes() {
 
 function App() {
   const auth = useAuthState();
+  const inviteState = useInviteState(auth.authToken);
 
   return (
     <AuthProvider value={auth}>
-      <AppRoutes />
+      <InviteProvider value={inviteState}>
+        <AppRoutes />
+      </InviteProvider>
     </AuthProvider>
   );
 }

@@ -4,23 +4,68 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { useParams, useNavigate, Navigate } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams, Navigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { usePlayer } from "../hooks/usePlayer";
+import { useWatchTogether } from "../hooks/useWatchTogether";
+import { getItemMetadata, getNextEpisode } from "../services/plex-library";
 import PlayerControls from "../components/PlayerControls";
+import ParticipantOverlay from "../components/ParticipantOverlay";
+import SyncIndicator from "../components/SyncIndicator";
+import NextEpisodePrompt from "../components/NextEpisodePrompt";
+import type { PlexEpisode, PlexMediaItem } from "../types/library";
 
 const CONTROLS_HIDE_MS = 3000;
 const DOUBLE_CLICK_MS = 250;
 
 function Player() {
   const { ratingKey } = useParams<{ ratingKey: string }>();
+  const [searchParams] = useSearchParams();
   const { isAuthenticated, serverSelected } = useAuth();
   const navigate = useNavigate();
   const player = usePlayer(ratingKey ?? "");
 
+  // Watch Together session from URL query params
+  const sessionId = searchParams.get("session");
+  const isHost = searchParams.get("host") === "true";
+  const wt = useWatchTogether(player, sessionId, isHost);
+
+  const { server } = useAuth();
+
   const [controlsVisible, setControlsVisible] = useState(true);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Next episode detection (for Watch Together host)
+  const [nextEp, setNextEp] = useState<PlexEpisode | null>(null);
+  const nextEpFetchedRef = useRef(false);
+
+  useEffect(() => {
+    if (!wt.isInSession || !wt.isHost || !server || !ratingKey) return;
+    if (nextEpFetchedRef.current) return;
+
+    // Fetch current item to check if it's an episode
+    (async () => {
+      try {
+        const item = await getItemMetadata<PlexMediaItem>(
+          server.uri,
+          server.accessToken,
+          ratingKey
+        );
+        if (item.type === "episode") {
+          const next = await getNextEpisode(
+            server.uri,
+            server.accessToken,
+            item as PlexEpisode
+          );
+          setNextEp(next);
+          nextEpFetchedRef.current = true;
+        }
+      } catch {
+        // Non-critical — just won't show the prompt
+      }
+    })();
+  }, [wt.isInSession, wt.isHost, server, ratingKey]);
 
   // ── Controls visibility ──
   const resetHideTimer = useCallback(() => {
@@ -52,6 +97,9 @@ function Player() {
   }, []);
 
   // ── Click to pause / double-click fullscreen ──
+  const togglePlay = wt.isInSession ? wt.syncTogglePlay : player.togglePlay;
+  const seek = wt.isInSession ? wt.syncSeek : player.seek;
+
   const handleVideoClick = useCallback(() => {
     if (clickTimerRef.current !== null) {
       // Double click detected
@@ -61,11 +109,11 @@ function Player() {
     } else {
       clickTimerRef.current = setTimeout(() => {
         clickTimerRef.current = null;
-        player.togglePlay();
+        togglePlay();
       }, DOUBLE_CLICK_MS);
     }
     resetHideTimer();
-  }, [player, resetHideTimer]);
+  }, [player, togglePlay, resetHideTimer]);
 
   // ── Keyboard shortcuts ──
   useEffect(() => {
@@ -82,15 +130,15 @@ function Player() {
         case " ":
         case "k":
           e.preventDefault();
-          player.togglePlay();
+          togglePlay();
           break;
         case "ArrowLeft":
           e.preventDefault();
-          player.seek(Math.max(0, player.currentTime - 10));
+          seek(Math.max(0, player.currentTime - 10));
           break;
         case "ArrowRight":
           e.preventDefault();
-          player.seek(Math.min(player.duration, player.currentTime + 10));
+          seek(Math.min(player.duration, player.currentTime + 10));
           break;
         case "ArrowUp":
           e.preventDefault();
@@ -118,7 +166,7 @@ function Player() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [player, navigate, resetHideTimer]);
+  }, [player, navigate, resetHideTimer, togglePlay, seek]);
 
   const handleBack = useCallback(() => {
     navigate(-1);
@@ -173,6 +221,26 @@ function Player() {
         </div>
       )}
 
+      {/* Watch Together overlays */}
+      {wt.isInSession && (
+        <ParticipantOverlay
+          participants={wt.participants}
+          visible={controlsVisible}
+        />
+      )}
+
+      {/* Next episode prompt (host only) */}
+      {wt.showNextEpisodePrompt && wt.isHost && nextEp && (
+        <NextEpisodePrompt
+          nextEpisodeTitle={nextEp.title}
+          participantCount={wt.participants.length}
+          onContinue={() =>
+            wt.loadNextEpisode(nextEp.ratingKey, nextEp.title)
+          }
+          onEndSession={wt.leaveSession}
+        />
+      )}
+
       {/* Player controls overlay — uses pointer-events: none on container,
           pointer-events: auto only on interactive areas (top bar, bottom bar),
           so clicks on the video surface pass through to the <video> above */}
@@ -181,6 +249,14 @@ function Player() {
           player={player}
           onBack={handleBack}
           visible={controlsVisible}
+          syncIndicator={
+            wt.isInSession ? (
+              <SyncIndicator
+                syncStatus={wt.syncStatus}
+                participantCount={wt.participants.length + 1}
+              />
+            ) : undefined
+          }
         />
       )}
     </div>

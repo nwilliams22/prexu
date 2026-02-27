@@ -154,3 +154,105 @@ export async function serverFetch(
   const headers = await getServerHeaders(serverToken);
   return fetch(`${serverUri}${path}`, { headers });
 }
+
+// ── Plex User & Friends API ──
+
+export interface PlexUser {
+  id: number;
+  username: string;
+  email: string;
+  friendlyName: string;
+  thumb: string;
+}
+
+export interface PlexFriend {
+  id: number;
+  username: string;
+  email: string;
+  friendlyName: string;
+  thumb: string;
+  status: string;
+  home: boolean;
+}
+
+/** Fetch the current authenticated user's profile */
+export async function getPlexUser(authToken: string): Promise<PlexUser> {
+  const headers = await getAuthHeaders(authToken);
+  const response = await fetch(`${PLEX_TV_API}/user`, { headers });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch user profile: ${response.status}`);
+  }
+
+  const data = await response.json();
+  return {
+    id: data.id,
+    username: data.username ?? data.title ?? "",
+    email: data.email ?? "",
+    friendlyName: data.friendlyName ?? data.title ?? "",
+    thumb: data.thumb ?? "",
+  };
+}
+
+/** Fetch the user's Plex friends list */
+export async function getPlexFriends(
+  authToken: string
+): Promise<PlexFriend[]> {
+  const headers = await getAuthHeaders(authToken);
+
+  // Try v2 JSON endpoint first
+  try {
+    const response = await fetch(`${PLEX_TV_API}/friends`, { headers });
+    if (response.ok) {
+      const data = await response.json();
+      if (Array.isArray(data)) {
+        return data.map((f: Record<string, unknown>) => ({
+          id: (f.id as number) ?? 0,
+          username: (f.username as string) ?? (f.title as string) ?? "",
+          email: (f.email as string) ?? "",
+          friendlyName:
+            (f.friendlyName as string) ?? (f.title as string) ?? "",
+          thumb: (f.thumb as string) ?? "",
+          status: (f.status as string) ?? "accepted",
+          home: (f.home as boolean) ?? false,
+        }));
+      }
+    }
+  } catch {
+    // Fall through to v1 XML endpoint
+  }
+
+  // Fallback: v1 XML endpoint
+  try {
+    const xmlHeaders = { ...headers, Accept: "application/xml" };
+    const response = await fetch("https://plex.tv/api/users", {
+      headers: xmlHeaders,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Friends API failed: ${response.status}`);
+    }
+
+    const xml = await response.text();
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(xml, "text/xml");
+    const userElements = doc.querySelectorAll("User");
+
+    return Array.from(userElements).map((el) => ({
+      id: parseInt(el.getAttribute("id") ?? "0", 10),
+      username: el.getAttribute("username") ?? el.getAttribute("title") ?? "",
+      email: el.getAttribute("email") ?? "",
+      friendlyName:
+        el.getAttribute("friendlyName") ??
+        el.getAttribute("title") ??
+        "",
+      thumb: el.getAttribute("thumb") ?? "",
+      status: el.getAttribute("status") ?? "accepted",
+      home: el.getAttribute("home") === "1",
+    }));
+  } catch (err) {
+    throw new Error(
+      `Failed to fetch friends: ${err instanceof Error ? err.message : "Unknown error"}`
+    );
+  }
+}
