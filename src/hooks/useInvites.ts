@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect, useCallback } from "rea
 import { watchSync } from "../services/watch-sync";
 import { getPlexUser } from "../services/plex-api";
 import { getRelayUrl } from "../services/storage";
+import { playNotificationSound } from "../utils/notificationSound";
 import type { WatchInvite } from "../types/watch-together";
 
 export interface InviteContextValue {
@@ -97,6 +98,7 @@ export function useInviteState(
         setInvites((prev) => {
           // Avoid duplicate invites for same session
           if (prev.some((i) => i.sessionId === invite.sessionId)) return prev;
+          playNotificationSound();
           return [...prev, invite];
         });
       }
@@ -122,7 +124,11 @@ export function useInviteState(
           const newInvites = parsed.filter(
             (i) => !existingIds.has(i.sessionId)
           );
-          return newInvites.length > 0 ? [...prev, ...newInvites] : prev;
+          if (newInvites.length > 0) {
+            playNotificationSound();
+            return [...prev, ...newInvites];
+          }
+          return prev;
         });
       }
     );
