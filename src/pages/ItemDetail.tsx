@@ -7,6 +7,8 @@ import {
   getImageUrl,
 } from "../services/plex-library";
 import WatchTogetherButton from "../components/WatchTogetherButton";
+import EmptyState from "../components/EmptyState";
+import ErrorState from "../components/ErrorState";
 import type {
   PlexMediaItem,
   PlexMovie,
@@ -26,6 +28,7 @@ function ItemDetail() {
   const [episodes, setEpisodes] = useState<PlexEpisode[]>([]);
   const [selectedSeason, setSelectedSeason] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingEpisodes, setIsLoadingEpisodes] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Fetch item metadata
@@ -83,6 +86,8 @@ function ItemDetail() {
     let cancelled = false;
 
     (async () => {
+      setIsLoadingEpisodes(true);
+      setEpisodes([]);
       try {
         const epList = await getItemChildren<PlexEpisode>(
           server.uri,
@@ -92,6 +97,8 @@ function ItemDetail() {
         if (!cancelled) setEpisodes(epList);
       } catch {
         // Silently fail for episode fetch
+      } finally {
+        if (!cancelled) setIsLoadingEpisodes(false);
       }
     })();
 
@@ -131,10 +138,12 @@ function ItemDetail() {
   if (error || !item) {
     return (
       <div style={styles.container}>
-        <p style={styles.error}>{error ?? "Item not found"}</p>
-        <button onClick={() => navigate(-1)} style={styles.backButton}>
-          Go Back
-        </button>
+        <ErrorState message={error ?? "Item not found"} />
+        <div style={{ textAlign: "center" }}>
+          <button onClick={() => navigate(-1)} style={styles.backButton}>
+            Go Back
+          </button>
+        </div>
       </div>
     );
   }
@@ -321,7 +330,29 @@ function ItemDetail() {
           </div>
 
           <div style={styles.episodeList}>
-            {episodes.map((ep) => (
+            {isLoadingEpisodes && (
+              <div style={styles.episodeLoading}>
+                <div className="loading-spinner" />
+              </div>
+            )}
+            {!isLoadingEpisodes && episodes.length === 0 && selectedSeason && (
+              <EmptyState
+                icon={
+                  <svg width={36} height={36} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                    <rect x={2} y={2} width={20} height={20} rx={2.18} ry={2.18} />
+                    <line x1={7} y1={2} x2={7} y2={22} />
+                    <line x1={17} y1={2} x2={17} y2={22} />
+                    <line x1={2} y1={12} x2={22} y2={12} />
+                    <line x1={2} y1={7} x2={7} y2={7} />
+                    <line x1={2} y1={17} x2={7} y2={17} />
+                    <line x1={17} y1={17} x2={22} y2={17} />
+                    <line x1={17} y1={7} x2={22} y2={7} />
+                  </svg>
+                }
+                title="No episodes in this season"
+              />
+            )}
+            {!isLoadingEpisodes && episodes.map((ep) => (
               <button
                 key={ep.ratingKey}
                 onClick={() => navigate(`/item/${ep.ratingKey}`)}
@@ -449,10 +480,6 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     justifyContent: "center",
     padding: "4rem",
-  },
-  error: {
-    color: "var(--error)",
-    padding: "1.5rem",
   },
   backButton: {
     background: "var(--bg-card)",
@@ -638,6 +665,12 @@ const styles: Record<string, React.CSSProperties> = {
   },
 
   // Episodes
+  episodeLoading: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "2rem",
+  },
   episodeList: {
     display: "flex",
     flexDirection: "column",

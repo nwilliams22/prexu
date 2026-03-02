@@ -5,6 +5,8 @@ import { getImageUrl } from "../services/plex-library";
 import HorizontalRow from "../components/HorizontalRow";
 import PosterCard from "../components/PosterCard";
 import SkeletonCard from "../components/SkeletonCard";
+import EmptyState from "../components/EmptyState";
+import ErrorState from "../components/ErrorState";
 import type { PlexMediaItem, PlexEpisode } from "../types/library";
 
 function SearchResults() {
@@ -50,7 +52,7 @@ function SearchResults() {
         <h2 style={styles.title}>Search</h2>
       )}
 
-      {error && <p style={styles.error}>{error}</p>}
+      {error && <ErrorState message={error} />}
 
       {/* Loading state */}
       {isSearching && (
@@ -87,19 +89,29 @@ function SearchResults() {
 
       {/* Empty state */}
       {!isSearching && query && results.length === 0 && !error && (
-        <div style={styles.emptyState}>
-          <p>No results found for "{query}"</p>
-          <p style={styles.emptyHint}>
-            Try a different search term or check your spelling.
-          </p>
-        </div>
+        <EmptyState
+          icon={
+            <svg width={48} height={48} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+              <circle cx={11} cy={11} r={8} />
+              <line x1={21} y1={21} x2={16.65} y2={16.65} />
+            </svg>
+          }
+          title={`No results found for "${query}"`}
+          subtitle="Try a different search term or check your spelling."
+        />
       )}
 
       {/* No query yet */}
       {!query && !isSearching && (
-        <div style={styles.emptyState}>
-          <p>Start typing to search your libraries.</p>
-        </div>
+        <EmptyState
+          icon={
+            <svg width={48} height={48} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+              <circle cx={11} cy={11} r={8} />
+              <line x1={21} y1={21} x2={16.65} y2={16.65} />
+            </svg>
+          }
+          title="Start typing to search your libraries"
+        />
       )}
     </div>
   );
@@ -114,11 +126,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
     marginBottom: "1rem",
   },
-  error: {
-    color: "var(--error)",
-    fontSize: "0.9rem",
-    marginBottom: "1rem",
-  },
   skeletonSection: {
     marginBottom: "1.75rem",
   },
@@ -126,20 +133,6 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     gap: "0.75rem",
     overflow: "hidden",
-  },
-  emptyState: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: "4rem 2rem",
-    color: "var(--text-secondary)",
-    textAlign: "center",
-  },
-  emptyHint: {
-    fontSize: "0.85rem",
-    marginTop: "0.5rem",
-    opacity: 0.7,
   },
 };
 

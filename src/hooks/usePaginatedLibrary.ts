@@ -13,6 +13,7 @@ export interface UsePaginatedLibraryResult {
   totalSize: number;
   error: string | null;
   loadMore: () => void;
+  retry: () => void;
 }
 
 export function usePaginatedLibrary(
@@ -27,6 +28,11 @@ export function usePaginatedLibrary(
   const [totalSize, setTotalSize] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const loadingRef = useRef(false);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  const retry = useCallback(() => {
+    setRefreshTrigger((n) => n + 1);
+  }, []);
 
   // Reset when section or sort changes
   useEffect(() => {
@@ -68,7 +74,7 @@ export function usePaginatedLibrary(
     return () => {
       cancelled = true;
     };
-  }, [server, sectionId, sort]);
+  }, [server, sectionId, sort, refreshTrigger]);
 
   const loadMore = useCallback(() => {
     if (!server || !sectionId || loadingRef.current || !hasMore) return;
@@ -97,5 +103,5 @@ export function usePaginatedLibrary(
     })();
   }, [server, sectionId, sort, items.length, hasMore]);
 
-  return { items, isLoading, isLoadingMore, hasMore, totalSize, error, loadMore };
+  return { items, isLoading, isLoadingMore, hasMore, totalSize, error, loadMore, retry };
 }

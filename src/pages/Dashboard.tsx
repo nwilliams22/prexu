@@ -14,6 +14,8 @@ import EpisodeExpander from "../components/EpisodeExpander";
 import ContextMenu from "../components/ContextMenu";
 import type { ContextMenuItem } from "../components/ContextMenu";
 import SessionCreator from "../components/SessionCreator";
+import EmptyState from "../components/EmptyState";
+import ErrorState from "../components/ErrorState";
 import type {
   PlexMediaItem,
   PlexEpisode,
@@ -169,7 +171,7 @@ function Dashboard() {
   if (error) {
     return (
       <div style={styles.container}>
-        <p style={styles.error}>{error}</p>
+        <ErrorState message={error} onRetry={refresh} />
       </div>
     );
   }
@@ -317,9 +319,16 @@ function Dashboard() {
 
       {/* Empty state */}
       {!isLoading && !hasContent && (
-        <div style={styles.emptyState}>
-          <p>No recent activity. Add some media to your Plex libraries!</p>
-        </div>
+        <EmptyState
+          icon={
+            <svg width={48} height={48} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+              <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+              <polyline points="9 22 9 12 15 12 15 22" />
+            </svg>
+          }
+          title="No recent activity"
+          subtitle="Add some media to your Plex libraries to see it here."
+        />
       )}
 
       {/* Context menu */}
@@ -361,22 +370,10 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "0.75rem",
     overflow: "hidden",
   },
-  error: {
-    color: "var(--error)",
-    fontSize: "0.9rem",
-    padding: "2rem",
-  },
   activeCardWrapper: {
     borderBottom: "2px solid var(--accent)",
     borderRadius: "8px",
     flexShrink: 0,
-  },
-  emptyState: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: "4rem 2rem",
-    color: "var(--text-secondary)",
   },
 };
 

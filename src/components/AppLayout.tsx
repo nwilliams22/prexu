@@ -4,6 +4,7 @@ import { useAuth } from "../hooks/useAuth";
 import Sidebar from "./Sidebar";
 import SearchBar from "./SearchBar";
 import InviteNotification from "./InviteNotification";
+import ErrorBoundary from "./ErrorBoundary";
 
 function AppLayout() {
   const { isAuthenticated, serverSelected, server, logout, changeServer } =
@@ -53,7 +54,9 @@ function AppLayout() {
         />
         <main style={styles.main}>
           <InviteNotification />
-          <Outlet />
+          <ErrorBoundary>
+            <Outlet />
+          </ErrorBoundary>
         </main>
       </div>
     </div>

@@ -15,6 +15,8 @@ import SkeletonCard from "../components/SkeletonCard";
 import ContextMenu from "../components/ContextMenu";
 import type { ContextMenuItem } from "../components/ContextMenu";
 import SessionCreator from "../components/SessionCreator";
+import EmptyState from "../components/EmptyState";
+import ErrorState from "../components/ErrorState";
 import type { PlexMediaItem, PlexShow } from "../types/library";
 
 interface ContextMenuState {
@@ -36,7 +38,7 @@ function LibraryView() {
   const [sort, setSort] = useState("titleSort:asc");
   const sentinelRef = useRef<HTMLDivElement>(null);
 
-  const { items, isLoading, isLoadingMore, hasMore, totalSize, error, loadMore } =
+  const { items, isLoading, isLoadingMore, hasMore, totalSize, error, loadMore, retry } =
     usePaginatedLibrary(sectionId, sort);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [sessionCreator, setSessionCreator] =
@@ -154,9 +156,9 @@ function LibraryView() {
     <div style={styles.container}>
       <h2 style={styles.title}>{section?.title ?? `Library ${sectionId}`}</h2>
 
-      {error && <p style={styles.error}>{error}</p>}
+      {error && <ErrorState message={error} onRetry={retry} />}
 
-      {!isLoading && (
+      {!isLoading && !error && (
         <SortBar
           currentSort={sort}
           onSortChange={setSort}
@@ -190,6 +192,24 @@ function LibraryView() {
             <SkeletonCard key={`more-${i}`} />
           ))}
       </LibraryGrid>
+
+      {/* Empty state */}
+      {!isLoading && !error && items.length === 0 && (
+        <EmptyState
+          icon={
+            <svg width={48} height={48} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+              <path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4M4 7l8 4M4 7v10l8 4m0-10v10" />
+            </svg>
+          }
+          title="No items in this library"
+          subtitle="Add some media to this library section in Plex to see it here."
+        />
+      )}
+
+      {/* Loading more indicator */}
+      {isLoadingMore && (
+        <p style={styles.loadingMore}>Loading more...</p>
+      )}
 
       {/* Infinite scroll sentinel */}
       <div ref={sentinelRef} style={styles.sentinel} />
@@ -225,10 +245,11 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
     marginBottom: "1rem",
   },
-  error: {
-    color: "var(--error)",
-    fontSize: "0.9rem",
-    marginBottom: "1rem",
+  loadingMore: {
+    textAlign: "center",
+    color: "var(--text-secondary)",
+    fontSize: "0.85rem",
+    padding: "0.5rem 0",
   },
   sentinel: {
     height: "1px",
