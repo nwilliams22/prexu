@@ -205,6 +205,40 @@ export interface GroupedRecentItem {
   episodeCount: number;
 }
 
+// ── Collections ──
+
+export interface PlexCollection {
+  ratingKey: string;
+  key: string;
+  type: "collection";
+  title: string;
+  summary: string;
+  thumb: string;
+  art: string;
+  childCount: number;
+  subtype: string;
+  addedAt: number;
+  updatedAt: number;
+}
+
+// ── Playlists ──
+
+export interface PlexPlaylist {
+  ratingKey: string;
+  key: string;
+  type: "playlist";
+  title: string;
+  summary: string;
+  thumb: string;
+  composite: string;
+  playlistType: string;
+  leafCount: number;
+  duration: number;
+  smart: boolean;
+  addedAt: number;
+  updatedAt: number;
+}
+
 // ── Pagination ──
 
 export interface PaginatedResult<T> {

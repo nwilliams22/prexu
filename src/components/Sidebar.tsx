@@ -123,6 +123,70 @@ function Sidebar({ collapsed, onToggle }: SidebarProps) {
           }}>Watch History</span>
         </button>
 
+        {/* Collections */}
+        <button
+          onClick={() => navigate("/collections")}
+          style={{
+            ...styles.navItem,
+            ...(isActive("/collections") ? styles.navItemActive : {}),
+          }}
+          title="Collections"
+        >
+          <svg
+            width={20}
+            height={20}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <rect x={3} y={3} width={7} height={7} rx={1} />
+            <rect x={14} y={3} width={7} height={7} rx={1} />
+            <rect x={3} y={14} width={7} height={7} rx={1} />
+            <rect x={14} y={14} width={7} height={7} rx={1} />
+          </svg>
+          <span style={{
+            ...styles.navLabel,
+            opacity: collapsed ? 0 : 1,
+            width: collapsed ? 0 : "auto",
+          }}>Collections</span>
+        </button>
+
+        {/* Playlists */}
+        <button
+          onClick={() => navigate("/playlists")}
+          style={{
+            ...styles.navItem,
+            ...(isActive("/playlists") ? styles.navItemActive : {}),
+          }}
+          title="Playlists"
+        >
+          <svg
+            width={20}
+            height={20}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <line x1={8} y1={6} x2={21} y2={6} />
+            <line x1={8} y1={12} x2={21} y2={12} />
+            <line x1={8} y1={18} x2={21} y2={18} />
+            <line x1={3} y1={6} x2={3.01} y2={6} />
+            <line x1={3} y1={12} x2={3.01} y2={12} />
+            <line x1={3} y1={18} x2={3.01} y2={18} />
+          </svg>
+          <span style={{
+            ...styles.navLabel,
+            opacity: collapsed ? 0 : 1,
+            width: collapsed ? 0 : "auto",
+          }}>Playlists</span>
+        </button>
+
         {/* Divider */}
         <div style={styles.divider} />
 
