@@ -183,11 +183,11 @@ function ItemDetail() {
         {/* Hero */}
         <div style={styles.hero}>
           {movie.art && (
-            <div
-              style={{
-                ...styles.heroArt,
-                backgroundImage: `url(${artUrl(movie.art)})`,
-              }}
+            <img
+              src={artUrl(movie.art)}
+              alt=""
+              loading="lazy"
+              style={styles.heroArt}
             />
           )}
           <div style={styles.heroOverlay} />
@@ -356,11 +356,11 @@ function ItemDetail() {
         {/* Hero */}
         <div style={styles.hero}>
           {show.art && (
-            <div
-              style={{
-                ...styles.heroArt,
-                backgroundImage: `url(${artUrl(show.art)})`,
-              }}
+            <img
+              src={artUrl(show.art)}
+              alt=""
+              loading="lazy"
+              style={styles.heroArt}
             />
           )}
           <div style={styles.heroOverlay} />
@@ -533,11 +533,11 @@ function ItemDetail() {
       <div style={styles.container}>
         <div style={styles.hero}>
           {(ep.grandparentArt || ep.art) && (
-            <div
-              style={{
-                ...styles.heroArt,
-                backgroundImage: `url(${artUrl(ep.grandparentArt || ep.art)})`,
-              }}
+            <img
+              src={artUrl(ep.grandparentArt || ep.art)}
+              alt=""
+              loading="lazy"
+              style={styles.heroArt}
             />
           )}
           <div style={styles.heroOverlay} />
@@ -639,8 +639,10 @@ const styles: Record<string, React.CSSProperties> = {
   heroArt: {
     position: "absolute",
     inset: 0,
-    backgroundSize: "cover",
-    backgroundPosition: "center top",
+    width: "100%",
+    height: "100%",
+    objectFit: "cover",
+    objectPosition: "center top",
     filter: "blur(2px) brightness(0.4)",
   },
   heroOverlay: {

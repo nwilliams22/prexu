@@ -124,6 +124,7 @@ const styles: Record<string, React.CSSProperties> = {
     overflowX: "auto",
     overflowY: "hidden",
     scrollSnapType: "x mandatory",
+    willChange: "scroll-position",
     paddingBottom: "4px",
     scrollbarWidth: "none" as never,
   },

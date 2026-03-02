@@ -129,6 +129,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "8px",
     overflow: "visible",
     transition: "transform 0.15s ease",
+    willChange: "transform",
     textAlign: "left",
     flexShrink: 0,
   },
