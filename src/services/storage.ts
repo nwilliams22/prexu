@@ -9,6 +9,7 @@
 
 import type { AuthData, ServerData } from "../types/plex";
 import type { Preferences } from "../types/preferences";
+import type { ActiveUser } from "../types/home-user";
 
 const STORAGE_KEYS = {
   AUTH: "auth_data",
@@ -16,6 +17,8 @@ const STORAGE_KEYS = {
   CLIENT_ID: "client_identifier",
   RELAY_URL: "prexu_relay_url",
   PREFERENCES: "prexu_preferences",
+  ADMIN_AUTH: "admin_auth_data",
+  ACTIVE_USER: "active_user",
 } as const;
 
 const DEFAULT_RELAY_PORT = 9847;
@@ -66,6 +69,8 @@ export async function getAuth(): Promise<AuthData | null> {
 export async function clearAuth(): Promise<void> {
   await storage.remove(STORAGE_KEYS.AUTH);
   await storage.remove(STORAGE_KEYS.SERVER);
+  await storage.remove(STORAGE_KEYS.ADMIN_AUTH);
+  await storage.remove(STORAGE_KEYS.ACTIVE_USER);
 }
 
 /** Save selected server */
@@ -132,6 +137,34 @@ export async function hasManualRelayUrl(): Promise<boolean> {
   return url !== null;
 }
 
+// ── Admin Token (preserved for switching back from managed user) ──
+
+export async function saveAdminAuth(data: AuthData): Promise<void> {
+  await storage.set(STORAGE_KEYS.ADMIN_AUTH, data);
+}
+
+export async function getAdminAuth(): Promise<AuthData | null> {
+  return storage.get<AuthData>(STORAGE_KEYS.ADMIN_AUTH);
+}
+
+export async function clearAdminAuth(): Promise<void> {
+  await storage.remove(STORAGE_KEYS.ADMIN_AUTH);
+}
+
+// ── Active User ──
+
+export async function saveActiveUser(user: ActiveUser): Promise<void> {
+  await storage.set(STORAGE_KEYS.ACTIVE_USER, user);
+}
+
+export async function getActiveUser(): Promise<ActiveUser | null> {
+  return storage.get<ActiveUser>(STORAGE_KEYS.ACTIVE_USER);
+}
+
+export async function clearActiveUser(): Promise<void> {
+  await storage.remove(STORAGE_KEYS.ACTIVE_USER);
+}
+
 // ── Preferences ──
 
 export function getDefaultPreferences(): Preferences {
@@ -157,10 +190,7 @@ export function getDefaultPreferences(): Preferences {
   };
 }
 
-export async function getPreferences(): Promise<Preferences> {
-  const saved = await storage.get<Preferences>(STORAGE_KEYS.PREFERENCES);
-  if (!saved) return getDefaultPreferences();
-  // Merge with defaults to handle new fields added in future updates
+function mergeWithDefaults(saved: Preferences): Preferences {
   const defaults = getDefaultPreferences();
   return {
     playback: { ...defaults.playback, ...saved.playback },
@@ -175,6 +205,36 @@ export async function getPreferences(): Promise<Preferences> {
   };
 }
 
+export async function getPreferences(): Promise<Preferences> {
+  const saved = await storage.get<Preferences>(STORAGE_KEYS.PREFERENCES);
+  if (!saved) return getDefaultPreferences();
+  return mergeWithDefaults(saved);
+}
+
 export async function savePreferences(prefs: Preferences): Promise<void> {
   await storage.set(STORAGE_KEYS.PREFERENCES, prefs);
+}
+
+// ── Per-User Preferences ──
+
+function userPrefsKey(userId: number): string {
+  return `prexu_preferences_${userId}`;
+}
+
+export async function getUserPreferences(userId: number): Promise<Preferences> {
+  const saved = await storage.get<Preferences>(userPrefsKey(userId));
+  if (!saved) {
+    // Fall back to global prefs (migration path for existing users)
+    const global = await storage.get<Preferences>(STORAGE_KEYS.PREFERENCES);
+    if (global) return mergeWithDefaults(global);
+    return getDefaultPreferences();
+  }
+  return mergeWithDefaults(saved);
+}
+
+export async function saveUserPreferences(
+  userId: number,
+  prefs: Preferences
+): Promise<void> {
+  await storage.set(userPrefsKey(userId), prefs);
 }

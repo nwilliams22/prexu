@@ -16,6 +16,7 @@ import AppLayout from "./components/AppLayout";
 import { useAuth, useAuthState, AuthProvider } from "./hooks/useAuth";
 import { useInviteState, InviteProvider } from "./hooks/useInvites";
 import { usePreferencesState, PreferencesProvider } from "./hooks/usePreferences";
+import { useHomeUsersState, HomeUsersProvider } from "./hooks/useHomeUsers";
 
 /** Route guard for unauthenticated routes */
 function PublicRoute({ children }: { children: React.ReactNode }) {
@@ -89,18 +90,33 @@ function AppRoutes() {
   );
 }
 
-function App() {
-  const auth = useAuthState();
+/**
+ * Inner app component — runs inside AuthProvider so useAuth() is available
+ * for hooks that depend on auth state (home users, invites, preferences).
+ */
+function AppWithAuth() {
+  const auth = useAuth();
+  const homeUsersState = useHomeUsersState();
   const inviteState = useInviteState(auth.authToken, auth.server?.uri ?? null);
-  const prefsState = usePreferencesState();
+  const prefsState = usePreferencesState(auth.activeUser?.id ?? null);
 
   return (
-    <AuthProvider value={auth}>
+    <HomeUsersProvider value={homeUsersState}>
       <PreferencesProvider value={prefsState}>
         <InviteProvider value={inviteState}>
           <AppRoutes />
         </InviteProvider>
       </PreferencesProvider>
+    </HomeUsersProvider>
+  );
+}
+
+function App() {
+  const auth = useAuthState();
+
+  return (
+    <AuthProvider value={auth}>
+      <AppWithAuth />
     </AuthProvider>
   );
 }

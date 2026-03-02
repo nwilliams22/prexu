@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, createContext, useContext } from "react";
 import type { AuthData, ServerData } from "../types/plex";
+import type { ActiveUser } from "../types/home-user";
 import {
   getAuth,
   saveAuth,
@@ -8,8 +9,12 @@ import {
   saveServer,
   clearServer,
   getClientIdentifier,
+  getAdminAuth,
+  saveAdminAuth,
+  saveActiveUser,
+  getActiveUser,
 } from "../services/storage";
-import { validateToken } from "../services/plex-api";
+import { validateToken, getPlexUser } from "../services/plex-api";
 
 export interface AuthContextValue {
   isLoading: boolean;
@@ -17,10 +22,12 @@ export interface AuthContextValue {
   serverSelected: boolean;
   authToken: string | null;
   server: ServerData | null;
+  activeUser: ActiveUser | null;
   login: (token: string) => Promise<void>;
   logout: () => Promise<void>;
   selectServer: (server: ServerData) => Promise<void>;
   changeServer: () => Promise<void>;
+  switchUser: (newToken: string, user: ActiveUser) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -40,6 +47,7 @@ export function useAuthState(): AuthContextValue {
   const [isLoading, setIsLoading] = useState(true);
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [server, setServer] = useState<ServerData | null>(null);
+  const [activeUser, setActiveUser] = useState<ActiveUser | null>(null);
 
   // On mount, check for existing auth
   useEffect(() => {
@@ -56,6 +64,12 @@ export function useAuthState(): AuthContextValue {
             const storedServer = await getServer();
             if (storedServer) {
               setServer(storedServer);
+            }
+
+            // Restore active user profile
+            const storedUser = await getActiveUser();
+            if (storedUser) {
+              setActiveUser(storedUser);
             }
           } else {
             // Token expired, clean up
@@ -78,12 +92,30 @@ export function useAuthState(): AuthContextValue {
     };
     await saveAuth(authData);
     setAuthToken(token);
+
+    // Set the initial active user from the logged-in Plex account
+    try {
+      const plexUser = await getPlexUser(token);
+      const user: ActiveUser = {
+        id: plexUser.id,
+        title: plexUser.friendlyName || plexUser.username,
+        username: plexUser.username,
+        thumb: plexUser.thumb,
+        isAdmin: true,
+        isHomeUser: false,
+      };
+      await saveActiveUser(user);
+      setActiveUser(user);
+    } catch {
+      // Non-fatal: user switcher will just not show an avatar
+    }
   }, []);
 
   const logout = useCallback(async () => {
     await clearAuth();
     setAuthToken(null);
     setServer(null);
+    setActiveUser(null);
   }, []);
 
   const selectServer = useCallback(async (serverData: ServerData) => {
@@ -96,15 +128,42 @@ export function useAuthState(): AuthContextValue {
     setServer(null);
   }, []);
 
+  const switchUser = useCallback(
+    async (newToken: string, user: ActiveUser) => {
+      // If this is the first user switch, preserve the current token as admin
+      const existingAdmin = await getAdminAuth();
+      if (!existingAdmin && authToken) {
+        const clientId = await getClientIdentifier();
+        await saveAdminAuth({ authToken, clientIdentifier: clientId });
+      }
+
+      // Save new auth token
+      const clientId = await getClientIdentifier();
+      await saveAuth({ authToken: newToken, clientIdentifier: clientId });
+      setAuthToken(newToken);
+
+      // Save active user
+      await saveActiveUser(user);
+      setActiveUser(user);
+
+      // Clear server selection — must re-discover with new token
+      await clearServer();
+      setServer(null);
+    },
+    [authToken]
+  );
+
   return {
     isLoading,
     isAuthenticated: authToken !== null,
     serverSelected: server !== null,
     authToken,
     server,
+    activeUser,
     login,
     logout,
     selectServer,
     changeServer,
+    switchUser,
   };
 }

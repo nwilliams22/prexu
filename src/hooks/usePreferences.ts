@@ -3,6 +3,8 @@ import {
   getPreferences,
   savePreferences,
   getDefaultPreferences,
+  getUserPreferences,
+  saveUserPreferences,
 } from "../services/storage";
 import type { Preferences } from "../types/preferences";
 
@@ -28,14 +30,21 @@ export function usePreferences(): PreferencesContextValue {
   return ctx;
 }
 
-export function usePreferencesState(): PreferencesContextValue {
+export function usePreferencesState(
+  userId?: number | null
+): PreferencesContextValue {
   const [preferences, setPreferences] = useState<Preferences>(
     getDefaultPreferences()
   );
 
+  // Re-load preferences when userId changes
   useEffect(() => {
-    getPreferences().then(setPreferences);
-  }, []);
+    if (userId) {
+      getUserPreferences(userId).then(setPreferences);
+    } else {
+      getPreferences().then(setPreferences);
+    }
+  }, [userId]);
 
   const updatePreferences = useCallback(
     (partial: DeepPartial<Preferences>) => {
@@ -56,18 +65,27 @@ export function usePreferencesState(): PreferencesContextValue {
             },
           },
         };
-        savePreferences(next);
+        // Save to per-user key if userId is known, otherwise global
+        if (userId) {
+          saveUserPreferences(userId, next);
+        } else {
+          savePreferences(next);
+        }
         return next;
       });
     },
-    []
+    [userId]
   );
 
   const resetPreferences = useCallback(() => {
     const defaults = getDefaultPreferences();
     setPreferences(defaults);
-    savePreferences(defaults);
-  }, []);
+    if (userId) {
+      saveUserPreferences(userId, defaults);
+    } else {
+      savePreferences(defaults);
+    }
+  }, [userId]);
 
   return { preferences, updatePreferences, resetPreferences };
 }

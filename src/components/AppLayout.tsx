@@ -4,12 +4,12 @@ import { useAuth } from "../hooks/useAuth";
 import { usePreferences } from "../hooks/usePreferences";
 import Sidebar from "./Sidebar";
 import SearchBar from "./SearchBar";
+import UserSwitcher from "./UserSwitcher";
 import InviteNotification from "./InviteNotification";
 import ErrorBoundary from "./ErrorBoundary";
 
 function AppLayout() {
-  const { isAuthenticated, serverSelected, server, logout, changeServer } =
-    useAuth();
+  const { isAuthenticated, serverSelected } = useAuth();
   const { preferences } = usePreferences();
   const navigate = useNavigate();
   const location = useLocation();
@@ -35,19 +35,7 @@ function AppLayout() {
         <SearchBar />
 
         <div style={styles.headerRight}>
-          <span style={styles.serverName}>{server?.name}</span>
-          <button
-            onClick={() => navigate("/settings")}
-            style={styles.headerButton}
-          >
-            Settings
-          </button>
-          <button onClick={changeServer} style={styles.headerButton}>
-            Change Server
-          </button>
-          <button onClick={logout} style={styles.headerButton}>
-            Sign Out
-          </button>
+          <UserSwitcher />
         </div>
       </header>
 
@@ -98,18 +86,6 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     gap: "0.75rem",
-  },
-  serverName: {
-    fontSize: "0.85rem",
-    color: "var(--text-secondary)",
-  },
-  headerButton: {
-    background: "transparent",
-    color: "var(--text-secondary)",
-    fontSize: "0.8rem",
-    padding: "0.35rem 0.75rem",
-    borderRadius: "4px",
-    border: "1px solid var(--border)",
   },
   body: {
     display: "flex",

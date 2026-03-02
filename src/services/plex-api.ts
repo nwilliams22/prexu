@@ -3,6 +3,7 @@
  */
 
 import type { PlexResource, PlexServer, PlexConnection } from "../types/plex";
+import type { HomeUser } from "../types/home-user";
 import { getClientIdentifier } from "./storage";
 
 const PLEX_TV_API = "https://clients.plex.tv/api/v2";
@@ -255,4 +256,88 @@ export async function getPlexFriends(
       `Failed to fetch friends: ${err instanceof Error ? err.message : "Unknown error"}`
     );
   }
+}
+
+// ── Plex Home Users API ──
+
+/**
+ * Fetch all users in the Plex Home.
+ * Returns empty array if the account is not part of a Plex Home.
+ */
+export async function getHomeUsers(authToken: string): Promise<HomeUser[]> {
+  const headers = await getAuthHeaders(authToken);
+
+  try {
+    const response = await fetch(`${PLEX_TV_API}/home/users`, { headers });
+
+    if (!response.ok) {
+      // 401 or 403 means not a Plex Home member — graceful degradation
+      if (response.status === 401 || response.status === 403) {
+        return [];
+      }
+      throw new Error(`Failed to fetch home users: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const users = Array.isArray(data) ? data : (data.users ?? []);
+
+    return users.map((u: Record<string, unknown>) => ({
+      id: (u.id as number) ?? 0,
+      uuid: (u.uuid as string) ?? "",
+      title: (u.title as string) ?? (u.username as string) ?? "",
+      username: (u.username as string) ?? "",
+      thumb: (u.thumb as string) ?? "",
+      admin: (u.admin as boolean) ?? false,
+      guest: (u.guest as boolean) ?? false,
+      restricted: (u.restricted as boolean) ?? false,
+      home: (u.home as boolean) ?? false,
+      protected: (u.protected as boolean) ?? false,
+    }));
+  } catch (err) {
+    console.warn("[plex-api] Could not fetch home users:", err);
+    return [];
+  }
+}
+
+/**
+ * Switch to a different Plex Home user.
+ * Returns a new auth token for that user.
+ * If the user has a PIN, it must be provided.
+ */
+export async function switchHomeUser(
+  authToken: string,
+  userId: number,
+  pin?: string
+): Promise<string> {
+  const headers = await getAuthHeaders(authToken);
+
+  const body = new URLSearchParams();
+  if (pin) {
+    body.set("pin", pin);
+  }
+
+  const response = await fetch(`${PLEX_TV_API}/home/users/${userId}/switch`, {
+    method: "POST",
+    headers: {
+      ...headers,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: body.toString(),
+  });
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new Error("Incorrect PIN");
+    }
+    throw new Error(`Failed to switch user: ${response.status}`);
+  }
+
+  const data = await response.json();
+  const newToken = data.authToken ?? data.authentication_token;
+
+  if (!newToken) {
+    throw new Error("No auth token returned from user switch");
+  }
+
+  return newToken as string;
 }
