@@ -32,6 +32,19 @@ interface SessionCreatorState {
   mediaType: "movie" | "episode";
 }
 
+/** Pure helper — subtitle for a library item (year, episode count) */
+function getSubtitle(item: { type: string; year?: number; leafCount?: number }): string {
+  if (item.type === "show") {
+    const show = item as PlexShow;
+    const parts: string[] = [];
+    if (show.year) parts.push(String(show.year));
+    if (show.leafCount) parts.push(`${show.leafCount} eps`);
+    return parts.join(" · ");
+  }
+  if (item.year) return String(item.year);
+  return "";
+}
+
 function LibraryView() {
   const { sectionId } = useParams<{ sectionId: string }>();
   const { server } = useAuth();
@@ -126,18 +139,6 @@ function LibraryView() {
 
   const posterUrl = (thumb: string) =>
     getImageUrl(server.uri, server.accessToken, thumb, 300, 450);
-
-  const getSubtitle = (item: { type: string; year?: number; leafCount?: number }): string => {
-    if (item.type === "show") {
-      const show = item as PlexShow;
-      const parts: string[] = [];
-      if (show.year) parts.push(String(show.year));
-      if (show.leafCount) parts.push(`${show.leafCount} eps`);
-      return parts.join(" · ");
-    }
-    if (item.year) return String(item.year);
-    return "";
-  };
 
   const getLabel = (): string => {
     if (!section) return "items";

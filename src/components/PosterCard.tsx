@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, memo } from "react";
 
 interface PosterCardProps {
   imageUrl: string;
@@ -217,4 +217,4 @@ const styles: Record<string, React.CSSProperties> = {
   },
 };
 
-export default PosterCard;
+export default memo(PosterCard);

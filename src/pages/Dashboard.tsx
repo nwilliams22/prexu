@@ -37,6 +37,43 @@ interface SessionCreatorState {
 
 const POSTER_SIZES = { small: 130, medium: 160, large: 200 } as const;
 
+/** Pure helper — subtitle for a media item (movie year, episode code) */
+function getSubtitle(item: PlexMediaItem): string {
+  if (item.type === "movie") {
+    const movie = item as { year?: number };
+    return movie.year ? String(movie.year) : "";
+  }
+  if (item.type === "episode") {
+    const ep = item as PlexEpisode;
+    return `S${String(ep.parentIndex).padStart(2, "0")}E${String(ep.index).padStart(2, "0")}`;
+  }
+  return "";
+}
+
+/** Pure helper — subtitle for a grouped show card */
+function getGroupSubtitle(group: GroupedRecentItem): string {
+  if (group.episodes.length === 1) {
+    const ep = group.episodes[0];
+    return `S${String(ep.parentIndex).padStart(2, "0")}E${String(ep.index).padStart(2, "0")} · ${ep.title}`;
+  }
+  if (group.episodes.length > 1) {
+    return `${group.episodes.length} new episodes`;
+  }
+  if (group.episodeCount > 0) {
+    return `${group.episodeCount} episodes`;
+  }
+  return "Recently Added";
+}
+
+/** Pure helper — playback progress ratio (0-1) or undefined */
+function getProgress(item: PlexMediaItem): number | undefined {
+  const withOffset = item as { viewOffset?: number; duration?: number };
+  if (withOffset.viewOffset && withOffset.duration) {
+    return withOffset.viewOffset / withOffset.duration;
+  }
+  return undefined;
+}
+
 function Dashboard() {
   const { server } = useAuth();
   const { preferences } = usePreferences();
@@ -67,43 +104,6 @@ function Dashboard() {
 
   const posterUrl = (thumb: string) =>
     getImageUrl(server.uri, server.accessToken, thumb, 300, 450);
-
-  const getSubtitle = (item: PlexMediaItem): string => {
-    if (item.type === "movie") {
-      const movie = item as { year?: number };
-      return movie.year ? String(movie.year) : "";
-    }
-    if (item.type === "episode") {
-      const ep = item as PlexEpisode;
-      return `S${String(ep.parentIndex).padStart(2, "0")}E${String(ep.index).padStart(2, "0")}`;
-    }
-    return "";
-  };
-
-  /** Build subtitle for a show-group card */
-  const getGroupSubtitle = (group: GroupedRecentItem): string => {
-    // Episode-level data available
-    if (group.episodes.length === 1) {
-      const ep = group.episodes[0];
-      return `S${String(ep.parentIndex).padStart(2, "0")}E${String(ep.index).padStart(2, "0")} · ${ep.title}`;
-    }
-    if (group.episodes.length > 1) {
-      return `${group.episodes.length} new episodes`;
-    }
-    // Season-level data only (from /library/recentlyAdded)
-    if (group.episodeCount > 0) {
-      return `${group.episodeCount} episodes`;
-    }
-    return "Recently Added";
-  };
-
-  const getProgress = (item: PlexMediaItem): number | undefined => {
-    const withOffset = item as { viewOffset?: number; duration?: number };
-    if (withOffset.viewOffset && withOffset.duration) {
-      return withOffset.viewOffset / withOffset.duration;
-    }
-    return undefined;
-  };
 
   const openContextMenu = useCallback(
     (e: React.MouseEvent, item: PlexMediaItem, section: ContextMenuState["section"]) => {

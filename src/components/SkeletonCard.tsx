@@ -1,3 +1,5 @@
+import { memo } from "react";
+
 interface SkeletonCardProps {
   width?: number;
   aspectRatio?: number;
@@ -47,4 +49,4 @@ const styles: Record<string, React.CSSProperties> = {
   },
 };
 
-export default SkeletonCard;
+export default memo(SkeletonCard);

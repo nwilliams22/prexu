@@ -29,7 +29,7 @@ function HorizontalRow({ title, children, onSeeAll }: HorizontalRowProps) {
       el.removeEventListener("scroll", updateScrollState);
       observer.disconnect();
     };
-  }, [children]);
+  }, []);
 
   const scroll = (direction: "left" | "right") => {
     const el = scrollRef.current;
