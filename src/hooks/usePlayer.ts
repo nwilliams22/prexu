@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import Hls from "hls.js";
+import type HlsType from "hls.js";
 import { useAuth } from "./useAuth";
 import { usePreferences } from "./usePreferences";
 import { getItemMetadata } from "../services/plex-library";
@@ -70,7 +70,8 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
   const prefsRef = useRef(preferences);
   prefsRef.current = preferences;
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const hlsRef = useRef<Hls | null>(null);
+  const hlsRef = useRef<HlsType | null>(null);
+  const HlsCtorRef = useRef<typeof HlsType | null>(null);
   const timelineRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const ratingKeyRef = useRef(ratingKey);
 
@@ -120,6 +121,14 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
       hlsRef.current.destroy();
       hlsRef.current = null;
     }
+  }, []);
+
+  // ── Load hls.js dynamically ──
+  const loadHls = useCallback(async (): Promise<typeof HlsType> => {
+    if (HlsCtorRef.current) return HlsCtorRef.current;
+    const { default: Hls } = await import("hls.js");
+    HlsCtorRef.current = Hls;
+    return Hls;
   }, []);
 
   // ── Timeline reporting ──
@@ -255,7 +264,9 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
           // Autoplay blocked — user will click play
         });
       } else {
-        // HLS Transcode
+        // HLS Transcode — dynamically load hls.js
+        const Hls = await loadHls();
+
         if (!Hls.isSupported()) {
           throw new Error(
             "HLS playback is not supported in this browser/webview"
@@ -329,6 +340,7 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
     volume,
     isMuted,
     destroyHls,
+    loadHls,
     startTimeline,
   ]);
 
@@ -481,6 +493,7 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
 
       // For HLS, we need to rebuild the transcode URL with the new stream
       if (hlsRef.current) {
+        const Hls = await loadHls();
         const savedTime = videoRef.current?.currentTime ?? 0;
         destroyHls();
         setIsBuffering(true);
@@ -519,7 +532,7 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
         hlsRef.current = hls;
       }
     },
-    [server, ratingKey, selectedAudioId, selectedSubtitleId, destroyHls]
+    [server, ratingKey, selectedAudioId, selectedSubtitleId, destroyHls, loadHls]
   );
 
   const selectSubtitleTrack = useCallback(
@@ -529,6 +542,7 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
 
       // For HLS, rebuild transcode URL
       if (hlsRef.current) {
+        const Hls = await loadHls();
         const savedTime = videoRef.current?.currentTime ?? 0;
         destroyHls();
         setIsBuffering(true);
@@ -567,7 +581,7 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
         hlsRef.current = hls;
       }
     },
-    [server, ratingKey, selectedAudioId, selectedSubtitleId, destroyHls]
+    [server, ratingKey, selectedAudioId, selectedSubtitleId, destroyHls, loadHls]
   );
 
   const retry = useCallback(() => {
