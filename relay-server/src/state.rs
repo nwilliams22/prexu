@@ -28,6 +28,7 @@ impl AppState {
     }
 }
 
+#[allow(dead_code)]
 pub struct Session {
     pub id: String,
     pub media_title: String,
@@ -46,6 +47,7 @@ pub struct Participant {
     pub sender: mpsc::UnboundedSender<String>,
 }
 
+#[allow(dead_code)]
 pub struct ConnectionHandle {
     pub plex_username: String,
     pub plex_thumb: String,

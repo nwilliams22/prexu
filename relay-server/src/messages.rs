@@ -42,6 +42,7 @@ pub enum ClientMessage {
         timestamp: u64,
     },
     Buffering {
+        #[allow(dead_code)]
         current_time: f64,
     },
     Ready {
@@ -82,6 +83,7 @@ pub enum ServerMessage {
     ParticipantLeft {
         plex_username: String,
     },
+    #[allow(dead_code)]
     SessionDestroyed,
     InviteReceived {
         session_id: String,
