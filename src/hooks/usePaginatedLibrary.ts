@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useAuth } from "./useAuth";
 import { getLibraryItems } from "../services/plex-library";
-import type { PlexMediaItem } from "../types/library";
+import type { PlexMediaItem, LibraryFilters } from "../types/library";
 
 const PAGE_SIZE = 50;
 
@@ -18,9 +18,11 @@ export interface UsePaginatedLibraryResult {
 
 export function usePaginatedLibrary(
   sectionId: string | undefined,
-  sort: string = "titleSort:asc"
+  sort: string = "titleSort:asc",
+  filters: LibraryFilters = {}
 ): UsePaginatedLibraryResult {
   const { server } = useAuth();
+  const filtersKey = useMemo(() => JSON.stringify(filters), [filters]);
   const [items, setItems] = useState<PlexMediaItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -50,7 +52,7 @@ export function usePaginatedLibrary(
           server.uri,
           server.accessToken,
           sectionId,
-          { start: 0, size: PAGE_SIZE, sort }
+          { start: 0, size: PAGE_SIZE, sort, filters }
         );
         if (!cancelled) {
           setItems(result.items);
@@ -74,7 +76,7 @@ export function usePaginatedLibrary(
     return () => {
       cancelled = true;
     };
-  }, [server, sectionId, sort, refreshTrigger]);
+  }, [server, sectionId, sort, filtersKey, refreshTrigger]);
 
   const loadMore = useCallback(() => {
     if (!server || !sectionId || loadingRef.current || !hasMore) return;
@@ -88,7 +90,7 @@ export function usePaginatedLibrary(
           server.uri,
           server.accessToken,
           sectionId,
-          { start: items.length, size: PAGE_SIZE, sort }
+          { start: items.length, size: PAGE_SIZE, sort, filters }
         );
         setItems((prev) => [...prev, ...result.items]);
         setHasMore(result.hasMore);
@@ -101,7 +103,7 @@ export function usePaginatedLibrary(
         loadingRef.current = false;
       }
     })();
-  }, [server, sectionId, sort, items.length, hasMore]);
+  }, [server, sectionId, sort, filtersKey, items.length, hasMore]);
 
   return { items, isLoading, isLoadingMore, hasMore, totalSize, error, loadMore, retry };
 }

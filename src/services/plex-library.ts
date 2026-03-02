@@ -14,6 +14,8 @@ import type {
   PlexSeason,
   PaginatedResult,
   PlexHub,
+  LibraryFilters,
+  FilterOption,
 } from "../types/library";
 
 // ── JSON fetch helper ──
@@ -57,6 +59,7 @@ export async function getLibraryItems(
     size?: number;
     sort?: string;
     type?: number;
+    filters?: LibraryFilters;
   } = {}
 ): Promise<PaginatedResult<PlexMediaItem>> {
   const params = new URLSearchParams();
@@ -66,6 +69,16 @@ export async function getLibraryItems(
     params.set("X-Plex-Container-Size", String(options.size));
   if (options.sort) params.set("sort", options.sort);
   if (options.type) params.set("type", String(options.type));
+
+  // Apply filters
+  if (options.filters?.genre) params.set("genre", options.filters.genre);
+  if (options.filters?.year) params.set("year", options.filters.year);
+  if (options.filters?.contentRating)
+    params.set("contentRating", options.filters.contentRating);
+  if (options.filters?.unwatched) {
+    params.set("unwatched", "1");
+    params.set("unwatchedLeaves", "1");
+  }
 
   const query = params.toString();
   const path = `/library/sections/${sectionId}/all${query ? `?${query}` : ""}`;
@@ -87,6 +100,24 @@ export async function getLibraryItems(
     offset,
     hasMore: offset + items.length < totalSize,
   };
+}
+
+// ── Filter Options ──
+
+export async function getFilterOptions(
+  serverUri: string,
+  serverToken: string,
+  sectionId: string,
+  filterType: "genre" | "year" | "contentRating"
+): Promise<FilterOption[]> {
+  const data = await fetchJson<PlexMediaContainer<never>>(
+    serverUri,
+    serverToken,
+    `/library/sections/${sectionId}/${filterType}`
+  );
+  return (
+    (data.MediaContainer.Directory as unknown as { key: string; title: string }[]) ?? []
+  ).map((d) => ({ key: d.key, title: d.title }));
 }
 
 // ── Item Detail ──

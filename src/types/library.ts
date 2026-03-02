@@ -220,3 +220,17 @@ export interface SortOption {
   label: string;
   value: string;
 }
+
+// ── Filters ──
+
+export interface LibraryFilters {
+  genre?: string;
+  year?: string;
+  contentRating?: string;
+  unwatched?: boolean;
+}
+
+export interface FilterOption {
+  key: string;
+  title: string;
+}
