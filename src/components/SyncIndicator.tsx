@@ -6,10 +6,10 @@ interface SyncIndicatorProps {
 function SyncIndicator({ syncStatus, participantCount }: SyncIndicatorProps) {
   const dotColor =
     syncStatus === "synced"
-      ? "#4caf50"
+      ? "var(--success)"
       : syncStatus === "syncing"
         ? "var(--accent)"
-        : "#ef4444";
+        : "var(--error)";
 
   const label =
     syncStatus === "synced"

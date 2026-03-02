@@ -187,8 +187,8 @@ const styles: Record<string, React.CSSProperties> = {
     background: "var(--accent)",
     color: "#000",
     fontWeight: 600,
-    padding: "0.5rem 1.5rem",
-    borderRadius: "6px",
+    padding: "0.5rem 1.25rem",
+    borderRadius: "8px",
     fontSize: "0.9rem",
   },
   emptyContainer: {

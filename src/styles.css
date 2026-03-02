@@ -197,7 +197,7 @@ input[type="range"]::-webkit-slider-thumb {
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background: #e5a00d;
+  background: var(--accent);
   margin-top: -4px;
   cursor: pointer;
 }

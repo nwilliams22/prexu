@@ -333,7 +333,7 @@ function Settings() {
             <div
               style={{
                 ...styles.statusDot,
-                background: isRelayConnected ? "#4caf50" : "#ef4444",
+                background: isRelayConnected ? "var(--success)" : "var(--error)",
               }}
             />
             <span style={styles.statusText}>
@@ -416,12 +416,12 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: "1.5rem",
   },
   section: {
-    marginBottom: "2rem",
+    marginBottom: "1.75rem",
     paddingBottom: "1.5rem",
     borderBottom: "1px solid var(--border)",
   },
   sectionTitle: {
-    fontSize: "1.1rem",
+    fontSize: "1.15rem",
     fontWeight: 600,
     marginBottom: "1rem",
     color: "var(--accent)",
@@ -444,9 +444,9 @@ const styles: Record<string, React.CSSProperties> = {
   select: {
     width: "100%",
     padding: "0.5rem 0.75rem",
-    borderRadius: "6px",
+    borderRadius: "8px",
     border: "1px solid var(--border)",
-    background: "var(--bg-card)",
+    background: "var(--bg-primary)",
     color: "var(--text-primary)",
     fontSize: "0.9rem",
     outline: "none",
@@ -567,7 +567,7 @@ const styles: Record<string, React.CSSProperties> = {
   input: {
     flex: 1,
     padding: "0.5rem 0.75rem",
-    borderRadius: "6px",
+    borderRadius: "8px",
     border: "1px solid var(--border)",
     background: "var(--bg-primary)",
     color: "var(--text-primary)",
@@ -578,9 +578,9 @@ const styles: Record<string, React.CSSProperties> = {
     background: "var(--accent)",
     color: "#000",
     border: "none",
-    borderRadius: "6px",
-    padding: "0.5rem 1rem",
-    fontSize: "0.85rem",
+    borderRadius: "8px",
+    padding: "0.5rem 1.25rem",
+    fontSize: "0.9rem",
     fontWeight: 600,
     cursor: "pointer",
     whiteSpace: "nowrap",
@@ -607,8 +607,8 @@ const styles: Record<string, React.CSSProperties> = {
     background: "transparent",
     color: "var(--text-primary)",
     border: "1px solid var(--border)",
-    borderRadius: "6px",
-    padding: "0.5rem 1rem",
+    borderRadius: "8px",
+    padding: "0.5rem 1.25rem",
     fontSize: "0.85rem",
     cursor: "pointer",
     marginTop: "0.5rem",

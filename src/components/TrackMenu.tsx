@@ -103,13 +103,13 @@ const styles: Record<string, React.CSSProperties> = {
     width: "100%",
     padding: "0.5rem 1rem",
     background: "transparent",
-    color: "#fff",
+    color: "var(--text-primary)",
     fontSize: "0.85rem",
     textAlign: "left",
     borderRadius: 0,
   },
   menuItemSelected: {
-    color: "#e5a00d",
+    color: "var(--accent)",
     fontWeight: 600,
   },
   checkmark: {

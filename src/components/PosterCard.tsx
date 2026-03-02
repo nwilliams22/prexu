@@ -202,14 +202,14 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: "hidden",
   },
   title: {
-    fontSize: "0.82rem",
+    fontSize: "0.85rem",
     fontWeight: 500,
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   },
   subtitle: {
-    fontSize: "0.72rem",
+    fontSize: "0.75rem",
     color: "var(--text-secondary)",
     overflow: "hidden",
     textOverflow: "ellipsis",

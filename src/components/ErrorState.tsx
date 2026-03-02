@@ -51,7 +51,7 @@ const styles: Record<string, React.CSSProperties> = {
     background: "transparent",
     color: "var(--text-primary)",
     border: "1px solid var(--border)",
-    borderRadius: "6px",
+    borderRadius: "8px",
     padding: "0.5rem 1.25rem",
     fontSize: "0.85rem",
     fontWeight: 600,

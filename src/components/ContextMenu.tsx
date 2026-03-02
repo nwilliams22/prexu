@@ -92,7 +92,7 @@ function ContextMenu({ items, position, onClose }: ContextMenuProps) {
 const styles: Record<string, React.CSSProperties> = {
   menu: {
     position: "fixed",
-    zIndex: 9999,
+    zIndex: 1200,
     background: "var(--bg-card)",
     border: "1px solid var(--border)",
     borderRadius: "8px",

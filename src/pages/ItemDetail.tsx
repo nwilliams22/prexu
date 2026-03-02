@@ -584,10 +584,10 @@ const styles: Record<string, React.CSSProperties> = {
   playButton: {
     background: "var(--accent)",
     color: "#000",
-    fontSize: "1rem",
+    fontSize: "0.9rem",
     fontWeight: 600,
-    padding: "0.6rem 1.5rem",
-    borderRadius: "6px",
+    padding: "0.5rem 1.25rem",
+    borderRadius: "8px",
     width: "fit-content",
   },
   showLink: {
@@ -603,7 +603,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "1rem 1.5rem",
   },
   sectionTitle: {
-    fontSize: "1.1rem",
+    fontSize: "1.15rem",
     fontWeight: 600,
     marginBottom: "0.75rem",
   },

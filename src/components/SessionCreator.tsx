@@ -319,7 +319,7 @@ const styles: Record<string, React.CSSProperties> = {
   searchInput: {
     margin: "0 1.25rem 0.75rem",
     padding: "0.5rem 0.75rem",
-    borderRadius: "6px",
+    borderRadius: "8px",
     border: "1px solid var(--border)",
     background: "var(--bg-primary)",
     color: "var(--text-primary)",
@@ -393,7 +393,7 @@ const styles: Record<string, React.CSSProperties> = {
     transition: "all 0.15s",
   },
   errorText: {
-    color: "var(--error, #ef4444)",
+    color: "var(--error)",
     fontSize: "0.85rem",
     padding: "0 1.25rem",
     margin: "0.5rem 0 0",

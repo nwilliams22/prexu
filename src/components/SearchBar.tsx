@@ -109,7 +109,7 @@ const styles: Record<string, React.CSSProperties> = {
     maxWidth: "400px",
     margin: "0 1.5rem",
     background: "var(--bg-primary)",
-    borderRadius: "6px",
+    borderRadius: "8px",
     border: "1px solid var(--border)",
     padding: "0 0.5rem",
     height: "34px",

@@ -264,7 +264,7 @@ const styles: Record<string, React.CSSProperties> = {
   episodeMeta: {
     display: "flex",
     gap: "0.75rem",
-    fontSize: "0.78rem",
+    fontSize: "0.75rem",
     color: "var(--text-secondary)",
   },
   playButton: {

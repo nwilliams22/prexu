@@ -240,7 +240,7 @@ function PlayerControls({ player, onBack, visible, syncIndicator }: PlayerContro
                 style={{
                   ...styles.controlButton,
                   ...(player.selectedSubtitleId !== null
-                    ? { color: "#e5a00d" }
+                    ? { color: "var(--accent)" }
                     : {}),
                 }}
                 aria-label="Subtitles"
@@ -404,7 +404,7 @@ const styles: Record<string, React.CSSProperties> = {
     left: 0,
     height: "4px",
     marginTop: "-2px",
-    background: "#e5a00d",
+    background: "var(--accent)",
     borderRadius: "2px",
     pointerEvents: "none",
   },
@@ -415,7 +415,7 @@ const styles: Record<string, React.CSSProperties> = {
     height: "14px",
     marginTop: "-7px",
     marginLeft: "-7px",
-    background: "#e5a00d",
+    background: "var(--accent)",
     borderRadius: "50%",
     pointerEvents: "none",
     boxShadow: "0 1px 4px rgba(0,0,0,0.4)",
@@ -425,7 +425,7 @@ const styles: Record<string, React.CSSProperties> = {
     bottom: "22px",
     transform: "translateX(-50%)",
     background: "rgba(0,0,0,0.85)",
-    color: "#fff",
+    color: "var(--text-primary)",
     fontSize: "0.75rem",
     padding: "2px 6px",
     borderRadius: "3px",
@@ -451,7 +451,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   controlButton: {
     background: "transparent",
-    color: "#fff",
+    color: "var(--text-primary)",
     padding: "0.35rem",
     display: "flex",
     alignItems: "center",
@@ -460,7 +460,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   timeDisplay: {
     color: "rgba(255,255,255,0.9)",
-    fontSize: "0.82rem",
+    fontSize: "0.85rem",
     fontVariantNumeric: "tabular-nums",
     marginLeft: "0.25rem",
     whiteSpace: "nowrap",

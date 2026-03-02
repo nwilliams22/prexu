@@ -175,7 +175,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    zIndex: 5000,
+    zIndex: 1100,
     animation: "overlayFadeIn 0.2s ease-out",
   },
   card: {
@@ -254,9 +254,9 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#000",
     border: "none",
     borderRadius: "8px",
-    padding: "0.65rem 2rem",
-    fontSize: "0.95rem",
-    fontWeight: 700,
+    padding: "0.5rem 1.25rem",
+    fontSize: "0.9rem",
+    fontWeight: 600,
     cursor: "pointer",
   },
   declineButton: {
@@ -264,8 +264,8 @@ const styles: Record<string, React.CSSProperties> = {
     color: "var(--text-secondary)",
     border: "1px solid var(--border)",
     borderRadius: "8px",
-    padding: "0.65rem 1.5rem",
-    fontSize: "0.95rem",
+    padding: "0.5rem 1.25rem",
+    fontSize: "0.9rem",
     cursor: "pointer",
   },
   nav: {

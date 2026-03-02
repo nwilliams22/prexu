@@ -16,10 +16,10 @@ function ParticipantOverlay({
       {participants.map((p) => {
         const borderColor =
           p.state === "playing"
-            ? "#4caf50"
+            ? "var(--success)"
             : p.state === "buffering"
               ? "var(--accent)"
-              : "#666";
+              : "var(--text-secondary)";
 
         return (
           <div key={p.plexUsername} style={styles.avatarWrapper} title={p.plexUsername}>
