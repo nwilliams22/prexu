@@ -1,9 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "./useAuth";
 import { getWatchHistory } from "../services/plex-library";
-import type { PlexMediaItem } from "../types/library";
+import { cacheGet, cacheSet, cacheInvalidate } from "../services/api-cache";
+import type { PlexMediaItem, PaginatedResult } from "../types/library";
 
 const PAGE_SIZE = 50;
+const CACHE_KEY = "watchHistory:page0";
+const CACHE_TTL = 2 * 60 * 1000; // 2 minutes
 
 export interface UseWatchHistoryResult {
   items: PlexMediaItem[];
@@ -28,12 +31,24 @@ export function useWatchHistory(): UseWatchHistoryResult {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   const retry = useCallback(() => {
+    cacheInvalidate(CACHE_KEY);
     setRefreshTrigger((n) => n + 1);
   }, []);
 
   // Initial fetch
   useEffect(() => {
     if (!server) return;
+
+    // Check cache for first page
+    const cached = cacheGet<PaginatedResult<PlexMediaItem>>(CACHE_KEY);
+    if (cached) {
+      setItems(cached.items);
+      setTotalSize(cached.totalSize);
+      setHasMore(cached.hasMore);
+      setIsLoading(false);
+      loadingRef.current = false;
+      return;
+    }
 
     let cancelled = false;
     loadingRef.current = true;
@@ -52,6 +67,7 @@ export function useWatchHistory(): UseWatchHistoryResult {
           setItems(result.items);
           setTotalSize(result.totalSize);
           setHasMore(result.hasMore);
+          cacheSet(CACHE_KEY, result, CACHE_TTL);
         }
       } catch (err) {
         if (!cancelled) {

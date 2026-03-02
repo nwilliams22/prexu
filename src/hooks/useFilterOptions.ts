@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "./useAuth";
 import { getFilterOptions } from "../services/plex-library";
+import { cacheGet, cacheSet } from "../services/api-cache";
 import type { FilterOption } from "../types/library";
 
 export interface UseFilterOptionsResult {
@@ -9,6 +10,14 @@ export interface UseFilterOptionsResult {
   contentRatings: FilterOption[];
   isLoading: boolean;
 }
+
+interface FilterOptionsData {
+  genres: FilterOption[];
+  years: FilterOption[];
+  contentRatings: FilterOption[];
+}
+
+const CACHE_TTL = 10 * 60 * 1000; // 10 minutes
 
 export function useFilterOptions(
   sectionId: string | undefined
@@ -21,6 +30,16 @@ export function useFilterOptions(
 
   useEffect(() => {
     if (!server || !sectionId) return;
+
+    const cacheKey = `filterOptions:${sectionId}`;
+    const cached = cacheGet<FilterOptionsData>(cacheKey);
+    if (cached) {
+      setGenres(cached.genres);
+      setYears(cached.years);
+      setContentRatings(cached.contentRatings);
+      setIsLoading(false);
+      return;
+    }
 
     let cancelled = false;
     setIsLoading(true);
@@ -40,6 +59,7 @@ export function useFilterOptions(
           setGenres(g);
           setYears(y);
           setContentRatings(cr);
+          cacheSet(cacheKey, { genres: g, years: y, contentRatings: cr }, CACHE_TTL);
         }
       })
       .catch(() => {

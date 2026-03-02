@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "./useAuth";
 import { getRecentlyAdded, getOnDeck } from "../services/plex-library";
+import { cacheGet, cacheSet, cacheInvalidate } from "../services/api-cache";
 import { groupRecentlyAdded } from "../utils/groupRecentlyAdded";
 import type { PlexMediaItem, GroupedRecentItem } from "../types/library";
 
@@ -13,50 +14,48 @@ export interface UseDashboardResult {
   refresh: () => void;
 }
 
-/** Simple in-memory cache keyed by server URI */
-interface DashboardCache {
-  serverUri: string;
+interface DashboardData {
   recentMovies: PlexMediaItem[];
   recentShows: GroupedRecentItem[];
   onDeck: PlexMediaItem[];
-  timestamp: number;
 }
 
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-let cache: DashboardCache | null = null;
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 export function useDashboard(): UseDashboardResult {
   const { server } = useAuth();
-  const [recentMovies, setRecentMovies] = useState<PlexMediaItem[]>(
-    () => cache?.recentMovies ?? []
-  );
-  const [recentShows, setRecentShows] = useState<GroupedRecentItem[]>(
-    () => cache?.recentShows ?? []
-  );
-  const [onDeck, setOnDeck] = useState<PlexMediaItem[]>(
-    () => cache?.onDeck ?? []
-  );
+  const cacheKey = server ? `dashboard:${server.uri}` : "";
+
+  const [recentMovies, setRecentMovies] = useState<PlexMediaItem[]>(() => {
+    const cached = cacheKey ? cacheGet<DashboardData>(cacheKey) : null;
+    return cached?.recentMovies ?? [];
+  });
+  const [recentShows, setRecentShows] = useState<GroupedRecentItem[]>(() => {
+    const cached = cacheKey ? cacheGet<DashboardData>(cacheKey) : null;
+    return cached?.recentShows ?? [];
+  });
+  const [onDeck, setOnDeck] = useState<PlexMediaItem[]>(() => {
+    const cached = cacheKey ? cacheGet<DashboardData>(cacheKey) : null;
+    return cached?.onDeck ?? [];
+  });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   const refresh = useCallback(() => {
-    cache = null;
+    if (cacheKey) cacheInvalidate(cacheKey);
     setRefreshTrigger((n) => n + 1);
-  }, []);
+  }, [cacheKey]);
 
   useEffect(() => {
     if (!server) return;
 
-    // If cache is fresh for this server, use it and skip fetch
-    if (
-      cache &&
-      cache.serverUri === server.uri &&
-      Date.now() - cache.timestamp < CACHE_TTL_MS
-    ) {
-      setRecentMovies(cache.recentMovies);
-      setRecentShows(cache.recentShows);
-      setOnDeck(cache.onDeck);
+    // If cache is fresh, use it and skip fetch
+    const cached = cacheGet<DashboardData>(cacheKey);
+    if (cached) {
+      setRecentMovies(cached.recentMovies);
+      setRecentShows(cached.recentShows);
+      setOnDeck(cached.onDeck);
       setIsLoading(false);
       return;
     }
@@ -83,13 +82,11 @@ export function useDashboard(): UseDashboardResult {
           setRecentShows(shows);
           setOnDeck(deckItems);
 
-          cache = {
-            serverUri: server.uri,
+          cacheSet(cacheKey, {
             recentMovies: movies,
             recentShows: shows,
             onDeck: deckItems,
-            timestamp: Date.now(),
-          };
+          }, CACHE_TTL);
         }
       } catch (err) {
         if (!cancelled) {
@@ -109,7 +106,7 @@ export function useDashboard(): UseDashboardResult {
     return () => {
       cancelled = true;
     };
-  }, [server, refreshTrigger]);
+  }, [server, cacheKey, refreshTrigger]);
 
   return { recentMovies, recentShows, onDeck, isLoading, error, refresh };
 }

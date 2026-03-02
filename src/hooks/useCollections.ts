@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "./useAuth";
 import { useLibrary } from "./useLibrary";
 import { getCollections } from "../services/plex-library";
+import { cacheGet, cacheSet, cacheInvalidate } from "../services/api-cache";
 import type { LibrarySection, PlexCollection } from "../types/library";
 
 export interface CollectionGroup {
@@ -16,6 +17,9 @@ export interface UseCollectionsResult {
   retry: () => void;
 }
 
+const CACHE_KEY = "collections:all";
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
 export function useCollections(): UseCollectionsResult {
   const { server } = useAuth();
   const { sections } = useLibrary();
@@ -25,11 +29,19 @@ export function useCollections(): UseCollectionsResult {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   const retry = useCallback(() => {
+    cacheInvalidate(CACHE_KEY);
     setRefreshTrigger((n) => n + 1);
   }, []);
 
   useEffect(() => {
     if (!server || sections.length === 0) return;
+
+    const cached = cacheGet<CollectionGroup[]>(CACHE_KEY);
+    if (cached) {
+      setCollections(cached);
+      setIsLoading(false);
+      return;
+    }
 
     let cancelled = false;
     setIsLoading(true);
@@ -55,8 +67,9 @@ export function useCollections(): UseCollectionsResult {
     )
       .then((groups) => {
         if (!cancelled) {
-          // Only include sections that have collections
-          setCollections(groups.filter((g) => g.items.length > 0));
+          const filtered = groups.filter((g) => g.items.length > 0);
+          setCollections(filtered);
+          cacheSet(CACHE_KEY, filtered, CACHE_TTL);
         }
       })
       .catch((err) => {
