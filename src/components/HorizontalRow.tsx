@@ -54,17 +54,20 @@ function HorizontalRow({ title, children, onSeeAll }: HorizontalRowProps) {
 
       <div style={styles.scrollWrapper}>
         {/* Left arrow */}
-        {canScrollLeft && (
-          <button
-            onClick={() => scroll("left")}
-            style={{ ...styles.scrollButton, left: 0 }}
-            aria-label="Scroll left"
-          >
-            <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-              <polyline points="15 18 9 12 15 6" />
-            </svg>
-          </button>
-        )}
+        <button
+          onClick={() => scroll("left")}
+          style={{
+            ...styles.scrollButton,
+            left: 0,
+            opacity: canScrollLeft ? 1 : 0,
+            pointerEvents: canScrollLeft ? "auto" : "none",
+          }}
+          aria-label="Scroll left"
+        >
+          <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <polyline points="15 18 9 12 15 6" />
+          </svg>
+        </button>
 
         {/* Scroll container */}
         <div ref={scrollRef} className="hide-scrollbar" style={styles.scrollContainer}>
@@ -72,17 +75,20 @@ function HorizontalRow({ title, children, onSeeAll }: HorizontalRowProps) {
         </div>
 
         {/* Right arrow */}
-        {canScrollRight && (
-          <button
-            onClick={() => scroll("right")}
-            style={{ ...styles.scrollButton, right: 0 }}
-            aria-label="Scroll right"
-          >
-            <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-              <polyline points="9 6 15 12 9 18" />
-            </svg>
-          </button>
-        )}
+        <button
+          onClick={() => scroll("right")}
+          style={{
+            ...styles.scrollButton,
+            right: 0,
+            opacity: canScrollRight ? 1 : 0,
+            pointerEvents: canScrollRight ? "auto" : "none",
+          }}
+          aria-label="Scroll right"
+        >
+          <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <polyline points="9 6 15 12 9 18" />
+          </svg>
+        </button>
       </div>
     </section>
   );
@@ -134,6 +140,7 @@ const styles: Record<string, React.CSSProperties> = {
     zIndex: 2,
     borderRadius: "4px",
     padding: 0,
+    transition: "opacity 0.2s ease",
   },
 };
 

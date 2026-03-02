@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Outlet, Navigate, useNavigate } from "react-router-dom";
+import { Outlet, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { usePreferences } from "../hooks/usePreferences";
 import Sidebar from "./Sidebar";
@@ -12,6 +12,7 @@ function AppLayout() {
     useAuth();
   const { preferences } = usePreferences();
   const navigate = useNavigate();
+  const location = useLocation();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => preferences.appearance.sidebarCollapsed
   );
@@ -58,9 +59,11 @@ function AppLayout() {
         />
         <main style={styles.main}>
           <InviteNotification />
-          <ErrorBoundary>
-            <Outlet />
-          </ErrorBoundary>
+          <div key={location.pathname} style={styles.pageTransition}>
+            <ErrorBoundary>
+              <Outlet />
+            </ErrorBoundary>
+          </div>
         </main>
       </div>
     </div>
@@ -117,6 +120,12 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
     overflowY: "auto",
     overflowX: "hidden",
+    display: "flex",
+    flexDirection: "column",
+  },
+  pageTransition: {
+    animation: "pageEnter 0.2s ease-out",
+    flex: 1,
   },
 };
 

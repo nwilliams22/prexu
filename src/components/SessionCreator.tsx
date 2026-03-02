@@ -279,6 +279,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     justifyContent: "center",
     zIndex: 1000,
+    animation: "overlayFadeIn 0.2s ease-out",
   },
   modal: {
     background: "var(--bg-secondary)",
@@ -289,6 +290,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     overflow: "hidden",
+    animation: "modalSlideUp 0.25s ease-out",
   },
   header: {
     display: "flex",

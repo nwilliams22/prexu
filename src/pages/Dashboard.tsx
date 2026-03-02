@@ -46,6 +46,7 @@ function Dashboard() {
   const sections = preferences.appearance.dashboardSections;
   const navigate = useNavigate();
   const [expandedGroupKey, setExpandedGroupKey] = useState<string | null>(null);
+  const [expanderClosing, setExpanderClosing] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [sessionCreator, setSessionCreator] =
     useState<SessionCreatorState | null>(null);
@@ -195,7 +196,7 @@ function Dashboard() {
           <h3 style={styles.sectionTitle}>Continue Watching</h3>
           <div style={styles.skeletonRow}>
             {Array.from({ length: 8 }).map((_, i) => (
-              <SkeletonCard key={i} />
+              <SkeletonCard key={i} index={i} />
             ))}
           </div>
         </section>
@@ -236,7 +237,7 @@ function Dashboard() {
           <h3 style={styles.sectionTitle}>Recently Added in Movies</h3>
           <div style={styles.skeletonRow}>
             {Array.from({ length: 8 }).map((_, i) => (
-              <SkeletonCard key={i} />
+              <SkeletonCard key={i} index={i} />
             ))}
           </div>
         </section>
@@ -266,7 +267,7 @@ function Dashboard() {
           <h3 style={styles.sectionTitle}>Recently Added in TV Shows</h3>
           <div style={styles.skeletonRow}>
             {Array.from({ length: 8 }).map((_, i) => (
-              <SkeletonCard key={i} />
+              <SkeletonCard key={i} index={i} />
             ))}
           </div>
         </section>
@@ -295,7 +296,15 @@ function Dashboard() {
                     }
                     onClick={() => {
                       if (isExpandable) {
-                        setExpandedGroupKey(isActive ? null : group.groupKey);
+                        if (isActive) {
+                          setExpanderClosing(true);
+                          setTimeout(() => {
+                            setExpandedGroupKey(null);
+                            setExpanderClosing(false);
+                          }, 250);
+                        } else {
+                          setExpandedGroupKey(group.groupKey);
+                        }
                       } else {
                         navigate(`/item/${group.groupKey}`);
                       }
@@ -321,7 +330,14 @@ function Dashboard() {
           group={expandedGroup}
           serverUri={server.uri}
           serverToken={server.accessToken}
-          onClose={() => setExpandedGroupKey(null)}
+          closing={expanderClosing}
+          onClose={() => {
+            setExpanderClosing(true);
+            setTimeout(() => {
+              setExpandedGroupKey(null);
+              setExpanderClosing(false);
+            }, 250);
+          }}
           onPlayEpisode={(ratingKey) => navigate(`/play/${ratingKey}`)}
           onViewShow={(groupKey) => navigate(`/item/${groupKey}`)}
           onViewEpisode={(ratingKey) => navigate(`/item/${ratingKey}`)}

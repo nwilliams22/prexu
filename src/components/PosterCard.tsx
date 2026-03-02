@@ -33,6 +33,7 @@ function PosterCard({
 }: PosterCardProps) {
   const [loaded, setLoaded] = useState(false);
   const [hovered, setHovered] = useState(false);
+  const [active, setActive] = useState(false);
   const height = Math.round(width * aspectRatio);
 
   return (
@@ -45,11 +46,13 @@ function PosterCard({
         }
       }}
       onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      onMouseLeave={() => { setHovered(false); setActive(false); }}
+      onMouseDown={() => setActive(true)}
+      onMouseUp={() => setActive(false)}
       style={{
         ...styles.card,
         width,
-        transform: hovered ? "scale(1.04)" : "scale(1)",
+        transform: active ? "scale(1.0)" : hovered ? "scale(1.04)" : "scale(1)",
       }}
     >
       {/* Image container */}
@@ -70,13 +73,17 @@ function PosterCard({
         />
 
         {/* Three-dot menu button */}
-        {showMoreButton && hovered && (
+        {showMoreButton && (
           <button
             onClick={(e) => {
               e.stopPropagation();
               onMoreClick?.(e);
             }}
-            style={styles.moreButton}
+            style={{
+              ...styles.moreButton,
+              opacity: hovered ? 1 : 0,
+              pointerEvents: hovered ? "auto" : "none",
+            }}
             aria-label="More options"
           >
             <svg width={16} height={16} viewBox="0 0 24 24" fill="currentColor">
@@ -160,6 +167,7 @@ const styles: Record<string, React.CSSProperties> = {
     zIndex: 2,
     border: "none",
     cursor: "pointer",
+    transition: "opacity 0.15s ease",
   },
   badge: {
     position: "absolute",

@@ -85,6 +85,8 @@ const styles: Record<string, React.CSSProperties> = {
     maxHeight: "300px",
     overflowY: "auto",
     boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
+    animation: "popIn 0.15s ease-out",
+    transformOrigin: "bottom right",
   },
   menuHeader: {
     fontSize: "0.75rem",

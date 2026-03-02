@@ -176,6 +176,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     justifyContent: "center",
     zIndex: 5000,
+    animation: "overlayFadeIn 0.2s ease-out",
   },
   card: {
     background: "var(--bg-secondary)",
@@ -188,6 +189,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "1.25rem",
     boxShadow: "0 12px 40px rgba(0, 0, 0, 0.6)",
+    animation: "modalSlideUp 0.3s ease-out",
   },
   senderRow: {
     display: "flex",

@@ -74,6 +74,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "1.25rem 1.5rem",
     textAlign: "center",
     minWidth: "320px",
+    animation: "modalSlideUp 0.25s ease-out",
   },
   prompt: {
     fontSize: "0.95rem",

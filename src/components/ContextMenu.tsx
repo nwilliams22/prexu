@@ -99,6 +99,8 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "4px 0",
     minWidth: "200px",
     boxShadow: "0 8px 24px rgba(0, 0, 0, 0.5)",
+    animation: "popIn 0.12s ease-out",
+    transformOrigin: "top left",
   },
   menuItem: {
     display: "block",

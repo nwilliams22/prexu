@@ -87,7 +87,11 @@ function Sidebar({ collapsed, onToggle }: SidebarProps) {
             <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
             <polyline points="9 22 9 12 15 12 15 22" />
           </svg>
-          {!collapsed && <span style={styles.navLabel}>Home</span>}
+          <span style={{
+            ...styles.navLabel,
+            opacity: collapsed ? 0 : 1,
+            width: collapsed ? 0 : "auto",
+          }}>Home</span>
         </button>
 
         {/* Divider */}
@@ -120,15 +124,21 @@ function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 title={section.title}
               >
                 <LibraryIcon type={section.type} size={20} />
-                {!collapsed && (
-                  <span style={styles.navLabel}>{section.title}</span>
-                )}
+                <span style={{
+                  ...styles.navLabel,
+                  opacity: collapsed ? 0 : 1,
+                  width: collapsed ? 0 : "auto",
+                }}>{section.title}</span>
               </button>
               {/* Three-dot menu button (non-collapsed, hovered) */}
-              {!collapsed && isHovered && (
+              {!collapsed && (
                 <button
                   onClick={(e) => openSectionMenu(e, section.key)}
-                  style={styles.sectionMoreBtn}
+                  style={{
+                    ...styles.sectionMoreBtn,
+                    opacity: isHovered ? 1 : 0,
+                    pointerEvents: isHovered ? "auto" : "none",
+                  }}
                   aria-label="Library options"
                 >
                   <svg width={14} height={14} viewBox="0 0 24 24" fill="currentColor">
@@ -216,6 +226,8 @@ const styles: Record<string, React.CSSProperties> = {
   navLabel: {
     overflow: "hidden",
     textOverflow: "ellipsis",
+    whiteSpace: "nowrap" as const,
+    transition: "opacity 0.15s ease",
   },
   divider: {
     height: "1px",
@@ -249,6 +261,7 @@ const styles: Record<string, React.CSSProperties> = {
     border: "none",
     cursor: "pointer",
     zIndex: 1,
+    transition: "opacity 0.15s ease",
   },
   collapseButton: {
     display: "flex",

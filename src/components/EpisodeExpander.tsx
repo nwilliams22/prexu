@@ -16,6 +16,7 @@ interface EpisodeExpanderProps {
   onPlayEpisode: (ratingKey: string) => void;
   onViewShow: (groupKey: string) => void;
   onViewEpisode: (ratingKey: string) => void;
+  closing?: boolean;
 }
 
 function formatDuration(ms: number): string {
@@ -34,6 +35,7 @@ function EpisodeExpander({
   onPlayEpisode,
   onViewShow,
   onViewEpisode,
+  closing,
 }: EpisodeExpanderProps) {
   // Escape key closes the panel
   useEffect(() => {
@@ -54,7 +56,10 @@ function EpisodeExpander({
     getImageUrl(serverUri, serverToken, thumb, 400, 225);
 
   return (
-    <div style={styles.container}>
+    <div style={{
+      ...styles.container,
+      ...(closing ? styles.containerClosing : {}),
+    }}>
       {/* Header */}
       <div style={styles.header}>
         <h4 style={styles.showTitle}>{group.title}</h4>
@@ -156,6 +161,13 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "0 0 8px 8px",
     margin: "0 1.25rem 1rem",
     overflow: "hidden",
+    animation: "slideDown 0.3s ease-out",
+  },
+  containerClosing: {
+    animation: "none",
+    maxHeight: "0px",
+    opacity: 0,
+    transition: "max-height 0.25s ease-in, opacity 0.2s ease-in",
   },
   header: {
     display: "flex",

@@ -95,6 +95,66 @@ a:hover {
   animation: shimmer 1.5s ease-in-out infinite;
 }
 
+/* Page entrance transition */
+@keyframes pageEnter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Overlay backdrop fade */
+@keyframes overlayFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Modal card slide up */
+@keyframes modalSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Context menu / small popup scale */
+@keyframes popIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Slide down for expander entrance */
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    max-height: 0;
+  }
+  to {
+    opacity: 1;
+    max-height: 500px;
+  }
+}
+
+/* Global button press feedback */
+button:active:not(:disabled) {
+  transform: scale(0.97);
+  transition: transform 0.08s ease;
+}
+
 /* Thin dark scrollbars */
 ::-webkit-scrollbar {
   width: 8px;

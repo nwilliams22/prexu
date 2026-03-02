@@ -1,17 +1,19 @@
 interface SkeletonCardProps {
   width?: number;
   aspectRatio?: number;
+  index?: number;
 }
 
-function SkeletonCard({ width = 160, aspectRatio = 1.5 }: SkeletonCardProps) {
+function SkeletonCard({ width = 160, aspectRatio = 1.5, index = 0 }: SkeletonCardProps) {
   const height = Math.round(width * aspectRatio);
+  const delay = `${index * 0.1}s`;
 
   return (
     <div style={{ ...styles.card, width }}>
-      <div className="shimmer" style={{ ...styles.image, height }} />
+      <div className="shimmer" style={{ ...styles.image, height, animationDelay: delay }} />
       <div style={styles.textArea}>
-        <div className="shimmer" style={styles.titleLine} />
-        <div className="shimmer" style={styles.subtitleLine} />
+        <div className="shimmer" style={{ ...styles.titleLine, animationDelay: delay }} />
+        <div className="shimmer" style={{ ...styles.subtitleLine, animationDelay: delay }} />
       </div>
     </div>
   );
