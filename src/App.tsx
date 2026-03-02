@@ -6,6 +6,7 @@ import LibraryView from "./pages/LibraryView";
 import ItemDetail from "./pages/ItemDetail";
 import SearchResults from "./pages/SearchResults";
 import Settings from "./pages/Settings";
+import WatchHistory from "./pages/WatchHistory";
 import Player from "./pages/Player";
 import AppLayout from "./components/AppLayout";
 import { useAuth, useAuthState, AuthProvider } from "./hooks/useAuth";
@@ -69,6 +70,7 @@ function AppRoutes() {
         <Route index element={<Dashboard />} />
         <Route path="/library/:sectionId" element={<LibraryView />} />
         <Route path="/item/:ratingKey" element={<ItemDetail />} />
+        <Route path="/history" element={<WatchHistory />} />
         <Route path="/search" element={<SearchResults />} />
         <Route path="/settings" element={<Settings />} />
       </Route>
