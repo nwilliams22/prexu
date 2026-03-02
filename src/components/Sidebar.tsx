@@ -1,18 +1,66 @@
+import { useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
+import { useAuth } from "../hooks/useAuth";
 import { useLibrary } from "../hooks/useLibrary";
+import {
+  scanLibrary,
+  refreshLibraryMetadata,
+  emptyLibraryTrash,
+} from "../services/plex-library";
 import LibraryIcon from "./LibraryIcon";
+import ContextMenu from "./ContextMenu";
+import type { ContextMenuItem } from "./ContextMenu";
 
 interface SidebarProps {
   collapsed: boolean;
   onToggle: () => void;
 }
 
+interface SectionMenuState {
+  position: { x: number; y: number };
+  sectionKey: string;
+}
+
 function Sidebar({ collapsed, onToggle }: SidebarProps) {
+  const { server } = useAuth();
   const { sections, isLoading } = useLibrary();
   const navigate = useNavigate();
   const location = useLocation();
+  const [hoveredSection, setHoveredSection] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<SectionMenuState | null>(null);
 
   const isActive = (path: string) => location.pathname === path;
+
+  const openSectionMenu = (e: React.MouseEvent, sectionKey: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({ position: { x: e.clientX, y: e.clientY }, sectionKey });
+  };
+
+  const buildSectionMenuItems = (sectionKey: string): ContextMenuItem[] => {
+    if (!server) return [];
+    return [
+      {
+        label: "Scan Library Files",
+        onClick: async () => {
+          await scanLibrary(server.uri, server.accessToken, sectionKey);
+        },
+      },
+      {
+        label: "Refresh All Metadata",
+        onClick: async () => {
+          await refreshLibraryMetadata(server.uri, server.accessToken, sectionKey);
+        },
+      },
+      {
+        label: "Empty Trash",
+        dividerAbove: true,
+        onClick: async () => {
+          await emptyLibraryTrash(server.uri, server.accessToken, sectionKey);
+        },
+      },
+    ];
+  };
 
   return (
     <nav style={{ ...styles.sidebar, width: collapsed ? 60 : 220 }}>
@@ -54,21 +102,43 @@ function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
         {sections.map((section) => {
           const path = `/library/${section.key}`;
+          const isHovered = hoveredSection === section.key;
           return (
-            <button
+            <div
               key={section.key}
-              onClick={() => navigate(path)}
-              style={{
-                ...styles.navItem,
-                ...(isActive(path) ? styles.navItemActive : {}),
-              }}
-              title={section.title}
+              style={styles.sectionWrapper}
+              onMouseEnter={() => setHoveredSection(section.key)}
+              onMouseLeave={() => setHoveredSection(null)}
             >
-              <LibraryIcon type={section.type} size={20} />
-              {!collapsed && (
-                <span style={styles.navLabel}>{section.title}</span>
+              <button
+                onClick={() => navigate(path)}
+                onContextMenu={(e) => openSectionMenu(e, section.key)}
+                style={{
+                  ...styles.navItem,
+                  ...(isActive(path) ? styles.navItemActive : {}),
+                }}
+                title={section.title}
+              >
+                <LibraryIcon type={section.type} size={20} />
+                {!collapsed && (
+                  <span style={styles.navLabel}>{section.title}</span>
+                )}
+              </button>
+              {/* Three-dot menu button (non-collapsed, hovered) */}
+              {!collapsed && isHovered && (
+                <button
+                  onClick={(e) => openSectionMenu(e, section.key)}
+                  style={styles.sectionMoreBtn}
+                  aria-label="Library options"
+                >
+                  <svg width={14} height={14} viewBox="0 0 24 24" fill="currentColor">
+                    <circle cx="12" cy="5" r="2" />
+                    <circle cx="12" cy="12" r="2" />
+                    <circle cx="12" cy="19" r="2" />
+                  </svg>
+                </button>
               )}
-            </button>
+            </div>
           );
         })}
       </div>
@@ -92,6 +162,15 @@ function Sidebar({ collapsed, onToggle }: SidebarProps) {
           <polyline points="15 18 9 12 15 6" />
         </svg>
       </button>
+
+      {/* Section context menu */}
+      {contextMenu && (
+        <ContextMenu
+          items={buildSectionMenuItems(contextMenu.sectionKey)}
+          position={contextMenu.position}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
     </nav>
   );
 }
@@ -149,6 +228,27 @@ const styles: Record<string, React.CSSProperties> = {
     background: "var(--border)",
     opacity: 0.3,
     margin: "2px 0",
+  },
+  sectionWrapper: {
+    position: "relative",
+    display: "flex",
+    alignItems: "center",
+  },
+  sectionMoreBtn: {
+    position: "absolute",
+    right: "6px",
+    width: "24px",
+    height: "24px",
+    borderRadius: "4px",
+    background: "rgba(255, 255, 255, 0.08)",
+    color: "var(--text-secondary)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 0,
+    border: "none",
+    cursor: "pointer",
+    zIndex: 1,
   },
   collapseButton: {
     display: "flex",

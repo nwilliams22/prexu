@@ -1,24 +1,46 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { useDashboard } from "../hooks/useDashboard";
-import { getImageUrl } from "../services/plex-library";
+import {
+  getImageUrl,
+  markAsWatched,
+  markAsUnwatched,
+} from "../services/plex-library";
 import HorizontalRow from "../components/HorizontalRow";
 import PosterCard from "../components/PosterCard";
 import SkeletonCard from "../components/SkeletonCard";
 import EpisodeExpander from "../components/EpisodeExpander";
+import ContextMenu from "../components/ContextMenu";
+import type { ContextMenuItem } from "../components/ContextMenu";
+import SessionCreator from "../components/SessionCreator";
 import type {
   PlexMediaItem,
   PlexEpisode,
   GroupedRecentItem,
 } from "../types/library";
 
+interface ContextMenuState {
+  position: { x: number; y: number };
+  item: PlexMediaItem;
+  section: "onDeck" | "movies" | "shows";
+}
+
+interface SessionCreatorState {
+  ratingKey: string;
+  title: string;
+  mediaType: "movie" | "episode";
+}
+
 function Dashboard() {
   const { server } = useAuth();
-  const { recentMovies, recentShows, onDeck, isLoading, error } =
+  const { recentMovies, recentShows, onDeck, isLoading, error, refresh } =
     useDashboard();
   const navigate = useNavigate();
   const [expandedGroupKey, setExpandedGroupKey] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [sessionCreator, setSessionCreator] =
+    useState<SessionCreatorState | null>(null);
 
   // Reset expansion when data changes (e.g., server switch)
   useEffect(() => {
@@ -74,6 +96,76 @@ function Dashboard() {
     return undefined;
   };
 
+  const openContextMenu = useCallback(
+    (e: React.MouseEvent, item: PlexMediaItem, section: ContextMenuState["section"]) => {
+      setContextMenu({ position: { x: e.clientX, y: e.clientY }, item, section });
+    },
+    []
+  );
+
+  const buildMenuItems = useCallback(
+    (item: PlexMediaItem, section: ContextMenuState["section"]): ContextMenuItem[] => {
+      if (!server) return [];
+      const items: ContextMenuItem[] = [];
+      const hasView = (item as { viewCount?: number }).viewCount;
+
+      if (hasView) {
+        items.push({
+          label: "Mark as Unwatched",
+          onClick: async () => {
+            await markAsUnwatched(server.uri, server.accessToken, item.ratingKey);
+            refresh();
+          },
+        });
+      } else {
+        items.push({
+          label: "Mark as Watched",
+          onClick: async () => {
+            await markAsWatched(server.uri, server.accessToken, item.ratingKey);
+            refresh();
+          },
+        });
+      }
+
+      // "Remove from Continue Watching" = Mark as Watched (only in onDeck section)
+      if (section === "onDeck" && !hasView) {
+        items.push({
+          label: "Remove from Continue Watching",
+          onClick: async () => {
+            await markAsWatched(server.uri, server.accessToken, item.ratingKey);
+            refresh();
+          },
+        });
+      }
+
+      // Watch Together (movies & episodes only)
+      if (item.type === "movie" || item.type === "episode") {
+        items.push({
+          label: "Watch Together...",
+          dividerAbove: true,
+          onClick: () => {
+            setSessionCreator({
+              ratingKey: item.ratingKey,
+              title: item.type === "episode"
+                ? `${(item as PlexEpisode).grandparentTitle} - ${item.title}`
+                : item.title,
+              mediaType: item.type as "movie" | "episode",
+            });
+          },
+        });
+      }
+
+      items.push({
+        label: "Get Info",
+        dividerAbove: item.type !== "movie" && item.type !== "episode",
+        onClick: () => navigate(`/item/${item.ratingKey}`),
+      });
+
+      return items;
+    },
+    [server, refresh, navigate]
+  );
+
   if (error) {
     return (
       <div style={styles.container}>
@@ -117,6 +209,9 @@ function Dashboard() {
                   }
                   progress={getProgress(item)}
                   onClick={() => navigate(`/item/${item.ratingKey}`)}
+                  showMoreButton
+                  onContextMenu={(e) => openContextMenu(e, item, "onDeck")}
+                  onMoreClick={(e) => openContextMenu(e, item, "onDeck")}
                 />
               );
             })}
@@ -144,6 +239,9 @@ function Dashboard() {
                 title={item.title}
                 subtitle={getSubtitle(item)}
                 onClick={() => navigate(`/item/${item.ratingKey}`)}
+                showMoreButton
+                onContextMenu={(e) => openContextMenu(e, item, "movies")}
+                onMoreClick={(e) => openContextMenu(e, item, "movies")}
               />
             ))}
           </HorizontalRow>
@@ -189,6 +287,13 @@ function Dashboard() {
                         navigate(`/item/${group.groupKey}`);
                       }
                     }}
+                    showMoreButton
+                    onContextMenu={(e) =>
+                      openContextMenu(e, group.representativeItem, "shows")
+                    }
+                    onMoreClick={(e) =>
+                      openContextMenu(e, group.representativeItem, "shows")
+                    }
                   />
                 </div>
               );
@@ -215,6 +320,25 @@ function Dashboard() {
         <div style={styles.emptyState}>
           <p>No recent activity. Add some media to your Plex libraries!</p>
         </div>
+      )}
+
+      {/* Context menu */}
+      {contextMenu && (
+        <ContextMenu
+          items={buildMenuItems(contextMenu.item, contextMenu.section)}
+          position={contextMenu.position}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
+
+      {/* Watch Together session creator */}
+      {sessionCreator && (
+        <SessionCreator
+          ratingKey={sessionCreator.ratingKey}
+          title={sessionCreator.title}
+          mediaType={sessionCreator.mediaType}
+          onClose={() => setSessionCreator(null)}
+        />
       )}
     </div>
   );

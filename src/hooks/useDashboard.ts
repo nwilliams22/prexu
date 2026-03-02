@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "./useAuth";
 import { getRecentlyAdded, getOnDeck } from "../services/plex-library";
 import { groupRecentlyAdded } from "../utils/groupRecentlyAdded";
@@ -10,6 +10,7 @@ export interface UseDashboardResult {
   onDeck: PlexMediaItem[];
   isLoading: boolean;
   error: string | null;
+  refresh: () => void;
 }
 
 /** Simple in-memory cache keyed by server URI */
@@ -37,6 +38,12 @@ export function useDashboard(): UseDashboardResult {
   );
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  const refresh = useCallback(() => {
+    cache = null;
+    setRefreshTrigger((n) => n + 1);
+  }, []);
 
   useEffect(() => {
     if (!server) return;
@@ -102,7 +109,7 @@ export function useDashboard(): UseDashboardResult {
     return () => {
       cancelled = true;
     };
-  }, [server]);
+  }, [server, refreshTrigger]);
 
-  return { recentMovies, recentShows, onDeck, isLoading, error };
+  return { recentMovies, recentShows, onDeck, isLoading, error, refresh };
 }

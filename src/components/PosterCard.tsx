@@ -10,6 +10,12 @@ interface PosterCardProps {
   aspectRatio?: number; // height / width, default 1.5 (2:3 poster)
   /** Optional progress bar (0-1) for continue watching */
   progress?: number;
+  /** Right-click handler for context menu */
+  onContextMenu?: (e: React.MouseEvent) => void;
+  /** Show a three-dot menu button on hover */
+  showMoreButton?: boolean;
+  /** Click handler for the three-dot button */
+  onMoreClick?: (e: React.MouseEvent) => void;
 }
 
 function PosterCard({
@@ -21,6 +27,9 @@ function PosterCard({
   width = 160,
   aspectRatio = 1.5,
   progress,
+  onContextMenu,
+  showMoreButton,
+  onMoreClick,
 }: PosterCardProps) {
   const [loaded, setLoaded] = useState(false);
   const [hovered, setHovered] = useState(false);
@@ -29,6 +38,12 @@ function PosterCard({
   return (
     <button
       onClick={onClick}
+      onContextMenu={(e) => {
+        if (onContextMenu) {
+          e.preventDefault();
+          onContextMenu(e);
+        }
+      }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
@@ -53,6 +68,24 @@ function PosterCard({
             opacity: loaded ? 1 : 0,
           }}
         />
+
+        {/* Three-dot menu button */}
+        {showMoreButton && hovered && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onMoreClick?.(e);
+            }}
+            style={styles.moreButton}
+            aria-label="More options"
+          >
+            <svg width={16} height={16} viewBox="0 0 24 24" fill="currentColor">
+              <circle cx="12" cy="5" r="2" />
+              <circle cx="12" cy="12" r="2" />
+              <circle cx="12" cy="19" r="2" />
+            </svg>
+          </button>
+        )}
 
         {/* Badge (e.g. "+3 episodes") */}
         {badge && <span style={styles.badge}>{badge}</span>}
@@ -110,6 +143,23 @@ const styles: Record<string, React.CSSProperties> = {
     objectFit: "cover",
     transition: "opacity 0.3s ease",
     display: "block",
+  },
+  moreButton: {
+    position: "absolute",
+    bottom: "6px",
+    right: "6px",
+    width: "28px",
+    height: "28px",
+    borderRadius: "50%",
+    background: "rgba(0, 0, 0, 0.7)",
+    color: "var(--text-primary)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 0,
+    zIndex: 2,
+    border: "none",
+    cursor: "pointer",
   },
   badge: {
     position: "absolute",

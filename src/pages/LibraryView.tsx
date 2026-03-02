@@ -1,14 +1,32 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { usePaginatedLibrary } from "../hooks/usePaginatedLibrary";
 import { useLibrary } from "../hooks/useLibrary";
-import { getImageUrl } from "../services/plex-library";
+import {
+  getImageUrl,
+  markAsWatched,
+  markAsUnwatched,
+} from "../services/plex-library";
 import LibraryGrid from "../components/LibraryGrid";
 import SortBar from "../components/SortBar";
 import PosterCard from "../components/PosterCard";
 import SkeletonCard from "../components/SkeletonCard";
-import type { PlexShow } from "../types/library";
+import ContextMenu from "../components/ContextMenu";
+import type { ContextMenuItem } from "../components/ContextMenu";
+import SessionCreator from "../components/SessionCreator";
+import type { PlexMediaItem, PlexShow } from "../types/library";
+
+interface ContextMenuState {
+  position: { x: number; y: number };
+  item: PlexMediaItem;
+}
+
+interface SessionCreatorState {
+  ratingKey: string;
+  title: string;
+  mediaType: "movie" | "episode";
+}
 
 function LibraryView() {
   const { sectionId } = useParams<{ sectionId: string }>();
@@ -20,6 +38,9 @@ function LibraryView() {
 
   const { items, isLoading, isLoadingMore, hasMore, totalSize, error, loadMore } =
     usePaginatedLibrary(sectionId, sort);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [sessionCreator, setSessionCreator] =
+    useState<SessionCreatorState | null>(null);
 
   const section = sections.find((s) => s.key === sectionId);
 
@@ -74,6 +95,61 @@ function LibraryView() {
     }
   };
 
+  const openContextMenu = useCallback(
+    (e: React.MouseEvent, item: PlexMediaItem) => {
+      setContextMenu({ position: { x: e.clientX, y: e.clientY }, item });
+    },
+    []
+  );
+
+  const buildMenuItems = useCallback(
+    (item: PlexMediaItem): ContextMenuItem[] => {
+      if (!server) return [];
+      const menuItems: ContextMenuItem[] = [];
+      const hasView = (item as { viewCount?: number }).viewCount;
+
+      if (hasView) {
+        menuItems.push({
+          label: "Mark as Unwatched",
+          onClick: async () => {
+            await markAsUnwatched(server.uri, server.accessToken, item.ratingKey);
+          },
+        });
+      } else {
+        menuItems.push({
+          label: "Mark as Watched",
+          onClick: async () => {
+            await markAsWatched(server.uri, server.accessToken, item.ratingKey);
+          },
+        });
+      }
+
+      // Watch Together (movies & episodes, not shows)
+      if (item.type === "movie" || item.type === "episode") {
+        menuItems.push({
+          label: "Watch Together...",
+          dividerAbove: true,
+          onClick: () => {
+            setSessionCreator({
+              ratingKey: item.ratingKey,
+              title: item.title,
+              mediaType: item.type as "movie" | "episode",
+            });
+          },
+        });
+      }
+
+      menuItems.push({
+        label: "Get Info",
+        dividerAbove: item.type !== "movie" && item.type !== "episode",
+        onClick: () => navigate(`/item/${item.ratingKey}`),
+      });
+
+      return menuItems;
+    },
+    [server, navigate]
+  );
+
   return (
     <div style={styles.container}>
       <h2 style={styles.title}>{section?.title ?? `Library ${sectionId}`}</h2>
@@ -102,6 +178,9 @@ function LibraryView() {
             title={item.title}
             subtitle={getSubtitle(item as { type: string; year?: number; leafCount?: number })}
             onClick={() => navigate(`/item/${item.ratingKey}`)}
+            showMoreButton
+            onContextMenu={(e) => openContextMenu(e, item)}
+            onMoreClick={(e) => openContextMenu(e, item)}
           />
         ))}
 
@@ -114,6 +193,25 @@ function LibraryView() {
 
       {/* Infinite scroll sentinel */}
       <div ref={sentinelRef} style={styles.sentinel} />
+
+      {/* Context menu */}
+      {contextMenu && (
+        <ContextMenu
+          items={buildMenuItems(contextMenu.item)}
+          position={contextMenu.position}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
+
+      {/* Watch Together session creator */}
+      {sessionCreator && (
+        <SessionCreator
+          ratingKey={sessionCreator.ratingKey}
+          title={sessionCreator.title}
+          mediaType={sessionCreator.mediaType}
+          onClose={() => setSessionCreator(null)}
+        />
+      )}
     </div>
   );
 }

@@ -5,7 +5,7 @@
  * to the existing serverFetch helper from plex-api.ts.
  */
 
-import { serverFetch } from "./plex-api";
+import { serverFetch, getServerHeaders } from "./plex-api";
 import type {
   LibrarySection,
   PlexMediaContainer,
@@ -276,4 +276,83 @@ export function getImageUrl(
     "X-Plex-Token": serverToken,
   });
   return `${serverUri}/photo/:/transcode?${params.toString()}`;
+}
+
+// ── Scrobble / Unscrobble (Mark Watched / Unwatched) ──
+
+export async function markAsWatched(
+  serverUri: string,
+  serverToken: string,
+  ratingKey: string
+): Promise<void> {
+  const response = await serverFetch(
+    serverUri,
+    serverToken,
+    `/:/scrobble?identifier=com.plexapp.plugins.library&key=${ratingKey}`
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to mark as watched: ${response.status}`);
+  }
+}
+
+export async function markAsUnwatched(
+  serverUri: string,
+  serverToken: string,
+  ratingKey: string
+): Promise<void> {
+  const response = await serverFetch(
+    serverUri,
+    serverToken,
+    `/:/unscrobble?identifier=com.plexapp.plugins.library&key=${ratingKey}`
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to mark as unwatched: ${response.status}`);
+  }
+}
+
+// ── Library Section Management ──
+
+export async function scanLibrary(
+  serverUri: string,
+  serverToken: string,
+  sectionId: string
+): Promise<void> {
+  const response = await serverFetch(
+    serverUri,
+    serverToken,
+    `/library/sections/${sectionId}/refresh`
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to scan library: ${response.status}`);
+  }
+}
+
+export async function refreshLibraryMetadata(
+  serverUri: string,
+  serverToken: string,
+  sectionId: string
+): Promise<void> {
+  const headers = await getServerHeaders(serverToken);
+  const response = await fetch(
+    `${serverUri}/library/sections/${sectionId}/refresh?force=1`,
+    { method: "PUT", headers }
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to refresh metadata: ${response.status}`);
+  }
+}
+
+export async function emptyLibraryTrash(
+  serverUri: string,
+  serverToken: string,
+  sectionId: string
+): Promise<void> {
+  const headers = await getServerHeaders(serverToken);
+  const response = await fetch(
+    `${serverUri}/library/sections/${sectionId}/emptyTrash`,
+    { method: "PUT", headers }
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to empty trash: ${response.status}`);
+  }
 }
