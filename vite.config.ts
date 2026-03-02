@@ -9,6 +9,18 @@ export default defineConfig(async () => ({
   // Prevent vite from obscuring Rust errors
   clearScreen: false,
 
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          "vendor-react": ["react", "react-dom", "react-router-dom"],
+          "vendor-tauri": ["@tauri-apps/api", "@tauri-apps/plugin-shell"],
+        },
+      },
+    },
+    chunkSizeWarningLimit: 300,
+  },
+
   server: {
     port: 1420,
     strictPort: true,
