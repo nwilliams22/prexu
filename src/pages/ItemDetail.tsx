@@ -5,7 +5,11 @@ import {
   getItemMetadata,
   getItemChildren,
   getImageUrl,
+  getRelatedItems,
+  getExtras,
 } from "../services/plex-library";
+import HorizontalRow from "../components/HorizontalRow";
+import PosterCard from "../components/PosterCard";
 import WatchTogetherButton from "../components/WatchTogetherButton";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
@@ -17,6 +21,7 @@ import type {
   PlexEpisode,
   PlexTag,
   PlexRole,
+  PlexChapter,
 } from "../types/library";
 
 function ItemDetail() {
@@ -30,6 +35,8 @@ function ItemDetail() {
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingEpisodes, setIsLoadingEpisodes] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [related, setRelated] = useState<PlexMediaItem[]>([]);
+  const [extras, setExtras] = useState<PlexMediaItem[]>([]);
 
   // Fetch item metadata
   useEffect(() => {
@@ -107,6 +114,26 @@ function ItemDetail() {
     };
   }, [server, selectedSeason]);
 
+  // Fetch related + extras for movies and shows (non-critical)
+  useEffect(() => {
+    if (!server || !ratingKey || !item) return;
+    if (item.type !== "movie" && item.type !== "show") return;
+    let cancelled = false;
+
+    Promise.allSettled([
+      getRelatedItems(server.uri, server.accessToken, ratingKey),
+      getExtras(server.uri, server.accessToken, ratingKey),
+    ]).then(([relResult, extResult]) => {
+      if (cancelled) return;
+      if (relResult.status === "fulfilled") setRelated(relResult.value);
+      if (extResult.status === "fulfilled") setExtras(extResult.value);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [server, ratingKey, item]);
+
   if (!server) return null;
 
   const artUrl = (path: string) =>
@@ -178,7 +205,12 @@ function ItemDetail() {
                   <span style={styles.rating}>{movie.contentRating}</span>
                 )}
                 {movie.duration && <span>{formatDuration(movie.duration)}</span>}
-                {movie.rating > 0 && <span>★ {movie.rating.toFixed(1)}</span>}
+                {movie.rating > 0 && (
+                  <span title="Critic rating">★ {movie.rating.toFixed(1)}</span>
+                )}
+                {movie.audienceRating > 0 && (
+                  <span title="Audience rating">♥ {movie.audienceRating.toFixed(1)}</span>
+                )}
               </div>
               {movie.Genre && movie.Genre.length > 0 && (
                 <div style={styles.genreRow}>
@@ -213,6 +245,46 @@ function ItemDetail() {
         {movie.summary && (
           <div style={styles.section}>
             <p style={styles.summary}>{movie.summary}</p>
+          </div>
+        )}
+
+        {/* Chapters */}
+        {(() => {
+          const chapters: PlexChapter[] =
+            movie.Media?.[0]?.Part?.[0]?.Chapter ?? [];
+          return chapters.length > 0 ? (
+            <div style={styles.section}>
+              <h3 style={styles.sectionTitle}>Chapters</h3>
+              <div style={styles.chapterList}>
+                {chapters.map((ch, i) => (
+                  <div key={ch.id} style={styles.chapterItem}>
+                    <span style={styles.chapterIndex}>{i + 1}</span>
+                    <span style={styles.chapterTitle}>{ch.tag}</span>
+                    <span style={styles.chapterTime}>
+                      {formatDuration(ch.startTimeOffset)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null;
+        })()}
+
+        {/* Extras */}
+        {extras.length > 0 && (
+          <div style={styles.section}>
+            <HorizontalRow title="Extras">
+              {extras.map((extra) => (
+                <PosterCard
+                  key={extra.ratingKey}
+                  imageUrl={posterUrl(extra.thumb)}
+                  title={extra.title}
+                  subtitle={(extra as { subtype?: string }).subtype || "Extra"}
+                  width={200}
+                  aspectRatio={0.56}
+                />
+              ))}
+            </HorizontalRow>
           </div>
         )}
 
@@ -251,6 +323,27 @@ function ItemDetail() {
             </p>
           )}
         </div>
+
+        {/* Related */}
+        {related.length > 0 && (
+          <div style={styles.section}>
+            <HorizontalRow title="Related">
+              {related.map((r) => (
+                <PosterCard
+                  key={r.ratingKey}
+                  imageUrl={posterUrl(r.thumb)}
+                  title={r.title}
+                  subtitle={
+                    (r as { year?: number }).year
+                      ? String((r as { year?: number }).year)
+                      : ""
+                  }
+                  onClick={() => navigate(`/item/${r.ratingKey}`)}
+                />
+              ))}
+            </HorizontalRow>
+          </div>
+        )}
       </div>
     );
   }
@@ -288,7 +381,12 @@ function ItemDetail() {
                   {show.childCount} season{show.childCount !== 1 ? "s" : ""}
                 </span>
                 <span>{show.leafCount} episodes</span>
-                {show.rating > 0 && <span>★ {show.rating.toFixed(1)}</span>}
+                {show.rating > 0 && (
+                  <span title="Critic rating">★ {show.rating.toFixed(1)}</span>
+                )}
+                {show.audienceRating > 0 && (
+                  <span title="Audience rating">♥ {show.audienceRating.toFixed(1)}</span>
+                )}
               </div>
               {show.Genre && show.Genre.length > 0 && (
                 <div style={styles.genreRow}>
@@ -307,6 +405,24 @@ function ItemDetail() {
         {show.summary && (
           <div style={styles.section}>
             <p style={styles.summary}>{show.summary}</p>
+          </div>
+        )}
+
+        {/* Extras */}
+        {extras.length > 0 && (
+          <div style={styles.section}>
+            <HorizontalRow title="Extras">
+              {extras.map((extra) => (
+                <PosterCard
+                  key={extra.ratingKey}
+                  imageUrl={posterUrl(extra.thumb)}
+                  title={extra.title}
+                  subtitle={(extra as { subtype?: string }).subtype || "Extra"}
+                  width={200}
+                  aspectRatio={0.56}
+                />
+              ))}
+            </HorizontalRow>
           </div>
         )}
 
@@ -385,6 +501,27 @@ function ItemDetail() {
             ))}
           </div>
         </div>
+
+        {/* Related */}
+        {related.length > 0 && (
+          <div style={styles.section}>
+            <HorizontalRow title="Related">
+              {related.map((r) => (
+                <PosterCard
+                  key={r.ratingKey}
+                  imageUrl={posterUrl(r.thumb)}
+                  title={r.title}
+                  subtitle={
+                    (r as { year?: number }).year
+                      ? String((r as { year?: number }).year)
+                      : ""
+                  }
+                  onClick={() => navigate(`/item/${r.ratingKey}`)}
+                />
+              ))}
+            </HorizontalRow>
+          </div>
+        )}
       </div>
     );
   }
@@ -637,6 +774,36 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "0.85rem",
     color: "var(--text-secondary)",
     marginBottom: "0.3rem",
+  },
+
+  // Chapters
+  chapterList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "0.25rem",
+  },
+  chapterItem: {
+    display: "flex",
+    gap: "0.75rem",
+    padding: "0.4rem 0",
+    alignItems: "center",
+    borderBottom: "1px solid var(--border)",
+  },
+  chapterIndex: {
+    color: "var(--text-secondary)",
+    fontSize: "0.8rem",
+    width: "24px",
+    textAlign: "right",
+    flexShrink: 0,
+  },
+  chapterTitle: {
+    fontSize: "0.85rem",
+    flex: 1,
+  },
+  chapterTime: {
+    color: "var(--text-secondary)",
+    fontSize: "0.8rem",
+    flexShrink: 0,
   },
 
   // Seasons

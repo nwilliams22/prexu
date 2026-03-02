@@ -405,6 +405,36 @@ export async function getPlaylistItems(
   };
 }
 
+// ── Related Items ──
+
+export async function getRelatedItems(
+  serverUri: string,
+  serverToken: string,
+  ratingKey: string
+): Promise<PlexMediaItem[]> {
+  const data = await fetchJson<PlexMediaContainer<PlexMediaItem>>(
+    serverUri,
+    serverToken,
+    `/library/metadata/${ratingKey}/related`
+  );
+  return data.MediaContainer.Metadata ?? [];
+}
+
+// ── Extras (trailers, behind-the-scenes, etc.) ──
+
+export async function getExtras(
+  serverUri: string,
+  serverToken: string,
+  ratingKey: string
+): Promise<PlexMediaItem[]> {
+  const data = await fetchJson<PlexMediaContainer<PlexMediaItem>>(
+    serverUri,
+    serverToken,
+    `/library/metadata/${ratingKey}/extras`
+  );
+  return data.MediaContainer.Metadata ?? [];
+}
+
 // ── Search ──
 
 export async function searchLibrary(

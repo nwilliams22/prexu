@@ -48,6 +48,14 @@ export interface PlexStream {
   bitrate?: number;
 }
 
+export interface PlexChapter {
+  id: number;
+  index: number;
+  startTimeOffset: number;
+  endTimeOffset: number;
+  tag: string;
+}
+
 export interface PlexMediaPart {
   id: number;
   key: string;
@@ -56,6 +64,7 @@ export interface PlexMediaPart {
   size: number;
   container: string;
   Stream?: PlexStream[];
+  Chapter?: PlexChapter[];
 }
 
 export interface PlexMediaInfo {
@@ -90,6 +99,8 @@ export interface PlexMovie extends PlexMediaItem {
   year: number;
   rating: number;
   audienceRating: number;
+  ratingImage?: string;
+  audienceRatingImage?: string;
   contentRating: string;
   duration: number;
   tagline: string;
@@ -111,6 +122,8 @@ export interface PlexShow extends PlexMediaItem {
   year: number;
   rating: number;
   audienceRating: number;
+  ratingImage?: string;
+  audienceRatingImage?: string;
   contentRating: string;
   childCount: number;
   leafCount: number;
