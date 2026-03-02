@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
+import { usePreferences } from "../hooks/usePreferences";
 import { useDashboard } from "../hooks/useDashboard";
 import {
   getImageUrl,
@@ -34,10 +35,15 @@ interface SessionCreatorState {
   mediaType: "movie" | "episode";
 }
 
+const POSTER_SIZES = { small: 130, medium: 160, large: 200 } as const;
+
 function Dashboard() {
   const { server } = useAuth();
+  const { preferences } = usePreferences();
   const { recentMovies, recentShows, onDeck, isLoading, error, refresh } =
     useDashboard();
+  const posterWidth = POSTER_SIZES[preferences.appearance.posterSize];
+  const sections = preferences.appearance.dashboardSections;
   const navigate = useNavigate();
   const [expandedGroupKey, setExpandedGroupKey] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -177,12 +183,14 @@ function Dashboard() {
   }
 
   const hasContent =
-    recentMovies.length > 0 || recentShows.length > 0 || onDeck.length > 0;
+    (sections.continueWatching && onDeck.length > 0) ||
+    (sections.recentMovies && recentMovies.length > 0) ||
+    (sections.recentShows && recentShows.length > 0);
 
   return (
     <div style={styles.container}>
       {/* Continue Watching */}
-      {isLoading ? (
+      {sections.continueWatching && (isLoading ? (
         <section style={styles.section}>
           <h3 style={styles.sectionTitle}>Continue Watching</h3>
           <div style={styles.skeletonRow}>
@@ -210,6 +218,7 @@ function Dashboard() {
                       : getSubtitle(item)
                   }
                   progress={getProgress(item)}
+                  width={posterWidth}
                   onClick={() => navigate(`/item/${item.ratingKey}`)}
                   showMoreButton
                   onContextMenu={(e) => openContextMenu(e, item, "onDeck")}
@@ -219,10 +228,10 @@ function Dashboard() {
             })}
           </HorizontalRow>
         )
-      )}
+      ))}
 
       {/* Recently Added in Movies */}
-      {isLoading ? (
+      {sections.recentMovies && (isLoading ? (
         <section style={styles.section}>
           <h3 style={styles.sectionTitle}>Recently Added in Movies</h3>
           <div style={styles.skeletonRow}>
@@ -240,6 +249,7 @@ function Dashboard() {
                 imageUrl={posterUrl(item.thumb)}
                 title={item.title}
                 subtitle={getSubtitle(item)}
+                width={posterWidth}
                 onClick={() => navigate(`/item/${item.ratingKey}`)}
                 showMoreButton
                 onContextMenu={(e) => openContextMenu(e, item, "movies")}
@@ -248,10 +258,10 @@ function Dashboard() {
             ))}
           </HorizontalRow>
         )
-      )}
+      ))}
 
       {/* Recently Added in TV Shows */}
-      {isLoading ? (
+      {sections.recentShows && (isLoading ? (
         <section style={styles.section}>
           <h3 style={styles.sectionTitle}>Recently Added in TV Shows</h3>
           <div style={styles.skeletonRow}>
@@ -277,6 +287,7 @@ function Dashboard() {
                     imageUrl={posterUrl(group.thumb)}
                     title={group.title}
                     subtitle={getGroupSubtitle(group)}
+                    width={posterWidth}
                     badge={
                       group.episodeCount > 1
                         ? `+${group.episodeCount}`
@@ -302,7 +313,7 @@ function Dashboard() {
             })}
           </HorizontalRow>
         )
-      )}
+      ))}
 
       {/* Episode expansion panel */}
       {expandedGroup && server && (

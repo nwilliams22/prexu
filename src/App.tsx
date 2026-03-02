@@ -10,6 +10,7 @@ import Player from "./pages/Player";
 import AppLayout from "./components/AppLayout";
 import { useAuth, useAuthState, AuthProvider } from "./hooks/useAuth";
 import { useInviteState, InviteProvider } from "./hooks/useInvites";
+import { usePreferencesState, PreferencesProvider } from "./hooks/usePreferences";
 
 /** Route guard for unauthenticated routes */
 function PublicRoute({ children }: { children: React.ReactNode }) {
@@ -81,12 +82,15 @@ function AppRoutes() {
 function App() {
   const auth = useAuthState();
   const inviteState = useInviteState(auth.authToken, auth.server?.uri ?? null);
+  const prefsState = usePreferencesState();
 
   return (
     <AuthProvider value={auth}>
-      <InviteProvider value={inviteState}>
-        <AppRoutes />
-      </InviteProvider>
+      <PreferencesProvider value={prefsState}>
+        <InviteProvider value={inviteState}>
+          <AppRoutes />
+        </InviteProvider>
+      </PreferencesProvider>
     </AuthProvider>
   );
 }

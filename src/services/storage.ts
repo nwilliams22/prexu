@@ -8,12 +8,14 @@
  */
 
 import type { AuthData, ServerData } from "../types/plex";
+import type { Preferences } from "../types/preferences";
 
 const STORAGE_KEYS = {
   AUTH: "auth_data",
   SERVER: "server_data",
   CLIENT_ID: "client_identifier",
   RELAY_URL: "prexu_relay_url",
+  PREFERENCES: "prexu_preferences",
 } as const;
 
 const DEFAULT_RELAY_PORT = 9847;
@@ -128,4 +130,51 @@ export async function clearRelayUrl(): Promise<void> {
 export async function hasManualRelayUrl(): Promise<boolean> {
   const url = await storage.get<string>(STORAGE_KEYS.RELAY_URL);
   return url !== null;
+}
+
+// ── Preferences ──
+
+export function getDefaultPreferences(): Preferences {
+  return {
+    playback: {
+      quality: "1080p",
+      preferredAudioLanguage: "",
+      preferredSubtitleLanguage: "",
+      defaultSubtitles: "auto",
+      subtitleSize: 100,
+      audioBoost: 100,
+      directPlayPreference: "auto",
+    },
+    appearance: {
+      posterSize: "medium",
+      sidebarCollapsed: false,
+      dashboardSections: {
+        continueWatching: true,
+        recentMovies: true,
+        recentShows: true,
+      },
+    },
+  };
+}
+
+export async function getPreferences(): Promise<Preferences> {
+  const saved = await storage.get<Preferences>(STORAGE_KEYS.PREFERENCES);
+  if (!saved) return getDefaultPreferences();
+  // Merge with defaults to handle new fields added in future updates
+  const defaults = getDefaultPreferences();
+  return {
+    playback: { ...defaults.playback, ...saved.playback },
+    appearance: {
+      ...defaults.appearance,
+      ...saved.appearance,
+      dashboardSections: {
+        ...defaults.appearance.dashboardSections,
+        ...saved.appearance?.dashboardSections,
+      },
+    },
+  };
+}
+
+export async function savePreferences(prefs: Preferences): Promise<void> {
+  await storage.set(STORAGE_KEYS.PREFERENCES, prefs);
 }

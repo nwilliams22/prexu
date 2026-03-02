@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Outlet, Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
+import { usePreferences } from "../hooks/usePreferences";
 import Sidebar from "./Sidebar";
 import SearchBar from "./SearchBar";
 import InviteNotification from "./InviteNotification";
@@ -9,8 +10,11 @@ import ErrorBoundary from "./ErrorBoundary";
 function AppLayout() {
   const { isAuthenticated, serverSelected, server, logout, changeServer } =
     useAuth();
+  const { preferences } = usePreferences();
   const navigate = useNavigate();
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => preferences.appearance.sidebarCollapsed
+  );
 
   // Auth guards
   if (!isAuthenticated) return <Navigate to="/login" replace />;

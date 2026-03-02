@@ -6,6 +6,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import Hls from "hls.js";
 import { useAuth } from "./useAuth";
+import { usePreferences } from "./usePreferences";
 import { getItemMetadata } from "../services/plex-library";
 import {
   canDirectPlay,
@@ -65,6 +66,9 @@ export interface UsePlayerResult {
 
 export function usePlayer(ratingKey: string): UsePlayerResult {
   const { server } = useAuth();
+  const { preferences } = usePreferences();
+  const prefsRef = useRef(preferences);
+  prefsRef.current = preferences;
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
   const timelineRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -190,11 +194,30 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
       setAudioTracks(streams.audio);
       setSubtitleTracks(streams.subtitles);
 
-      // Set default selected tracks
-      const defaultAudio = streams.audio.find((s) => s.selected);
+      // Set default selected tracks (prefer user language settings)
+      const pb = prefsRef.current.playback;
+      let defaultAudio: PlexStream | undefined;
+      if (pb.preferredAudioLanguage) {
+        defaultAudio = streams.audio.find(
+          (s) => s.languageCode === pb.preferredAudioLanguage
+        );
+      }
+      if (!defaultAudio) {
+        defaultAudio = streams.audio.find((s) => s.selected);
+      }
       setSelectedAudioId(defaultAudio?.id ?? streams.audio[0]?.id ?? null);
 
-      const defaultSub = streams.subtitles.find((s) => s.selected);
+      let defaultSub: PlexStream | undefined;
+      if (pb.defaultSubtitles === "off") {
+        defaultSub = undefined;
+      } else if (pb.defaultSubtitles === "always" && pb.preferredSubtitleLanguage) {
+        defaultSub = streams.subtitles.find(
+          (s) => s.languageCode === pb.preferredSubtitleLanguage
+        ) ?? streams.subtitles[0];
+      } else {
+        // "auto" — use Plex server's default selection
+        defaultSub = streams.subtitles.find((s) => s.selected);
+      }
       setSelectedSubtitleId(defaultSub?.id ?? null);
 
       // Get resume position
@@ -207,7 +230,14 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
       video.volume = volume;
       video.muted = isMuted;
 
-      if (canDirectPlay(media)) {
+      // Direct play decision based on preferences
+      const shouldDirectPlay =
+        pb.directPlayPreference === "always" ||
+        (pb.directPlayPreference === "auto" &&
+          (pb.quality === "original" || canDirectPlay(media)));
+      const forceTranscode = pb.directPlayPreference === "never";
+
+      if (shouldDirectPlay && !forceTranscode && canDirectPlay(media)) {
         // Direct Play — native <video>
         const url = buildDirectPlayUrl(
           server.uri,
@@ -240,6 +270,9 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
             offset: viewOffset > 0 ? viewOffset : undefined,
             audioStreamId: defaultAudio?.id,
             subtitleStreamId: defaultSub?.id,
+            quality: pb.quality,
+            subtitleSize: pb.subtitleSize,
+            audioBoost: pb.audioBoost,
           }
         );
 
@@ -452,6 +485,7 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
         destroyHls();
         setIsBuffering(true);
 
+        const pb = prefsRef.current.playback;
         const url = await buildTranscodeUrl(
           server.uri,
           server.accessToken,
@@ -460,6 +494,9 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
             offset: Math.round(savedTime * 1000),
             audioStreamId: streamId,
             subtitleStreamId: selectedSubtitleId ?? undefined,
+            quality: pb.quality,
+            subtitleSize: pb.subtitleSize,
+            audioBoost: pb.audioBoost,
           }
         );
 
@@ -496,6 +533,7 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
         destroyHls();
         setIsBuffering(true);
 
+        const pb = prefsRef.current.playback;
         const url = await buildTranscodeUrl(
           server.uri,
           server.accessToken,
@@ -504,6 +542,9 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
             offset: Math.round(savedTime * 1000),
             audioStreamId: selectedAudioId ?? undefined,
             subtitleStreamId: streamId ?? undefined,
+            quality: pb.quality,
+            subtitleSize: pb.subtitleSize,
+            audioBoost: pb.audioBoost,
           }
         );
 

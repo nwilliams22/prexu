@@ -42,6 +42,16 @@ export function buildDirectPlayUrl(
   return `${serverUri}${partKey}?${params.toString()}`;
 }
 
+/** Quality preset -> transcode parameters */
+export const QUALITY_PRESETS: Record<
+  string,
+  { resolution: string; bitrate: number }
+> = {
+  "1080p": { resolution: "1920x1080", bitrate: 20000 },
+  "720p": { resolution: "1280x720", bitrate: 4000 },
+  "480p": { resolution: "720x480", bitrate: 2000 },
+};
+
 export async function buildTranscodeUrl(
   serverUri: string,
   serverToken: string,
@@ -50,11 +60,16 @@ export async function buildTranscodeUrl(
     offset?: number;
     audioStreamId?: number;
     subtitleStreamId?: number;
-    maxVideoBitrate?: number;
+    quality?: string;
+    subtitleSize?: number;
+    audioBoost?: number;
   }
 ): Promise<string> {
   const clientId = await getClientIdentifier();
   const sessionId = crypto.randomUUID();
+
+  const preset =
+    QUALITY_PRESETS[options?.quality ?? "1080p"] ?? QUALITY_PRESETS["1080p"];
 
   const params = new URLSearchParams({
     path: `/library/metadata/${ratingKey}`,
@@ -66,10 +81,10 @@ export async function buildTranscodeUrl(
     directStream: "1",
     directStreamAudio: "1",
     videoQuality: "100",
-    videoResolution: "1920x1080",
-    maxVideoBitrate: String(options?.maxVideoBitrate ?? 200000),
-    subtitleSize: "100",
-    audioBoost: "100",
+    videoResolution: preset.resolution,
+    maxVideoBitrate: String(preset.bitrate),
+    subtitleSize: String(options?.subtitleSize ?? 100),
+    audioBoost: String(options?.audioBoost ?? 100),
     "X-Plex-Session-Identifier": sessionId,
     "X-Plex-Client-Identifier": clientId,
     "X-Plex-Product": "Prexu",
