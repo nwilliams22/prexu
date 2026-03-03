@@ -73,6 +73,7 @@ function LibraryView() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const section = sections.find((s) => s.key === sectionId);
 
   // Initialize sort & filters from URL params
   const sort = searchParams.get("sort") || "titleSort:asc";
@@ -86,8 +87,9 @@ function LibraryView() {
     if (year) f.year = year;
     if (contentRating) f.contentRating = contentRating;
     if (unwatched === "1") f.unwatched = true;
+    if (section) f.sectionType = section.type as LibraryFilters["sectionType"];
     return f;
-  }, [searchParams]);
+  }, [searchParams, section]);
 
   const { items, isLoading, isLoadingMore, hasMore, totalSize, error, loadMore, retry } =
     usePaginatedLibrary(sectionId, sort, filters);
@@ -96,8 +98,6 @@ function LibraryView() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [sessionCreator, setSessionCreator] =
     useState<SessionCreatorState | null>(null);
-
-  const section = sections.find((s) => s.key === sectionId);
 
   useEffect(() => {
     if (section) document.title = `${section.title} - Prexu`;

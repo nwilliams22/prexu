@@ -78,8 +78,12 @@ export async function getLibraryItems(
   if (options.filters?.contentRating)
     params.set("contentRating", options.filters.contentRating);
   if (options.filters?.unwatched) {
-    params.set("unwatched", "1");
-    params.set("unwatchedLeaves", "1");
+    // Movies use `unwatched=1`; shows/seasons use `unwatchedLeaves=1`
+    if (options.filters.sectionType === "show") {
+      params.set("unwatchedLeaves", "1");
+    } else {
+      params.set("unwatched", "1");
+    }
   }
 
   const query = params.toString();

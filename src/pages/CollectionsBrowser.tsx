@@ -2,7 +2,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { useCollections } from "../hooks/useCollections";
 import { getImageUrl } from "../services/plex-library";
-import HorizontalRow from "../components/HorizontalRow";
+import LibraryGrid from "../components/LibraryGrid";
 import PosterCard from "../components/PosterCard";
 import SkeletonCard from "../components/SkeletonCard";
 import EmptyState from "../components/EmptyState";
@@ -24,35 +24,31 @@ function CollectionsBrowser() {
 
       {error && <ErrorState message={error} onRetry={retry} />}
 
-      {isLoading &&
-        [1, 2].map((i) => (
-          <section key={i} style={styles.section}>
-            <div style={styles.skeletonTitle} />
-            <div style={styles.skeletonRow}>
-              {Array.from({ length: 8 }).map((_, j) => (
-                <SkeletonCard key={j} />
-              ))}
-            </div>
-          </section>
-        ))}
+      {isLoading && (
+        <LibraryGrid>
+          {Array.from({ length: 18 }).map((_, i) => (
+            <SkeletonCard key={i} />
+          ))}
+        </LibraryGrid>
+      )}
 
       {!isLoading &&
         !error &&
         collections.map((group) => (
-          <HorizontalRow
-            key={group.section.key}
-            title={group.section.title}
-          >
-            {group.items.map((collection) => (
-              <PosterCard
-                key={collection.ratingKey}
-                imageUrl={posterUrl(collection.thumb)}
-                title={collection.title}
-                subtitle={`${collection.childCount} item${collection.childCount !== 1 ? "s" : ""}`}
-                onClick={() => navigate(`/collection/${collection.ratingKey}`)}
-              />
-            ))}
-          </HorizontalRow>
+          <section key={group.section.key} style={styles.section}>
+            <h3 style={styles.sectionTitle}>{group.section.title}</h3>
+            <LibraryGrid>
+              {group.items.map((collection) => (
+                <PosterCard
+                  key={collection.ratingKey}
+                  imageUrl={posterUrl(collection.thumb)}
+                  title={collection.title}
+                  subtitle={`${collection.childCount} item${collection.childCount !== 1 ? "s" : ""}`}
+                  onClick={() => navigate(`/collection/${collection.ratingKey}`)}
+                />
+              ))}
+            </LibraryGrid>
+          </section>
         ))}
 
       {!isLoading && !error && collections.length === 0 && (
@@ -83,20 +79,13 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: "1rem",
   },
   section: {
-    marginBottom: "1.75rem",
+    marginBottom: "2rem",
   },
-  skeletonTitle: {
-    width: "150px",
-    height: "20px",
-    borderRadius: "4px",
-    background: "var(--border)",
-    opacity: 0.3,
+  sectionTitle: {
+    fontSize: "1.1rem",
+    fontWeight: 600,
     marginBottom: "0.75rem",
-  },
-  skeletonRow: {
-    display: "flex",
-    gap: "0.75rem",
-    overflow: "hidden",
+    color: "var(--text-primary)",
   },
 };
 

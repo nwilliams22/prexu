@@ -176,7 +176,22 @@ describe("plex-library — async functions", () => {
       expect(path).toContain("sort=year%3Adesc");
       expect(path).toContain("genre=Action");
       expect(path).toContain("unwatched=1");
+      // unwatchedLeaves is only sent for show libraries
+      expect(path).not.toContain("unwatchedLeaves=1");
+    });
+
+    it("sends unwatchedLeaves for show libraries", async () => {
+      mockServerFetch.mockResolvedValueOnce(
+        jsonResponse({ MediaContainer: { size: 0, totalSize: 0, Metadata: [] } })
+      );
+
+      await getLibraryItems("https://server:32400", "token", "1", {
+        filters: { unwatched: true, sectionType: "show" },
+      });
+
+      const path = mockServerFetch.mock.calls[0][2];
       expect(path).toContain("unwatchedLeaves=1");
+      expect(path).not.toContain("unwatched=1");
     });
 
     it("handles pagination params", async () => {

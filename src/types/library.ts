@@ -275,6 +275,8 @@ export interface LibraryFilters {
   year?: string;
   contentRating?: string;
   unwatched?: boolean;
+  /** Used to send the correct unwatched param to the Plex API */
+  sectionType?: "movie" | "show" | "artist" | "photo";
 }
 
 export interface FilterOption {
