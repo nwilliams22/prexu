@@ -16,7 +16,7 @@ interface PosterCardProps {
   showMoreButton?: boolean;
   /** Click handler for the three-dot button */
   onMoreClick?: (e: React.MouseEvent) => void;
-  /** Show a watched checkmark (bottom-left) */
+  /** Show a watched checkmark (top-right corner fold) */
   watched?: boolean;
   /** Show unwatched episode count badge (top-left) */
   unwatchedCount?: number;
@@ -110,19 +110,20 @@ function PosterCard({
         {/* Badge (e.g. "+3 episodes") */}
         {badge && <span style={styles.badge}>{badge}</span>}
 
-        {/* Watched checkmark (bottom-left) */}
+        {/* Watched checkmark (top-right corner fold) */}
         {watched && (
-          <div style={styles.watchedBadge} aria-label="Watched">
+          <div style={styles.watchedCorner} aria-label="Watched">
             <svg
               aria-hidden="true"
-              width={12}
-              height={12}
+              width={10}
+              height={10}
               viewBox="0 0 24 24"
               fill="none"
               stroke="#000"
-              strokeWidth={3}
+              strokeWidth={3.5}
               strokeLinecap="round"
               strokeLinejoin="round"
+              style={styles.watchedCheck}
             >
               <polyline points="20 6 9 17 4 12" />
             </svg>
@@ -227,18 +228,20 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
     zIndex: 2,
   },
-  watchedBadge: {
+  watchedCorner: {
     position: "absolute",
-    bottom: "8px",
-    left: "6px",
-    width: "20px",
-    height: "20px",
-    borderRadius: "50%",
+    top: 0,
+    right: 0,
+    width: "28px",
+    height: "28px",
     background: "var(--accent)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
+    clipPath: "polygon(0 0, 100% 0, 100% 100%)",
     zIndex: 3,
+  },
+  watchedCheck: {
+    position: "absolute",
+    top: "3px",
+    right: "3px",
   },
   progressTrack: {
     position: "absolute",
