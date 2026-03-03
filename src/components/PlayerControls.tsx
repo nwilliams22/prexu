@@ -5,14 +5,23 @@
 
 import { useState, useRef } from "react";
 import type { UsePlayerResult } from "../hooks/usePlayer";
+import type { AudioEnhancementsResult } from "../hooks/useAudioEnhancements";
+import type { NormalizationPreset } from "../types/preferences";
 import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
 import TrackMenu from "./TrackMenu";
+import AudioEnhancementsPanel from "./AudioEnhancementsPanel";
 
 interface PlayerControlsProps {
   player: UsePlayerResult;
   onBack: () => void;
   visible: boolean;
   syncIndicator?: React.ReactNode;
+  audioEnhancements?: AudioEnhancementsResult;
+  onAudioEnhancementChange?: (changes: {
+    volumeBoost?: number;
+    normalizationPreset?: NormalizationPreset;
+    audioOffsetMs?: number;
+  }) => void;
 }
 
 function formatTime(seconds: number): string {
@@ -25,7 +34,7 @@ function formatTime(seconds: number): string {
   return `${m}:${String(sec).padStart(2, "0")}`;
 }
 
-function PlayerControls({ player, onBack, visible, syncIndicator }: PlayerControlsProps) {
+function PlayerControls({ player, onBack, visible, syncIndicator, audioEnhancements, onAudioEnhancementChange }: PlayerControlsProps) {
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
   const seekBarRef = useRef<HTMLDivElement>(null);
@@ -35,6 +44,7 @@ function PlayerControls({ player, onBack, visible, syncIndicator }: PlayerContro
   const [isDragging, setIsDragging] = useState(false);
   const [subtitleMenuOpen, setSubtitleMenuOpen] = useState(false);
   const [audioMenuOpen, setAudioMenuOpen] = useState(false);
+  const [enhancementsOpen, setEnhancementsOpen] = useState(false);
 
   const progressPercent =
     player.duration > 0 ? (player.currentTime / player.duration) * 100 : 0;
@@ -319,6 +329,31 @@ function PlayerControls({ player, onBack, visible, syncIndicator }: PlayerContro
               </button>
             )}
 
+            {/* Audio Enhancements */}
+            {audioEnhancements && !mobile && (
+              <button
+                onClick={() => {
+                  setEnhancementsOpen((o) => !o);
+                  setSubtitleMenuOpen(false);
+                  setAudioMenuOpen(false);
+                }}
+                style={{
+                  ...styles.controlButton,
+                  ...(audioEnhancements.volumeBoost > 1 ||
+                  audioEnhancements.normalizationPreset !== "off"
+                    ? { color: "var(--accent)" }
+                    : {}),
+                }}
+                aria-label="Audio enhancements"
+              >
+                <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+                  <rect x={4} y={2} width={3} height={20} rx={1} />
+                  <rect x={10.5} y={6} width={3} height={12} rx={1} />
+                  <rect x={17} y={4} width={3} height={16} rx={1} />
+                </svg>
+              </button>
+            )}
+
             {/* Fullscreen */}
             <button
               onClick={player.toggleFullscreen}
@@ -369,6 +404,14 @@ function PlayerControls({ player, onBack, visible, syncIndicator }: PlayerContro
             if (id !== null) player.selectAudioTrack(id);
           }}
           onClose={() => setAudioMenuOpen(false)}
+        />
+      )}
+
+      {enhancementsOpen && audioEnhancements && onAudioEnhancementChange && (
+        <AudioEnhancementsPanel
+          enhancements={audioEnhancements}
+          onClose={() => setEnhancementsOpen(false)}
+          onPersist={onAudioEnhancementChange}
         />
       )}
     </div>

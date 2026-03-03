@@ -8,12 +8,15 @@ import { useParams, useNavigate, useSearchParams, Navigate } from "react-router-
 import { useAuth } from "../hooks/useAuth";
 import { usePlayer } from "../hooks/usePlayer";
 import { useWatchTogether } from "../hooks/useWatchTogether";
+import { useAudioEnhancements } from "../hooks/useAudioEnhancements";
+import { usePreferences } from "../hooks/usePreferences";
 import { getItemMetadata, getNextEpisode } from "../services/plex-library";
 import PlayerControls from "../components/PlayerControls";
 import ParticipantOverlay from "../components/ParticipantOverlay";
 import SyncIndicator from "../components/SyncIndicator";
 import NextEpisodePrompt from "../components/NextEpisodePrompt";
 import type { PlexEpisode, PlexMediaItem } from "../types/library";
+import type { NormalizationPreset } from "../types/preferences";
 
 const CONTROLS_HIDE_MS = 3000;
 const DOUBLE_CLICK_MS = 250;
@@ -32,6 +35,37 @@ function Player() {
   const wt = useWatchTogether(player, sessionId, isHost, relayUrl);
 
   const { server } = useAuth();
+  const { preferences, updatePreferences } = usePreferences();
+  const pb = preferences.playback;
+
+  // Audio enhancements — Web Audio API processing graph
+  const audioEnhancements = useAudioEnhancements(
+    player.videoRef,
+    pb.volumeBoost,
+    pb.normalizationPreset,
+    pb.audioOffsetMs,
+  );
+
+  const handleAudioEnhancementChange = useCallback(
+    (changes: {
+      volumeBoost?: number;
+      normalizationPreset?: NormalizationPreset;
+      audioOffsetMs?: number;
+    }) => {
+      if (changes.volumeBoost !== undefined) {
+        audioEnhancements.setVolumeBoost(changes.volumeBoost);
+      }
+      if (changes.normalizationPreset !== undefined) {
+        audioEnhancements.setNormalizationPreset(changes.normalizationPreset);
+      }
+      if (changes.audioOffsetMs !== undefined) {
+        audioEnhancements.setAudioOffsetMs(changes.audioOffsetMs);
+      }
+      // Persist to preferences
+      updatePreferences({ playback: changes });
+    },
+    [audioEnhancements, updatePreferences],
+  );
 
   const [controlsVisible, setControlsVisible] = useState(true);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -166,12 +200,30 @@ function Player() {
             navigate(-1);
           }
           break;
+        // Audio enhancement shortcuts
+        case "[":
+          handleAudioEnhancementChange({
+            volumeBoost: Math.max(1, audioEnhancements.volumeBoost - 0.25),
+          });
+          break;
+        case "]":
+          handleAudioEnhancementChange({
+            volumeBoost: Math.min(5, audioEnhancements.volumeBoost + 0.25),
+          });
+          break;
+        case "n": {
+          const cycle: NormalizationPreset[] = ["off", "light", "night"];
+          const idx = cycle.indexOf(audioEnhancements.normalizationPreset);
+          const next = cycle[(idx + 1) % cycle.length];
+          handleAudioEnhancementChange({ normalizationPreset: next });
+          break;
+        }
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [player, navigate, resetHideTimer, togglePlay, seek]);
+  }, [player, navigate, resetHideTimer, togglePlay, seek, audioEnhancements, handleAudioEnhancementChange]);
 
   const handleBack = useCallback(() => {
     navigate(-1);
@@ -194,6 +246,7 @@ function Player() {
         ref={player.videoRef}
         style={styles.video}
         playsInline
+        crossOrigin="anonymous"
         onClick={handleVideoClick}
       />
 
@@ -254,6 +307,8 @@ function Player() {
           player={player}
           onBack={handleBack}
           visible={controlsVisible}
+          audioEnhancements={audioEnhancements}
+          onAudioEnhancementChange={handleAudioEnhancementChange}
           syncIndicator={
             wt.isInSession ? (
               <SyncIndicator

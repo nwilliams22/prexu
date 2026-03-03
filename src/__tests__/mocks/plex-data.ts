@@ -542,6 +542,9 @@ export function createPreferences(
       subtitleSize: 100,
       audioBoost: 100,
       directPlayPreference: "auto",
+      volumeBoost: 1.0,
+      normalizationPreset: "off",
+      audioOffsetMs: 0,
       ...overrides.playback,
     },
     appearance: {

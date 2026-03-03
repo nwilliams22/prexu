@@ -1,3 +1,5 @@
+export type NormalizationPreset = "off" | "light" | "night";
+
 export interface PlaybackPreferences {
   quality: "original" | "1080p" | "720p" | "480p";
   preferredAudioLanguage: string;
@@ -6,6 +8,9 @@ export interface PlaybackPreferences {
   subtitleSize: number;
   audioBoost: number;
   directPlayPreference: "auto" | "always" | "never";
+  volumeBoost: number;
+  normalizationPreset: NormalizationPreset;
+  audioOffsetMs: number;
 }
 
 export interface AppearancePreferences {

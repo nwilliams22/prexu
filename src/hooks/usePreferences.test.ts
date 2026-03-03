@@ -22,6 +22,9 @@ const defaultPrefs = {
     subtitleSize: 100,
     audioBoost: 100,
     directPlayPreference: "auto" as const,
+    volumeBoost: 1.0,
+    normalizationPreset: "off" as const,
+    audioOffsetMs: 0,
   },
   appearance: {
     posterSize: "medium" as const,
