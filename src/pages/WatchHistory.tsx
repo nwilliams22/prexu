@@ -94,6 +94,11 @@ function WatchHistory() {
     return undefined;
   };
 
+  const isWatched = (item: PlexMediaItem): boolean => {
+    const asMovie = item as { viewCount?: number };
+    return asMovie.viewCount !== undefined && asMovie.viewCount > 0;
+  };
+
   const openContextMenu = useCallback(
     (e: React.MouseEvent, item: PlexMediaItem) => {
       setContextMenu({ position: { x: e.clientX, y: e.clientY }, item });
@@ -173,6 +178,7 @@ function WatchHistory() {
             title={getTitle(item)}
             subtitle={getSubtitle(item)}
             progress={getProgress(item)}
+            watched={isWatched(item)}
             onClick={() => navigate(`/item/${item.ratingKey}`)}
             showMoreButton
             onContextMenu={(e) => openContextMenu(e, item)}

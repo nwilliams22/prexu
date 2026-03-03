@@ -168,6 +168,49 @@ describe("PosterCard", () => {
     expect(imageContainer.style.height).toBe("400px");
   });
 
+  // ── Watched checkmark ──
+
+  it("shows watched checkmark when watched is true", () => {
+    render(<PosterCard {...defaultProps} watched />);
+    expect(screen.getByLabelText("Watched")).toBeInTheDocument();
+  });
+
+  it("does not show watched checkmark when watched is false", () => {
+    render(<PosterCard {...defaultProps} watched={false} />);
+    expect(screen.queryByLabelText("Watched")).not.toBeInTheDocument();
+  });
+
+  it("does not show watched checkmark when watched is undefined", () => {
+    render(<PosterCard {...defaultProps} />);
+    expect(screen.queryByLabelText("Watched")).not.toBeInTheDocument();
+  });
+
+  // ── Unwatched count badge ──
+
+  it("shows unwatched count badge when unwatchedCount > 0", () => {
+    render(<PosterCard {...defaultProps} unwatchedCount={5} />);
+    expect(screen.getByLabelText("5 unwatched")).toBeInTheDocument();
+    expect(screen.getByText("5")).toBeInTheDocument();
+  });
+
+  it("does not show unwatched badge when unwatchedCount is 0", () => {
+    render(<PosterCard {...defaultProps} unwatchedCount={0} />);
+    expect(screen.queryByLabelText(/unwatched/)).not.toBeInTheDocument();
+  });
+
+  it("does not show unwatched badge when unwatchedCount is undefined", () => {
+    render(<PosterCard {...defaultProps} />);
+    expect(screen.queryByLabelText(/unwatched/)).not.toBeInTheDocument();
+  });
+
+  it("has no axe violations with watched indicators", async () => {
+    const { container } = render(
+      <PosterCard {...defaultProps} watched unwatchedCount={3} />
+    );
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+
   it("has no axe violations", async () => {
     const { container } = render(<PosterCard {...defaultProps} />);
     const results = await axe(container);

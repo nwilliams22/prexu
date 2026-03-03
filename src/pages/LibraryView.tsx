@@ -32,6 +32,27 @@ interface SessionCreatorState {
   mediaType: "movie" | "episode";
 }
 
+/** Pure helper — is this item fully watched? */
+function isWatched(item: PlexMediaItem): boolean {
+  const asMovie = item as { viewCount?: number };
+  if (asMovie.viewCount !== undefined) return asMovie.viewCount > 0;
+  const asShow = item as { viewedLeafCount?: number; leafCount?: number };
+  if (asShow.viewedLeafCount !== undefined && asShow.leafCount !== undefined) {
+    return asShow.leafCount > 0 && asShow.viewedLeafCount >= asShow.leafCount;
+  }
+  return false;
+}
+
+/** Pure helper — number of unwatched episodes (shows/seasons), or undefined */
+function getUnwatchedCount(item: PlexMediaItem): number | undefined {
+  const asShow = item as { viewedLeafCount?: number; leafCount?: number };
+  if (asShow.leafCount !== undefined && asShow.viewedLeafCount !== undefined) {
+    const count = asShow.leafCount - asShow.viewedLeafCount;
+    return count > 0 ? count : undefined;
+  }
+  return undefined;
+}
+
 /** Pure helper — subtitle for a library item (year, episode count) */
 function getSubtitle(item: { type: string; year?: number; leafCount?: number }): string {
   if (item.type === "show") {
@@ -252,6 +273,8 @@ function LibraryView() {
             imageUrl={posterUrl(item.thumb)}
             title={item.title}
             subtitle={getSubtitle(item as { type: string; year?: number; leafCount?: number })}
+            watched={isWatched(item)}
+            unwatchedCount={getUnwatchedCount(item)}
             onClick={() => navigate(`/item/${item.ratingKey}`)}
             showMoreButton
             onContextMenu={(e) => openContextMenu(e, item)}

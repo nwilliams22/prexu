@@ -16,6 +16,10 @@ interface PosterCardProps {
   showMoreButton?: boolean;
   /** Click handler for the three-dot button */
   onMoreClick?: (e: React.MouseEvent) => void;
+  /** Show a watched checkmark (bottom-left) */
+  watched?: boolean;
+  /** Show unwatched episode count badge (top-left) */
+  unwatchedCount?: number;
 }
 
 function PosterCard({
@@ -30,6 +34,8 @@ function PosterCard({
   onContextMenu,
   showMoreButton,
   onMoreClick,
+  watched,
+  unwatchedCount,
 }: PosterCardProps) {
   const [loaded, setLoaded] = useState(false);
   const [hovered, setHovered] = useState(false);
@@ -94,8 +100,34 @@ function PosterCard({
           </button>
         )}
 
+        {/* Unwatched episode count (top-left) */}
+        {unwatchedCount !== undefined && unwatchedCount > 0 && (
+          <span style={styles.unwatchedBadge} aria-label={`${unwatchedCount} unwatched`}>
+            {unwatchedCount}
+          </span>
+        )}
+
         {/* Badge (e.g. "+3 episodes") */}
         {badge && <span style={styles.badge}>{badge}</span>}
+
+        {/* Watched checkmark (bottom-left) */}
+        {watched && (
+          <div style={styles.watchedBadge} aria-label="Watched">
+            <svg
+              aria-hidden="true"
+              width={12}
+              height={12}
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="#000"
+              strokeWidth={3}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          </div>
+        )}
 
         {/* Progress bar */}
         {progress !== undefined && progress > 0 && (
@@ -181,6 +213,32 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "2px 6px",
     borderRadius: "4px",
     whiteSpace: "nowrap",
+  },
+  unwatchedBadge: {
+    position: "absolute",
+    top: "6px",
+    left: "6px",
+    background: "var(--accent)",
+    color: "#000",
+    fontSize: "0.65rem",
+    fontWeight: 700,
+    padding: "2px 6px",
+    borderRadius: "4px",
+    whiteSpace: "nowrap",
+    zIndex: 2,
+  },
+  watchedBadge: {
+    position: "absolute",
+    bottom: "8px",
+    left: "6px",
+    width: "20px",
+    height: "20px",
+    borderRadius: "50%",
+    background: "var(--accent)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 3,
   },
   progressTrack: {
     position: "absolute",

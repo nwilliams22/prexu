@@ -76,6 +76,17 @@ function getProgress(item: PlexMediaItem): number | undefined {
   return undefined;
 }
 
+/** Pure helper — is this item fully watched? */
+function isWatched(item: PlexMediaItem): boolean {
+  const asMovie = item as { viewCount?: number };
+  if (asMovie.viewCount !== undefined) return asMovie.viewCount > 0;
+  const asShow = item as { viewedLeafCount?: number; leafCount?: number };
+  if (asShow.viewedLeafCount !== undefined && asShow.leafCount !== undefined) {
+    return asShow.leafCount > 0 && asShow.viewedLeafCount >= asShow.leafCount;
+  }
+  return false;
+}
+
 function Dashboard() {
   const { server } = useAuth();
   const { preferences } = usePreferences();
@@ -326,6 +337,7 @@ function Dashboard() {
                 title={item.title}
                 subtitle={getSubtitle(item)}
                 width={posterWidth}
+                watched={isWatched(item)}
                 onClick={() => navigate(`/item/${item.ratingKey}`)}
                 showMoreButton
                 onContextMenu={(e) => openContextMenu(e, item, "movies")}
