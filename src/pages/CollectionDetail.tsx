@@ -88,6 +88,10 @@ function CollectionDetail() {
     };
   }, [server, collectionKey]);
 
+  useEffect(() => {
+    if (collectionTitle) document.title = `${collectionTitle} - Prexu`;
+  }, [collectionTitle]);
+
   if (!server) return null;
 
   const posterUrl = (thumb: string) =>

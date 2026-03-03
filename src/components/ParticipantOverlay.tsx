@@ -12,7 +12,7 @@ function ParticipantOverlay({
   if (!visible || participants.length === 0) return null;
 
   return (
-    <div style={styles.container}>
+    <div role="status" aria-label="Watch Together participants" style={styles.container}>
       {participants.map((p) => {
         const borderColor =
           p.state === "playing"

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 export interface ContextMenuItem {
   label: string;
@@ -15,6 +16,7 @@ interface ContextMenuProps {
 
 function ContextMenu({ items, position, onClose }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(menuRef, true);
 
   // Close on outside click (setTimeout prevents the opening click from closing)
   useEffect(() => {
@@ -41,6 +43,28 @@ function ContextMenu({ items, position, onClose }: ContextMenuProps) {
     return () => window.removeEventListener("keydown", handleKey);
   }, [onClose]);
 
+  // Arrow key navigation between menu items
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+      e.preventDefault();
+      const menu = menuRef.current;
+      if (!menu) return;
+      const items = Array.from(
+        menu.querySelectorAll<HTMLElement>("button:not([disabled])"),
+      );
+      if (items.length === 0) return;
+      const idx = items.indexOf(document.activeElement as HTMLElement);
+      if (e.key === "ArrowDown") {
+        items[(idx + 1) % items.length].focus();
+      } else {
+        items[(idx - 1 + items.length) % items.length].focus();
+      }
+    };
+    document.addEventListener("keydown", handleKey);
+    return () => document.removeEventListener("keydown", handleKey);
+  }, []);
+
   // Adjust position to stay within viewport
   useEffect(() => {
     const el = menuRef.current;
@@ -57,6 +81,7 @@ function ContextMenu({ items, position, onClose }: ContextMenuProps) {
   return (
     <div
       ref={menuRef}
+      role="menu"
       style={{
         ...styles.menu,
         left: position.x,
@@ -67,6 +92,7 @@ function ContextMenu({ items, position, onClose }: ContextMenuProps) {
         <div key={i}>
           {item.dividerAbove && <div style={styles.divider} />}
           <button
+            role="menuitem"
             data-context-menu-item
             style={{
               ...styles.menuItem,

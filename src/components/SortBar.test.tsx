@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "vitest-axe";
 import SortBar from "./SortBar";
 
 describe("SortBar", () => {
@@ -55,5 +56,11 @@ describe("SortBar", () => {
 
     await user.selectOptions(select, "rating:desc");
     expect(onSortChange).toHaveBeenCalledWith("rating:desc");
+  });
+
+  it("has no axe violations", async () => {
+    const { container } = render(<SortBar {...defaultProps} />);
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
   });
 });

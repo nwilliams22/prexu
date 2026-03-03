@@ -3,6 +3,8 @@
  * Positioned above the anchor button.
  */
 
+import { useEffect, useRef } from "react";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 import type { PlexStream } from "../types/library";
 
 interface TrackMenuProps {
@@ -22,6 +24,40 @@ function TrackMenu({
   allowNone = false,
   onClose,
 }: TrackMenuProps) {
+  const menuRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(menuRef, true);
+
+  // Close on Escape
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
+  // Arrow key navigation between menu items
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+      e.preventDefault();
+      const menu = menuRef.current;
+      if (!menu) return;
+      const items = Array.from(
+        menu.querySelectorAll<HTMLElement>("button:not([disabled])"),
+      );
+      if (items.length === 0) return;
+      const idx = items.indexOf(document.activeElement as HTMLElement);
+      if (e.key === "ArrowDown") {
+        items[(idx + 1) % items.length].focus();
+      } else {
+        items[(idx - 1 + items.length) % items.length].focus();
+      }
+    };
+    document.addEventListener("keydown", handleKey);
+    return () => document.removeEventListener("keydown", handleKey);
+  }, []);
+
   const handleSelect = (id: number | null) => {
     onSelect(id);
     onClose();
@@ -29,11 +65,13 @@ function TrackMenu({
 
   return (
     <div style={styles.backdrop} onClick={onClose}>
-      <div style={styles.menu} onClick={(e) => e.stopPropagation()}>
+      <div ref={menuRef} role="menu" aria-label={label} style={styles.menu} onClick={(e) => e.stopPropagation()}>
         <div style={styles.menuHeader}>{label}</div>
 
         {allowNone && (
           <button
+            role="menuitemradio"
+            aria-checked={selectedId === null}
             onClick={() => handleSelect(null)}
             style={{
               ...styles.menuItem,
@@ -50,6 +88,8 @@ function TrackMenu({
         {tracks.map((track) => (
           <button
             key={track.id}
+            role="menuitemradio"
+            aria-checked={selectedId === track.id}
             onClick={() => handleSelect(track.id)}
             style={{
               ...styles.menuItem,

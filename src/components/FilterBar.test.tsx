@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "vitest-axe";
 import FilterBar from "./FilterBar";
 import type { LibraryFilters, FilterOption } from "../types/library";
 
@@ -138,5 +139,11 @@ describe("FilterBar", () => {
     // Button text + chip text
     const unwatchedElements = screen.getAllByText("Unwatched");
     expect(unwatchedElements.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("has no axe violations", async () => {
+    const { container } = render(<FilterBar {...defaultProps} />);
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
   });
 });

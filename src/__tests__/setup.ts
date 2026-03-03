@@ -1,4 +1,7 @@
 import "@testing-library/jest-dom/vitest";
+import * as matchers from "vitest-axe/matchers";
+
+expect.extend(matchers);
 
 // Polyfill crypto.randomUUID — jsdom doesn't provide it, storage.ts needs it
 if (!globalThis.crypto?.randomUUID) {

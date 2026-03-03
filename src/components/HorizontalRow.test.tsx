@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "vitest-axe";
 import HorizontalRow from "./HorizontalRow";
 
 describe("HorizontalRow", () => {
@@ -78,5 +79,15 @@ describe("HorizontalRow", () => {
     );
 
     expect(container.querySelector("section")).toBeInTheDocument();
+  });
+
+  it("has no axe violations", async () => {
+    const { container } = render(
+      <HorizontalRow title="Test Row">
+        <div>Item</div>
+      </HorizontalRow>
+    );
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
   });
 });

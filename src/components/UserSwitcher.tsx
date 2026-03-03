@@ -2,6 +2,8 @@ import { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { useHomeUsers } from "../hooks/useHomeUsers";
+import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 import PinEntryModal from "./PinEntryModal";
 import type { HomeUser } from "../types/home-user";
 
@@ -20,6 +22,8 @@ function UserSwitcher() {
   const [isOpen, setIsOpen] = useState(false);
   const [pinUser, setPinUser] = useState<HomeUser | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(menuRef, isOpen);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -41,11 +45,29 @@ function UserSwitcher() {
     };
   }, [isOpen]);
 
-  // Close dropdown on Escape
+  // Close dropdown on Escape + arrow key navigation
   useEffect(() => {
     if (!isOpen) return;
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setIsOpen(false);
+      if (e.key === "Escape") {
+        setIsOpen(false);
+        return;
+      }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const menu = menuRef.current;
+        if (!menu) return;
+        const items = Array.from(
+          menu.querySelectorAll<HTMLElement>("button:not([disabled])"),
+        );
+        if (items.length === 0) return;
+        const idx = items.indexOf(document.activeElement as HTMLElement);
+        if (e.key === "ArrowDown") {
+          items[(idx + 1) % items.length].focus();
+        } else {
+          items[(idx - 1 + items.length) % items.length].focus();
+        }
+      }
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
@@ -83,20 +105,25 @@ function UserSwitcher() {
     }
   }, [isSwitching, switchError, pinUser]);
 
+  const bp = useBreakpoint();
+  const mobile = isMobile(bp);
+
   const displayName =
     activeUser?.title ?? activeUser?.username ?? "User";
   const displayThumb = activeUser?.thumb ?? "";
 
   return (
     <div style={styles.container} ref={dropdownRef}>
-      {/* Server name */}
-      <span style={styles.serverName}>{server?.name}</span>
+      {/* Server name — hidden on mobile */}
+      {!mobile && <span style={styles.serverName}>{server?.name}</span>}
 
       {/* Avatar button */}
       <button
         onClick={() => setIsOpen(!isOpen)}
         style={styles.avatarButton}
         title={displayName}
+        aria-expanded={isOpen}
+        aria-haspopup="true"
       >
         {displayThumb ? (
           <img src={displayThumb} alt="" style={styles.avatarImg} />
@@ -123,7 +150,7 @@ function UserSwitcher() {
 
       {/* Dropdown */}
       {isOpen && (
-        <div style={styles.dropdown}>
+        <div ref={menuRef} role="menu" style={styles.dropdown}>
           {/* Current user info */}
           <div style={styles.currentUser}>
             <span style={styles.currentUserName}>{displayName}</span>
@@ -205,6 +232,7 @@ function UserSwitcher() {
           {/* Actions */}
           <div style={styles.divider} />
           <button
+            role="menuitem"
             onClick={() => {
               navigate("/settings");
               setIsOpen(false);
@@ -214,6 +242,7 @@ function UserSwitcher() {
             Settings
           </button>
           <button
+            role="menuitem"
             onClick={() => {
               changeServer();
               setIsOpen(false);
@@ -223,6 +252,7 @@ function UserSwitcher() {
             Change Server
           </button>
           <button
+            role="menuitem"
             onClick={() => {
               logout();
               setIsOpen(false);

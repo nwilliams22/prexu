@@ -19,7 +19,7 @@ function SyncIndicator({ syncStatus, participantCount }: SyncIndicatorProps) {
         : "Disconnected";
 
   return (
-    <div style={styles.container}>
+    <div role="status" aria-live="polite" style={styles.container}>
       <div style={{ ...styles.dot, background: dotColor }} />
       <span style={styles.label}>{label}</span>
       <span style={styles.count}>

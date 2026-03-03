@@ -1,3 +1,4 @@
+import { useBreakpoint, isTabletOrBelow } from "../hooks/useBreakpoint";
 import type { LibraryFilters, FilterOption } from "../types/library";
 
 interface FilterBarProps {
@@ -17,6 +18,10 @@ function FilterBar({
   contentRatings,
   isLoading,
 }: FilterBarProps) {
+  const bp = useBreakpoint();
+  const touchMode = isTabletOrBelow(bp);
+  const touchPadding = touchMode ? { padding: "0.6rem 0.75rem" } : {};
+
   const hasActiveFilters =
     !!filters.genre ||
     !!filters.year ||
@@ -72,9 +77,10 @@ function FilterBar({
       {/* Filter controls row */}
       <div style={styles.controls}>
         <select
+          aria-label="Genre filter"
           value={filters.genre ?? ""}
           onChange={(e) => updateFilter("genre", e.target.value)}
-          style={styles.select}
+          style={{ ...styles.select, ...touchPadding }}
         >
           <option value="">All Genres</option>
           {genres.map((g) => (
@@ -85,9 +91,10 @@ function FilterBar({
         </select>
 
         <select
+          aria-label="Year filter"
           value={filters.year ?? ""}
           onChange={(e) => updateFilter("year", e.target.value)}
-          style={styles.select}
+          style={{ ...styles.select, ...touchPadding }}
         >
           <option value="">All Years</option>
           {years.map((y) => (
@@ -98,9 +105,10 @@ function FilterBar({
         </select>
 
         <select
+          aria-label="Rating filter"
           value={filters.contentRating ?? ""}
           onChange={(e) => updateFilter("contentRating", e.target.value)}
-          style={styles.select}
+          style={{ ...styles.select, ...touchPadding }}
         >
           <option value="">All Ratings</option>
           {contentRatings.map((cr) => (
@@ -112,8 +120,10 @@ function FilterBar({
 
         <button
           onClick={() => updateFilter("unwatched", !filters.unwatched)}
+          aria-pressed={!!filters.unwatched}
           style={{
             ...styles.toggleButton,
+            ...touchPadding,
             ...(filters.unwatched ? styles.toggleActive : {}),
           }}
         >

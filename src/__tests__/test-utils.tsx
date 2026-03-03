@@ -142,6 +142,44 @@ export function renderWithProviders(
   });
 }
 
+// ── Breakpoint mock helper ──
+
+import type { Breakpoint } from "../hooks/useBreakpoint";
+
+const BREAKPOINT_QUERIES: Record<string, Breakpoint> = {
+  "(max-width: 767px)": "mobile",
+  "(min-width: 768px) and (max-width: 1024px)": "tablet",
+  "(min-width: 1025px) and (max-width: 1440px)": "desktop",
+  "(min-width: 1441px)": "large",
+};
+
+/**
+ * Mock `window.matchMedia` so that `useBreakpoint()` returns the given breakpoint.
+ * Call in `beforeEach` or at the top of a test. Returns the mock for assertions.
+ */
+export function mockBreakpoint(breakpoint: Breakpoint) {
+  const mockMatchMedia = vi.fn().mockImplementation((query: string) => {
+    const matchedBp = BREAKPOINT_QUERIES[query];
+    return {
+      matches: matchedBp === breakpoint,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    };
+  });
+
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    value: mockMatchMedia,
+  });
+
+  return mockMatchMedia;
+}
+
 /** Re-export everything from @testing-library/react for convenience */
 export * from "@testing-library/react";
 export { default as userEvent } from "@testing-library/user-event";

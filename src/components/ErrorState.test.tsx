@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "vitest-axe";
 import ErrorState from "./ErrorState";
 
 describe("ErrorState", () => {
@@ -31,5 +32,11 @@ describe("ErrorState", () => {
   it("renders an SVG error icon", () => {
     const { container } = render(<ErrorState message="Error" />);
     expect(container.querySelector("svg")).toBeInTheDocument();
+  });
+
+  it("has no axe violations", async () => {
+    const { container } = render(<ErrorState message="Something went wrong" onRetry={() => {}} />);
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
   });
 });

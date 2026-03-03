@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
 
 const DEBOUNCE_MS = 300;
 
@@ -50,10 +51,17 @@ function SearchBar() {
     }
   };
 
+  const bp = useBreakpoint();
+  const mobile = isMobile(bp);
+
   return (
-    <div style={styles.container}>
+    <div role="search" style={{
+      ...styles.container,
+      ...(mobile ? { margin: "0 0.5rem", maxWidth: "none" } : {}),
+    }}>
       {/* Magnifying glass icon */}
       <svg
+        aria-hidden="true"
         style={styles.icon}
         width={16}
         height={16}
@@ -75,6 +83,7 @@ function SearchBar() {
         onChange={handleChange}
         onKeyDown={handleKeyDown}
         placeholder="Search movies, shows, episodes..."
+        aria-label="Search movies, shows, episodes"
         style={styles.input}
         spellCheck={false}
       />

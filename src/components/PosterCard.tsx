@@ -62,7 +62,7 @@ function PosterCard({
 
         <img
           src={imageUrl}
-          alt={title}
+          alt=""
           loading="lazy"
           onLoad={() => setLoaded(true)}
           onError={() => setLoaded(true)}
@@ -86,7 +86,7 @@ function PosterCard({
             }}
             aria-label="More options"
           >
-            <svg width={16} height={16} viewBox="0 0 24 24" fill="currentColor">
+            <svg aria-hidden="true" width={16} height={16} viewBox="0 0 24 24" fill="currentColor">
               <circle cx="12" cy="5" r="2" />
               <circle cx="12" cy="12" r="2" />
               <circle cx="12" cy="19" r="2" />

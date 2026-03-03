@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { useLibrary } from "../hooks/useLibrary";
+import { useBreakpoint, isTabletOrBelow } from "../hooks/useBreakpoint";
 import {
   scanLibrary,
   refreshLibraryMetadata,
@@ -14,6 +15,7 @@ import type { ContextMenuItem } from "./ContextMenu";
 interface SidebarProps {
   collapsed: boolean;
   onToggle: () => void;
+  onNavigate?: () => void;
 }
 
 interface SectionMenuState {
@@ -21,15 +23,27 @@ interface SectionMenuState {
   sectionKey: string;
 }
 
-function Sidebar({ collapsed, onToggle }: SidebarProps) {
+function Sidebar({ collapsed, onToggle, onNavigate }: SidebarProps) {
   const { server } = useAuth();
   const { sections, isLoading } = useLibrary();
+  const bp = useBreakpoint();
+  const touchMode = isTabletOrBelow(bp);
   const navigate = useNavigate();
   const location = useLocation();
   const [hoveredSection, setHoveredSection] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<SectionMenuState | null>(null);
 
   const isActive = (path: string) => location.pathname === path;
+
+  const navigateTo = (path: string) => {
+    navigate(path);
+    onNavigate?.();
+  };
+
+  const navItemStyle: React.CSSProperties = {
+    ...styles.navItem,
+    ...(touchMode ? { minHeight: "44px", padding: "0.75rem 1rem" } : {}),
+  };
 
   const openSectionMenu = (e: React.MouseEvent, sectionKey: string) => {
     e.preventDefault();
@@ -63,18 +77,20 @@ function Sidebar({ collapsed, onToggle }: SidebarProps) {
   };
 
   return (
-    <nav style={{ ...styles.sidebar, width: collapsed ? 60 : 220 }}>
+    <nav aria-label="Main navigation" style={{ ...styles.sidebar, width: collapsed ? 60 : 220 }}>
       <div style={styles.sectionList}>
         {/* Home */}
         <button
-          onClick={() => navigate("/")}
+          onClick={() => navigateTo("/")}
           style={{
-            ...styles.navItem,
+            ...navItemStyle,
             ...(isActive("/") ? styles.navItemActive : {}),
           }}
           title="Home"
+          aria-current={isActive("/") ? "page" : undefined}
         >
           <svg
+            aria-hidden="true"
             width={20}
             height={20}
             viewBox="0 0 24 24"
@@ -96,14 +112,16 @@ function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
         {/* Watch History */}
         <button
-          onClick={() => navigate("/history")}
+          onClick={() => navigateTo("/history")}
           style={{
-            ...styles.navItem,
+            ...navItemStyle,
             ...(isActive("/history") ? styles.navItemActive : {}),
           }}
           title="Watch History"
+          aria-current={isActive("/history") ? "page" : undefined}
         >
           <svg
+            aria-hidden="true"
             width={20}
             height={20}
             viewBox="0 0 24 24"
@@ -125,14 +143,16 @@ function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
         {/* Collections */}
         <button
-          onClick={() => navigate("/collections")}
+          onClick={() => navigateTo("/collections")}
           style={{
-            ...styles.navItem,
+            ...navItemStyle,
             ...(isActive("/collections") ? styles.navItemActive : {}),
           }}
           title="Collections"
+          aria-current={isActive("/collections") ? "page" : undefined}
         >
           <svg
+            aria-hidden="true"
             width={20}
             height={20}
             viewBox="0 0 24 24"
@@ -156,14 +176,16 @@ function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
         {/* Playlists */}
         <button
-          onClick={() => navigate("/playlists")}
+          onClick={() => navigateTo("/playlists")}
           style={{
-            ...styles.navItem,
+            ...navItemStyle,
             ...(isActive("/playlists") ? styles.navItemActive : {}),
           }}
           title="Playlists"
+          aria-current={isActive("/playlists") ? "page" : undefined}
         >
           <svg
+            aria-hidden="true"
             width={20}
             height={20}
             viewBox="0 0 24 24"
@@ -208,13 +230,14 @@ function Sidebar({ collapsed, onToggle }: SidebarProps) {
               onMouseLeave={() => setHoveredSection(null)}
             >
               <button
-                onClick={() => navigate(path)}
+                onClick={() => navigateTo(path)}
                 onContextMenu={(e) => openSectionMenu(e, section.key)}
                 style={{
-                  ...styles.navItem,
+                  ...navItemStyle,
                   ...(isActive(path) ? styles.navItemActive : {}),
                 }}
                 title={section.title}
+                aria-current={isActive(path) ? "page" : undefined}
               >
                 <LibraryIcon type={section.type} size={20} />
                 <span style={{

@@ -1,3 +1,4 @@
+import { useBreakpoint, isTabletOrBelow } from "../hooks/useBreakpoint";
 import type { SortOption } from "../types/library";
 
 const SORT_OPTIONS: SortOption[] = [
@@ -16,6 +17,9 @@ interface SortBarProps {
 }
 
 function SortBar({ currentSort, onSortChange, totalCount, label }: SortBarProps) {
+  const bp = useBreakpoint();
+  const touchPadding = isTabletOrBelow(bp) ? { padding: "0.6rem 0.75rem" } : {};
+
   return (
     <div style={styles.bar}>
       <span style={styles.count}>
@@ -30,7 +34,7 @@ function SortBar({ currentSort, onSortChange, totalCount, label }: SortBarProps)
           id="sort-select"
           value={currentSort}
           onChange={(e) => onSortChange(e.target.value)}
-          style={styles.select}
+          style={{ ...styles.select, ...touchPadding }}
         >
           {SORT_OPTIONS.map((opt) => (
             <option key={opt.value} value={opt.value}>

@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "vitest-axe";
 import EmptyState from "./EmptyState";
 
 describe("EmptyState", () => {
@@ -62,5 +63,13 @@ describe("EmptyState", () => {
 
     await user.click(screen.getByText("Go"));
     expect(onClick).toHaveBeenCalledOnce();
+  });
+
+  it("has no axe violations", async () => {
+    const { container } = render(
+      <EmptyState icon={<span>📦</span>} title="Empty" subtitle="No items" />
+    );
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
   });
 });

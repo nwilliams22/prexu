@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "vitest-axe";
 import TrackMenu from "./TrackMenu";
 import type { PlexStream } from "../types/library";
 
@@ -128,5 +129,11 @@ describe("TrackMenu", () => {
     await user.click(backdrop);
 
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("has no axe violations", async () => {
+    const { container } = render(<TrackMenu {...defaultProps} />);
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
   });
 });

@@ -34,7 +34,7 @@ function NextEpisodePrompt({
 
   return (
     <div style={styles.overlay}>
-      <div style={styles.card}>
+      <div role="alertdialog" aria-label="Next episode" style={styles.card}>
         <p style={styles.prompt}>
           Continue watching with{" "}
           <span style={styles.highlight}>

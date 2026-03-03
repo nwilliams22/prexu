@@ -1,6 +1,7 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useInvites } from "../hooks/useInvites";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 import { playNotificationSound } from "../utils/notificationSound";
 import type { WatchInvite } from "../types/watch-together";
 
@@ -9,6 +10,9 @@ const INVITE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 function InviteNotification() {
   const { invites, dismissInvite } = useInvites();
   const [currentIndex, setCurrentIndex] = useState(0);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const hasInvites = invites.length > 0;
+  useFocusTrap(cardRef, hasInvites);
 
   // Keep index in bounds
   const safeIndex = Math.min(currentIndex, Math.max(invites.length - 1, 0));
@@ -32,6 +36,19 @@ function InviteNotification() {
     [dismissInvite]
   );
 
+  // Dismiss on Escape
+  useEffect(() => {
+    if (invites.length === 0) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        const inv = invites[Math.min(currentIndex, invites.length - 1)];
+        if (inv) handleDismiss(inv.sessionId);
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [invites, currentIndex, handleDismiss]);
+
   if (invites.length === 0) return null;
 
   const invite = invites[safeIndex];
@@ -39,7 +56,13 @@ function InviteNotification() {
 
   return (
     <div style={styles.overlay}>
-      <div style={styles.card}>
+      <div
+        ref={cardRef}
+        role="alertdialog"
+        aria-modal="true"
+        aria-label={`Watch invite from ${invite.senderUsername}`}
+        style={styles.card}
+      >
         <InviteCard
           key={invite.sessionId}
           invite={invite}

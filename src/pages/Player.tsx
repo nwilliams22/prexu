@@ -68,6 +68,10 @@ function Player() {
     })();
   }, [wt.isInSession, wt.isHost, server, ratingKey]);
 
+  useEffect(() => {
+    if (player.title) document.title = `${player.title} - Prexu`;
+  }, [player.title]);
+
   // ── Controls visibility ──
   const resetHideTimer = useCallback(() => {
     setControlsVisible(true);

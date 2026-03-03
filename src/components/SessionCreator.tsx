@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { getPlexFriends, getPlexUser } from "../services/plex-api";
@@ -30,6 +31,8 @@ function SessionCreator({
   const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(modalRef, true);
 
   // Fetch friends on mount
   useEffect(() => {
@@ -148,11 +151,18 @@ function SessionCreator({
 
   return (
     <div style={styles.overlay} onClick={onClose}>
-      <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="session-creator-title"
+        style={styles.modal}
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
         <div style={styles.header}>
-          <h2 style={styles.title}>Watch Together</h2>
-          <button onClick={onClose} style={styles.closeButton}>
+          <h2 id="session-creator-title" style={styles.title}>Watch Together</h2>
+          <button onClick={onClose} style={styles.closeButton} aria-label="Close">
             ✕
           </button>
         </div>
@@ -162,6 +172,7 @@ function SessionCreator({
         <input
           type="text"
           placeholder="Search friends..."
+          aria-label="Search friends"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           style={styles.searchInput}
@@ -183,8 +194,10 @@ function SessionCreator({
           {filteredFriends.map((friend) => {
             const isSelected = selectedUsernames.has(friend.username);
             return (
-              <div
+              <button
                 key={friend.id}
+                role="checkbox"
+                aria-checked={isSelected}
                 style={{
                   ...styles.friendRow,
                   background: isSelected
@@ -215,6 +228,7 @@ function SessionCreator({
                   )}
                 </div>
                 <div
+                  aria-hidden="true"
                   style={{
                     ...styles.checkbox,
                     background: isSelected
@@ -240,7 +254,7 @@ function SessionCreator({
                     </svg>
                   )}
                 </div>
-              </div>
+              </button>
             );
           })}
         </div>

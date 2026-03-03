@@ -78,6 +78,10 @@ function LibraryView() {
 
   const section = sections.find((s) => s.key === sectionId);
 
+  useEffect(() => {
+    if (section) document.title = `${section.title} - Prexu`;
+  }, [section]);
+
   const updateSearchParams = useCallback(
     (updates: Record<string, string | undefined>) => {
       setSearchParams((prev) => {

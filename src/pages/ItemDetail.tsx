@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
+import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
 import {
   getItemMetadata,
   getItemChildren,
@@ -27,6 +28,8 @@ import type {
 function ItemDetail() {
   const { ratingKey } = useParams<{ ratingKey: string }>();
   const { server } = useAuth();
+  const bp = useBreakpoint();
+  const mobile = isMobile(bp);
   const navigate = useNavigate();
   const [item, setItem] = useState<PlexMediaItem | null>(null);
   const [seasons, setSeasons] = useState<PlexSeason[]>([]);
@@ -86,6 +89,11 @@ function ItemDetail() {
       cancelled = true;
     };
   }, [server, ratingKey]);
+
+  // Update page title when item loads
+  useEffect(() => {
+    if (item) document.title = `${item.title} - Prexu`;
+  }, [item]);
 
   // Fetch episodes when season changes
   useEffect(() => {
@@ -191,15 +199,32 @@ function ItemDetail() {
             />
           )}
           <div style={styles.heroOverlay} />
-          <div style={styles.heroContent}>
+          <div style={{
+            ...styles.heroContent,
+            ...(mobile ? { flexDirection: "column", alignItems: "center" } : {}),
+          }}>
             <img
               src={posterUrl(movie.thumb)}
               alt={movie.title}
-              style={styles.heroPoster}
+              style={{
+                ...styles.heroPoster,
+                width: mobile ? "140px" : bp === "large" ? "220px" : "180px",
+                ...(mobile ? { alignSelf: "center" } : {}),
+              }}
             />
-            <div style={styles.heroInfo}>
-              <h1 style={styles.heroTitle}>{movie.title}</h1>
-              <div style={styles.metaRow}>
+            <div style={{
+              ...styles.heroInfo,
+              ...(mobile ? { alignItems: "center" } : {}),
+            }}>
+              <h1 style={{
+                ...styles.heroTitle,
+                fontSize: mobile ? "1.4rem" : bp === "large" ? "2rem" : "1.75rem",
+                ...(mobile ? { textAlign: "center" } : {}),
+              }}>{movie.title}</h1>
+              <div style={{
+                ...styles.metaRow,
+                ...(mobile ? { justifyContent: "center" } : {}),
+              }}>
                 {movie.year && <span>{movie.year}</span>}
                 {movie.contentRating && (
                   <span style={styles.rating}>{movie.contentRating}</span>
@@ -224,7 +249,10 @@ function ItemDetail() {
               {movie.tagline && (
                 <p style={styles.tagline}>{movie.tagline}</p>
               )}
-              <div style={styles.buttonRow}>
+              <div style={{
+                ...styles.buttonRow,
+                ...(mobile ? { justifyContent: "center" } : {}),
+              }}>
                 <button
                   onClick={() => navigate(`/play/${movie.ratingKey}`)}
                   style={styles.playButton}
@@ -243,8 +271,14 @@ function ItemDetail() {
 
         {/* Summary */}
         {movie.summary && (
-          <div style={styles.section}>
-            <p style={styles.summary}>{movie.summary}</p>
+          <div style={{
+            ...styles.section,
+            ...(mobile ? { padding: "0.75rem 1rem" } : {}),
+          }}>
+            <p style={{
+              ...styles.summary,
+              maxWidth: bp === "large" ? "1000px" : "800px",
+            }}>{movie.summary}</p>
           </div>
         )}
 
@@ -290,9 +324,15 @@ function ItemDetail() {
 
         {/* Cast */}
         {movie.Role && movie.Role.length > 0 && (
-          <div style={styles.section}>
+          <div style={{
+            ...styles.section,
+            ...(mobile ? { padding: "0.75rem 1rem" } : {}),
+          }}>
             <h3 style={styles.sectionTitle}>Cast</h3>
-            <div style={styles.castGrid}>
+            <div style={{
+              ...styles.castGrid,
+              gridTemplateColumns: `repeat(auto-fill, minmax(${mobile ? "140px" : bp === "large" ? "200px" : "180px"}, 1fr))`,
+            }}>
               {movie.Role.slice(0, 12).map((role: PlexRole) => (
                 <div key={`${role.tag}-${role.role}`} style={styles.castItem}>
                   <span style={styles.castName}>{role.tag}</span>
@@ -364,15 +404,32 @@ function ItemDetail() {
             />
           )}
           <div style={styles.heroOverlay} />
-          <div style={styles.heroContent}>
+          <div style={{
+            ...styles.heroContent,
+            ...(mobile ? { flexDirection: "column", alignItems: "center" } : {}),
+          }}>
             <img
               src={posterUrl(show.thumb)}
               alt={show.title}
-              style={styles.heroPoster}
+              style={{
+                ...styles.heroPoster,
+                width: mobile ? "140px" : bp === "large" ? "220px" : "180px",
+                ...(mobile ? { alignSelf: "center" } : {}),
+              }}
             />
-            <div style={styles.heroInfo}>
-              <h1 style={styles.heroTitle}>{show.title}</h1>
-              <div style={styles.metaRow}>
+            <div style={{
+              ...styles.heroInfo,
+              ...(mobile ? { alignItems: "center" } : {}),
+            }}>
+              <h1 style={{
+                ...styles.heroTitle,
+                fontSize: mobile ? "1.4rem" : bp === "large" ? "2rem" : "1.75rem",
+                ...(mobile ? { textAlign: "center" } : {}),
+              }}>{show.title}</h1>
+              <div style={{
+                ...styles.metaRow,
+                ...(mobile ? { justifyContent: "center" } : {}),
+              }}>
                 {show.year && <span>{show.year}</span>}
                 {show.contentRating && (
                   <span style={styles.rating}>{show.contentRating}</span>
@@ -403,8 +460,14 @@ function ItemDetail() {
 
         {/* Summary */}
         {show.summary && (
-          <div style={styles.section}>
-            <p style={styles.summary}>{show.summary}</p>
+          <div style={{
+            ...styles.section,
+            ...(mobile ? { padding: "0.75rem 1rem" } : {}),
+          }}>
+            <p style={{
+              ...styles.summary,
+              maxWidth: bp === "large" ? "1000px" : "800px",
+            }}>{show.summary}</p>
           </div>
         )}
 
@@ -472,12 +535,18 @@ function ItemDetail() {
               <button
                 key={ep.ratingKey}
                 onClick={() => navigate(`/item/${ep.ratingKey}`)}
-                style={styles.episodeItem}
+                style={{
+                  ...styles.episodeItem,
+                  ...(mobile ? { flexDirection: "column" } : {}),
+                }}
               >
                 <img
                   src={episodeThumbUrl(ep.thumb)}
                   alt={ep.title}
-                  style={styles.episodeThumb}
+                  style={{
+                    ...styles.episodeThumb,
+                    ...(mobile ? { width: "100%", height: "auto", aspectRatio: "16/9" } : {}),
+                  }}
                   loading="lazy"
                 />
                 <div style={styles.episodeInfo}>
@@ -541,21 +610,37 @@ function ItemDetail() {
             />
           )}
           <div style={styles.heroOverlay} />
-          <div style={styles.heroContent}>
+          <div style={{
+            ...styles.heroContent,
+            ...(mobile ? { flexDirection: "column", alignItems: "center" } : {}),
+          }}>
             <img
               src={episodeThumbUrl(ep.thumb)}
               alt={ep.title}
-              style={styles.episodeHeroThumb}
+              style={{
+                ...styles.episodeHeroThumb,
+                ...(mobile ? { width: "100%", maxWidth: "280px", alignSelf: "center" } : {}),
+              }}
             />
-            <div style={styles.heroInfo}>
+            <div style={{
+              ...styles.heroInfo,
+              ...(mobile ? { alignItems: "center" } : {}),
+            }}>
               <button
                 onClick={() => navigate(`/item/${ep.grandparentRatingKey}`)}
                 style={styles.showLink}
               >
                 {ep.grandparentTitle}
               </button>
-              <h1 style={styles.heroTitle}>{ep.title}</h1>
-              <div style={styles.metaRow}>
+              <h1 style={{
+                ...styles.heroTitle,
+                fontSize: mobile ? "1.4rem" : bp === "large" ? "2rem" : "1.75rem",
+                ...(mobile ? { textAlign: "center" } : {}),
+              }}>{ep.title}</h1>
+              <div style={{
+                ...styles.metaRow,
+                ...(mobile ? { justifyContent: "center" } : {}),
+              }}>
                 <span>
                   S{String(ep.parentIndex).padStart(2, "0")}E
                   {String(ep.index).padStart(2, "0")}
@@ -568,7 +653,10 @@ function ItemDetail() {
                   <span style={styles.rating}>{ep.contentRating}</span>
                 )}
               </div>
-              <div style={styles.buttonRow}>
+              <div style={{
+                ...styles.buttonRow,
+                ...(mobile ? { justifyContent: "center" } : {}),
+              }}>
                 <button
                   onClick={() => navigate(`/play/${ep.ratingKey}`)}
                   style={styles.playButton}
@@ -586,8 +674,14 @@ function ItemDetail() {
         </div>
 
         {ep.summary && (
-          <div style={styles.section}>
-            <p style={styles.summary}>{ep.summary}</p>
+          <div style={{
+            ...styles.section,
+            ...(mobile ? { padding: "0.75rem 1rem" } : {}),
+          }}>
+            <p style={{
+              ...styles.summary,
+              maxWidth: bp === "large" ? "1000px" : "800px",
+            }}>{ep.summary}</p>
           </div>
         )}
       </div>

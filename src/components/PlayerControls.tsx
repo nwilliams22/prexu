@@ -5,6 +5,7 @@
 
 import { useState, useRef } from "react";
 import type { UsePlayerResult } from "../hooks/usePlayer";
+import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
 import TrackMenu from "./TrackMenu";
 
 interface PlayerControlsProps {
@@ -25,6 +26,8 @@ function formatTime(seconds: number): string {
 }
 
 function PlayerControls({ player, onBack, visible, syncIndicator }: PlayerControlsProps) {
+  const bp = useBreakpoint();
+  const mobile = isMobile(bp);
   const seekBarRef = useRef<HTMLDivElement>(null);
   const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [hoverX, setHoverX] = useState(0);
@@ -37,6 +40,10 @@ function PlayerControls({ player, onBack, visible, syncIndicator }: PlayerContro
     player.duration > 0 ? (player.currentTime / player.duration) * 100 : 0;
   const bufferedPercent =
     player.duration > 0 ? (player.buffered / player.duration) * 100 : 0;
+
+  // Icon sizes — larger on mobile for touch
+  const iconSmall = mobile ? 26 : 22;
+  const iconLarge = mobile ? 32 : 28;
 
   // ── Seek bar interaction ──
   const getSeekTime = (clientX: number): number => {
@@ -76,6 +83,22 @@ function PlayerControls({ player, onBack, visible, syncIndicator }: PlayerContro
     }
   };
 
+  // ── Touch seek handlers (mobile) ──
+  const handleTouchStart = (e: React.TouchEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+    player.seek(getSeekTime(e.touches[0].clientX));
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (!isDragging) return;
+    player.seek(getSeekTime(e.touches[0].clientX));
+  };
+
+  const handleTouchEnd = () => {
+    setIsDragging(false);
+  };
+
   return (
     <div
       style={{
@@ -90,6 +113,7 @@ function PlayerControls({ player, onBack, visible, syncIndicator }: PlayerContro
       }}>
         <button onClick={onBack} style={styles.backButton} aria-label="Back">
           <svg
+            aria-hidden="true"
             width={24}
             height={24}
             viewBox="0 0 24 24"
@@ -116,10 +140,23 @@ function PlayerControls({ player, onBack, visible, syncIndicator }: PlayerContro
         {/* Seek bar */}
         <div
           ref={seekBarRef}
-          style={styles.seekBarContainer}
+          role="slider"
+          aria-label="Seek"
+          aria-valuemin={0}
+          aria-valuemax={Math.floor(player.duration)}
+          aria-valuenow={Math.floor(player.currentTime)}
+          aria-valuetext={formatTime(player.currentTime)}
+          tabIndex={0}
+          style={{
+            ...styles.seekBarContainer,
+            ...(mobile ? { height: "32px" } : {}),
+          }}
           onMouseDown={handleSeekMouseDown}
           onMouseMove={handleSeekHover}
           onMouseLeave={() => setHoverTime(null)}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
         >
           {/* Buffered range */}
           <div
@@ -140,6 +177,7 @@ function PlayerControls({ player, onBack, visible, syncIndicator }: PlayerContro
             style={{
               ...styles.seekBarThumb,
               left: `${progressPercent}%`,
+              ...(mobile ? { width: "20px", height: "20px", marginTop: "-10px", marginLeft: "-10px" } : {}),
             }}
           />
           {/* Hover tooltip */}
@@ -162,22 +200,26 @@ function PlayerControls({ player, onBack, visible, syncIndicator }: PlayerContro
             {/* Play / Pause */}
             <button
               onClick={player.togglePlay}
-              style={styles.controlButton}
+              style={{
+                ...styles.controlButton,
+                ...(mobile ? { padding: "0.5rem" } : {}),
+              }}
               aria-label={player.isPlaying ? "Pause" : "Play"}
             >
               {player.isPlaying ? (
-                <svg width={28} height={28} viewBox="0 0 24 24" fill="currentColor">
+                <svg width={iconLarge} height={iconLarge} viewBox="0 0 24 24" fill="currentColor">
                   <rect x={6} y={4} width={4} height={16} rx={1} />
                   <rect x={14} y={4} width={4} height={16} rx={1} />
                 </svg>
               ) : (
-                <svg width={28} height={28} viewBox="0 0 24 24" fill="currentColor">
+                <svg width={iconLarge} height={iconLarge} viewBox="0 0 24 24" fill="currentColor">
                   <polygon points="6,4 20,12 6,20" />
                 </svg>
               )}
             </button>
 
-            {/* Volume */}
+            {/* Volume — hidden on mobile (hardware volume used instead) */}
+            {!mobile && (
             <div
               style={styles.volumeContainer}
               onMouseEnter={() => setVolumeOpen(true)}
@@ -189,13 +231,13 @@ function PlayerControls({ player, onBack, visible, syncIndicator }: PlayerContro
                 aria-label={player.isMuted ? "Unmute" : "Mute"}
               >
                 {player.isMuted || player.volume === 0 ? (
-                  <svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
                     <polygon points="11,5 6,9 2,9 2,15 6,15 11,19" fill="currentColor" />
                     <line x1={23} y1={9} x2={17} y2={15} />
                     <line x1={17} y1={9} x2={23} y2={15} />
                   </svg>
                 ) : (
-                  <svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
                     <polygon points="11,5 6,9 2,9 2,15 6,15 11,19" fill="currentColor" />
                     <path d="M15.54 8.46a5 5 0 010 7.07" />
                     {player.volume > 0.5 && (
@@ -208,6 +250,7 @@ function PlayerControls({ player, onBack, visible, syncIndicator }: PlayerContro
                 <div style={styles.volumeSliderContainer}>
                   <input
                     type="range"
+                    aria-label="Volume"
                     min={0}
                     max={1}
                     step={0.05}
@@ -218,6 +261,7 @@ function PlayerControls({ player, onBack, visible, syncIndicator }: PlayerContro
                 </div>
               )}
             </div>
+            )}
 
             {/* Time display */}
             <span style={styles.timeDisplay}>
@@ -245,7 +289,7 @@ function PlayerControls({ player, onBack, visible, syncIndicator }: PlayerContro
                 }}
                 aria-label="Subtitles"
               >
-                <svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
                   <rect x={2} y={4} width={20} height={16} rx={2} />
                   <line x1={6} y1={12} x2={10} y2={12} />
                   <line x1={14} y1={12} x2={18} y2={12} />
@@ -261,10 +305,13 @@ function PlayerControls({ player, onBack, visible, syncIndicator }: PlayerContro
                   setAudioMenuOpen((o) => !o);
                   setSubtitleMenuOpen(false);
                 }}
-                style={styles.controlButton}
+                style={{
+                  ...styles.controlButton,
+                  ...(mobile ? { padding: "0.5rem" } : {}),
+                }}
                 aria-label="Audio"
               >
-                <svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
                   <path d="M9 18V5l12-2v13" />
                   <circle cx={6} cy={18} r={3} />
                   <circle cx={18} cy={16} r={3} />
@@ -275,18 +322,21 @@ function PlayerControls({ player, onBack, visible, syncIndicator }: PlayerContro
             {/* Fullscreen */}
             <button
               onClick={player.toggleFullscreen}
-              style={styles.controlButton}
+              style={{
+                ...styles.controlButton,
+                ...(mobile ? { padding: "0.5rem" } : {}),
+              }}
               aria-label={player.isFullscreen ? "Exit fullscreen" : "Fullscreen"}
             >
               {player.isFullscreen ? (
-                <svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
                   <polyline points="4 14 8 14 8 18" />
                   <polyline points="20 10 16 10 16 6" />
                   <polyline points="14 4 14 8 18 8" />
                   <polyline points="10 20 10 16 6 16" />
                 </svg>
               ) : (
-                <svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
                   <polyline points="15 3 21 3 21 9" />
                   <polyline points="9 21 3 21 3 15" />
                   <polyline points="21 3 14 10" />

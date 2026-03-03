@@ -98,6 +98,10 @@ function PlaylistDetail() {
     };
   }, [server, playlistKey]);
 
+  useEffect(() => {
+    if (playlist) document.title = `${playlist.title} - Prexu`;
+  }, [playlist]);
+
   if (!server) return null;
 
   const posterUrl = (thumb: string) =>

@@ -1,5 +1,6 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "vitest-axe";
 import PinEntryModal from "./PinEntryModal";
 
 describe("PinEntryModal", () => {
@@ -121,5 +122,11 @@ describe("PinEntryModal", () => {
   it("does not display error when error is null", () => {
     render(<PinEntryModal {...defaultProps} error={null} />);
     expect(screen.queryByText("Incorrect PIN")).not.toBeInTheDocument();
+  });
+
+  it("has no axe violations", async () => {
+    const { container } = render(<PinEntryModal {...defaultProps} />);
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
   });
 });

@@ -1,5 +1,6 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "vitest-axe";
 import ContextMenu from "./ContextMenu";
 
 describe("ContextMenu", () => {
@@ -97,5 +98,13 @@ describe("ContextMenu", () => {
 
     const deleteButton = screen.getByText("Delete").closest("button");
     expect(deleteButton).toBeDisabled();
+  });
+
+  it("has no axe violations", async () => {
+    const { container } = render(
+      <ContextMenu items={defaultItems} position={defaultPosition} onClose={onClose} />
+    );
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
   });
 });

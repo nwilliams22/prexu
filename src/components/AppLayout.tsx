@@ -1,21 +1,45 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Outlet, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { usePreferences } from "../hooks/usePreferences";
+import { useBreakpoint, isMobile, isTabletOrBelow, isDesktopOrAbove } from "../hooks/useBreakpoint";
+import { useFocusTrap } from "../hooks/useFocusTrap";
+import { useRouteAnnouncer } from "../hooks/useRouteAnnouncer";
 import Sidebar from "./Sidebar";
 import SearchBar from "./SearchBar";
 import UserSwitcher from "./UserSwitcher";
 import InviteNotification from "./InviteNotification";
 import ErrorBoundary from "./ErrorBoundary";
+import BottomNav from "./BottomNav";
 
 function AppLayout() {
   const { isAuthenticated, serverSelected } = useAuth();
   const { preferences } = usePreferences();
+  const bp = useBreakpoint();
   const navigate = useNavigate();
   const location = useLocation();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => preferences.appearance.sidebarCollapsed
   );
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const sidebarOverlayRef = useRef<HTMLDivElement>(null);
+
+  const mobile = isMobile(bp);
+  const tabletOrBelow = isTabletOrBelow(bp);
+  const desktopOrAbove = isDesktopOrAbove(bp);
+
+  useFocusTrap(sidebarOverlayRef, sidebarOpen && tabletOrBelow);
+  useRouteAnnouncer();
+
+  // Close sidebar overlay on Escape
+  useEffect(() => {
+    if (!sidebarOpen || !tabletOrBelow) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setSidebarOpen(false);
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [sidebarOpen, tabletOrBelow]);
 
   // Auth guards
   if (!isAuthenticated) return <Navigate to="/login" replace />;
@@ -25,12 +49,27 @@ function AppLayout() {
     <div style={styles.container}>
       {/* Header */}
       <header style={styles.header}>
-        <button
-          onClick={() => navigate("/")}
-          style={styles.logoButton}
-        >
-          Prexu
-        </button>
+        {/* Left: hamburger (tablet/mobile) or logo (desktop) */}
+        {tabletOrBelow ? (
+          <button
+            onClick={() => setSidebarOpen((o) => !o)}
+            style={styles.hamburgerButton}
+            aria-label="Toggle menu"
+          >
+            <svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
+              <line x1={3} y1={6} x2={21} y2={6} />
+              <line x1={3} y1={12} x2={21} y2={12} />
+              <line x1={3} y1={18} x2={21} y2={18} />
+            </svg>
+          </button>
+        ) : (
+          <button
+            onClick={() => navigate("/")}
+            style={styles.logoButton}
+          >
+            Prexu
+          </button>
+        )}
 
         <SearchBar />
 
@@ -41,11 +80,43 @@ function AppLayout() {
 
       {/* Body: Sidebar + Main Content */}
       <div style={styles.body}>
-        <Sidebar
-          collapsed={sidebarCollapsed}
-          onToggle={() => setSidebarCollapsed((c) => !c)}
-        />
-        <main style={styles.main}>
+        {/* Desktop: inline sidebar */}
+        {desktopOrAbove && (
+          <Sidebar
+            collapsed={sidebarCollapsed}
+            onToggle={() => setSidebarCollapsed((c) => !c)}
+          />
+        )}
+
+        {/* Tablet/Mobile: overlay sidebar */}
+        {tabletOrBelow && sidebarOpen && (
+          <>
+            <div
+              aria-hidden="true"
+              style={styles.sidebarBackdrop}
+              onClick={() => setSidebarOpen(false)}
+            />
+            <div
+              ref={sidebarOverlayRef}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Navigation menu"
+              style={styles.sidebarOverlay}
+            >
+              <Sidebar
+                collapsed={false}
+                onToggle={() => setSidebarOpen(false)}
+                onNavigate={() => setSidebarOpen(false)}
+              />
+            </div>
+          </>
+        )}
+
+        <main style={{
+          ...styles.main,
+          ...(bp === "large" ? { maxWidth: "1600px", margin: "0 auto" } : {}),
+          ...(mobile ? { paddingBottom: "56px" } : {}),
+        }}>
           <InviteNotification />
           <div key={location.pathname} style={styles.pageTransition}>
             <ErrorBoundary>
@@ -54,6 +125,9 @@ function AppLayout() {
           </div>
         </main>
       </div>
+
+      {/* Mobile: bottom navigation */}
+      {mobile && <BottomNav />}
     </div>
   );
 }
@@ -82,6 +156,15 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     padding: 0,
   },
+  hamburgerButton: {
+    background: "transparent",
+    color: "var(--text-primary)",
+    padding: "0.25rem",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
   headerRight: {
     display: "flex",
     alignItems: "center",
@@ -102,6 +185,24 @@ const styles: Record<string, React.CSSProperties> = {
   pageTransition: {
     animation: "pageEnter 0.2s ease-out",
     flex: 1,
+  },
+  sidebarBackdrop: {
+    position: "fixed",
+    top: "52px",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    background: "rgba(0,0,0,0.5)",
+    zIndex: 999,
+  },
+  sidebarOverlay: {
+    position: "fixed",
+    top: "52px",
+    left: 0,
+    bottom: 0,
+    width: "220px",
+    zIndex: 1000,
+    animation: "slideRight 0.2s ease-out",
   },
 };
 

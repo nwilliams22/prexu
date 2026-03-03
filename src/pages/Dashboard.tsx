@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { usePreferences } from "../hooks/usePreferences";
@@ -17,6 +17,7 @@ import type { ContextMenuItem } from "../components/ContextMenu";
 import SessionCreator from "../components/SessionCreator";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
+import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
 import type {
   PlexMediaItem,
   PlexEpisode,
@@ -36,6 +37,7 @@ interface SessionCreatorState {
 }
 
 const POSTER_SIZES = { small: 130, medium: 160, large: 200 } as const;
+const POSTER_SIZES_LARGE = { small: 160, medium: 200, large: 240 } as const;
 
 /** Pure helper — subtitle for a media item (movie year, episode code) */
 function getSubtitle(item: PlexMediaItem): string {
@@ -77,9 +79,12 @@ function getProgress(item: PlexMediaItem): number | undefined {
 function Dashboard() {
   const { server } = useAuth();
   const { preferences } = usePreferences();
+  const bp = useBreakpoint();
+  const mobile = isMobile(bp);
   const { recentMovies, recentShows, onDeck, isLoading, error, refresh } =
     useDashboard();
-  const posterWidth = POSTER_SIZES[preferences.appearance.posterSize];
+  const sizeMap = bp === "large" ? POSTER_SIZES_LARGE : POSTER_SIZES;
+  const posterWidth = sizeMap[preferences.appearance.posterSize];
   const sections = preferences.appearance.dashboardSections;
   const navigate = useNavigate();
   const [expandedGroupKey, setExpandedGroupKey] = useState<string | null>(null);
@@ -87,6 +92,44 @@ function Dashboard() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [sessionCreator, setSessionCreator] =
     useState<SessionCreatorState | null>(null);
+
+  // Pull-to-refresh (mobile only)
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [pullDistance, setPullDistance] = useState(0);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const touchStartY = useRef(0);
+  const isPulling = useRef(false);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (!mobile || isRefreshing) return;
+    if (containerRef.current && containerRef.current.scrollTop <= 0) {
+      touchStartY.current = e.touches[0].clientY;
+      isPulling.current = true;
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (!isPulling.current) return;
+    const delta = e.touches[0].clientY - touchStartY.current;
+    if (delta > 0) {
+      setPullDistance(Math.min(delta * 0.5, 80));
+    }
+  };
+
+  const handleTouchEnd = () => {
+    if (!isPulling.current) return;
+    isPulling.current = false;
+    if (pullDistance > 50) {
+      setIsRefreshing(true);
+      refresh();
+      setTimeout(() => {
+        setIsRefreshing(false);
+        setPullDistance(0);
+      }, 1000);
+    } else {
+      setPullDistance(0);
+    }
+  };
 
   // Reset expansion when data changes (e.g., server switch)
   useEffect(() => {
@@ -189,7 +232,39 @@ function Dashboard() {
     (sections.recentShows && recentShows.length > 0);
 
   return (
-    <div style={styles.container}>
+    <div
+      ref={containerRef}
+      style={{
+        ...styles.container,
+        ...(mobile ? { padding: "1rem" } : {}),
+      }}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+    >
+      {/* Pull-to-refresh indicator (mobile) */}
+      {mobile && pullDistance > 0 && (
+        <div style={{
+          display: "flex",
+          justifyContent: "center",
+          padding: `${pullDistance * 0.3}px 0`,
+          transition: isPulling.current ? "none" : "padding 0.2s ease",
+        }}>
+          <div
+            className="loading-spinner"
+            style={{
+              opacity: pullDistance > 50 ? 1 : pullDistance / 50,
+              transform: `rotate(${pullDistance * 4}deg)`,
+            }}
+          />
+        </div>
+      )}
+      {mobile && isRefreshing && (
+        <div style={{ display: "flex", justifyContent: "center", padding: "0.5rem 0" }}>
+          <div className="loading-spinner" />
+        </div>
+      )}
+
       {/* Continue Watching */}
       {sections.continueWatching && (isLoading ? (
         <section style={styles.section}>

@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { useSearch } from "../hooks/useSearch";
@@ -13,6 +14,10 @@ function SearchResults() {
   const { server } = useAuth();
   const { query, results, isSearching, error } = useSearch();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    document.title = query ? `"${query}" — Search - Prexu` : "Search - Prexu";
+  }, [query]);
 
   if (!server) return null;
 

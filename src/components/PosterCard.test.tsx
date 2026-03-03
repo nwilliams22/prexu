@@ -1,5 +1,6 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "vitest-axe";
 import PosterCard from "./PosterCard";
 
 describe("PosterCard", () => {
@@ -9,10 +10,10 @@ describe("PosterCard", () => {
   };
 
   it("renders title and image", () => {
-    render(<PosterCard {...defaultProps} />);
+    const { container } = render(<PosterCard {...defaultProps} />);
 
     expect(screen.getByText("Inception")).toBeInTheDocument();
-    const img = screen.getByAltText("Inception");
+    const img = container.querySelector("img");
     expect(img).toBeInTheDocument();
     expect(img).toHaveAttribute("src", "/poster.jpg");
   });
@@ -95,7 +96,7 @@ describe("PosterCard", () => {
   it("hides skeleton after image loads", () => {
     const { container } = render(<PosterCard {...defaultProps} />);
 
-    const img = screen.getByAltText("Inception");
+    const img = container.querySelector("img")!;
     fireEvent.load(img);
 
     const skeleton = container.querySelector(".shimmer");
@@ -105,7 +106,7 @@ describe("PosterCard", () => {
   it("handles image error by removing skeleton", () => {
     const { container } = render(<PosterCard {...defaultProps} />);
 
-    const img = screen.getByAltText("Inception");
+    const img = container.querySelector("img")!;
     fireEvent.error(img);
 
     const skeleton = container.querySelector(".shimmer");
@@ -165,5 +166,11 @@ describe("PosterCard", () => {
     expect(imageContainer).not.toBeNull();
     // 200 * 2 = 400
     expect(imageContainer.style.height).toBe("400px");
+  });
+
+  it("has no axe violations", async () => {
+    const { container } = render(<PosterCard {...defaultProps} />);
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
   });
 });

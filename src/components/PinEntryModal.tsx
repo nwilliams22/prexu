@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 interface PinEntryModalProps {
   userName: string;
@@ -19,6 +20,8 @@ function PinEntryModal({
 }: PinEntryModalProps) {
   const [pin, setPin] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(modalRef, true);
 
   // Auto-focus input on mount
   useEffect(() => {
@@ -43,7 +46,14 @@ function PinEntryModal({
 
   return (
     <div style={styles.backdrop} onClick={onCancel}>
-      <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="pin-modal-title"
+        style={styles.modal}
+        onClick={(e) => e.stopPropagation()}
+      >
         {userThumb ? (
           <img src={userThumb} alt="" style={styles.avatar} />
         ) : (
@@ -51,7 +61,7 @@ function PinEntryModal({
             {userName.charAt(0).toUpperCase()}
           </div>
         )}
-        <p style={styles.userName}>{userName}</p>
+        <p id="pin-modal-title" style={styles.userName}>{userName}</p>
         <p style={styles.hint}>Enter PIN to switch user</p>
 
         <form onSubmit={handleSubmit}>
@@ -63,6 +73,7 @@ function PinEntryModal({
             value={pin}
             onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))}
             placeholder="PIN"
+            aria-label="PIN"
             style={styles.pinInput}
             disabled={isLoading}
           />
