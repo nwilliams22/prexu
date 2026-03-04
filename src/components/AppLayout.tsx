@@ -6,6 +6,7 @@ import { useBreakpoint, isMobile, isTabletOrBelow, isDesktopOrAbove } from "../h
 import { useFocusTrap } from "../hooks/useFocusTrap";
 import { useRouteAnnouncer } from "../hooks/useRouteAnnouncer";
 import Sidebar from "./Sidebar";
+import BackButton from "./BackButton";
 import SearchBar from "./SearchBar";
 import UserSwitcher from "./UserSwitcher";
 import InviteNotification from "./InviteNotification";
@@ -71,6 +72,7 @@ function AppLayout() {
           </button>
         )}
 
+        <BackButton />
         <SearchBar />
 
         <div style={styles.headerRight}>
@@ -114,7 +116,6 @@ function AppLayout() {
 
         <main style={{
           ...styles.main,
-          ...(bp === "large" ? { maxWidth: "1600px", margin: "0 auto" } : {}),
           ...(mobile ? { paddingBottom: "56px" } : {}),
         }}>
           <InviteNotification />

@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "./useAuth";
 import { getWatchHistory } from "../services/plex-library";
+import { getServerAccountId } from "../services/plex-api";
 import { cacheGet, cacheSet, cacheInvalidate } from "../services/api-cache";
 import type { PlexMediaItem, PaginatedResult } from "../types/library";
 
 const PAGE_SIZE = 50;
-const CACHE_KEY = "watchHistory:page0";
 const CACHE_TTL = 2 * 60 * 1000; // 2 minutes
 
 export interface UseWatchHistoryResult {
@@ -29,18 +29,42 @@ export function useWatchHistory(): UseWatchHistoryResult {
   const [error, setError] = useState<string | null>(null);
   const loadingRef = useRef(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [accountID, setAccountID] = useState<number | null>(null);
+  const [accountIDLoaded, setAccountIDLoaded] = useState(false);
+
+  // Cache key includes accountID to prevent stale data across user switches
+  const cacheKey = `watchHistory:page0:${accountID ?? "all"}`;
 
   const retry = useCallback(() => {
-    cacheInvalidate(CACHE_KEY);
+    cacheInvalidate(cacheKey);
     setRefreshTrigger((n) => n + 1);
-  }, []);
+  }, [cacheKey]);
 
-  // Initial fetch
+  // Fetch server-local account ID (re-runs when token changes on user switch)
   useEffect(() => {
     if (!server) return;
+    let cancelled = false;
+
+    (async () => {
+      setAccountIDLoaded(false);
+      const id = await getServerAccountId(server.uri, server.accessToken);
+      if (!cancelled) {
+        setAccountID(id);
+        setAccountIDLoaded(true);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [server, server?.accessToken]);
+
+  // Initial fetch — wait for accountID to be resolved
+  useEffect(() => {
+    if (!server || !accountIDLoaded) return;
 
     // Check cache for first page
-    const cached = cacheGet<PaginatedResult<PlexMediaItem>>(CACHE_KEY);
+    const cached = cacheGet<PaginatedResult<PlexMediaItem>>(cacheKey);
     if (cached) {
       setItems(cached.items);
       setTotalSize(cached.totalSize);
@@ -61,13 +85,17 @@ export function useWatchHistory(): UseWatchHistoryResult {
         const result = await getWatchHistory(
           server.uri,
           server.accessToken,
-          { start: 0, size: PAGE_SIZE }
+          {
+            start: 0,
+            size: PAGE_SIZE,
+            ...(accountID !== null ? { accountID } : {}),
+          }
         );
         if (!cancelled) {
           setItems(result.items);
           setTotalSize(result.totalSize);
           setHasMore(result.hasMore);
-          cacheSet(CACHE_KEY, result, CACHE_TTL);
+          cacheSet(cacheKey, result, CACHE_TTL);
         }
       } catch (err) {
         if (!cancelled) {
@@ -86,7 +114,7 @@ export function useWatchHistory(): UseWatchHistoryResult {
     return () => {
       cancelled = true;
     };
-  }, [server, refreshTrigger]);
+  }, [server, refreshTrigger, accountIDLoaded, accountID, cacheKey]);
 
   const loadMore = useCallback(() => {
     if (!server || loadingRef.current || !hasMore) return;
@@ -99,7 +127,11 @@ export function useWatchHistory(): UseWatchHistoryResult {
         const result = await getWatchHistory(
           server.uri,
           server.accessToken,
-          { start: items.length, size: PAGE_SIZE }
+          {
+            start: items.length,
+            size: PAGE_SIZE,
+            ...(accountID !== null ? { accountID } : {}),
+          }
         );
         setItems((prev) => [...prev, ...result.items]);
         setHasMore(result.hasMore);
@@ -112,7 +144,7 @@ export function useWatchHistory(): UseWatchHistoryResult {
         loadingRef.current = false;
       }
     })();
-  }, [server, items.length, hasMore]);
+  }, [server, items.length, hasMore, accountID]);
 
   return { items, isLoading, isLoadingMore, hasMore, totalSize, error, loadMore, retry };
 }

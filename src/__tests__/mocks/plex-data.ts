@@ -343,6 +343,7 @@ export function createGroupedRecentItem(
     thumb: movie.thumb,
     episodes: [],
     episodeCount: 0,
+    seasonIndices: [],
     ...overrides,
   };
 }

@@ -156,6 +156,49 @@ export async function serverFetch(
   return fetch(`${serverUri}${path}`, { headers });
 }
 
+// ── Server Account ID ──
+
+/** Fetch the current user's server-local account ID from the /accounts endpoint */
+export async function getServerAccountId(
+  serverUri: string,
+  serverToken: string
+): Promise<number | null> {
+  try {
+    const headers = await getServerHeaders(serverToken);
+
+    // /accounts returns all server accounts; the one matching our token
+    // will have the correct server-local ID for history filtering
+    const accountsResp = await fetch(`${serverUri}/accounts`, { headers });
+    if (accountsResp.ok) {
+      const accountsData = await accountsResp.json();
+      const accounts: Array<{ id: number; name: string; defaultAudioLanguage?: string }> =
+        accountsData?.MediaContainer?.Account ?? accountsData?.accounts ?? [];
+
+      // Also fetch our Plex.tv identity to match against
+      const myPlexResp = await fetch(`${serverUri}/myplex/account`, { headers });
+      if (myPlexResp.ok) {
+        const myPlexData = await myPlexResp.json();
+        const myPlexUsername =
+          myPlexData?.MyPlex?.username ?? myPlexData?.username ?? null;
+
+        if (myPlexUsername && accounts.length > 0) {
+          const match = accounts.find(
+            (a) => a.name.toLowerCase() === myPlexUsername.toLowerCase()
+          );
+          if (match) return match.id;
+        }
+      }
+
+      // Fallback: if only one account or if the admin account (id=1) is all we have
+      if (accounts.length === 1) return accounts[0].id;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // ── Plex User & Friends API ──
 
 export interface PlexUser {

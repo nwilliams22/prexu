@@ -282,7 +282,7 @@ export async function getNextEpisode(
 export async function getWatchHistory(
   serverUri: string,
   serverToken: string,
-  options: { start?: number; size?: number } = {}
+  options: { start?: number; size?: number; accountID?: number } = {}
 ): Promise<PaginatedResult<PlexMediaItem>> {
   const params = new URLSearchParams();
   params.set("sort", "viewedAt:desc");
@@ -290,6 +290,8 @@ export async function getWatchHistory(
     params.set("X-Plex-Container-Start", String(options.start));
   if (options.size !== undefined)
     params.set("X-Plex-Container-Size", String(options.size));
+  if (options.accountID !== undefined)
+    params.set("accountID", String(options.accountID));
 
   const path = `/status/sessions/history/all?${params.toString()}`;
 
@@ -407,6 +409,54 @@ export async function getPlaylistItems(
     offset,
     hasMore: offset + items.length < totalSize,
   };
+}
+
+// ── Playlist Mutations ──
+
+/** Add an item to an existing playlist */
+export async function addToPlaylist(
+  serverUri: string,
+  serverToken: string,
+  playlistId: string,
+  ratingKey: string,
+  machineIdentifier: string
+): Promise<void> {
+  const uri = `server://${machineIdentifier}/com.plexapp.plugins.library/library/metadata/${ratingKey}`;
+  const headers = await getServerHeaders(serverToken);
+  const response = await fetch(
+    `${serverUri}/playlists/${playlistId}/items?uri=${encodeURIComponent(uri)}`,
+    { method: "PUT", headers }
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to add to playlist: ${response.status}`);
+  }
+}
+
+/** Create a new playlist with an initial item */
+export async function createPlaylist(
+  serverUri: string,
+  serverToken: string,
+  title: string,
+  ratingKey: string,
+  machineIdentifier: string
+): Promise<PlexPlaylist> {
+  const uri = `server://${machineIdentifier}/com.plexapp.plugins.library/library/metadata/${ratingKey}`;
+  const params = new URLSearchParams({
+    type: "video",
+    title,
+    smart: "0",
+    uri,
+  });
+  const headers = await getServerHeaders(serverToken);
+  const response = await fetch(
+    `${serverUri}/playlists?${params.toString()}`,
+    { method: "POST", headers }
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to create playlist: ${response.status}`);
+  }
+  const data = await response.json();
+  return data.MediaContainer.Metadata[0];
 }
 
 // ── Related Items ──

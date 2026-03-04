@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { usePaginatedLibrary } from "../hooks/usePaginatedLibrary";
@@ -17,6 +17,9 @@ import SkeletonCard from "../components/SkeletonCard";
 import ContextMenu from "../components/ContextMenu";
 import type { ContextMenuItem } from "../components/ContextMenu";
 import SessionCreator from "../components/SessionCreator";
+import PlaylistPicker from "../components/PlaylistPicker";
+import ShowExpansionPanel from "../components/ShowExpansionPanel";
+import AlphaJumpBar from "../components/AlphaJumpBar";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
 import type { PlexMediaItem, PlexShow, LibraryFilters } from "../types/library";
@@ -30,6 +33,11 @@ interface SessionCreatorState {
   ratingKey: string;
   title: string;
   mediaType: "movie" | "episode";
+}
+
+interface PlaylistPickerState {
+  ratingKey: string;
+  title: string;
 }
 
 /** Pure helper — is this item fully watched? */
@@ -91,13 +99,67 @@ function LibraryView() {
     return f;
   }, [searchParams, section]);
 
+  // Load all items at once when sorted alphabetically on movie/show libraries
+  // so the alpha jump bar can access all letters
+  const shouldLoadAll =
+    (section?.type === "movie" || section?.type === "show") &&
+    sort.startsWith("titleSort:");
+
   const { items, isLoading, isLoadingMore, hasMore, totalSize, error, loadMore, retry } =
-    usePaginatedLibrary(sectionId, sort, filters);
+    usePaginatedLibrary(sectionId, sort, filters, { loadAll: shouldLoadAll });
   const { genres, years, contentRatings, isLoading: filtersLoading } =
     useFilterOptions(sectionId);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [sessionCreator, setSessionCreator] =
     useState<SessionCreatorState | null>(null);
+  const [playlistPicker, setPlaylistPicker] =
+    useState<PlaylistPickerState | null>(null);
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  const gridContainerRef = useRef<HTMLDivElement>(null);
+
+  // Compute available first-letters from loaded items for the alpha jump bar
+  const availableLetters = useMemo(() => {
+    const letters = new Set<string>();
+    for (const item of items) {
+      const first = ((item as { titleSort?: string }).titleSort || item.title || "")
+        .charAt(0)
+        .toUpperCase();
+      if (/[A-Z]/.test(first)) {
+        letters.add(first);
+      } else {
+        letters.add("#");
+      }
+    }
+    return letters;
+  }, [items]);
+
+  const handleAlphaJump = useCallback(
+    (letter: string) => {
+      if (!gridContainerRef.current) return;
+      // Find the first card element whose data-title starts with this letter
+      const cards = gridContainerRef.current.querySelectorAll("[data-title-sort]");
+      for (const card of cards) {
+        const titleSort = card.getAttribute("data-title-sort") || "";
+        const first = titleSort.charAt(0).toUpperCase();
+        const matches =
+          letter === "#"
+            ? !/[A-Z]/.test(first)
+            : first === letter;
+        if (matches) {
+          card.scrollIntoView({ behavior: "smooth", block: "center" });
+          return;
+        }
+      }
+    },
+    []
+  );
+
+  // Show alpha jump bar for movie and show libraries when sorted alphabetically
+  const showAlphaJump =
+    !isLoading &&
+    items.length > 0 &&
+    (section?.type === "movie" || section?.type === "show") &&
+    sort.startsWith("titleSort:");
 
   useEffect(() => {
     if (section) document.title = `${section.title} - Prexu`;
@@ -225,6 +287,18 @@ function LibraryView() {
         });
       }
 
+      // Add to Playlist (movies & episodes)
+      if (item.type === "movie" || item.type === "episode") {
+        menuItems.push({
+          label: "Add to Playlist...",
+          onClick: () =>
+            setPlaylistPicker({
+              ratingKey: item.ratingKey,
+              title: item.title,
+            }),
+        });
+      }
+
       menuItems.push({
         label: "Get Info",
         dividerAbove: item.type !== "movie" && item.type !== "episode",
@@ -261,6 +335,7 @@ function LibraryView() {
         </>
       )}
 
+      <div ref={gridContainerRef}>
       <LibraryGrid>
         {/* Initial loading skeletons */}
         {isLoading &&
@@ -268,18 +343,40 @@ function LibraryView() {
 
         {/* Actual items */}
         {items.map((item) => (
-          <PosterCard
-            key={item.ratingKey}
-            imageUrl={posterUrl(item.thumb)}
-            title={item.title}
-            subtitle={getSubtitle(item as { type: string; year?: number; leafCount?: number })}
-            watched={isWatched(item)}
-            unwatchedCount={getUnwatchedCount(item)}
-            onClick={() => navigate(`/item/${item.ratingKey}`)}
-            showMoreButton
-            onContextMenu={(e) => openContextMenu(e, item)}
-            onMoreClick={(e) => openContextMenu(e, item)}
-          />
+          <React.Fragment key={item.ratingKey}>
+            <div data-title-sort={(item as { titleSort?: string }).titleSort || item.title}>
+            <PosterCard
+              imageUrl={posterUrl(item.thumb)}
+              title={item.title}
+              subtitle={getSubtitle(item as { type: string; year?: number; leafCount?: number })}
+              watched={isWatched(item)}
+              unwatchedCount={getUnwatchedCount(item)}
+              onClick={() => navigate(`/item/${item.ratingKey}`)}
+              showMoreButton
+              onContextMenu={(e) => openContextMenu(e, item)}
+              onMoreClick={(e) => openContextMenu(e, item)}
+              onExpand={
+                item.type === "show"
+                  ? () =>
+                      setExpandedKey(
+                        expandedKey === item.ratingKey ? null : item.ratingKey
+                      )
+                  : undefined
+              }
+              isExpanded={expandedKey === item.ratingKey}
+            />
+            </div>
+            {expandedKey === item.ratingKey && (
+              <div style={{ gridColumn: "1 / -1" }}>
+                <ShowExpansionPanel
+                  ratingKey={item.ratingKey}
+                  onClose={() => setExpandedKey(null)}
+                  onNavigateToShow={(key) => navigate(`/item/${key}`)}
+                  onNavigateToSeason={(key) => navigate(`/item/${key}`)}
+                />
+              </div>
+            )}
+          </React.Fragment>
         ))}
 
         {/* Loading more skeletons */}
@@ -288,6 +385,15 @@ function LibraryView() {
             <SkeletonCard key={`more-${i}`} />
           ))}
       </LibraryGrid>
+      </div>
+
+      {/* Alpha jump bar */}
+      {showAlphaJump && (
+        <AlphaJumpBar
+          onJump={handleAlphaJump}
+          availableLetters={availableLetters}
+        />
+      )}
 
       {/* Empty state */}
       {!isLoading && !error && items.length === 0 && (
@@ -335,6 +441,15 @@ function LibraryView() {
           title={sessionCreator.title}
           mediaType={sessionCreator.mediaType}
           onClose={() => setSessionCreator(null)}
+        />
+      )}
+
+      {/* Add to Playlist picker */}
+      {playlistPicker && (
+        <PlaylistPicker
+          ratingKey={playlistPicker.ratingKey}
+          title={playlistPicker.title}
+          onClose={() => setPlaylistPicker(null)}
         />
       )}
     </div>

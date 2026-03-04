@@ -28,6 +28,7 @@ function SessionCreator({
     new Set()
   );
   const [filter, setFilter] = useState("");
+  const [failedAvatars, setFailedAvatars] = useState<Set<number>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -206,11 +207,14 @@ function SessionCreator({
                 }}
                 onClick={() => toggleFriend(friend.username)}
               >
-                {friend.thumb ? (
+                {friend.thumb && !failedAvatars.has(friend.id) ? (
                   <img
                     src={friend.thumb}
                     alt=""
                     style={styles.friendAvatar}
+                    onError={() =>
+                      setFailedAvatars((prev) => new Set(prev).add(friend.id))
+                    }
                   />
                 ) : (
                   <div style={styles.friendAvatarPlaceholder}>

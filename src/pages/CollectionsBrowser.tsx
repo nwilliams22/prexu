@@ -1,3 +1,4 @@
+import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { useCollections } from "../hooks/useCollections";
@@ -8,10 +9,44 @@ import SkeletonCard from "../components/SkeletonCard";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
 
+type SortOption = "alpha-asc" | "alpha-desc" | "items-desc" | "items-asc";
+
 function CollectionsBrowser() {
   const { server } = useAuth();
   const navigate = useNavigate();
   const { collections, isLoading, error, retry } = useCollections();
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sortBy, setSortBy] = useState<SortOption>("alpha-asc");
+
+  const filteredCollections = useMemo(() => {
+    const query = searchQuery.toLowerCase();
+    return collections
+      .map((group) => ({
+        ...group,
+        items: group.items
+          .filter((c) => c.title.toLowerCase().includes(query))
+          .sort((a, b) => {
+            switch (sortBy) {
+              case "alpha-asc":
+                return a.title.localeCompare(b.title);
+              case "alpha-desc":
+                return b.title.localeCompare(a.title);
+              case "items-desc":
+                return b.childCount - a.childCount;
+              case "items-asc":
+                return a.childCount - b.childCount;
+              default:
+                return 0;
+            }
+          }),
+      }))
+      .filter((group) => group.items.length > 0);
+  }, [collections, searchQuery, sortBy]);
+
+  const totalCount = useMemo(
+    () => filteredCollections.reduce((sum, g) => sum + g.items.length, 0),
+    [filteredCollections]
+  );
 
   if (!server) return null;
 
@@ -24,6 +59,39 @@ function CollectionsBrowser() {
 
       {error && <ErrorState message={error} onRetry={retry} />}
 
+      {/* Toolbar */}
+      {!isLoading && !error && collections.length > 0 && (
+        <div style={styles.toolbar}>
+          <input
+            type="text"
+            placeholder="Search collections..."
+            aria-label="Search collections"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            style={styles.searchInput}
+          />
+          <div style={styles.sortGroup}>
+            <label htmlFor="collection-sort" style={styles.sortLabel}>
+              Sort:
+            </label>
+            <select
+              id="collection-sort"
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as SortOption)}
+              style={styles.sortSelect}
+            >
+              <option value="alpha-asc">A–Z</option>
+              <option value="alpha-desc">Z–A</option>
+              <option value="items-desc">Most Items</option>
+              <option value="items-asc">Fewest Items</option>
+            </select>
+          </div>
+          <span style={styles.countLabel}>
+            {totalCount} collection{totalCount !== 1 ? "s" : ""}
+          </span>
+        </div>
+      )}
+
       {isLoading && (
         <LibraryGrid>
           {Array.from({ length: 18 }).map((_, i) => (
@@ -34,7 +102,7 @@ function CollectionsBrowser() {
 
       {!isLoading &&
         !error &&
-        collections.map((group) => (
+        filteredCollections.map((group) => (
           <section key={group.section.key} style={styles.section}>
             <h3 style={styles.sectionTitle}>{group.section.title}</h3>
             <LibraryGrid>
@@ -51,6 +119,7 @@ function CollectionsBrowser() {
           </section>
         ))}
 
+      {/* Empty state — no collections at all */}
       {!isLoading && !error && collections.length === 0 && (
         <EmptyState
           icon={
@@ -65,6 +134,21 @@ function CollectionsBrowser() {
           subtitle="Collections created in Plex will appear here."
         />
       )}
+
+      {/* Empty state — search has no matches */}
+      {!isLoading && !error && collections.length > 0 && filteredCollections.length === 0 && (
+        <EmptyState
+          icon={
+            <svg width={48} height={48} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+              <circle cx={11} cy={11} r={8} />
+              <line x1={21} y1={21} x2={16.65} y2={16.65} />
+            </svg>
+          }
+          title="No collections match"
+          subtitle="Try a different search term."
+          action={{ label: "Clear Search", onClick: () => setSearchQuery("") }}
+        />
+      )}
     </div>
   );
 }
@@ -77,6 +161,46 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "1.5rem",
     fontWeight: 600,
     marginBottom: "1rem",
+  },
+  toolbar: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.75rem",
+    marginBottom: "1.25rem",
+    flexWrap: "wrap",
+  },
+  searchInput: {
+    padding: "0.45rem 0.75rem",
+    borderRadius: "6px",
+    border: "1px solid var(--border)",
+    background: "var(--bg-primary)",
+    color: "var(--text-primary)",
+    fontSize: "0.85rem",
+    width: "220px",
+    outline: "none",
+  },
+  sortGroup: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.4rem",
+  },
+  sortLabel: {
+    fontSize: "0.85rem",
+    color: "var(--text-secondary)",
+  },
+  sortSelect: {
+    padding: "0.4rem 0.5rem",
+    borderRadius: "6px",
+    border: "1px solid var(--border)",
+    background: "var(--bg-primary)",
+    color: "var(--text-primary)",
+    fontSize: "0.85rem",
+    outline: "none",
+  },
+  countLabel: {
+    fontSize: "0.85rem",
+    color: "var(--text-secondary)",
+    marginLeft: "auto",
   },
   section: {
     marginBottom: "2rem",

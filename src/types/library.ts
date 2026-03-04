@@ -216,6 +216,8 @@ export interface GroupedRecentItem {
   thumb: string;
   episodes: PlexEpisode[];
   episodeCount: number;
+  /** Season indices from season-level data (when episodes array is empty) */
+  seasonIndices: number[];
 }
 
 // ── Collections ──

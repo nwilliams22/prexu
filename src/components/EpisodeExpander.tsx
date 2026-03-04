@@ -4,9 +4,9 @@
  * when a user clicks a show-group card.
  */
 
-import { useEffect } from "react";
-import { getImageUrl } from "../services/plex-library";
-import type { GroupedRecentItem } from "../types/library";
+import { useState, useEffect } from "react";
+import { getImageUrl, getItemChildren } from "../services/plex-library";
+import type { GroupedRecentItem, PlexEpisode, PlexSeason } from "../types/library";
 
 interface EpisodeExpanderProps {
   group: GroupedRecentItem;
@@ -37,6 +37,10 @@ function EpisodeExpander({
   onViewEpisode,
   closing,
 }: EpisodeExpanderProps) {
+  const [fetchedEpisodes, setFetchedEpisodes] = useState<PlexEpisode[]>([]);
+  const [isFetchingEpisodes, setIsFetchingEpisodes] = useState(false);
+  const [seasons, setSeasons] = useState<PlexSeason[]>([]);
+
   // Escape key closes the panel
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -46,8 +50,51 @@ function EpisodeExpander({
     return () => window.removeEventListener("keydown", handleKey);
   }, [onClose]);
 
+  // When group.episodes is empty (season-based data), fetch seasons + episodes
+  useEffect(() => {
+    if (group.episodes.length > 0) return;
+    if (!serverUri || !serverToken || !group.groupKey) return;
+    let cancelled = false;
+
+    (async () => {
+      setIsFetchingEpisodes(true);
+      try {
+        // Fetch seasons for this show
+        const seasonList = await getItemChildren<PlexSeason>(
+          serverUri,
+          serverToken,
+          group.groupKey
+        );
+        if (cancelled) return;
+        setSeasons(seasonList);
+
+        // Fetch episodes from each season that was recently added
+        const targetSeasons = group.seasonIndices.length > 0
+          ? seasonList.filter((s) => group.seasonIndices.includes(s.index))
+          : seasonList;
+
+        const episodePromises = targetSeasons.map((season) =>
+          getItemChildren<PlexEpisode>(serverUri, serverToken, season.ratingKey)
+        );
+        const results = await Promise.all(episodePromises);
+        if (!cancelled) {
+          setFetchedEpisodes(results.flat());
+        }
+      } catch {
+        // Silently fail — header and View Show link still work
+      } finally {
+        if (!cancelled) setIsFetchingEpisodes(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [serverUri, serverToken, group.groupKey, group.episodes.length, group.seasonIndices]);
+
+  // Use provided episodes or fetched ones
+  const allEpisodes = group.episodes.length > 0 ? group.episodes : fetchedEpisodes;
+
   // Sort episodes by season then episode number
-  const sortedEpisodes = [...group.episodes].sort((a, b) => {
+  const sortedEpisodes = [...allEpisodes].sort((a, b) => {
     if (a.parentIndex !== b.parentIndex) return a.parentIndex - b.parentIndex;
     return a.index - b.index;
   });
@@ -100,6 +147,28 @@ function EpisodeExpander({
           </button>
         </div>
       </div>
+
+      {/* Season buttons */}
+      {seasons.length > 0 && (
+        <div style={styles.seasonRow}>
+          {seasons.map((season) => (
+            <button
+              key={season.ratingKey}
+              onClick={() => onViewEpisode(season.ratingKey)}
+              style={styles.seasonButton}
+            >
+              {season.title}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Loading indicator for fetched episodes */}
+      {isFetchingEpisodes && (
+        <div style={styles.fetchingContainer}>
+          <div className="loading-spinner" />
+        </div>
+      )}
 
       {/* Episode list */}
       <div style={styles.episodeList}>
@@ -205,6 +274,31 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     justifyContent: "center",
     borderRadius: "4px",
+  },
+
+  seasonRow: {
+    display: "flex",
+    gap: "0.4rem",
+    padding: "0.5rem 1rem",
+    overflowX: "auto",
+    borderBottom: "1px solid var(--border)",
+  },
+  seasonButton: {
+    background: "var(--bg-card)",
+    color: "var(--text-secondary)",
+    fontSize: "0.8rem",
+    fontWeight: 500,
+    padding: "0.3rem 0.75rem",
+    borderRadius: "4px",
+    border: "1px solid var(--border)",
+    whiteSpace: "nowrap",
+    flexShrink: 0,
+    cursor: "pointer",
+  },
+  fetchingContainer: {
+    display: "flex",
+    justifyContent: "center",
+    padding: "1rem",
   },
 
   // Episode list

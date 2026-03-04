@@ -32,6 +32,7 @@ export function groupRecentlyAdded(
         thumb: item.thumb,
         episodes: [],
         episodeCount: 0,
+        seasonIndices: [],
       });
     } else if (item.type === "episode") {
       const episode = item as PlexEpisode;
@@ -50,6 +51,7 @@ export function groupRecentlyAdded(
           thumb: episode.grandparentThumb || episode.thumb,
           episodes: [episode],
           episodeCount: 1,
+          seasonIndices: [],
         };
         showGroupMap.set(showKey, group);
         result.push(group);
@@ -64,6 +66,9 @@ export function groupRecentlyAdded(
         const group = showGroupMap.get(showKey)!;
         // Accumulate episode count from this season's leafCount
         group.episodeCount += season.leafCount || 0;
+        if (season.index !== undefined) {
+          group.seasonIndices.push(season.index);
+        }
       } else {
         const group: GroupedRecentItem = {
           kind: "show-group",
@@ -73,6 +78,7 @@ export function groupRecentlyAdded(
           thumb: season.parentThumb || item.thumb,
           episodes: [], // No episode-level data from season items
           episodeCount: season.leafCount || 0,
+          seasonIndices: season.index !== undefined ? [season.index] : [],
         };
         showGroupMap.set(showKey, group);
         result.push(group);

@@ -19,7 +19,8 @@ export interface UsePaginatedLibraryResult {
 export function usePaginatedLibrary(
   sectionId: string | undefined,
   sort: string = "titleSort:asc",
-  filters: LibraryFilters = {}
+  filters: LibraryFilters = {},
+  options: { loadAll?: boolean } = {}
 ): UsePaginatedLibraryResult {
   const { server } = useAuth();
   const filtersKey = useMemo(() => JSON.stringify(filters), [filters]);
@@ -36,6 +37,8 @@ export function usePaginatedLibrary(
     setRefreshTrigger((n) => n + 1);
   }, []);
 
+  const loadAll = options.loadAll ?? false;
+
   // Reset when section or sort changes
   useEffect(() => {
     if (!server || !sectionId) return;
@@ -48,16 +51,18 @@ export function usePaginatedLibrary(
       setError(null);
       setItems([]);
       try {
+        // When loadAll is true, fetch everything at once (use a very large size)
+        const pageSize = loadAll ? 99999 : PAGE_SIZE;
         const result = await getLibraryItems(
           server.uri,
           server.accessToken,
           sectionId,
-          { start: 0, size: PAGE_SIZE, sort, filters }
+          { start: 0, size: pageSize, sort, filters }
         );
         if (!cancelled) {
           setItems(result.items);
           setTotalSize(result.totalSize);
-          setHasMore(result.hasMore);
+          setHasMore(loadAll ? false : result.hasMore);
         }
       } catch (err) {
         if (!cancelled) {
@@ -76,7 +81,7 @@ export function usePaginatedLibrary(
     return () => {
       cancelled = true;
     };
-  }, [server, sectionId, sort, filtersKey, refreshTrigger]);
+  }, [server, sectionId, sort, filtersKey, refreshTrigger, loadAll]);
 
   const loadMore = useCallback(() => {
     if (!server || !sectionId || loadingRef.current || !hasMore) return;

@@ -15,6 +15,7 @@ import EpisodeExpander from "../components/EpisodeExpander";
 import ContextMenu from "../components/ContextMenu";
 import type { ContextMenuItem } from "../components/ContextMenu";
 import SessionCreator from "../components/SessionCreator";
+import PlaylistPicker from "../components/PlaylistPicker";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
 import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
@@ -36,6 +37,11 @@ interface SessionCreatorState {
   mediaType: "movie" | "episode";
 }
 
+interface PlaylistPickerState {
+  ratingKey: string;
+  title: string;
+}
+
 const POSTER_SIZES = { small: 130, medium: 160, large: 200 } as const;
 const POSTER_SIZES_LARGE = { small: 160, medium: 200, large: 240 } as const;
 
@@ -52,19 +58,64 @@ function getSubtitle(item: PlexMediaItem): string {
   return "";
 }
 
+/** Pure helper — season label prefix for a grouped show (e.g. "Season 3 · ") */
+function getSeasonLabel(group: GroupedRecentItem): string {
+  // Episode-level data
+  if (group.episodes.length > 0) {
+    const seasons = new Set(group.episodes.map((e) => e.parentIndex));
+    if (seasons.size === 1) {
+      return `Season ${seasons.values().next().value} · `;
+    }
+    return "";
+  }
+  // Season-level data
+  if (group.seasonIndices.length > 0) {
+    const unique = new Set(group.seasonIndices);
+    if (unique.size === 1) {
+      return `Season ${unique.values().next().value} · `;
+    }
+    return "";
+  }
+  return "";
+}
+
 /** Pure helper — subtitle for a grouped show card */
 function getGroupSubtitle(group: GroupedRecentItem): string {
+  const seasonLabel = getSeasonLabel(group);
   if (group.episodes.length === 1) {
     const ep = group.episodes[0];
     return `S${String(ep.parentIndex).padStart(2, "0")}E${String(ep.index).padStart(2, "0")} · ${ep.title}`;
   }
   if (group.episodes.length > 1) {
-    return `${group.episodes.length} new episodes`;
+    return `${seasonLabel}${group.episodes.length} new episodes`;
   }
   if (group.episodeCount > 0) {
-    return `${group.episodeCount} episodes`;
+    return `${seasonLabel}${group.episodeCount} episodes`;
   }
   return "Recently Added";
+}
+
+/** Pure helper — season suffix for a grouped show badge (e.g. " S03") */
+function getSeasonBadgeSuffix(group: GroupedRecentItem): string {
+  // Check episode-level data first (when items come as episodes)
+  if (group.episodes.length > 0) {
+    const seasons = new Set(group.episodes.map((e) => e.parentIndex));
+    if (seasons.size === 1) {
+      const num = seasons.values().next().value;
+      return ` S${String(num).padStart(2, "0")}`;
+    }
+    return ""; // multiple seasons — omit to keep badge short
+  }
+  // Fallback: season-level data (when items come as seasons from /library/recentlyAdded)
+  if (group.seasonIndices.length > 0) {
+    const uniqueSeasons = new Set(group.seasonIndices);
+    if (uniqueSeasons.size === 1) {
+      const num = uniqueSeasons.values().next().value;
+      return ` S${String(num).padStart(2, "0")}`;
+    }
+    return ""; // multiple seasons — omit
+  }
+  return "";
 }
 
 /** Pure helper — playback progress ratio (0-1) or undefined */
@@ -103,6 +154,8 @@ function Dashboard() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [sessionCreator, setSessionCreator] =
     useState<SessionCreatorState | null>(null);
+  const [playlistPicker, setPlaylistPicker] =
+    useState<PlaylistPickerState | null>(null);
 
   // Pull-to-refresh (mobile only)
   const containerRef = useRef<HTMLDivElement>(null);
@@ -215,6 +268,18 @@ function Dashboard() {
               mediaType: item.type as "movie" | "episode",
             });
           },
+        });
+      }
+
+      // Add to Playlist (movies & episodes)
+      if (item.type === "movie" || item.type === "episode") {
+        items.push({
+          label: "Add to Playlist...",
+          onClick: () =>
+            setPlaylistPicker({
+              ratingKey: item.ratingKey,
+              title: item.title,
+            }),
         });
       }
 
@@ -362,8 +427,7 @@ function Dashboard() {
         recentShows.length > 0 && (
           <HorizontalRow title="Recently Added in TV Shows">
             {recentShows.map((group) => {
-              const isExpandable =
-                group.kind === "show-group" && group.episodes.length > 1;
+              const isShowGroup = group.kind === "show-group";
               const isActive = expandedGroupKey === group.groupKey;
 
               return (
@@ -378,24 +442,26 @@ function Dashboard() {
                     width={posterWidth}
                     badge={
                       group.episodeCount > 1
-                        ? `+${group.episodeCount}`
-                        : "NEW"
+                        ? `+${group.episodeCount}${getSeasonBadgeSuffix(group)}`
+                        : `NEW${getSeasonBadgeSuffix(group)}`
                     }
-                    onClick={() => {
-                      if (isExpandable) {
-                        if (isActive) {
-                          setExpanderClosing(true);
-                          setTimeout(() => {
-                            setExpandedGroupKey(null);
-                            setExpanderClosing(false);
-                          }, 250);
-                        } else {
-                          setExpandedGroupKey(group.groupKey);
-                        }
-                      } else {
-                        navigate(`/item/${group.groupKey}`);
-                      }
-                    }}
+                    onClick={() => navigate(`/item/${group.groupKey}`)}
+                    onExpand={
+                      isShowGroup
+                        ? () => {
+                            if (isActive) {
+                              setExpanderClosing(true);
+                              setTimeout(() => {
+                                setExpandedGroupKey(null);
+                                setExpanderClosing(false);
+                              }, 250);
+                            } else {
+                              setExpandedGroupKey(group.groupKey);
+                            }
+                          }
+                        : undefined
+                    }
+                    isExpanded={isActive}
                     showMoreButton
                     onContextMenu={(e) =>
                       openContextMenu(e, group.representativeItem, "shows")
@@ -463,6 +529,15 @@ function Dashboard() {
           onClose={() => setSessionCreator(null)}
         />
       )}
+
+      {/* Add to Playlist picker */}
+      {playlistPicker && (
+        <PlaylistPicker
+          ratingKey={playlistPicker.ratingKey}
+          title={playlistPicker.title}
+          onClose={() => setPlaylistPicker(null)}
+        />
+      )}
     </div>
   );
 }
@@ -485,8 +560,6 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: "hidden",
   },
   activeCardWrapper: {
-    borderBottom: "2px solid var(--accent)",
-    borderRadius: "8px",
     flexShrink: 0,
   },
 };

@@ -14,6 +14,7 @@ import SkeletonCard from "../components/SkeletonCard";
 import ContextMenu from "../components/ContextMenu";
 import type { ContextMenuItem } from "../components/ContextMenu";
 import SessionCreator from "../components/SessionCreator";
+import PlaylistPicker from "../components/PlaylistPicker";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
 import type { PlexMediaItem, PlexEpisode, PlexShow } from "../types/library";
@@ -29,6 +30,11 @@ interface SessionCreatorState {
   mediaType: "movie" | "episode";
 }
 
+interface PlaylistPickerState {
+  ratingKey: string;
+  title: string;
+}
+
 function CollectionDetail() {
   const { collectionKey } = useParams<{ collectionKey: string }>();
   const { server } = useAuth();
@@ -42,6 +48,8 @@ function CollectionDetail() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [sessionCreator, setSessionCreator] =
     useState<SessionCreatorState | null>(null);
+  const [playlistPicker, setPlaylistPicker] =
+    useState<PlaylistPickerState | null>(null);
 
   useEffect(() => {
     if (!server || !collectionKey) return;
@@ -155,6 +163,17 @@ function CollectionDetail() {
         });
       }
 
+      if (item.type === "movie" || item.type === "episode") {
+        menuItems.push({
+          label: "Add to Playlist...",
+          onClick: () =>
+            setPlaylistPicker({
+              ratingKey: item.ratingKey,
+              title: item.title,
+            }),
+        });
+      }
+
       menuItems.push({
         label: "Get Info",
         dividerAbove: item.type !== "movie" && item.type !== "episode",
@@ -168,14 +187,6 @@ function CollectionDetail() {
 
   return (
     <div style={styles.container}>
-      {/* Back button */}
-      <button onClick={() => navigate("/collections")} style={styles.backButton}>
-        <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-          <polyline points="15 18 9 12 15 6" />
-        </svg>
-        Collections
-      </button>
-
       <h2 style={styles.title}>{collectionTitle || "Collection"}</h2>
 
       {collectionSummary && !isLoading && (
@@ -240,6 +251,14 @@ function CollectionDetail() {
           onClose={() => setSessionCreator(null)}
         />
       )}
+
+      {playlistPicker && (
+        <PlaylistPicker
+          ratingKey={playlistPicker.ratingKey}
+          title={playlistPicker.title}
+          onClose={() => setPlaylistPicker(null)}
+        />
+      )}
     </div>
   );
 }
@@ -247,17 +266,6 @@ function CollectionDetail() {
 const styles: Record<string, React.CSSProperties> = {
   container: {
     padding: "1.5rem",
-  },
-  backButton: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: "0.25rem",
-    background: "transparent",
-    color: "var(--text-secondary)",
-    fontSize: "0.85rem",
-    padding: "0.25rem 0",
-    marginBottom: "0.75rem",
-    cursor: "pointer",
   },
   title: {
     fontSize: "1.5rem",

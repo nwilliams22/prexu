@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useState, useEffect, useRef } from "react";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
 import {
@@ -31,6 +31,7 @@ function ItemDetail() {
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
   const navigate = useNavigate();
+  const location = useLocation();
   const [item, setItem] = useState<PlexMediaItem | null>(null);
   const [seasons, setSeasons] = useState<PlexSeason[]>([]);
   const [episodes, setEpisodes] = useState<PlexEpisode[]>([]);
@@ -40,6 +41,7 @@ function ItemDetail() {
   const [error, setError] = useState<string | null>(null);
   const [related, setRelated] = useState<PlexMediaItem[]>([]);
   const [extras, setExtras] = useState<PlexMediaItem[]>([]);
+  const seasonTabsRef = useRef<HTMLDivElement>(null);
 
   // Fetch item metadata
   useEffect(() => {
@@ -67,9 +69,16 @@ function ItemDetail() {
             );
             if (!cancelled) {
               setSeasons(seasonList);
-              // Auto-select first season
+              // Auto-select the season from location state, or default to first
+              const stateSeasonKey = (location.state as { selectedSeason?: string })
+                ?.selectedSeason;
+              const targetSeason = stateSeasonKey
+                ? seasonList.find((s) => s.ratingKey === stateSeasonKey)
+                : null;
               if (seasonList.length > 0) {
-                setSelectedSeason(seasonList[0].ratingKey);
+                setSelectedSeason(
+                  targetSeason?.ratingKey ?? seasonList[0].ratingKey
+                );
               }
             }
           }
@@ -95,21 +104,28 @@ function ItemDetail() {
     if (item) document.title = `${item.title} - Prexu`;
   }, [item]);
 
-  // Fetch episodes when season changes
+  // Fetch episodes when season changes — keep old episodes visible during load
   useEffect(() => {
     if (!server || !selectedSeason) return;
     let cancelled = false;
 
     (async () => {
       setIsLoadingEpisodes(true);
-      setEpisodes([]);
       try {
         const epList = await getItemChildren<PlexEpisode>(
           server.uri,
           server.accessToken,
           selectedSeason
         );
-        if (!cancelled) setEpisodes(epList);
+        if (!cancelled) {
+          // Preserve scroll position when swapping episode list
+          const mainEl = seasonTabsRef.current?.closest("main");
+          const scrollTop = mainEl?.scrollTop ?? 0;
+          setEpisodes(epList);
+          requestAnimationFrame(() => {
+            if (mainEl) mainEl.scrollTop = scrollTop;
+          });
+        }
       } catch {
         // Silently fail for episode fetch
       } finally {
@@ -174,11 +190,6 @@ function ItemDetail() {
     return (
       <div style={styles.container}>
         <ErrorState message={error ?? "Item not found"} />
-        <div style={{ textAlign: "center" }}>
-          <button onClick={() => navigate(-1)} style={styles.backButton}>
-            Go Back
-          </button>
-        </div>
       </div>
     );
   }
@@ -491,11 +502,21 @@ function ItemDetail() {
 
         {/* Season selector + Episode list */}
         <div style={styles.section}>
-          <div style={styles.seasonTabs}>
+          <div ref={seasonTabsRef} style={styles.seasonTabs}>
             {seasons.map((season) => (
               <button
                 key={season.ratingKey}
-                onClick={() => setSelectedSeason(season.ratingKey)}
+                onClick={() => {
+                  if (season.ratingKey === selectedSeason) return;
+                  // Capture scroll position of the main container before state update
+                  const mainEl = seasonTabsRef.current?.closest("main");
+                  const scrollTop = mainEl?.scrollTop ?? 0;
+                  setSelectedSeason(season.ratingKey);
+                  // Restore scroll position after React re-render
+                  requestAnimationFrame(() => {
+                    if (mainEl) mainEl.scrollTop = scrollTop;
+                  });
+                }}
                 style={{
                   ...styles.seasonTab,
                   ...(selectedSeason === season.ratingKey
@@ -508,8 +529,13 @@ function ItemDetail() {
             ))}
           </div>
 
-          <div style={styles.episodeList}>
-            {isLoadingEpisodes && (
+          <div style={{
+            ...styles.episodeList,
+            opacity: isLoadingEpisodes && episodes.length > 0 ? 0.5 : 1,
+            transition: "opacity 0.15s ease",
+          }}>
+            {/* Loading spinner only when no episodes to show yet */}
+            {isLoadingEpisodes && episodes.length === 0 && (
               <div style={styles.episodeLoading}>
                 <div className="loading-spinner" />
               </div>
@@ -531,7 +557,7 @@ function ItemDetail() {
                 title="No episodes in this season"
               />
             )}
-            {!isLoadingEpisodes && episodes.map((ep) => (
+            {episodes.map((ep) => (
               <button
                 key={ep.ratingKey}
                 onClick={() => navigate(`/item/${ep.ratingKey}`)}
@@ -688,6 +714,17 @@ function ItemDetail() {
     );
   }
 
+  // ── Season — redirect to parent show with this season pre-selected ──
+  if (item.type === "season") {
+    const season = item as PlexSeason;
+    // Navigate to the parent show and pass the season key as state
+    navigate(`/item/${season.parentRatingKey}`, {
+      replace: true,
+      state: { selectedSeason: season.ratingKey },
+    });
+    return null;
+  }
+
   // ── Fallback for other types ──
   return (
     <div style={styles.container}>
@@ -695,9 +732,6 @@ function ItemDetail() {
       <p style={{ color: "var(--text-secondary)" }}>
         Detail view for type "{item.type}" is not yet supported.
       </p>
-      <button onClick={() => navigate(-1)} style={styles.backButton}>
-        Go Back
-      </button>
     </div>
   );
 }
@@ -712,16 +746,6 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "center",
     padding: "4rem",
   },
-  backButton: {
-    background: "var(--bg-card)",
-    color: "var(--text-primary)",
-    padding: "0.5rem 1rem",
-    borderRadius: "6px",
-    fontSize: "0.9rem",
-    margin: "1rem 1.5rem",
-    border: "1px solid var(--border)",
-  },
-
   // Hero
   hero: {
     position: "relative",
@@ -918,6 +942,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "6px",
     whiteSpace: "nowrap",
     border: "1px solid var(--border)",
+    outline: "none",
     flexShrink: 0,
   },
   seasonTabActive: {

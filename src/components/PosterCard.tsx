@@ -20,6 +20,10 @@ interface PosterCardProps {
   watched?: boolean;
   /** Show unwatched episode count badge (top-left) */
   unwatchedCount?: number;
+  /** Callback when expand arrow is clicked (bottom center, appears on hover) */
+  onExpand?: () => void;
+  /** Whether this card is currently expanded (rotates arrow) */
+  isExpanded?: boolean;
 }
 
 function PosterCard({
@@ -36,6 +40,8 @@ function PosterCard({
   onMoreClick,
   watched,
   unwatchedCount,
+  onExpand,
+  isExpanded,
 }: PosterCardProps) {
   const [loaded, setLoaded] = useState(false);
   const [hovered, setHovered] = useState(false);
@@ -59,6 +65,11 @@ function PosterCard({
         ...styles.card,
         width,
         transform: active ? "scale(1.0)" : hovered ? "scale(1.04)" : "scale(1)",
+        border: isExpanded
+          ? "2px solid var(--accent)"
+          : onExpand
+            ? "2px solid transparent"
+            : undefined,
       }}
     >
       {/* Image container */}
@@ -96,6 +107,27 @@ function PosterCard({
               <circle cx="12" cy="5" r="2" />
               <circle cx="12" cy="12" r="2" />
               <circle cx="12" cy="19" r="2" />
+            </svg>
+          </button>
+        )}
+
+        {/* Expand button (bottom center, shown on hover when onExpand provided) */}
+        {onExpand && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onExpand();
+            }}
+            style={{
+              ...styles.expandButton,
+              opacity: hovered || isExpanded ? 1 : 0,
+              pointerEvents: hovered || isExpanded ? "auto" : "none",
+              transform: `translateX(-50%)${isExpanded ? " rotate(180deg)" : ""}`,
+            }}
+            aria-label={isExpanded ? "Collapse details" : "Expand details"}
+          >
+            <svg aria-hidden="true" width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+              <polyline points="6 9 12 15 18 9" />
             </svg>
           </button>
         )}
@@ -202,6 +234,24 @@ const styles: Record<string, React.CSSProperties> = {
     border: "none",
     cursor: "pointer",
     transition: "opacity 0.15s ease",
+  },
+  expandButton: {
+    position: "absolute",
+    bottom: "6px",
+    left: "50%",
+    width: "28px",
+    height: "28px",
+    borderRadius: "50%",
+    background: "rgba(0, 0, 0, 0.7)",
+    color: "var(--text-primary)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 0,
+    zIndex: 2,
+    border: "none",
+    cursor: "pointer",
+    transition: "opacity 0.15s ease, transform 0.2s ease",
   },
   badge: {
     position: "absolute",
