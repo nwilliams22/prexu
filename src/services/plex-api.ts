@@ -3,6 +3,7 @@
  */
 
 import type { PlexResource, PlexServer, PlexConnection } from "../types/plex";
+import { logger } from "./logger";
 import type { HomeUser } from "../types/home-user";
 import { getClientIdentifier } from "./storage";
 
@@ -163,6 +164,7 @@ export async function getServerAccountId(
   serverUri: string,
   serverToken: string
 ): Promise<number | null> {
+  const TAG = "WatchHistory";
   try {
     const headers = await getServerHeaders(serverToken);
 
@@ -171,18 +173,27 @@ export async function getServerAccountId(
     const myPlexResp = await fetch(`${serverUri}/myplex/account`, { headers });
     if (myPlexResp.ok) {
       const data = await myPlexResp.json();
+      logger.info(TAG, "/myplex/account response:", JSON.stringify(data).slice(0, 500));
       const id =
         data?.MyPlex?.id ??
         data?.MediaContainer?.MyPlex?.id ??
         data?.id ??
         data?.MediaContainer?.id ??
         null;
-      if (typeof id === "number" && id > 0) return id;
-      // id might be a numeric string
+      if (typeof id === "number" && id > 0) {
+        logger.info(TAG, "Found account ID from /myplex/account:", id);
+        return id;
+      }
       if (typeof id === "string" && id.length > 0) {
         const parsed = parseInt(id, 10);
-        if (!isNaN(parsed) && parsed > 0) return parsed;
+        if (!isNaN(parsed) && parsed > 0) {
+          logger.info(TAG, "Found account ID (parsed string) from /myplex/account:", parsed);
+          return parsed;
+        }
       }
+      logger.warn(TAG, "/myplex/account returned no usable ID, extracted:", id);
+    } else {
+      logger.warn(TAG, "/myplex/account failed with status:", myPlexResp.status);
     }
 
     // Strategy 2: Check the server root which includes myPlexUsername,
@@ -199,26 +210,42 @@ export async function getServerAccountId(
       const myPlexUsername: string =
         rootData?.MediaContainer?.myPlexUsername ?? "";
 
+      logger.info(TAG, "Server root myPlexUsername:", myPlexUsername);
+      logger.info(TAG, "/accounts list:", accounts.map((a) => `${a.id}=${a.name}`).join(", "));
+
       if (myPlexUsername && accounts.length > 0) {
-        // Try exact match first, then case-insensitive
         const exact = accounts.find((a) => a.name === myPlexUsername);
-        if (exact) return exact.id;
+        if (exact) {
+          logger.info(TAG, "Matched account by username:", `${exact.id}=${exact.name}`);
+          return exact.id;
+        }
         const lower = myPlexUsername.toLowerCase();
         const insensitive = accounts.find(
           (a) => a.name.toLowerCase() === lower
         );
-        if (insensitive) return insensitive.id;
+        if (insensitive) {
+          logger.info(TAG, "Matched account (case-insensitive):", `${insensitive.id}=${insensitive.name}`);
+          return insensitive.id;
+        }
+        logger.warn(TAG, "No username match found for:", myPlexUsername);
       }
 
       // Fallback: server owner is always account id 1
       if (accounts.length > 0) {
         const owner = accounts.find((a) => a.id === 1);
-        if (owner) return owner.id;
+        if (owner) {
+          logger.info(TAG, "Falling back to owner account id 1:", owner.name);
+          return owner.id;
+        }
       }
+    } else {
+      logger.warn(TAG, "Root or /accounts failed:", `${rootResp.status}, ${accountsResp.status}`);
     }
 
+    logger.warn(TAG, "All strategies failed, returning null (no filter)");
     return null;
-  } catch {
+  } catch (err) {
+    logger.error(TAG, "getServerAccountId error:", err);
     return null;
   }
 }
