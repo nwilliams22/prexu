@@ -7,6 +7,29 @@ import { getServerHeaders } from "./plex-api";
 import { getClientIdentifier } from "./storage";
 import type { PlexMediaInfo, PlexMediaPart, PlexStream } from "../types/library";
 
+/**
+ * Build an hls.js config object that includes Plex authentication headers.
+ * hls.js uses XHR for manifest/segment fetches — without these headers
+ * the Plex server may reject requests.
+ */
+export async function buildHlsConfig(
+  serverToken: string,
+  extraConfig?: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const headers = await getServerHeaders(serverToken);
+  return {
+    ...extraConfig,
+    xhrSetup(xhr: XMLHttpRequest) {
+      for (const [key, value] of Object.entries(headers)) {
+        // Don't override Accept for m3u8/ts fetches
+        if (key.toLowerCase() !== "accept") {
+          xhr.setRequestHeader(key, value);
+        }
+      }
+    },
+  };
+}
+
 // ── Direct Play Detection ──
 
 /** Browser-playable codec/container combos (WebView2/Chromium) */

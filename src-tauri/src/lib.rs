@@ -1,4 +1,5 @@
 use tauri_plugin_log::{Target, TargetKind};
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -16,6 +17,16 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        .setup(|app| {
+            // Show the main window after window-state has restored
+            // size/position/fullscreen. The window starts hidden
+            // (visible: false in tauri.conf.json) to avoid the flash
+            // of default size before state restoration.
+            if let Some(window) = app.get_webview_window("main") {
+                window.show().unwrap_or_default();
+            }
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

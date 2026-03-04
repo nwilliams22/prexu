@@ -12,6 +12,7 @@ import {
   canDirectPlay,
   buildDirectPlayUrl,
   buildTranscodeUrl,
+  buildHlsConfig,
   categorizeStreams,
   reportTimeline,
   reportTimelineBeacon,
@@ -289,11 +290,12 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
 
         destroyHls();
 
-        const hls = new Hls({
+        const hlsConfig = await buildHlsConfig(server.accessToken, {
           maxBufferLength: 30,
           maxMaxBufferLength: 60,
           startPosition: viewOffset > 0 ? viewOffset / 1000 : -1,
         });
+        const hls = new Hls(hlsConfig);
 
         hls.loadSource(hlsUrl);
         hls.attachMedia(video);
@@ -513,10 +515,11 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
           }
         );
 
-        const hls = new Hls({
+        const hlsConfig = await buildHlsConfig(server.accessToken, {
           maxBufferLength: 30,
           startPosition: savedTime,
         });
+        const hls = new Hls(hlsConfig);
 
         hls.loadSource(url);
         hls.attachMedia(videoRef.current!);
@@ -562,10 +565,11 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
           }
         );
 
-        const hls = new Hls({
+        const hlsConfig = await buildHlsConfig(server.accessToken, {
           maxBufferLength: 30,
           startPosition: savedTime,
         });
+        const hls = new Hls(hlsConfig);
 
         hls.loadSource(url);
         hls.attachMedia(videoRef.current!);

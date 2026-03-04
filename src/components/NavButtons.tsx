@@ -5,52 +5,72 @@ import { useState, useRef, useEffect, useCallback } from "react";
  * Back / Forward navigation buttons displayed in the header,
  * aligned above the main content area (to the right of the sidebar).
  *
- * Uses useState for currentIndex so the UI re-renders when navigation
- * state changes (refs alone wouldn't trigger a re-render).
+ * History state lives at module scope so it persists when NavButtons
+ * unmounts (e.g. navigating to the Player route which is outside AppLayout)
+ * and remounts when returning.
  */
+
+// ── Module-level history state (survives component mount/unmount) ──
+let _historyStack: string[] = [];
+let _currentIndex = -1;
+let _isNavAction = false;
+
 function NavButtons() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const historyStack = useRef<string[]>([]);
-  const [currentIndex, setCurrentIndex] = useState(-1);
-  const isNavAction = useRef(false);
+  // Force re-renders by tracking index in state, synced from module state
+  const [currentIndex, setCurrentIndex] = useState(_currentIndex);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   useEffect(() => {
     const path = location.pathname + location.search;
 
-    if (isNavAction.current) {
-      isNavAction.current = false;
+    if (_isNavAction) {
+      _isNavAction = false;
+      return;
+    }
+
+    // Don't double-push if the path is already the current entry
+    // (happens when remounting after Player route)
+    if (_currentIndex >= 0 && _historyStack[_currentIndex] === path) {
+      // Just sync the component state
+      setCurrentIndex(_currentIndex);
       return;
     }
 
     // Normal navigation — push and truncate forward entries
-    setCurrentIndex((prev) => {
-      const newIndex = prev + 1;
-      historyStack.current = [
-        ...historyStack.current.slice(0, newIndex),
-        path,
-      ];
-      return newIndex;
-    });
+    _currentIndex += 1;
+    _historyStack = [
+      ..._historyStack.slice(0, _currentIndex),
+      path,
+    ];
+    setCurrentIndex(_currentIndex);
   }, [location]);
 
   const canGoBack = currentIndex > 0;
-  const canGoForward = currentIndex < historyStack.current.length - 1;
+  const canGoForward = currentIndex < _historyStack.length - 1;
 
   const goBack = useCallback(() => {
-    if (currentIndex <= 0) return;
-    isNavAction.current = true;
-    setCurrentIndex((prev) => prev - 1);
+    if (_currentIndex <= 0) return;
+    _isNavAction = true;
+    _currentIndex -= 1;
+    setCurrentIndex(_currentIndex);
     navigate(-1);
-  }, [currentIndex, navigate]);
+  }, [navigate]);
 
   const goForward = useCallback(() => {
-    if (currentIndex >= historyStack.current.length - 1) return;
-    isNavAction.current = true;
-    setCurrentIndex((prev) => prev + 1);
+    if (_currentIndex >= _historyStack.length - 1) return;
+    _isNavAction = true;
+    _currentIndex += 1;
+    setCurrentIndex(_currentIndex);
     navigate(1);
-  }, [currentIndex, navigate]);
+  }, [navigate]);
 
   return (
     <div style={styles.container}>
