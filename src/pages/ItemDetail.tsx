@@ -506,6 +506,7 @@ function ItemDetail() {
             {seasons.map((season) => (
               <button
                 key={season.ratingKey}
+                className="season-tab"
                 onClick={(e) => {
                   e.currentTarget.blur();
                   if (season.ratingKey === selectedSeason) return;
