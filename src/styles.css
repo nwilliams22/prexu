@@ -223,9 +223,12 @@ input[type="range"]::-webkit-slider-thumb {
 
 /* Season tabs — remove focus ring on click (active tab styling is sufficient) */
 .season-tab:focus,
-.season-tab:focus-visible {
-  outline: none;
-  outline-offset: 0;
+.season-tab:focus-visible,
+.season-tab:focus-within {
+  outline: none !important;
+  outline-offset: 0 !important;
+  box-shadow: none !important;
+  -webkit-appearance: none;
 }
 
 /* Context menu item hover */
