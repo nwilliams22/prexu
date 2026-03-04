@@ -23,7 +23,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' https://clients.plex.tv https://*.plex.direct:* http://*.plex.direct:* https://*.plex.tv http://localhost:* https://localhost:* ws://*:9847 wss://*:9847; img-src 'self' https://*.plex.direct:* http://*.plex.direct:* https://plex.tv https://*.plex.tv data:; media-src 'self' https://*.plex.direct:* http://*.plex.direct:* http://localhost:* https://localhost:* blob:; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:"
+      "csp": "default-src 'self'; connect-src 'self' https: http: ws: wss:; img-src 'self' https: http: data:; media-src 'self' https: http: blob:; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:"
     }
   },
   "bundle": {

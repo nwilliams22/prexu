@@ -86,7 +86,7 @@ export function useDashboard(): UseDashboardResult {
             recentMovies: movies,
             recentShows: shows,
             onDeck: deckItems,
-          }, CACHE_TTL);
+          }, CACHE_TTL, true);
         }
       } catch (err) {
         if (!cancelled) {

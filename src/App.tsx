@@ -1,6 +1,7 @@
 import { lazy, Suspense } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import AppLayout from "./components/AppLayout";
+import SplashScreen from "./components/SplashScreen";
 import { useAuth, useAuthState, AuthProvider } from "./hooks/useAuth";
 import { useInviteState, InviteProvider } from "./hooks/useInvites";
 import { usePreferencesState, PreferencesProvider } from "./hooks/usePreferences";
@@ -48,18 +49,11 @@ function ServerRoute({ children }: { children: React.ReactNode }) {
 function AppRoutes() {
   const { isLoading } = useAuth();
 
-  if (isLoading) {
-    return (
-      <div className="loading-screen">
-        <div className="loading-spinner" />
-        <p>Loading Prexu...</p>
-      </div>
-    );
-  }
-
   return (
-    <Suspense fallback={<LoadingScreen />}>
-      <Routes>
+    <>
+      <SplashScreen ready={!isLoading} />
+      <Suspense fallback={<LoadingScreen />}>
+        {isLoading ? null : <Routes>
         {/* Unauthenticated */}
         <Route
           path="/login"
@@ -99,8 +93,9 @@ function AppRoutes() {
 
         {/* Catch-all */}
         <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </Suspense>
+      </Routes>}
+      </Suspense>
+    </>
   );
 }
 
