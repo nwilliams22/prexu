@@ -6,7 +6,7 @@ import { useBreakpoint, isMobile, isTabletOrBelow, isDesktopOrAbove } from "../h
 import { useFocusTrap } from "../hooks/useFocusTrap";
 import { useRouteAnnouncer } from "../hooks/useRouteAnnouncer";
 import Sidebar from "./Sidebar";
-import BackButton from "./BackButton";
+import NavButtons from "./NavButtons";
 import SearchBar from "./SearchBar";
 import UserSwitcher from "./UserSwitcher";
 import InviteNotification from "./InviteNotification";
@@ -50,7 +50,7 @@ function AppLayout() {
     <div style={styles.container}>
       {/* Header */}
       <header style={styles.header}>
-        {/* Left: hamburger (tablet/mobile) or logo (desktop) */}
+        {/* Left: logo/hamburger area — matches sidebar width below */}
         {tabletOrBelow ? (
           <button
             onClick={() => setSidebarOpen((o) => !o)}
@@ -64,16 +64,23 @@ function AppLayout() {
             </svg>
           </button>
         ) : (
-          <button
-            onClick={() => navigate("/")}
-            style={styles.logoButton}
-          >
-            Prexu
-          </button>
+          <div style={{
+            ...styles.logoArea,
+            width: sidebarCollapsed ? 60 : 220,
+          }}>
+            <button
+              onClick={() => navigate("/")}
+              style={styles.logoButton}
+            >
+              Prexu
+            </button>
+          </div>
         )}
 
+        {/* Back/Forward — aligned above main content start */}
+        <NavButtons />
+
         <div style={styles.headerCenter}>
-          <BackButton />
           <SearchBar />
         </div>
 
@@ -151,6 +158,12 @@ const styles: Record<string, React.CSSProperties> = {
     background: "var(--bg-secondary)",
     borderBottom: "1px solid var(--border)",
     flexShrink: 0,
+  },
+  logoArea: {
+    display: "flex",
+    alignItems: "center",
+    flexShrink: 0,
+    transition: "width 0.2s ease",
   },
   logoButton: {
     background: "transparent",
