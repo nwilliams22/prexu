@@ -72,8 +72,10 @@ function AppLayout() {
           </button>
         )}
 
-        <BackButton />
-        <SearchBar />
+        <div style={styles.headerCenter}>
+          <BackButton />
+          <SearchBar />
+        </div>
 
         <div style={styles.headerRight}>
           <UserSwitcher />
@@ -166,10 +168,19 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "center",
     flexShrink: 0,
   },
+  headerCenter: {
+    flex: 1,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "0.5rem",
+    minWidth: 0,
+  },
   headerRight: {
     display: "flex",
     alignItems: "center",
     gap: "0.75rem",
+    flexShrink: 0,
   },
   body: {
     display: "flex",
