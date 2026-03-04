@@ -950,7 +950,7 @@ const styles: Record<string, React.CSSProperties> = {
   seasonTabActive: {
     background: "var(--accent)",
     color: "#000",
-    borderColor: "var(--accent)",
+    border: "1px solid var(--accent)",
     fontWeight: 600,
   },
 
