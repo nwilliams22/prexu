@@ -5,14 +5,16 @@
 
 import { getServerHeaders } from "./plex-api";
 import { getClientIdentifier } from "./storage";
+import { createTauriLoaderClass } from "./tauri-loader";
 import type { PlexMediaInfo, PlexMediaPart, PlexStream } from "../types/library";
 
 /**
- * Build an hls.js config object that injects Plex auth into every request.
+ * Build an hls.js config object that routes all requests through Tauri's
+ * native HTTP plugin, bypassing WebView2 CORS restrictions entirely.
  *
- * Uses URL rewriting (appending X-Plex-Token as a query parameter) instead
- * of custom XHR headers to avoid CORS preflight (OPTIONS) requests that
- * Plex servers typically do not handle correctly.
+ * WebView2 enforces CORS on requests from https://tauri.localhost to the
+ * Plex server. The native HTTP plugin makes requests from Rust, so CORS
+ * does not apply.
  */
 export function buildHlsConfig(
   serverToken: string,
@@ -20,13 +22,7 @@ export function buildHlsConfig(
 ): Record<string, unknown> {
   return {
     ...extraConfig,
-    xhrSetup(xhr: XMLHttpRequest, url: string) {
-      // Re-open the request with the token appended to the URL.
-      // This avoids CORS preflight issues that occur when setting
-      // custom headers like X-Plex-Token via setRequestHeader().
-      const separator = url.includes("?") ? "&" : "?";
-      xhr.open("GET", `${url}${separator}X-Plex-Token=${encodeURIComponent(serverToken)}`, true);
-    },
+    loader: createTauriLoaderClass(serverToken),
   };
 }
 

@@ -8,6 +8,13 @@
   "permissions": [
     "core:default",
     "shell:allow-open",
-    "log:default"
+    "log:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://**" },
+        { "url": "http://**" }
+      ]
+    }
   ]
 }
