@@ -506,7 +506,8 @@ function ItemDetail() {
             {seasons.map((season) => (
               <button
                 key={season.ratingKey}
-                onClick={() => {
+                onClick={(e) => {
+                  e.currentTarget.blur();
                   if (season.ratingKey === selectedSeason) return;
                   // Capture scroll position of the main container before state update
                   const mainEl = seasonTabsRef.current?.closest("main");

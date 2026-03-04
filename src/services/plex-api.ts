@@ -158,7 +158,7 @@ export async function serverFetch(
 
 // ── Server Account ID ──
 
-/** Fetch the current user's server-local account ID from the /accounts endpoint */
+/** Fetch the current user's account ID for use with the history endpoint */
 export async function getServerAccountId(
   serverUri: string,
   serverToken: string
@@ -166,31 +166,55 @@ export async function getServerAccountId(
   try {
     const headers = await getServerHeaders(serverToken);
 
-    // /accounts returns all server accounts; the one matching our token
-    // will have the correct server-local ID for history filtering
-    const accountsResp = await fetch(`${serverUri}/accounts`, { headers });
-    if (accountsResp.ok) {
+    // Strategy 1: Fetch /myplex/account which returns the authenticated user's
+    // MyPlex account info — try multiple known response shapes
+    const myPlexResp = await fetch(`${serverUri}/myplex/account`, { headers });
+    if (myPlexResp.ok) {
+      const data = await myPlexResp.json();
+      const id =
+        data?.MyPlex?.id ??
+        data?.MediaContainer?.MyPlex?.id ??
+        data?.id ??
+        data?.MediaContainer?.id ??
+        null;
+      if (typeof id === "number" && id > 0) return id;
+      // id might be a numeric string
+      if (typeof id === "string" && id.length > 0) {
+        const parsed = parseInt(id, 10);
+        if (!isNaN(parsed) && parsed > 0) return parsed;
+      }
+    }
+
+    // Strategy 2: Check the server root which includes myPlexUsername,
+    // then match against /accounts
+    const [rootResp, accountsResp] = await Promise.all([
+      fetch(`${serverUri}/`, { headers }),
+      fetch(`${serverUri}/accounts`, { headers }),
+    ]);
+    if (rootResp.ok && accountsResp.ok) {
+      const rootData = await rootResp.json();
       const accountsData = await accountsResp.json();
-      const accounts: Array<{ id: number; name: string; defaultAudioLanguage?: string }> =
-        accountsData?.MediaContainer?.Account ?? accountsData?.accounts ?? [];
+      const accounts: Array<{ id: number; name: string }> =
+        accountsData?.MediaContainer?.Account ?? [];
+      const myPlexUsername: string =
+        rootData?.MediaContainer?.myPlexUsername ?? "";
 
-      // Also fetch our Plex.tv identity to match against
-      const myPlexResp = await fetch(`${serverUri}/myplex/account`, { headers });
-      if (myPlexResp.ok) {
-        const myPlexData = await myPlexResp.json();
-        const myPlexUsername =
-          myPlexData?.MyPlex?.username ?? myPlexData?.username ?? null;
-
-        if (myPlexUsername && accounts.length > 0) {
-          const match = accounts.find(
-            (a) => a.name.toLowerCase() === myPlexUsername.toLowerCase()
-          );
-          if (match) return match.id;
-        }
+      if (myPlexUsername && accounts.length > 0) {
+        // Try exact match first, then case-insensitive
+        const exact = accounts.find((a) => a.name === myPlexUsername);
+        if (exact) return exact.id;
+        const lower = myPlexUsername.toLowerCase();
+        const insensitive = accounts.find(
+          (a) => a.name.toLowerCase() === lower
+        );
+        if (insensitive) return insensitive.id;
       }
 
-      // Fallback: if only one account or if the admin account (id=1) is all we have
-      if (accounts.length === 1) return accounts[0].id;
+      // Fallback: server owner is always account id 1
+      if (accounts.length > 0) {
+        const owner = accounts.find((a) => a.id === 1);
+        if (owner) return owner.id;
+      }
     }
 
     return null;
