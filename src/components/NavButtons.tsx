@@ -1,17 +1,19 @@
 import { useNavigate, useLocation } from "react-router-dom";
-import { useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 
 /**
  * Back / Forward navigation buttons displayed in the header,
  * aligned above the main content area (to the right of the sidebar).
+ *
+ * Uses useState for currentIndex so the UI re-renders when navigation
+ * state changes (refs alone wouldn't trigger a re-render).
  */
 function NavButtons() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Track history stack for back/forward awareness
   const historyStack = useRef<string[]>([]);
-  const currentIndex = useRef(-1);
+  const [currentIndex, setCurrentIndex] = useState(-1);
   const isNavAction = useRef(false);
 
   useEffect(() => {
@@ -23,30 +25,32 @@ function NavButtons() {
     }
 
     // Normal navigation — push and truncate forward entries
-    currentIndex.current += 1;
-    historyStack.current = [
-      ...historyStack.current.slice(0, currentIndex.current),
-      path,
-    ];
+    setCurrentIndex((prev) => {
+      const newIndex = prev + 1;
+      historyStack.current = [
+        ...historyStack.current.slice(0, newIndex),
+        path,
+      ];
+      return newIndex;
+    });
   }, [location]);
 
-  const canGoBack = currentIndex.current > 0;
-  const canGoForward =
-    currentIndex.current < historyStack.current.length - 1;
+  const canGoBack = currentIndex > 0;
+  const canGoForward = currentIndex < historyStack.current.length - 1;
 
   const goBack = useCallback(() => {
-    if (!canGoBack) return;
+    if (currentIndex <= 0) return;
     isNavAction.current = true;
-    currentIndex.current -= 1;
+    setCurrentIndex((prev) => prev - 1);
     navigate(-1);
-  }, [canGoBack, navigate]);
+  }, [currentIndex, navigate]);
 
   const goForward = useCallback(() => {
-    if (!canGoForward) return;
+    if (currentIndex >= historyStack.current.length - 1) return;
     isNavAction.current = true;
-    currentIndex.current += 1;
+    setCurrentIndex((prev) => prev + 1);
     navigate(1);
-  }, [canGoForward, navigate]);
+  }, [currentIndex, navigate]);
 
   return (
     <div style={styles.container}>
