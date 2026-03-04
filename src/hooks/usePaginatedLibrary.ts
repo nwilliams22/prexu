@@ -4,6 +4,8 @@ import { getLibraryItems } from "../services/plex-library";
 import type { PlexMediaItem, LibraryFilters } from "../types/library";
 
 const PAGE_SIZE = 50;
+/** Batch size used during progressive background loading */
+const BG_BATCH_SIZE = 200;
 
 export interface UsePaginatedLibraryResult {
   items: PlexMediaItem[];
@@ -51,18 +53,64 @@ export function usePaginatedLibrary(
       setError(null);
       setItems([]);
       try {
-        // When loadAll is true, fetch everything at once (use a very large size)
-        const pageSize = loadAll ? 99999 : PAGE_SIZE;
-        const result = await getLibraryItems(
-          server.uri,
-          server.accessToken,
-          sectionId,
-          { start: 0, size: pageSize, sort, filters }
-        );
-        if (!cancelled) {
-          setItems(result.items);
-          setTotalSize(result.totalSize);
-          setHasMore(loadAll ? false : result.hasMore);
+        if (loadAll) {
+          // ── Progressive loading: first batch fast, then background fill ──
+          // Fetch the first page immediately so the grid renders fast
+          const firstPage = await getLibraryItems(
+            server.uri,
+            server.accessToken,
+            sectionId,
+            { start: 0, size: PAGE_SIZE, sort, filters }
+          );
+
+          if (cancelled) return;
+
+          setItems(firstPage.items);
+          setTotalSize(firstPage.totalSize);
+          setHasMore(false); // disable manual loadMore during progressive load
+          setIsLoading(false);
+          loadingRef.current = false;
+
+          // If there are more items, fetch them in background batches
+          if (firstPage.hasMore) {
+            setIsLoadingMore(true);
+            let offset = firstPage.items.length;
+            const total = firstPage.totalSize;
+
+            while (offset < total && !cancelled) {
+              const batch = await getLibraryItems(
+                server.uri,
+                server.accessToken,
+                sectionId,
+                { start: offset, size: BG_BATCH_SIZE, sort, filters }
+              );
+
+              if (cancelled) return;
+
+              setItems((prev) => [...prev, ...batch.items]);
+              offset += batch.items.length;
+
+              // Safety: if server returned 0 items, stop to avoid infinite loop
+              if (batch.items.length === 0) break;
+            }
+
+            if (!cancelled) {
+              setIsLoadingMore(false);
+            }
+          }
+        } else {
+          // ── Standard pagination: single page ──
+          const result = await getLibraryItems(
+            server.uri,
+            server.accessToken,
+            sectionId,
+            { start: 0, size: PAGE_SIZE, sort, filters }
+          );
+          if (!cancelled) {
+            setItems(result.items);
+            setTotalSize(result.totalSize);
+            setHasMore(result.hasMore);
+          }
         }
       } catch (err) {
         if (!cancelled) {

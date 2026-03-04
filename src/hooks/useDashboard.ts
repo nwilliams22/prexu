@@ -67,7 +67,7 @@ export function useDashboard(): UseDashboardResult {
       setError(null);
       try {
         const [recentItems, deckItems] = await Promise.all([
-          getRecentlyAdded(server.uri, server.accessToken, 50),
+          getRecentlyAdded(server.uri, server.accessToken, 25),
           getOnDeck(server.uri, server.accessToken),
         ]);
 
