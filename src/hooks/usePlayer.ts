@@ -290,7 +290,7 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
 
         destroyHls();
 
-        const hlsConfig = await buildHlsConfig(server.accessToken, {
+        const hlsConfig = buildHlsConfig(server.accessToken, {
           maxBufferLength: 30,
           maxMaxBufferLength: 60,
           startPosition: viewOffset > 0 ? viewOffset / 1000 : -1,
@@ -515,7 +515,7 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
           }
         );
 
-        const hlsConfig = await buildHlsConfig(server.accessToken, {
+        const hlsConfig = buildHlsConfig(server.accessToken, {
           maxBufferLength: 30,
           startPosition: savedTime,
         });
@@ -565,7 +565,7 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
           }
         );
 
-        const hlsConfig = await buildHlsConfig(server.accessToken, {
+        const hlsConfig = buildHlsConfig(server.accessToken, {
           maxBufferLength: 30,
           startPosition: savedTime,
         });

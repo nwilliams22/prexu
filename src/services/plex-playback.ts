@@ -8,24 +8,24 @@ import { getClientIdentifier } from "./storage";
 import type { PlexMediaInfo, PlexMediaPart, PlexStream } from "../types/library";
 
 /**
- * Build an hls.js config object that includes Plex authentication headers.
- * hls.js uses XHR for manifest/segment fetches — without these headers
- * the Plex server may reject requests.
+ * Build an hls.js config object that injects Plex auth into every request.
+ *
+ * Uses URL rewriting (appending X-Plex-Token as a query parameter) instead
+ * of custom XHR headers to avoid CORS preflight (OPTIONS) requests that
+ * Plex servers typically do not handle correctly.
  */
-export async function buildHlsConfig(
+export function buildHlsConfig(
   serverToken: string,
   extraConfig?: Record<string, unknown>,
-): Promise<Record<string, unknown>> {
-  const headers = await getServerHeaders(serverToken);
+): Record<string, unknown> {
   return {
     ...extraConfig,
-    xhrSetup(xhr: XMLHttpRequest) {
-      for (const [key, value] of Object.entries(headers)) {
-        // Don't override Accept for m3u8/ts fetches
-        if (key.toLowerCase() !== "accept") {
-          xhr.setRequestHeader(key, value);
-        }
-      }
+    xhrSetup(xhr: XMLHttpRequest, url: string) {
+      // Re-open the request with the token appended to the URL.
+      // This avoids CORS preflight issues that occur when setting
+      // custom headers like X-Plex-Token via setRequestHeader().
+      const separator = url.includes("?") ? "&" : "?";
+      xhr.open("GET", `${url}${separator}X-Plex-Token=${encodeURIComponent(serverToken)}`, true);
     },
   };
 }
