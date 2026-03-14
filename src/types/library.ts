@@ -23,6 +23,8 @@ export interface PlexRole {
   tag: string;
   role: string;
   thumb?: string;
+  id?: number;
+  tagKey?: string;
 }
 
 export interface PlexStream {
@@ -92,6 +94,13 @@ export interface PlexMediaItem {
   updatedAt: number;
 }
 
+/** Individual rating entry from Plex (returned when includeRatings=1) */
+export interface PlexRating {
+  image: string; // e.g. "imdb://image.rating", "rottentomatoes://image.rating.ripe"
+  value: number;
+  type: string;  // "audience" or "critic"
+}
+
 // ── Movies ──
 
 export interface PlexMovie extends PlexMediaItem {
@@ -112,6 +121,7 @@ export interface PlexMovie extends PlexMediaItem {
   Director?: PlexTag[];
   Writer?: PlexTag[];
   Role?: PlexRole[];
+  Rating?: PlexRating[];
   Media?: PlexMediaInfo[];
 }
 
@@ -131,6 +141,7 @@ export interface PlexShow extends PlexMediaItem {
   studio: string;
   Genre?: PlexTag[];
   Role?: PlexRole[];
+  Rating?: PlexRating[];
 }
 
 export interface PlexSeason extends PlexMediaItem {
@@ -159,6 +170,11 @@ export interface PlexEpisode extends PlexMediaItem {
   viewOffset?: number;
   viewCount?: number;
   originallyAvailableAt: string;
+  rating?: number;
+  audienceRating?: number;
+  ratingImage?: string;
+  audienceRatingImage?: string;
+  Rating?: PlexRating[];
   Media?: PlexMediaInfo[];
   Role?: PlexRole[];
   Director?: PlexTag[];

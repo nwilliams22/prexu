@@ -136,7 +136,7 @@ export async function getItemMetadata<T extends PlexMediaItem>(
   const data = await fetchJson<PlexMediaContainer<T>>(
     serverUri,
     serverToken,
-    `/library/metadata/${ratingKey}`
+    `/library/metadata/${ratingKey}?includeRatings=1`
   );
   const items = data.MediaContainer.Metadata;
   if (!items || items.length === 0) {
@@ -268,6 +268,60 @@ export async function getNextEpisode(
       );
       if (nextSeasonEpisodes.length > 0) {
         return nextSeasonEpisodes[0];
+      }
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// ── Previous Episode ──
+
+/**
+ * Finds the previous episode before the given one.
+ * Checks the same season first, then the last episode of the previous season.
+ */
+export async function getPreviousEpisode(
+  serverUri: string,
+  serverToken: string,
+  currentEpisode: PlexEpisode
+): Promise<PlexEpisode | null> {
+  try {
+    // Fetch all episodes in the current season
+    const episodes = await getItemChildren<PlexEpisode>(
+      serverUri,
+      serverToken,
+      currentEpisode.parentRatingKey
+    );
+
+    // Find the previous episode by index
+    const prevInSeason = episodes.find(
+      (ep) => ep.index === currentEpisode.index - 1
+    );
+    if (prevInSeason) return prevInSeason;
+
+    // If no previous in season, look for the previous season
+    const seasons = await getItemChildren<PlexSeason>(
+      serverUri,
+      serverToken,
+      currentEpisode.grandparentRatingKey
+    );
+
+    const currentSeasonIdx = seasons.findIndex(
+      (s) => s.ratingKey === currentEpisode.parentRatingKey
+    );
+
+    if (currentSeasonIdx > 0) {
+      const prevSeason = seasons[currentSeasonIdx - 1];
+      const prevSeasonEpisodes = await getItemChildren<PlexEpisode>(
+        serverUri,
+        serverToken,
+        prevSeason.ratingKey
+      );
+      if (prevSeasonEpisodes.length > 0) {
+        return prevSeasonEpisodes[prevSeasonEpisodes.length - 1];
       }
     }
 
@@ -466,12 +520,73 @@ export async function getRelatedItems(
   serverToken: string,
   ratingKey: string
 ): Promise<PlexMediaItem[]> {
-  const data = await fetchJson<PlexMediaContainer<PlexMediaItem>>(
-    serverUri,
-    serverToken,
-    `/library/metadata/${ratingKey}/related`
-  );
-  return data.MediaContainer.Metadata ?? [];
+  // Try the /library/metadata/{id}/similar endpoint first (most reliable)
+  try {
+    const data = await fetchJson<PlexMediaContainer<PlexMediaItem>>(
+      serverUri,
+      serverToken,
+      `/library/metadata/${ratingKey}/similar`
+    );
+    const items = data.MediaContainer.Metadata ?? [];
+    if (items.length > 0) return items;
+  } catch {
+    // Fall through
+  }
+  // Try /related endpoint
+  try {
+    const data = await fetchJson<PlexMediaContainer<PlexMediaItem>>(
+      serverUri,
+      serverToken,
+      `/library/metadata/${ratingKey}/related`
+    );
+    const items = data.MediaContainer.Metadata ?? [];
+    if (items.length > 0) return items;
+  } catch {
+    // Fall through to hubs endpoint
+  }
+  // Fallback: use /hubs/metadata endpoint which returns recommendation hubs
+  try {
+    const data = await fetchJson<{
+      MediaContainer: {
+        Hub?: Array<{
+          type: string;
+          hubIdentifier: string;
+          title: string;
+          Metadata?: PlexMediaItem[];
+        }>;
+      };
+    }>(serverUri, serverToken, `/hubs/metadata/${ratingKey}`);
+    const hubs = data.MediaContainer.Hub ?? [];
+    // Collect items from all relevant hubs (similar, related, recommendations)
+    const items: PlexMediaItem[] = [];
+    for (const hub of hubs) {
+      if (hub.Metadata && hub.Metadata.length > 0) {
+        // Skip hubs that are the item's own extras or cast
+        const id = hub.hubIdentifier?.toLowerCase() ?? "";
+        const title = hub.title?.toLowerCase() ?? "";
+        if (
+          id.includes("extra") ||
+          id.includes("cast") ||
+          id.includes("review") ||
+          title.includes("extra") ||
+          title.includes("cast") ||
+          title.includes("review")
+        ) {
+          continue;
+        }
+        items.push(...hub.Metadata);
+      }
+    }
+    // Deduplicate by ratingKey
+    const seen = new Set<string>();
+    return items.filter((item) => {
+      if (seen.has(item.ratingKey)) return false;
+      seen.add(item.ratingKey);
+      return true;
+    });
+  } catch {
+    return [];
+  }
 }
 
 // ── Extras (trailers, behind-the-scenes, etc.) ──
@@ -487,6 +602,59 @@ export async function getExtras(
     `/library/metadata/${ratingKey}/extras`
   );
   return data.MediaContainer.Metadata ?? [];
+}
+
+/**
+ * Find all media featuring a specific actor across all library sections.
+ * Uses the Plex library filter endpoint which is more thorough than hub search.
+ */
+export async function getMediaByActor(
+  serverUri: string,
+  serverToken: string,
+  actorName: string
+): Promise<PlexMediaItem[]> {
+  // First get all library sections
+  const sections = await getLibrarySections(serverUri, serverToken);
+  const movieAndShowSections = sections.filter(
+    (s) => s.type === "movie" || s.type === "show"
+  );
+
+  // Query each section in parallel with actor filter
+  const results = await Promise.allSettled(
+    movieAndShowSections.map(async (section) => {
+      const params = new URLSearchParams({
+        "X-Plex-Container-Size": "200",
+        sort: "titleSort:asc",
+        actor: actorName,
+      });
+      // For show sections, request type=2 (shows) not type=4 (episodes)
+      if (section.type === "show") {
+        params.set("type", "2");
+      }
+      const path = `/library/sections/${section.key}/all?${params.toString()}`;
+      const data = await fetchJson<PlexMediaContainer<PlexMediaItem>>(
+        serverUri,
+        serverToken,
+        path
+      );
+      return data.MediaContainer.Metadata ?? [];
+    })
+  );
+
+  // Merge and deduplicate by ratingKey
+  const seen = new Set<string>();
+  const items: PlexMediaItem[] = [];
+  for (const r of results) {
+    if (r.status === "fulfilled") {
+      for (const item of r.value) {
+        if (!seen.has(item.ratingKey)) {
+          seen.add(item.ratingKey);
+          items.push(item);
+        }
+      }
+    }
+  }
+  return items;
 }
 
 // ── Search ──
