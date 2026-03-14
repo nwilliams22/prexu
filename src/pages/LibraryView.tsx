@@ -4,41 +4,19 @@ import { useAuth } from "../hooks/useAuth";
 import { usePaginatedLibrary } from "../hooks/usePaginatedLibrary";
 import { useLibrary } from "../hooks/useLibrary";
 import { useFilterOptions } from "../hooks/useFilterOptions";
-import {
-  getImageUrl,
-  markAsWatched,
-  markAsUnwatched,
-} from "../services/plex-library";
+import { useMediaContextMenu } from "../hooks/useMediaContextMenu";
+import { usePlayAction } from "../hooks/usePlayAction";
+import { getImageUrl } from "../services/plex-library";
 import LibraryGrid from "../components/LibraryGrid";
 import SortBar from "../components/SortBar";
 import FilterBar from "../components/FilterBar";
 import PosterCard from "../components/PosterCard";
 import SkeletonCard from "../components/SkeletonCard";
-import ContextMenu from "../components/ContextMenu";
-import type { ContextMenuItem } from "../components/ContextMenu";
-import SessionCreator from "../components/SessionCreator";
-import PlaylistPicker from "../components/PlaylistPicker";
 import ShowExpansionPanel from "../components/ShowExpansionPanel";
 import AlphaJumpBar from "../components/AlphaJumpBar";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
 import type { PlexMediaItem, PlexShow, LibraryFilters } from "../types/library";
-
-interface ContextMenuState {
-  position: { x: number; y: number };
-  item: PlexMediaItem;
-}
-
-interface SessionCreatorState {
-  ratingKey: string;
-  title: string;
-  mediaType: "movie" | "episode";
-}
-
-interface PlaylistPickerState {
-  ratingKey: string;
-  title: string;
-}
 
 /** Pure helper — is this item fully watched? */
 function isWatched(item: PlexMediaItem): boolean {
@@ -106,14 +84,14 @@ function LibraryView() {
     sort.startsWith("titleSort:");
 
   const { items, isLoading, isLoadingMore, hasMore, totalSize, error, loadMore, retry } =
-    usePaginatedLibrary(sectionId, sort, filters, { loadAll: shouldLoadAll });
+    usePaginatedLibrary(sectionId, sort, filters, {
+      loadAll: shouldLoadAll,
+      type: section?.type === "show" ? 2 : section?.type === "movie" ? 1 : undefined,
+    });
   const { genres, years, contentRatings, isLoading: filtersLoading } =
     useFilterOptions(sectionId);
-  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
-  const [sessionCreator, setSessionCreator] =
-    useState<SessionCreatorState | null>(null);
-  const [playlistPicker, setPlaylistPicker] =
-    useState<PlaylistPickerState | null>(null);
+  const { openContextMenu, overlays: menuOverlays } = useMediaContextMenu();
+  const { getPlayHandler, playOverlay } = usePlayAction();
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const gridContainerRef = useRef<HTMLDivElement>(null);
 
@@ -243,73 +221,6 @@ function LibraryView() {
     }
   };
 
-  const openContextMenu = useCallback(
-    (e: React.MouseEvent, item: PlexMediaItem) => {
-      setContextMenu({ position: { x: e.clientX, y: e.clientY }, item });
-    },
-    []
-  );
-
-  const buildMenuItems = useCallback(
-    (item: PlexMediaItem): ContextMenuItem[] => {
-      if (!server) return [];
-      const menuItems: ContextMenuItem[] = [];
-      const hasView = (item as { viewCount?: number }).viewCount;
-
-      if (hasView) {
-        menuItems.push({
-          label: "Mark as Unwatched",
-          onClick: async () => {
-            await markAsUnwatched(server.uri, server.accessToken, item.ratingKey);
-          },
-        });
-      } else {
-        menuItems.push({
-          label: "Mark as Watched",
-          onClick: async () => {
-            await markAsWatched(server.uri, server.accessToken, item.ratingKey);
-          },
-        });
-      }
-
-      // Watch Together (movies & episodes, not shows)
-      if (item.type === "movie" || item.type === "episode") {
-        menuItems.push({
-          label: "Watch Together...",
-          dividerAbove: true,
-          onClick: () => {
-            setSessionCreator({
-              ratingKey: item.ratingKey,
-              title: item.title,
-              mediaType: item.type as "movie" | "episode",
-            });
-          },
-        });
-      }
-
-      // Add to Playlist (movies & episodes)
-      if (item.type === "movie" || item.type === "episode") {
-        menuItems.push({
-          label: "Add to Playlist...",
-          onClick: () =>
-            setPlaylistPicker({
-              ratingKey: item.ratingKey,
-              title: item.title,
-            }),
-        });
-      }
-
-      menuItems.push({
-        label: "Get Info",
-        dividerAbove: item.type !== "movie" && item.type !== "episode",
-        onClick: () => navigate(`/item/${item.ratingKey}`),
-      });
-
-      return menuItems;
-    },
-    [server, navigate]
-  );
-
   return (
     <div style={styles.container}>
       <h2 style={styles.title}>{section?.title ?? `Library ${sectionId}`}</h2>
@@ -352,6 +263,7 @@ function LibraryView() {
               watched={isWatched(item)}
               unwatchedCount={getUnwatchedCount(item)}
               onClick={() => navigate(`/item/${item.ratingKey}`)}
+              onPlay={getPlayHandler(item)}
               showMoreButton
               onContextMenu={(e) => openContextMenu(e, item)}
               onMoreClick={(e) => openContextMenu(e, item)}
@@ -425,33 +337,8 @@ function LibraryView() {
       {/* Infinite scroll sentinel */}
       <div ref={sentinelRef} style={styles.sentinel} />
 
-      {/* Context menu */}
-      {contextMenu && (
-        <ContextMenu
-          items={buildMenuItems(contextMenu.item)}
-          position={contextMenu.position}
-          onClose={() => setContextMenu(null)}
-        />
-      )}
-
-      {/* Watch Together session creator */}
-      {sessionCreator && (
-        <SessionCreator
-          ratingKey={sessionCreator.ratingKey}
-          title={sessionCreator.title}
-          mediaType={sessionCreator.mediaType}
-          onClose={() => setSessionCreator(null)}
-        />
-      )}
-
-      {/* Add to Playlist picker */}
-      {playlistPicker && (
-        <PlaylistPicker
-          ratingKey={playlistPicker.ratingKey}
-          title={playlistPicker.title}
-          onClose={() => setPlaylistPicker(null)}
-        />
-      )}
+      {menuOverlays}
+      {playOverlay}
     </div>
   );
 }

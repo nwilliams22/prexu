@@ -1,32 +1,16 @@
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { useWatchHistory } from "../hooks/useWatchHistory";
-import {
-  getImageUrl,
-  markAsWatched,
-  markAsUnwatched,
-} from "../services/plex-library";
+import { useMediaContextMenu } from "../hooks/useMediaContextMenu";
+import { usePlayAction } from "../hooks/usePlayAction";
+import { getImageUrl } from "../services/plex-library";
 import LibraryGrid from "../components/LibraryGrid";
 import PosterCard from "../components/PosterCard";
 import SkeletonCard from "../components/SkeletonCard";
-import ContextMenu from "../components/ContextMenu";
-import type { ContextMenuItem } from "../components/ContextMenu";
-import SessionCreator from "../components/SessionCreator";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
 import type { PlexMediaItem, PlexEpisode } from "../types/library";
-
-interface ContextMenuState {
-  position: { x: number; y: number };
-  item: PlexMediaItem;
-}
-
-interface SessionCreatorState {
-  ratingKey: string;
-  title: string;
-  mediaType: "movie" | "episode";
-}
 
 function WatchHistory() {
   const { server } = useAuth();
@@ -34,9 +18,10 @@ function WatchHistory() {
   const sentinelRef = useRef<HTMLDivElement>(null);
   const { items, isLoading, isLoadingMore, hasMore, totalSize, error, loadMore, retry } =
     useWatchHistory();
-  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
-  const [sessionCreator, setSessionCreator] =
-    useState<SessionCreatorState | null>(null);
+  const { openContextMenu, overlays: menuOverlays } = useMediaContextMenu({
+    showAddToPlaylist: false,
+  });
+  const { getPlayHandler, playOverlay } = usePlayAction();
 
   // Infinite scroll via IntersectionObserver
   useEffect(() => {
@@ -99,62 +84,6 @@ function WatchHistory() {
     return asMovie.viewCount !== undefined && asMovie.viewCount > 0;
   };
 
-  const openContextMenu = useCallback(
-    (e: React.MouseEvent, item: PlexMediaItem) => {
-      setContextMenu({ position: { x: e.clientX, y: e.clientY }, item });
-    },
-    []
-  );
-
-  const buildMenuItems = useCallback(
-    (item: PlexMediaItem): ContextMenuItem[] => {
-      if (!server) return [];
-      const menuItems: ContextMenuItem[] = [];
-      const hasView = (item as { viewCount?: number }).viewCount;
-
-      if (hasView) {
-        menuItems.push({
-          label: "Mark as Unwatched",
-          onClick: async () => {
-            await markAsUnwatched(server.uri, server.accessToken, item.ratingKey);
-          },
-        });
-      } else {
-        menuItems.push({
-          label: "Mark as Watched",
-          onClick: async () => {
-            await markAsWatched(server.uri, server.accessToken, item.ratingKey);
-          },
-        });
-      }
-
-      if (item.type === "movie" || item.type === "episode") {
-        menuItems.push({
-          label: "Watch Together...",
-          dividerAbove: true,
-          onClick: () => {
-            setSessionCreator({
-              ratingKey: item.ratingKey,
-              title: item.type === "episode"
-                ? `${(item as PlexEpisode).grandparentTitle} - ${item.title}`
-                : item.title,
-              mediaType: item.type as "movie" | "episode",
-            });
-          },
-        });
-      }
-
-      menuItems.push({
-        label: "Get Info",
-        dividerAbove: item.type !== "movie" && item.type !== "episode",
-        onClick: () => navigate(`/item/${item.ratingKey}`),
-      });
-
-      return menuItems;
-    },
-    [server, navigate]
-  );
-
   return (
     <div style={styles.container}>
       <h2 style={styles.title}>Watch History</h2>
@@ -180,6 +109,7 @@ function WatchHistory() {
             progress={getProgress(item)}
             watched={isWatched(item)}
             onClick={() => navigate(`/item/${item.ratingKey}`)}
+            onPlay={getPlayHandler(item)}
             showMoreButton
             onContextMenu={(e) => openContextMenu(e, item)}
             onMoreClick={(e) => openContextMenu(e, item)}
@@ -211,22 +141,8 @@ function WatchHistory() {
 
       <div ref={sentinelRef} style={styles.sentinel} />
 
-      {contextMenu && (
-        <ContextMenu
-          items={buildMenuItems(contextMenu.item)}
-          position={contextMenu.position}
-          onClose={() => setContextMenu(null)}
-        />
-      )}
-
-      {sessionCreator && (
-        <SessionCreator
-          ratingKey={sessionCreator.ratingKey}
-          title={sessionCreator.title}
-          mediaType={sessionCreator.mediaType}
-          onClose={() => setSessionCreator(null)}
-        />
-      )}
+      {menuOverlays}
+      {playOverlay}
     </div>
   );
 }

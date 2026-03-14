@@ -84,7 +84,7 @@ function SearchResults() {
                 }
                 title={item.title}
                 subtitle={getSubtitle(item)}
-                width={isEpisodeHub(hub.type) ? 200 : 160}
+                width={isEpisodeHub(hub.type) ? 230 : 190}
                 aspectRatio={isEpisodeHub(hub.type) ? 0.5625 : 1.5}
                 onClick={() => navigate(`/item/${item.ratingKey}`)}
               />

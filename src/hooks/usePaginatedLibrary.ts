@@ -22,7 +22,7 @@ export function usePaginatedLibrary(
   sectionId: string | undefined,
   sort: string = "titleSort:asc",
   filters: LibraryFilters = {},
-  options: { loadAll?: boolean } = {}
+  options: { loadAll?: boolean; type?: number } = {}
 ): UsePaginatedLibraryResult {
   const { server } = useAuth();
   const filtersKey = useMemo(() => JSON.stringify(filters), [filters]);
@@ -40,6 +40,7 @@ export function usePaginatedLibrary(
   }, []);
 
   const loadAll = options.loadAll ?? false;
+  const plexType = options.type;
 
   // Reset when section or sort changes
   useEffect(() => {
@@ -60,7 +61,7 @@ export function usePaginatedLibrary(
             server.uri,
             server.accessToken,
             sectionId,
-            { start: 0, size: PAGE_SIZE, sort, filters }
+            { start: 0, size: PAGE_SIZE, sort, filters, type: plexType }
           );
 
           if (cancelled) return;
@@ -82,7 +83,7 @@ export function usePaginatedLibrary(
                 server.uri,
                 server.accessToken,
                 sectionId,
-                { start: offset, size: BG_BATCH_SIZE, sort, filters }
+                { start: offset, size: BG_BATCH_SIZE, sort, filters, type: plexType }
               );
 
               if (cancelled) return;
@@ -104,7 +105,7 @@ export function usePaginatedLibrary(
             server.uri,
             server.accessToken,
             sectionId,
-            { start: 0, size: PAGE_SIZE, sort, filters }
+            { start: 0, size: PAGE_SIZE, sort, filters, type: plexType }
           );
           if (!cancelled) {
             setItems(result.items);
@@ -129,7 +130,7 @@ export function usePaginatedLibrary(
     return () => {
       cancelled = true;
     };
-  }, [server, sectionId, sort, filtersKey, refreshTrigger, loadAll]);
+  }, [server, sectionId, sort, filtersKey, refreshTrigger, loadAll, plexType]);
 
   const loadMore = useCallback(() => {
     if (!server || !sectionId || loadingRef.current || !hasMore) return;
@@ -143,7 +144,7 @@ export function usePaginatedLibrary(
           server.uri,
           server.accessToken,
           sectionId,
-          { start: items.length, size: PAGE_SIZE, sort, filters }
+          { start: items.length, size: PAGE_SIZE, sort, filters, type: plexType }
         );
         setItems((prev) => [...prev, ...result.items]);
         setHasMore(result.hasMore);
@@ -156,7 +157,7 @@ export function usePaginatedLibrary(
         loadingRef.current = false;
       }
     })();
-  }, [server, sectionId, sort, filtersKey, items.length, hasMore]);
+  }, [server, sectionId, sort, filtersKey, items.length, hasMore, plexType]);
 
   return { items, isLoading, isLoadingMore, hasMore, totalSize, error, loadMore, retry };
 }

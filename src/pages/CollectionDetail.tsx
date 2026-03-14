@@ -1,55 +1,32 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
+import { useMediaContextMenu } from "../hooks/useMediaContextMenu";
+import { usePlayAction } from "../hooks/usePlayAction";
 import {
   getItemMetadata,
   getCollectionItems,
   getImageUrl,
-  markAsWatched,
-  markAsUnwatched,
 } from "../services/plex-library";
 import LibraryGrid from "../components/LibraryGrid";
 import PosterCard from "../components/PosterCard";
 import SkeletonCard from "../components/SkeletonCard";
-import ContextMenu from "../components/ContextMenu";
-import type { ContextMenuItem } from "../components/ContextMenu";
-import SessionCreator from "../components/SessionCreator";
-import PlaylistPicker from "../components/PlaylistPicker";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
-import type { PlexMediaItem, PlexEpisode, PlexShow } from "../types/library";
-
-interface ContextMenuState {
-  position: { x: number; y: number };
-  item: PlexMediaItem;
-}
-
-interface SessionCreatorState {
-  ratingKey: string;
-  title: string;
-  mediaType: "movie" | "episode";
-}
-
-interface PlaylistPickerState {
-  ratingKey: string;
-  title: string;
-}
+import type { PlexMediaItem, PlexShow } from "../types/library";
 
 function CollectionDetail() {
   const { collectionKey } = useParams<{ collectionKey: string }>();
   const { server } = useAuth();
   const navigate = useNavigate();
+  const { openContextMenu, overlays: menuOverlays } = useMediaContextMenu();
+  const { getPlayHandler, playOverlay } = usePlayAction();
   const [collectionTitle, setCollectionTitle] = useState("");
   const [collectionSummary, setCollectionSummary] = useState("");
   const [items, setItems] = useState<PlexMediaItem[]>([]);
   const [totalSize, setTotalSize] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
-  const [sessionCreator, setSessionCreator] =
-    useState<SessionCreatorState | null>(null);
-  const [playlistPicker, setPlaylistPicker] =
-    useState<PlaylistPickerState | null>(null);
 
   useEffect(() => {
     if (!server || !collectionKey) return;
@@ -118,73 +95,6 @@ function CollectionDetail() {
     return "";
   };
 
-  const openContextMenu = useCallback(
-    (e: React.MouseEvent, item: PlexMediaItem) => {
-      setContextMenu({ position: { x: e.clientX, y: e.clientY }, item });
-    },
-    []
-  );
-
-  const buildMenuItems = useCallback(
-    (item: PlexMediaItem): ContextMenuItem[] => {
-      if (!server) return [];
-      const menuItems: ContextMenuItem[] = [];
-      const hasView = (item as { viewCount?: number }).viewCount;
-
-      if (hasView) {
-        menuItems.push({
-          label: "Mark as Unwatched",
-          onClick: async () => {
-            await markAsUnwatched(server.uri, server.accessToken, item.ratingKey);
-          },
-        });
-      } else {
-        menuItems.push({
-          label: "Mark as Watched",
-          onClick: async () => {
-            await markAsWatched(server.uri, server.accessToken, item.ratingKey);
-          },
-        });
-      }
-
-      if (item.type === "movie" || item.type === "episode") {
-        menuItems.push({
-          label: "Watch Together...",
-          dividerAbove: true,
-          onClick: () => {
-            setSessionCreator({
-              ratingKey: item.ratingKey,
-              title: item.type === "episode"
-                ? `${(item as PlexEpisode).grandparentTitle} - ${item.title}`
-                : item.title,
-              mediaType: item.type as "movie" | "episode",
-            });
-          },
-        });
-      }
-
-      if (item.type === "movie" || item.type === "episode") {
-        menuItems.push({
-          label: "Add to Playlist...",
-          onClick: () =>
-            setPlaylistPicker({
-              ratingKey: item.ratingKey,
-              title: item.title,
-            }),
-        });
-      }
-
-      menuItems.push({
-        label: "Get Info",
-        dividerAbove: item.type !== "movie" && item.type !== "episode",
-        onClick: () => navigate(`/item/${item.ratingKey}`),
-      });
-
-      return menuItems;
-    },
-    [server, navigate]
-  );
-
   return (
     <div style={styles.container}>
       <h2 style={styles.title}>{collectionTitle || "Collection"}</h2>
@@ -212,6 +122,7 @@ function CollectionDetail() {
             title={item.title}
             subtitle={getSubtitle(item)}
             onClick={() => navigate(`/item/${item.ratingKey}`)}
+            onPlay={getPlayHandler(item)}
             showMoreButton
             onContextMenu={(e) => openContextMenu(e, item)}
             onMoreClick={(e) => openContextMenu(e, item)}
@@ -235,30 +146,8 @@ function CollectionDetail() {
         />
       )}
 
-      {contextMenu && (
-        <ContextMenu
-          items={buildMenuItems(contextMenu.item)}
-          position={contextMenu.position}
-          onClose={() => setContextMenu(null)}
-        />
-      )}
-
-      {sessionCreator && (
-        <SessionCreator
-          ratingKey={sessionCreator.ratingKey}
-          title={sessionCreator.title}
-          mediaType={sessionCreator.mediaType}
-          onClose={() => setSessionCreator(null)}
-        />
-      )}
-
-      {playlistPicker && (
-        <PlaylistPicker
-          ratingKey={playlistPicker.ratingKey}
-          title={playlistPicker.title}
-          onClose={() => setPlaylistPicker(null)}
-        />
-      )}
+      {menuOverlays}
+      {playOverlay}
     </div>
   );
 }

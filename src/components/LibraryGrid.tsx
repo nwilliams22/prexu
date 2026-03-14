@@ -8,9 +8,9 @@ interface LibraryGridProps {
 
 const GRID_MIN_WIDTH: Record<Breakpoint, string> = {
   mobile: "45%",
-  tablet: "140px",
-  desktop: "155px",
-  large: "180px",
+  tablet: "170px",
+  desktop: "185px",
+  large: "215px",
 };
 
 function LibraryGrid({ children }: LibraryGridProps) {

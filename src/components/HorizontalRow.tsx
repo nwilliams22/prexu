@@ -148,12 +148,12 @@ const styles: Record<string, React.CSSProperties> = {
   },
   scrollContainer: {
     display: "flex",
-    gap: "0.75rem",
+    gap: "1rem",
     overflowX: "auto",
     overflowY: "hidden",
     scrollSnapType: "x mandatory",
     willChange: "scroll-position",
-    paddingBottom: "4px",
+    padding: "6px 0 4px 0",
     scrollbarWidth: "none" as never,
   },
   scrollButton: {
