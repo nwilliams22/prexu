@@ -22,7 +22,10 @@ export type SyncEventType =
   | "remote_buffering"
   | "remote_ready"
   | "new_media"
-  | "pong";
+  | "pong"
+  | "content_request_received"
+  | "content_request_response"
+  | "pending_content_requests";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Listener = (data: any) => void;
@@ -222,6 +225,15 @@ class WatchSyncService {
         break;
       case "pong":
         this.emit("pong", data);
+        break;
+      case "content_request":
+        this.emit("content_request_received", data);
+        break;
+      case "content_request_response":
+        this.emit("content_request_response", data);
+        break;
+      case "pending_content_requests":
+        this.emit("pending_content_requests", data);
         break;
       default:
         console.warn("[WatchSync] Unknown message type:", type);

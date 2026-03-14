@@ -1,15 +1,13 @@
 /**
- * Custom hls.js Loader that uses Tauri's native HTTP plugin.
+ * Custom hls.js Loader that uses window.fetch (intercepted by the
+ * Tauri HTTP plugin) instead of XMLHttpRequest.
  *
- * WebView2 enforces CORS on all XHR/fetch requests from the frontend
- * (origin: https://tauri.localhost). Plex servers don't reliably handle
- * CORS preflight (OPTIONS) requests, causing hls.js network errors.
- *
- * This loader routes all HLS requests (manifests, segments, keys) through
- * Tauri's Rust-side HTTP client, bypassing CORS entirely.
+ * In Tauri v2, the HTTP plugin overrides window.fetch to route requests
+ * through Rust's reqwest — this bypasses WebView2 CORS restrictions.
+ * However, XHR is NOT overridden, so hls.js's default XhrLoader fails.
+ * This loader forces hls.js to use fetch instead of XHR.
  */
 
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import type {
   Loader,
   LoaderCallbacks,
@@ -20,23 +18,18 @@ import type {
 import { LoadStats } from "hls.js";
 
 /**
- * Factory that creates a TauriLoader class bound to a specific Plex token.
- * This is needed because hls.js expects a loader *class* (constructor),
- * not an instance, and we need to inject the token at construction time.
+ * Factory that creates a FetchLoader class bound to a specific Plex token.
  */
 export function createTauriLoaderClass(serverToken: string) {
-  return class TauriLoader implements Loader<LoaderContext> {
+  return class TauriFetchLoader implements Loader<LoaderContext> {
     public context: LoaderContext | null = null;
     public stats: LoaderStats = new LoadStats();
 
     private callbacks: LoaderCallbacks<LoaderContext> | null = null;
-    private controller: AbortController = new AbortController();
-    private response: Response | null = null;
+    private aborted = false;
+    private abortController: AbortController | null = null;
 
-    // hls.js passes the HlsConfig to the constructor
-    constructor(_config: object) {
-      // no-op — config not needed for our loader
-    }
+    constructor(_config: object) {}
 
     load(
       context: LoaderContext,
@@ -47,12 +40,14 @@ export function createTauriLoaderClass(serverToken: string) {
       this.callbacks = callbacks;
       this.stats = new LoadStats();
       this.stats.loading.start = performance.now();
+      this.aborted = false;
 
-      this.controller = new AbortController();
-
-      // Build the URL with the Plex token
-      const separator = context.url.includes("?") ? "&" : "?";
-      const url = `${context.url}${separator}X-Plex-Token=${encodeURIComponent(serverToken)}`;
+      // Add the Plex token if not already present
+      let url = context.url;
+      if (!url.includes("X-Plex-Token=")) {
+        const separator = url.includes("?") ? "&" : "?";
+        url = `${url}${separator}X-Plex-Token=${encodeURIComponent(serverToken)}`;
+      }
 
       // Build request headers
       const headers: Record<string, string> = {};
@@ -60,84 +55,91 @@ export function createTauriLoaderClass(serverToken: string) {
         headers["Range"] = `bytes=${context.rangeStart}-${context.rangeEnd - 1}`;
       }
 
-      // Timeout: use loadPolicy if available, fall back to deprecated timeout
       const timeoutMs =
-        config.loadPolicy?.maxLoadTimeMs ?? config.timeout ?? 10000;
+        config.loadPolicy?.maxLoadTimeMs ?? config.timeout ?? 30000;
 
       const timeoutId = setTimeout(() => {
-        this.controller.abort();
+        if (this.aborted) return;
+        this.aborted = true;
+        this.abortController?.abort();
+        console.warn(`[HLS Loader] Timeout after ${timeoutMs}ms for ${url.substring(0, 80)}`);
         if (this.callbacks?.onTimeout) {
           this.callbacks.onTimeout(this.stats, context, null);
         }
       }, timeoutMs);
 
-      tauriFetch(url, {
-        signal: this.controller.signal,
-        headers,
-      })
+      this.abortController = new AbortController();
+
+      const urlShort = url.split("/").pop()?.split("?")[0] ?? url.substring(0, 60);
+      console.log(`[HLS Loader] Loading: ${urlShort} (type: ${context.responseType})`);
+
+      window
+        .fetch(url, {
+          method: "GET",
+          headers,
+          signal: this.abortController.signal,
+        })
         .then(async (response) => {
           clearTimeout(timeoutId);
-          this.response = response;
+          if (this.aborted) return;
+
           this.stats.loading.first = performance.now();
 
-          if (!response.ok) {
+          if (!response.ok && response.status !== 206) {
+            console.error(`[HLS Loader] HTTP ${response.status} for ${urlShort}`);
             if (this.callbacks) {
               this.callbacks.onError(
                 { code: response.status, text: response.statusText },
                 context,
-                response,
+                null,
                 this.stats,
               );
             }
             return;
           }
 
-          // Parse the response based on expected type
           let data: string | ArrayBuffer;
           if (context.responseType === "arraybuffer") {
-            data = await response.arrayBuffer();
+            const blob = await response.blob();
+            data = await blob.arrayBuffer();
           } else {
             data = await response.text();
           }
 
-          // Update stats
+          // Check if loader was destroyed during async body reading
+          if (this.aborted || !this.callbacks) return;
+
           const byteLength =
             typeof data === "string" ? data.length : data.byteLength;
           this.stats.loaded = byteLength;
           this.stats.total = byteLength;
           this.stats.loading.end = performance.now();
 
-          if (this.callbacks) {
-            this.callbacks.onSuccess(
-              {
-                url: response.url || context.url,
-                data,
-                code: response.status,
-                text: response.statusText,
-              },
-              this.stats,
-              context,
-              response,
-            );
-          }
+          // Normalize 206 to 200 for hls.js compatibility
+          const code = response.status === 206 ? 200 : response.status;
+
+          this.callbacks.onSuccess(
+            {
+              url: response.url || context.url,
+              data,
+              code,
+              text: response.statusText,
+            },
+            this.stats,
+            context,
+            null,
+          );
         })
         .catch((err) => {
           clearTimeout(timeoutId);
-
-          if (this.stats.aborted) return;
-
-          // AbortError from our abort() call
-          if (err?.name === "AbortError") {
-            this.stats.aborted = true;
-            if (this.callbacks?.onAbort) {
-              this.callbacks.onAbort(this.stats, context, null);
-            }
-            return;
-          }
+          if (this.aborted) return;
 
           if (this.callbacks) {
             this.callbacks.onError(
-              { code: 0, text: err?.message ?? "Network error" },
+              {
+                code: 0,
+                text: err?.message ?? err?.toString?.() ?? "Fetch error",
+              },
               context,
               null,
               this.stats,
@@ -147,28 +149,31 @@ export function createTauriLoaderClass(serverToken: string) {
     }
 
     abort(): void {
+      this.aborted = true;
       this.stats.aborted = true;
-      this.controller.abort();
+      this.abortController?.abort();
+      // Only fire onAbort if callbacks are still set (not during destroy)
       if (this.callbacks?.onAbort) {
         this.callbacks.onAbort(this.stats, this.context!, null);
       }
     }
 
     destroy(): void {
-      this.abort();
+      // Null callbacks FIRST to prevent recursive onAbort → resetLoader → destroy loop
       this.callbacks = null;
+      this.aborted = true;
+      this.stats.aborted = true;
+      this.abortController?.abort();
       this.context = null;
-      this.response = null;
+      this.abortController = null;
     }
 
     getCacheAge(): number | null {
-      if (!this.response) return null;
-      const age = this.response.headers.get("age");
-      return age ? parseFloat(age) : null;
+      return null;
     }
 
-    getResponseHeader(name: string): string | null {
-      return this.response?.headers.get(name) ?? null;
+    getResponseHeader(_name: string): string | null {
+      return null;
     }
   };
 }

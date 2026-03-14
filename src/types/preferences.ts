@@ -21,6 +21,8 @@ export interface AppearancePreferences {
     recentMovies: boolean;
     recentShows: boolean;
   };
+  /** Skip the seasons page for single-season shows and go straight to episode list */
+  skipSingleSeason: boolean;
 }
 
 export interface Preferences {

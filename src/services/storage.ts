@@ -10,6 +10,7 @@
 import type { AuthData, ServerData } from "../types/plex";
 import type { Preferences } from "../types/preferences";
 import type { ActiveUser } from "../types/home-user";
+import type { ContentRequest } from "../types/content-request";
 
 const STORAGE_KEYS = {
   AUTH: "auth_data",
@@ -19,6 +20,10 @@ const STORAGE_KEYS = {
   PREFERENCES: "prexu_preferences",
   ADMIN_AUTH: "admin_auth_data",
   ACTIVE_USER: "active_user",
+  TMDB_API_KEY: "prexu_tmdb_api_key",
+  CONTENT_REQUESTS: "prexu_content_requests",
+  REQUESTS_LAST_READ: "prexu_requests_last_read",
+  DISMISSED_RECOMMENDATIONS: "prexu_dismissed_recommendations",
 } as const;
 
 const DEFAULT_RELAY_PORT = 9847;
@@ -189,6 +194,7 @@ export function getDefaultPreferences(): Preferences {
         recentMovies: true,
         recentShows: true,
       },
+      skipSingleSeason: true,
     },
   };
 }
@@ -240,4 +246,49 @@ export async function saveUserPreferences(
   prefs: Preferences
 ): Promise<void> {
   await storage.set(userPrefsKey(userId), prefs);
+}
+
+// ── TMDb API Key ──
+
+export async function getTmdbApiKey(): Promise<string | null> {
+  return storage.get<string>(STORAGE_KEYS.TMDB_API_KEY);
+}
+
+export async function saveTmdbApiKey(key: string): Promise<void> {
+  await storage.set(STORAGE_KEYS.TMDB_API_KEY, key);
+}
+
+export async function clearTmdbApiKey(): Promise<void> {
+  await storage.remove(STORAGE_KEYS.TMDB_API_KEY);
+}
+
+// ── Content Requests ──
+
+export async function getContentRequests(): Promise<ContentRequest[]> {
+  const requests = await storage.get<ContentRequest[]>(STORAGE_KEYS.CONTENT_REQUESTS);
+  return requests ?? [];
+}
+
+export async function saveContentRequests(requests: ContentRequest[]): Promise<void> {
+  await storage.set(STORAGE_KEYS.CONTENT_REQUESTS, requests);
+}
+
+export async function getRequestsLastRead(): Promise<number> {
+  const ts = await storage.get<number>(STORAGE_KEYS.REQUESTS_LAST_READ);
+  return ts ?? 0;
+}
+
+export async function saveRequestsLastRead(timestamp: number): Promise<void> {
+  await storage.set(STORAGE_KEYS.REQUESTS_LAST_READ, timestamp);
+}
+
+/** Get the set of dismissed recommendation ratingKeys */
+export async function getDismissedRecommendations(): Promise<string[]> {
+  const keys = await storage.get<string[]>(STORAGE_KEYS.DISMISSED_RECOMMENDATIONS);
+  return keys ?? [];
+}
+
+/** Save the set of dismissed recommendation ratingKeys */
+export async function saveDismissedRecommendations(keys: string[]): Promise<void> {
+  await storage.set(STORAGE_KEYS.DISMISSED_RECOMMENDATIONS, keys);
 }

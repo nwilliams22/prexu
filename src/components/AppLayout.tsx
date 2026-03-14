@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect } from "react";
-import { Outlet, Navigate, useNavigate, useLocation } from "react-router-dom";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { Outlet, Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { usePreferences } from "../hooks/usePreferences";
 import { useBreakpoint, isMobile, isTabletOrBelow, isDesktopOrAbove } from "../hooks/useBreakpoint";
@@ -9,6 +9,8 @@ import Sidebar from "./Sidebar";
 import NavButtons from "./NavButtons";
 import SearchBar from "./SearchBar";
 import UserSwitcher from "./UserSwitcher";
+import RequestBell from "./RequestBell";
+import ActivityButton from "./ActivityButton";
 import InviteNotification from "./InviteNotification";
 import ErrorBoundary from "./ErrorBoundary";
 import BottomNav from "./BottomNav";
@@ -18,12 +20,24 @@ function AppLayout() {
   const { preferences } = usePreferences();
   const bp = useBreakpoint();
   const navigate = useNavigate();
-  const location = useLocation();
+
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => preferences.appearance.sidebarCollapsed
   );
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const sidebarOverlayRef = useRef<HTMLDivElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
+  const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleScroll = useCallback(() => {
+    const el = mainRef.current;
+    if (!el) return;
+    el.classList.add("scrolling");
+    if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
+    scrollTimerRef.current = setTimeout(() => {
+      el.classList.remove("scrolling");
+    }, 1200);
+  }, []);
 
   const mobile = isMobile(bp);
   const tabletOrBelow = isTabletOrBelow(bp);
@@ -85,6 +99,8 @@ function AppLayout() {
         </div>
 
         <div style={styles.headerRight}>
+          <ActivityButton />
+          <RequestBell />
           <UserSwitcher />
         </div>
       </header>
@@ -123,12 +139,17 @@ function AppLayout() {
           </>
         )}
 
-        <main style={{
-          ...styles.main,
-          ...(mobile ? { paddingBottom: "56px" } : {}),
-        }}>
+        <main
+          ref={mainRef}
+          className="auto-hide-scrollbar"
+          onScroll={handleScroll}
+          style={{
+            ...styles.main,
+            ...(mobile ? { paddingBottom: "56px" } : {}),
+          }}
+        >
           <InviteNotification />
-          <div key={location.pathname} style={styles.pageTransition}>
+          <div style={styles.pageTransition}>
             <ErrorBoundary>
               <Outlet />
             </ErrorBoundary>

@@ -5,10 +5,14 @@ import {
   clearRelayUrl,
   hasManualRelayUrl,
   deriveRelayUrl,
+  getTmdbApiKey,
+  saveTmdbApiKey,
+  clearTmdbApiKey,
 } from "../services/storage";
 import { useAuth } from "../hooks/useAuth";
 import { useInvites } from "../hooks/useInvites";
 import { usePreferences } from "../hooks/usePreferences";
+import { validateTmdbApiKey } from "../services/tmdb";
 import { open } from "@tauri-apps/plugin-shell";
 import type { PlaybackPreferences, AppearancePreferences, NormalizationPreset } from "../types/preferences";
 
@@ -36,8 +40,9 @@ const LANGUAGES = [
 ];
 
 function Settings() {
-  const { server } = useAuth();
+  const { server, activeUser } = useAuth();
   const { isRelayConnected, refreshInvites } = useInvites();
+  const isAdmin = activeUser?.isAdmin ?? false;
   const { preferences, updatePreferences } = usePreferences();
 
   // Relay state
@@ -45,6 +50,13 @@ function Settings() {
   const [hasOverride, setHasOverride] = useState(false);
   const [showOverride, setShowOverride] = useState(false);
   const [relaySaved, setRelaySaved] = useState(false);
+
+  // TMDb API key state
+  const [tmdbKey, setTmdbKey] = useState("");
+  const [tmdbKeyStored, setTmdbKeyStored] = useState(false);
+  const [tmdbKeySaving, setTmdbKeySaving] = useState(false);
+  const [tmdbKeyError, setTmdbKeyError] = useState<string | null>(null);
+  const [tmdbKeySaved, setTmdbKeySaved] = useState(false);
 
   const autoUrl = server?.uri ? deriveRelayUrl(server.uri) : null;
 
@@ -57,6 +69,13 @@ function Settings() {
         const url = await getRelayUrl();
         setManualUrl(url);
       }
+
+      // Load TMDb API key status
+      const storedTmdbKey = await getTmdbApiKey();
+      if (storedTmdbKey) {
+        setTmdbKeyStored(true);
+        setTmdbKey(storedTmdbKey);
+      }
     })();
   }, []);
 
@@ -66,6 +85,37 @@ function Settings() {
     setRelaySaved(true);
     setTimeout(() => setRelaySaved(false), 2000);
     refreshInvites();
+  };
+
+  const handleSaveTmdbKey = async () => {
+    if (!tmdbKey.trim()) return;
+    setTmdbKeySaving(true);
+    setTmdbKeyError(null);
+
+    try {
+      const valid = await validateTmdbApiKey(tmdbKey.trim());
+      if (!valid) {
+        setTmdbKeyError("Invalid API key. Please check and try again.");
+        setTmdbKeySaving(false);
+        return;
+      }
+      await saveTmdbApiKey(tmdbKey.trim());
+      setTmdbKeyStored(true);
+      setTmdbKeySaved(true);
+      setTimeout(() => setTmdbKeySaved(false), 2000);
+    } catch {
+      setTmdbKeyError("Failed to validate key. Check your connection.");
+    } finally {
+      setTmdbKeySaving(false);
+    }
+  };
+
+  const handleClearTmdbKey = async () => {
+    await clearTmdbApiKey();
+    setTmdbKey("");
+    setTmdbKeyStored(false);
+    setTmdbKeyError(null);
+    setTmdbKeySaved(false);
   };
 
   const handleResetToAuto = async () => {
@@ -374,6 +424,27 @@ function Settings() {
             </label>
           </div>
         </div>
+
+        <div style={styles.field}>
+          <label style={styles.label}>TV Show Navigation</label>
+          <div style={styles.checkboxGroup}>
+            <label style={styles.checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={ap.skipSingleSeason}
+                onChange={(e) =>
+                  updateAppearance({ skipSingleSeason: e.target.checked })
+                }
+                style={styles.checkbox}
+              />
+              Skip seasons page for single-season shows
+            </label>
+          </div>
+          <p style={styles.hint}>
+            When enabled, shows with only one season go directly to the episode
+            list instead of showing a seasons page.
+          </p>
+        </div>
       </section>
 
       {/* ── Watch Together ── */}
@@ -448,6 +519,70 @@ function Settings() {
           )}
         </div>
       </section>
+
+      {/* ── Content Requests (Admin only) ── */}
+      {isAdmin && (
+        <section style={styles.section}>
+          <h3 style={styles.sectionTitle}>Content Requests</h3>
+
+          <div style={styles.field}>
+            <label style={styles.label}>TMDb API Key</label>
+            <p style={styles.hint}>
+              A TMDb (The Movie Database) API key is required for content request
+              search functionality. Users can search for movies and TV shows to
+              request.
+            </p>
+
+            {tmdbKeyStored ? (
+              <div>
+                <div style={styles.statusRow}>
+                  <div style={{ ...styles.statusDot, background: "var(--success)" }} />
+                  <span style={styles.statusText}>TMDb API key configured</span>
+                </div>
+                <button
+                  onClick={handleClearTmdbKey}
+                  style={styles.linkButton}
+                >
+                  Remove API key
+                </button>
+              </div>
+            ) : (
+              <div>
+                <div style={styles.inputRow}>
+                  <input
+                    type="text"
+                    value={tmdbKey}
+                    onChange={(e) => { setTmdbKey(e.target.value); setTmdbKeyError(null); }}
+                    placeholder="Enter your TMDb API key (v4 auth)"
+                    style={styles.input}
+                  />
+                  <button
+                    onClick={handleSaveTmdbKey}
+                    disabled={!tmdbKey.trim() || tmdbKeySaving}
+                    style={{
+                      ...styles.saveButton,
+                      ...((!tmdbKey.trim() || tmdbKeySaving) ? { opacity: 0.5, cursor: "not-allowed" } : {}),
+                    }}
+                  >
+                    {tmdbKeySaving ? "Validating..." : tmdbKeySaved ? "Saved!" : "Save"}
+                  </button>
+                </div>
+                {tmdbKeyError && (
+                  <p style={{ ...styles.hint, color: "var(--error)", marginTop: "0.5rem" }}>
+                    {tmdbKeyError}
+                  </p>
+                )}
+                <button
+                  onClick={() => open("https://www.themoviedb.org/settings/api")}
+                  style={{ ...styles.linkButton, marginTop: "0.5rem" }}
+                >
+                  Get a TMDb API key →
+                </button>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* ── About ── */}
       <section style={{ ...styles.section, borderBottom: "none" }}>
