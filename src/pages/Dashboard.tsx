@@ -1,21 +1,21 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { usePreferences } from "../hooks/usePreferences";
 import { useDashboard } from "../hooks/useDashboard";
+import { useMediaContextMenu } from "../hooks/useMediaContextMenu";
+import { usePlayAction } from "../hooks/usePlayAction";
+import { getImageUrl, markAsWatched } from "../services/plex-library";
 import {
-  getImageUrl,
-  markAsWatched,
-  markAsUnwatched,
-} from "../services/plex-library";
+  getDismissedRecommendations,
+  saveDismissedRecommendations,
+} from "../services/storage";
+import HeroSlideshow from "../components/HeroSlideshow";
+import type { HeroSlide } from "../components/HeroSlideshow";
 import HorizontalRow from "../components/HorizontalRow";
 import PosterCard from "../components/PosterCard";
 import SkeletonCard from "../components/SkeletonCard";
 import EpisodeExpander from "../components/EpisodeExpander";
-import ContextMenu from "../components/ContextMenu";
-import type { ContextMenuItem } from "../components/ContextMenu";
-import SessionCreator from "../components/SessionCreator";
-import PlaylistPicker from "../components/PlaylistPicker";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
 import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
@@ -25,25 +25,9 @@ import type {
   GroupedRecentItem,
 } from "../types/library";
 
-interface ContextMenuState {
-  position: { x: number; y: number };
-  item: PlexMediaItem;
-  section: "onDeck" | "movies" | "shows";
-}
 
-interface SessionCreatorState {
-  ratingKey: string;
-  title: string;
-  mediaType: "movie" | "episode";
-}
-
-interface PlaylistPickerState {
-  ratingKey: string;
-  title: string;
-}
-
-const POSTER_SIZES = { small: 130, medium: 160, large: 200 } as const;
-const POSTER_SIZES_LARGE = { small: 160, medium: 200, large: 240 } as const;
+const POSTER_SIZES = { small: 150, medium: 190, large: 230 } as const;
+const POSTER_SIZES_LARGE = { small: 190, medium: 230, large: 280 } as const;
 
 /** Pure helper — subtitle for a media item (movie year, episode code) */
 function getSubtitle(item: PlexMediaItem): string {
@@ -95,28 +79,6 @@ function getGroupSubtitle(group: GroupedRecentItem): string {
   return "Recently Added";
 }
 
-/** Pure helper — season suffix for a grouped show badge (e.g. " S03") */
-function getSeasonBadgeSuffix(group: GroupedRecentItem): string {
-  // Check episode-level data first (when items come as episodes)
-  if (group.episodes.length > 0) {
-    const seasons = new Set(group.episodes.map((e) => e.parentIndex));
-    if (seasons.size === 1) {
-      const num = seasons.values().next().value;
-      return ` S${String(num).padStart(2, "0")}`;
-    }
-    return ""; // multiple seasons — omit to keep badge short
-  }
-  // Fallback: season-level data (when items come as seasons from /library/recentlyAdded)
-  if (group.seasonIndices.length > 0) {
-    const uniqueSeasons = new Set(group.seasonIndices);
-    if (uniqueSeasons.size === 1) {
-      const num = uniqueSeasons.values().next().value;
-      return ` S${String(num).padStart(2, "0")}`;
-    }
-    return ""; // multiple seasons — omit
-  }
-  return "";
-}
 
 /** Pure helper — playback progress ratio (0-1) or undefined */
 function getProgress(item: PlexMediaItem): number | undefined {
@@ -151,11 +113,56 @@ function Dashboard() {
   const navigate = useNavigate();
   const [expandedGroupKey, setExpandedGroupKey] = useState<string | null>(null);
   const [expanderClosing, setExpanderClosing] = useState(false);
-  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
-  const [sessionCreator, setSessionCreator] =
-    useState<SessionCreatorState | null>(null);
-  const [playlistPicker, setPlaylistPicker] =
-    useState<PlaylistPickerState | null>(null);
+  const { openContextMenu, overlays: menuOverlays } = useMediaContextMenu({
+    onRefresh: refresh,
+  });
+  const { getPlayHandler, playOverlay } = usePlayAction();
+
+  // Map ratingKey → PlexMediaItem for hero slide play handler
+  const heroItemMap = useMemo(() => {
+    const map = new Map<string, PlexMediaItem>();
+    for (const item of onDeck) map.set(item.ratingKey, item);
+    for (const movie of recentMovies) map.set(movie.ratingKey, movie);
+    return map;
+  }, [onDeck, recentMovies]);
+
+  const handleHeroPlay = useCallback(
+    (ratingKey: string, e: React.MouseEvent) => {
+      const item = heroItemMap.get(ratingKey);
+      if (item) {
+        const handler = getPlayHandler(item);
+        if (handler) {
+          handler(e);
+        } else {
+          navigate(`/play/${ratingKey}`);
+        }
+      } else {
+        navigate(`/play/${ratingKey}`);
+      }
+    },
+    [heroItemMap, getPlayHandler, navigate],
+  );
+
+  // Dismissed recommendations
+  const [dismissedKeys, setDismissedKeys] = useState<Set<string>>(new Set());
+  const dismissedInitRef = useRef(false);
+
+  useEffect(() => {
+    if (dismissedInitRef.current) return;
+    dismissedInitRef.current = true;
+    getDismissedRecommendations().then((keys) => {
+      if (keys.length > 0) setDismissedKeys(new Set(keys));
+    });
+  }, []);
+
+  const handleDismissRecommendation = useCallback((ratingKey: string) => {
+    setDismissedKeys((prev) => {
+      const next = new Set(prev);
+      next.add(ratingKey);
+      saveDismissedRecommendations([...next]);
+      return next;
+    });
+  }, []);
 
   // Pull-to-refresh (mobile only)
   const containerRef = useRef<HTMLDivElement>(null);
@@ -212,87 +219,74 @@ function Dashboard() {
   const posterUrl = (thumb: string) =>
     getImageUrl(server.uri, server.accessToken, thumb, 300, 450);
 
-  const openContextMenu = useCallback(
-    (e: React.MouseEvent, item: PlexMediaItem, section: ContextMenuState["section"]) => {
-      setContextMenu({ position: { x: e.clientX, y: e.clientY }, item, section });
-    },
-    []
-  );
+  const backdropUrl = (art: string) =>
+    getImageUrl(server.uri, server.accessToken, art, 1920, 1080);
 
-  const buildMenuItems = useCallback(
-    (item: PlexMediaItem, section: ContextMenuState["section"]): ContextMenuItem[] => {
-      if (!server) return [];
-      const items: ContextMenuItem[] = [];
-      const hasView = (item as { viewCount?: number }).viewCount;
+  // Build hero slides: Continue Watching items + top-rated unwatched movies
+  const heroSlides: HeroSlide[] = (() => {
+    const slides: HeroSlide[] = [];
 
-      if (hasView) {
-        items.push({
-          label: "Mark as Unwatched",
-          onClick: async () => {
-            await markAsUnwatched(server.uri, server.accessToken, item.ratingKey);
-            refresh();
-          },
-        });
-      } else {
-        items.push({
-          label: "Mark as Watched",
-          onClick: async () => {
-            await markAsWatched(server.uri, server.accessToken, item.ratingKey);
-            refresh();
-          },
-        });
-      }
-
-      // "Remove from Continue Watching" = Mark as Watched (only in onDeck section)
-      if (section === "onDeck" && !hasView) {
-        items.push({
-          label: "Remove from Continue Watching",
-          onClick: async () => {
-            await markAsWatched(server.uri, server.accessToken, item.ratingKey);
-            refresh();
-          },
-        });
-      }
-
-      // Watch Together (movies & episodes only)
-      if (item.type === "movie" || item.type === "episode") {
-        items.push({
-          label: "Watch Together...",
-          dividerAbove: true,
-          onClick: () => {
-            setSessionCreator({
-              ratingKey: item.ratingKey,
-              title: item.type === "episode"
-                ? `${(item as PlexEpisode).grandparentTitle} - ${item.title}`
-                : item.title,
-              mediaType: item.type as "movie" | "episode",
-            });
-          },
-        });
-      }
-
-      // Add to Playlist (movies & episodes)
-      if (item.type === "movie" || item.type === "episode") {
-        items.push({
-          label: "Add to Playlist...",
-          onClick: () =>
-            setPlaylistPicker({
-              ratingKey: item.ratingKey,
-              title: item.title,
-            }),
-        });
-      }
-
-      items.push({
-        label: "Get Info",
-        dividerAbove: item.type !== "movie" && item.type !== "episode",
-        onClick: () => navigate(`/item/${item.ratingKey}`),
+    // Continue watching (first 5 — prefer backdrop art, fall back to poster thumb)
+    for (const item of onDeck) {
+      if (slides.length >= 5) break;
+      const isEpisode = item.type === "episode";
+      const ep = isEpisode ? (item as PlexEpisode) : null;
+      const art = ep?.grandparentArt || item.art || ep?.grandparentThumb || item.thumb;
+      if (!art) continue;
+      slides.push({
+        ratingKey: item.ratingKey,
+        title: ep?.grandparentTitle || item.title,
+        subtitle: ep
+          ? `S${String(ep.parentIndex).padStart(2, "0")}E${String(ep.index).padStart(2, "0")} · ${ep.title}`
+          : getSubtitle(item),
+        backdropUrl: backdropUrl(art),
+        summary: item.summary,
+        progress: getProgress(item),
+        rating: (item as unknown as { rating?: number }).rating,
+        category: "Continue Watching",
       });
+    }
 
-      return items;
-    },
-    [server, refresh, navigate]
-  );
+    // Top-rated unwatched movies (fill up to 10 total)
+    const unwatchedMovies = recentMovies
+      .filter((m) => !isWatched(m) && (m.art || m.thumb) && !dismissedKeys.has(m.ratingKey))
+      .sort((a, b) =>
+        ((b as unknown as { rating?: number }).rating ?? 0) -
+        ((a as unknown as { rating?: number }).rating ?? 0)
+      );
+    for (const movie of unwatchedMovies) {
+      if (slides.length >= 10) break;
+      slides.push({
+        ratingKey: movie.ratingKey,
+        title: movie.title,
+        subtitle: (movie as { year?: number }).year
+          ? String((movie as { year?: number }).year)
+          : undefined,
+        backdropUrl: backdropUrl((movie.art || movie.thumb)!),
+        summary: movie.summary,
+        rating: (movie as unknown as { rating?: number }).rating,
+        category: "Recommended for You",
+      });
+    }
+
+    return slides;
+  })();
+
+  /** Build onDeck-specific extra items (Remove from Continue Watching). */
+  const onDeckExtras = (item: PlexMediaItem) => {
+    if (!server) return [];
+    const hasView = (item as { viewCount?: number }).viewCount;
+    if (hasView) return [];
+    return [
+      {
+        label: "Remove from Continue Watching",
+        onClick: async () => {
+          await markAsWatched(server.uri, server.accessToken, item.ratingKey);
+          refresh();
+        },
+      },
+    ];
+  };
 
   if (error) {
     return (
@@ -341,6 +335,11 @@ function Dashboard() {
         </div>
       )}
 
+      {/* Hero slideshow */}
+      {!isLoading && heroSlides.length > 0 && (
+        <HeroSlideshow slides={heroSlides} onDismiss={handleDismissRecommendation} onPlay={handleHeroPlay} />
+      )}
+
       {/* Continue Watching */}
       {sections.continueWatching && (isLoading ? (
         <section style={styles.section}>
@@ -372,9 +371,10 @@ function Dashboard() {
                   progress={getProgress(item)}
                   width={posterWidth}
                   onClick={() => navigate(`/item/${item.ratingKey}`)}
+                  onPlay={getPlayHandler(item)}
                   showMoreButton
-                  onContextMenu={(e) => openContextMenu(e, item, "onDeck")}
-                  onMoreClick={(e) => openContextMenu(e, item, "onDeck")}
+                  onContextMenu={(e) => openContextMenu(e, item, onDeckExtras(item))}
+                  onMoreClick={(e) => openContextMenu(e, item, onDeckExtras(item))}
                 />
               );
             })}
@@ -404,9 +404,10 @@ function Dashboard() {
                 width={posterWidth}
                 watched={isWatched(item)}
                 onClick={() => navigate(`/item/${item.ratingKey}`)}
+                onPlay={getPlayHandler(item)}
                 showMoreButton
-                onContextMenu={(e) => openContextMenu(e, item, "movies")}
-                onMoreClick={(e) => openContextMenu(e, item, "movies")}
+                onContextMenu={(e) => openContextMenu(e, item)}
+                onMoreClick={(e) => openContextMenu(e, item)}
               />
             ))}
           </HorizontalRow>
@@ -442,8 +443,8 @@ function Dashboard() {
                     width={posterWidth}
                     badge={
                       group.episodeCount > 1
-                        ? `+${group.episodeCount}${getSeasonBadgeSuffix(group)}`
-                        : `NEW${getSeasonBadgeSuffix(group)}`
+                        ? `+${group.episodeCount}`
+                        : "NEW"
                     }
                     onClick={() => navigate(`/item/${group.groupKey}`)}
                     onExpand={
@@ -464,10 +465,10 @@ function Dashboard() {
                     isExpanded={isActive}
                     showMoreButton
                     onContextMenu={(e) =>
-                      openContextMenu(e, group.representativeItem, "shows")
+                      openContextMenu(e, group.representativeItem)
                     }
                     onMoreClick={(e) =>
-                      openContextMenu(e, group.representativeItem, "shows")
+                      openContextMenu(e, group.representativeItem)
                     }
                   />
                 </div>
@@ -511,33 +512,8 @@ function Dashboard() {
         />
       )}
 
-      {/* Context menu */}
-      {contextMenu && (
-        <ContextMenu
-          items={buildMenuItems(contextMenu.item, contextMenu.section)}
-          position={contextMenu.position}
-          onClose={() => setContextMenu(null)}
-        />
-      )}
-
-      {/* Watch Together session creator */}
-      {sessionCreator && (
-        <SessionCreator
-          ratingKey={sessionCreator.ratingKey}
-          title={sessionCreator.title}
-          mediaType={sessionCreator.mediaType}
-          onClose={() => setSessionCreator(null)}
-        />
-      )}
-
-      {/* Add to Playlist picker */}
-      {playlistPicker && (
-        <PlaylistPicker
-          ratingKey={playlistPicker.ratingKey}
-          title={playlistPicker.title}
-          onClose={() => setPlaylistPicker(null)}
-        />
-      )}
+      {menuOverlays}
+      {playOverlay}
     </div>
   );
 }

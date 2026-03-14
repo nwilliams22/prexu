@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "./useAuth";
+import { useServerActivity } from "./useServerActivity";
 import { getRecentlyAdded, getOnDeck } from "../services/plex-library";
 import { cacheGet, cacheSet, cacheInvalidate } from "../services/api-cache";
 import { groupRecentlyAdded } from "../utils/groupRecentlyAdded";
@@ -20,10 +21,12 @@ interface DashboardData {
   onDeck: PlexMediaItem[];
 }
 
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL = 60 * 60 * 1000; // 1 hour — long TTL so navigating back is instant
+const STALE_THRESHOLD = 2 * 60 * 1000; // 2 minutes — background refetch if older than this
 
 export function useDashboard(): UseDashboardResult {
   const { server } = useAuth();
+  const { completionCounter } = useServerActivity();
   const cacheKey = server ? `dashboard:${server.uri}` : "";
 
   const [recentMovies, setRecentMovies] = useState<PlexMediaItem[]>(() => {
@@ -41,55 +44,55 @@ export function useDashboard(): UseDashboardResult {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const hasLoadedOnce = useRef(false);
+  const prevServerUri = useRef(server?.uri);
+
+  // Reset on server switch so we show skeletons for the new server
+  if (server?.uri !== prevServerUri.current) {
+    prevServerUri.current = server?.uri;
+    hasLoadedOnce.current = false;
+  }
 
   const refresh = useCallback(() => {
     if (cacheKey) cacheInvalidate(cacheKey);
     setRefreshTrigger((n) => n + 1);
   }, [cacheKey]);
 
-  useEffect(() => {
-    if (!server) return;
-
-    // If cache is fresh, use it and skip fetch
-    const cached = cacheGet<DashboardData>(cacheKey);
-    if (cached) {
-      setRecentMovies(cached.recentMovies);
-      setRecentShows(cached.recentShows);
-      setOnDeck(cached.onDeck);
-      setIsLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-
-    (async () => {
-      setIsLoading(true);
+  // Fetch from Plex and update state + cache
+  const fetchDashboard = useCallback(
+    async (signal: { cancelled: boolean }, showSkeleton: boolean) => {
+      if (!server) return;
+      if (showSkeleton) setIsLoading(true);
       setError(null);
       try {
         const [recentItems, deckItems] = await Promise.all([
-          getRecentlyAdded(server.uri, server.accessToken, 25),
+          getRecentlyAdded(server.uri, server.accessToken, 50),
           getOnDeck(server.uri, server.accessToken),
         ]);
 
-        if (!cancelled) {
-          const movies = recentItems.filter((i) => i.type === "movie");
-          const tvItems = recentItems.filter(
-            (i) => i.type === "season" || i.type === "episode"
-          );
+        if (!signal.cancelled) {
+          const movies = recentItems
+            .filter((i) => i.type === "movie")
+            .sort((a, b) => b.addedAt - a.addedAt);
+          const tvItems = recentItems
+            .filter((i) => i.type === "season" || i.type === "episode")
+            .sort((a, b) => b.addedAt - a.addedAt);
           const shows = groupRecentlyAdded(tvItems);
 
           setRecentMovies(movies);
           setRecentShows(shows);
           setOnDeck(deckItems);
+          hasLoadedOnce.current = true;
 
-          cacheSet(cacheKey, {
-            recentMovies: movies,
-            recentShows: shows,
-            onDeck: deckItems,
-          }, CACHE_TTL, true);
+          cacheSet(
+            cacheKey,
+            { recentMovies: movies, recentShows: shows, onDeck: deckItems },
+            CACHE_TTL,
+            true
+          );
         }
       } catch (err) {
-        if (!cancelled) {
+        if (!signal.cancelled) {
           setError(
             err instanceof Error
               ? err.message
@@ -97,16 +100,66 @@ export function useDashboard(): UseDashboardResult {
           );
         }
       } finally {
-        if (!cancelled) {
-          setIsLoading(false);
-        }
+        if (!signal.cancelled) setIsLoading(false);
       }
-    })();
+    },
+    [server, cacheKey]
+  );
 
-    return () => {
-      cancelled = true;
+  useEffect(() => {
+    if (!server) return;
+
+    const cached = cacheGet<DashboardData>(cacheKey);
+    const signal = { cancelled: false };
+
+    if (cached) {
+      // Always show cached data immediately
+      setRecentMovies(cached.recentMovies);
+      setRecentShows(cached.recentShows);
+      setOnDeck(cached.onDeck);
+      setIsLoading(false);
+      hasLoadedOnce.current = true;
+
+      // Always silently refresh in the background so the order is up-to-date
+      // (e.g. after returning from the player, continue watching order changes)
+      fetchDashboard(signal, false);
+      return () => { signal.cancelled = true; };
+    }
+
+    // No cache — full load with skeleton
+    fetchDashboard(signal, !hasLoadedOnce.current);
+
+    return () => { signal.cancelled = true; };
+  }, [server, cacheKey, refreshTrigger, fetchDashboard]);
+
+  // Auto-refresh when a server activity completes (scan, metadata refresh)
+  const prevCompletion = useRef(completionCounter);
+  useEffect(() => {
+    if (completionCounter > prevCompletion.current) {
+      prevCompletion.current = completionCounter;
+      refresh();
+    }
+  }, [completionCounter, refresh]);
+
+  // Refresh stale data when the user navigates back to the dashboard
+  const lastFetchTime = useRef(Date.now());
+  useEffect(() => {
+    // Record when data was last fetched
+    if (!isLoading) lastFetchTime.current = Date.now();
+  }, [isLoading]);
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (
+        document.visibilityState === "visible" &&
+        Date.now() - lastFetchTime.current > STALE_THRESHOLD
+      ) {
+        refresh();
+      }
     };
-  }, [server, cacheKey, refreshTrigger]);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [refresh]);
 
   return { recentMovies, recentShows, onDeck, isLoading, error, refresh };
 }
