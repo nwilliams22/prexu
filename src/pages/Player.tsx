@@ -10,7 +10,7 @@ import { usePlayer } from "../hooks/usePlayer";
 import { useWatchTogether } from "../hooks/useWatchTogether";
 import { useAudioEnhancements } from "../hooks/useAudioEnhancements";
 import { usePreferences } from "../hooks/usePreferences";
-import { getItemMetadata, getNextEpisode } from "../services/plex-library";
+import { getItemMetadata, getNextEpisode, getPreviousEpisode } from "../services/plex-library";
 import PlayerControls from "../components/PlayerControls";
 import ParticipantOverlay from "../components/ParticipantOverlay";
 import SyncIndicator from "../components/SyncIndicator";
@@ -26,7 +26,12 @@ function Player() {
   const [searchParams] = useSearchParams();
   const { isAuthenticated, serverSelected } = useAuth();
   const navigate = useNavigate();
-  const player = usePlayer(ratingKey ?? "");
+
+  // Offset override — ?offset=0 means "play from beginning"
+  const offsetParam = searchParams.get("offset");
+  const offsetOverride = offsetParam != null ? Number(offsetParam) : null;
+
+  const player = usePlayer(ratingKey ?? "", offsetOverride);
 
   // Watch Together session from URL query params
   const sessionId = searchParams.get("session");
@@ -67,6 +72,11 @@ function Player() {
     [audioEnhancements, updatePreferences],
   );
 
+  // Sync main volume's above-1.0 boost to the audio graph's GainNode
+  useEffect(() => {
+    audioEnhancements.setMainBoost(Math.max(player.volume, 1));
+  }, [player.volume, audioEnhancements]);
+
   const [controlsVisible, setControlsVisible] = useState(true);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -101,6 +111,48 @@ function Player() {
       }
     })();
   }, [wt.isInSession, wt.isHost, server, ratingKey]);
+
+  // Episode navigation (prev/next) — works for solo and Watch Together
+  const [prevEpNav, setPrevEpNav] = useState<PlexEpisode | null>(null);
+  const [nextEpNav, setNextEpNav] = useState<PlexEpisode | null>(null);
+
+  useEffect(() => {
+    if (!server || !ratingKey || player.itemType !== "episode") {
+      setPrevEpNav(null);
+      setNextEpNav(null);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const item = await getItemMetadata<PlexMediaItem>(
+          server.uri,
+          server.accessToken,
+          ratingKey,
+        );
+        if (cancelled || item.type !== "episode") return;
+        const ep = item as PlexEpisode;
+        const [prev, next] = await Promise.all([
+          getPreviousEpisode(server.uri, server.accessToken, ep),
+          getNextEpisode(server.uri, server.accessToken, ep),
+        ]);
+        if (cancelled) return;
+        setPrevEpNav(prev);
+        setNextEpNav(next);
+      } catch {
+        // Non-critical
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [server, ratingKey, player.itemType]);
+
+  const handleNextEpisode = nextEpNav
+    ? () => navigate(`/player/${nextEpNav.ratingKey}`)
+    : undefined;
+  const handlePrevEpisode = prevEpNav
+    ? () => navigate(`/player/${prevEpNav.ratingKey}`)
+    : undefined;
 
   useEffect(() => {
     if (player.title) document.title = `${player.title} - Prexu`;
@@ -173,11 +225,32 @@ function Player() {
           break;
         case "ArrowLeft":
           e.preventDefault();
-          seek(Math.max(0, player.currentTime - 10));
+          if (e.shiftKey) {
+            // Chapter skip backward (or 30s fallback)
+            if (player.chapters.length > 0) {
+              const currentMs = player.currentTime * 1000;
+              const sorted = [...player.chapters].sort((a, b) => b.startTimeOffset - a.startTimeOffset);
+              const prev = sorted.find((c) => c.startTimeOffset < currentMs - 2000);
+              if (prev) { seek(prev.startTimeOffset / 1000); break; }
+            }
+            seek(Math.max(0, player.currentTime - 30));
+          } else {
+            seek(Math.max(0, player.currentTime - 10));
+          }
           break;
         case "ArrowRight":
           e.preventDefault();
-          seek(Math.min(player.duration, player.currentTime + 10));
+          if (e.shiftKey) {
+            // Chapter skip forward (or 30s fallback)
+            if (player.chapters.length > 0) {
+              const currentMs = player.currentTime * 1000;
+              const next = player.chapters.find((c) => c.startTimeOffset > currentMs + 1000);
+              if (next) { seek(next.startTimeOffset / 1000); break; }
+            }
+            seek(Math.min(player.duration, player.currentTime + 30));
+          } else {
+            seek(Math.min(player.duration, player.currentTime + 10));
+          }
           break;
         case "ArrowUp":
           e.preventDefault();
@@ -211,19 +284,27 @@ function Player() {
             volumeBoost: Math.min(5, audioEnhancements.volumeBoost + 0.25),
           });
           break;
-        case "n": {
-          const cycle: NormalizationPreset[] = ["off", "light", "night"];
-          const idx = cycle.indexOf(audioEnhancements.normalizationPreset);
-          const next = cycle[(idx + 1) % cycle.length];
-          handleAudioEnhancementChange({ normalizationPreset: next });
+        case "n":
+        case "N":
+          if (e.shiftKey) {
+            if (handleNextEpisode) handleNextEpisode();
+          } else {
+            const cycle: NormalizationPreset[] = ["off", "light", "night"];
+            const idx = cycle.indexOf(audioEnhancements.normalizationPreset);
+            const nextPreset = cycle[(idx + 1) % cycle.length];
+            handleAudioEnhancementChange({ normalizationPreset: nextPreset });
+          }
           break;
-        }
+        case "p":
+        case "P":
+          if (e.shiftKey && handlePrevEpisode) handlePrevEpisode();
+          break;
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [player, navigate, resetHideTimer, togglePlay, seek, audioEnhancements, handleAudioEnhancementChange]);
+  }, [player, navigate, resetHideTimer, togglePlay, seek, audioEnhancements, handleAudioEnhancementChange, handleNextEpisode, handlePrevEpisode]);
 
   const handleBack = useCallback(() => {
     navigate(-1);
@@ -246,7 +327,6 @@ function Player() {
         ref={player.videoRef}
         style={styles.video}
         playsInline
-        crossOrigin="anonymous"
         onClick={handleVideoClick}
       />
 
@@ -267,7 +347,14 @@ function Player() {
       {/* Error overlay */}
       {player.playbackError && (
         <div style={styles.errorOverlay}>
-          <p style={styles.errorText}>{player.playbackError}</p>
+          <p style={styles.errorText}>
+            {player.playbackError.split("\n")[0]}
+          </p>
+          {player.playbackError.includes("\n") && (
+            <pre style={styles.errorDetails}>
+              {player.playbackError.split("\n").slice(1).join("\n")}
+            </pre>
+          )}
           <div style={styles.errorButtons}>
             <button onClick={player.retry} style={styles.retryButton}>
               Retry
@@ -307,6 +394,11 @@ function Player() {
           player={player}
           onBack={handleBack}
           visible={controlsVisible}
+          chapters={player.chapters}
+          onSeek={seek}
+          onActivity={resetHideTimer}
+          onNextEpisode={handleNextEpisode}
+          onPrevEpisode={handlePrevEpisode}
           audioEnhancements={audioEnhancements}
           onAudioEnhancementChange={handleAudioEnhancementChange}
           syncIndicator={
@@ -374,6 +466,20 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "1rem",
     textAlign: "center",
     maxWidth: "400px",
+  },
+  errorDetails: {
+    color: "rgba(255,255,255,0.5)",
+    fontSize: "0.7rem",
+    fontFamily: "monospace",
+    textAlign: "left" as const,
+    maxWidth: "500px",
+    padding: "0.5rem 0.75rem",
+    background: "rgba(255,255,255,0.05)",
+    borderRadius: "6px",
+    whiteSpace: "pre-wrap" as const,
+    wordBreak: "break-all" as const,
+    maxHeight: "120px",
+    overflow: "auto",
   },
   errorButtons: {
     display: "flex",

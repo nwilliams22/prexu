@@ -454,7 +454,7 @@ describe("plex-playback — async functions", () => {
       expect(parsed.searchParams.get("subtitles")).toBe("burn");
     });
 
-    it("sets empty subtitles when no subtitle stream", async () => {
+    it("omits subtitles param when no subtitle stream", async () => {
       const url = await buildTranscodeUrl(
         "https://server:32400",
         "token",
@@ -462,7 +462,7 @@ describe("plex-playback — async functions", () => {
       );
 
       const parsed = new URL(url);
-      expect(parsed.searchParams.get("subtitles")).toBe("");
+      expect(parsed.searchParams.get("subtitles")).toBeNull();
     });
 
     it("applies custom subtitle size and audio boost", async () => {

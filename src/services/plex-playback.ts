@@ -9,20 +9,17 @@ import { createTauriLoaderClass } from "./tauri-loader";
 import type { PlexMediaInfo, PlexMediaPart, PlexStream } from "../types/library";
 
 /**
- * Build an hls.js config object that routes all requests through Tauri's
- * native HTTP plugin, bypassing WebView2 CORS restrictions entirely.
- *
- * WebView2 enforces CORS on requests from https://tauri.localhost to the
- * Plex server. The native HTTP plugin makes requests from Rust, so CORS
- * does not apply.
+ * Build hls.js config with a custom fetch-based loader.
+ * The loader uses window.fetch (intercepted by Tauri's HTTP plugin)
+ * which routes through Rust reqwest, bypassing CORS.
  */
 export function buildHlsConfig(
   serverToken: string,
   extraConfig?: Record<string, unknown>,
 ): Record<string, unknown> {
   return {
-    ...extraConfig,
     loader: createTauriLoaderClass(serverToken),
+    ...extraConfig,
   };
 }
 
@@ -91,6 +88,7 @@ export async function buildTranscodeUrl(
     QUALITY_PRESETS[options?.quality ?? "1080p"] ?? QUALITY_PRESETS["1080p"];
 
   const params = new URLSearchParams({
+    hasMDE: "1",
     path: `/library/metadata/${ratingKey}`,
     mediaIndex: "0",
     partIndex: "0",
@@ -104,9 +102,14 @@ export async function buildTranscodeUrl(
     maxVideoBitrate: String(preset.bitrate),
     subtitleSize: String(options?.subtitleSize ?? 100),
     audioBoost: String(options?.audioBoost ?? 100),
+    location: "lan",
+    autoAdjustQuality: "0",
+    directPlayAllowed: "1",
     "X-Plex-Session-Identifier": sessionId,
+    session: sessionId,
     "X-Plex-Client-Identifier": clientId,
     "X-Plex-Product": "Prexu",
+    "X-Plex-Platform": "Web",
     "X-Plex-Token": serverToken,
   });
 
@@ -121,8 +124,6 @@ export async function buildTranscodeUrl(
   if (options?.subtitleStreamId !== undefined) {
     params.set("subtitleStreamID", String(options.subtitleStreamId));
     params.set("subtitles", "burn");
-  } else {
-    params.set("subtitles", "");
   }
 
   // Client profile: tell Plex we accept H264+AAC in HLS/MPEGTS
@@ -234,7 +235,7 @@ export function getSavedVolume(): number {
     const raw = localStorage.getItem(VOLUME_KEY);
     if (raw !== null) {
       const vol = parseFloat(raw);
-      if (!isNaN(vol) && vol >= 0 && vol <= 1) return vol;
+      if (!isNaN(vol) && vol >= 0 && vol <= 2) return vol;
     }
   } catch {
     // Ignore

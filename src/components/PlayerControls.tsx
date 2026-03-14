@@ -3,11 +3,13 @@
  * fullscreen, and track selection buttons.
  */
 
-import { useState, useRef } from "react";
+import { useState, useRef, useCallback } from "react";
 import type { UsePlayerResult } from "../hooks/usePlayer";
 import type { AudioEnhancementsResult } from "../hooks/useAudioEnhancements";
 import type { NormalizationPreset } from "../types/preferences";
+import type { PlexChapter } from "../types/library";
 import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
+import { useHoldToSkip } from "../hooks/useHoldToSkip";
 import TrackMenu from "./TrackMenu";
 import AudioEnhancementsPanel from "./AudioEnhancementsPanel";
 
@@ -16,6 +18,12 @@ interface PlayerControlsProps {
   onBack: () => void;
   visible: boolean;
   syncIndicator?: React.ReactNode;
+  chapters?: PlexChapter[];
+  onSeek?: (time: number) => void;
+  /** Called on any user interaction to keep controls visible */
+  onActivity?: () => void;
+  onNextEpisode?: () => void;
+  onPrevEpisode?: () => void;
   audioEnhancements?: AudioEnhancementsResult;
   onAudioEnhancementChange?: (changes: {
     volumeBoost?: number;
@@ -34,7 +42,25 @@ function formatTime(seconds: number): string {
   return `${m}:${String(sec).padStart(2, "0")}`;
 }
 
-function PlayerControls({ player, onBack, visible, syncIndicator, audioEnhancements, onAudioEnhancementChange }: PlayerControlsProps) {
+/** Format duration as "Xh Ymin" for the title area */
+function formatDurationLabel(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h > 0) return `${h}h ${m}min`;
+  return `${m}min`;
+}
+
+/** Compute the "Ends at" time string, accounting for remaining time from now */
+function getEndsAt(currentTime: number, duration: number): string {
+  const remaining = Math.max(0, duration - currentTime);
+  const end = new Date(Date.now() + remaining * 1000);
+  return end.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+const SKIP_SECONDS = 10;
+
+function PlayerControls({ player, onBack, visible, syncIndicator, chapters, onSeek, onActivity, onNextEpisode, onPrevEpisode, audioEnhancements, onAudioEnhancementChange }: PlayerControlsProps) {
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
   const seekBarRef = useRef<HTMLDivElement>(null);
@@ -45,6 +71,71 @@ function PlayerControls({ player, onBack, visible, syncIndicator, audioEnhanceme
   const [subtitleMenuOpen, setSubtitleMenuOpen] = useState(false);
   const [audioMenuOpen, setAudioMenuOpen] = useState(false);
   const [enhancementsOpen, setEnhancementsOpen] = useState(false);
+  const [skipIndicator, setSkipIndicator] = useState<string | null>(null);
+  const skipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Use WT-aware seek when provided, otherwise fall back to player.seek
+  const seekFn = onSeek ?? player.seek;
+
+  // Refs for latest values so hold-to-skip callbacks always read current state
+  const seekFnRef = useRef(seekFn);
+  seekFnRef.current = seekFn;
+  const currentTimeRef = useRef(player.currentTime);
+  currentTimeRef.current = player.currentTime;
+  const durationRef = useRef(player.duration);
+  durationRef.current = player.duration;
+
+  const showSkipIndicator = useCallback((label: string) => {
+    if (skipTimerRef.current) clearTimeout(skipTimerRef.current);
+    setSkipIndicator(label);
+    skipTimerRef.current = setTimeout(() => setSkipIndicator(null), 600);
+    onActivity?.();
+  }, [onActivity]);
+
+  // Hold-to-accelerate skip hooks — use refs so each tick reads the latest position
+  const skipBackward = useHoldToSkip({
+    direction: "backward",
+    onSkip: useCallback((seconds: number) => {
+      seekFnRef.current(Math.max(0, currentTimeRef.current - seconds));
+    }, []),
+    onSkipLabel: showSkipIndicator,
+  });
+
+  const skipForward = useHoldToSkip({
+    direction: "forward",
+    onSkip: useCallback((seconds: number) => {
+      seekFnRef.current(Math.min(durationRef.current, currentTimeRef.current + seconds));
+    }, []),
+    onSkipLabel: showSkipIndicator,
+  });
+
+  // Chapter skip (or 30s fallback)
+  const handleChapterSkip = useCallback((direction: "next" | "prev") => {
+    if (chapters && chapters.length > 0) {
+      const currentMs = player.currentTime * 1000;
+      if (direction === "next") {
+        const next = chapters.find((c) => c.startTimeOffset > currentMs + 1000);
+        if (next) {
+          seekFn(next.startTimeOffset / 1000);
+          showSkipIndicator(next.tag);
+          return;
+        }
+      } else {
+        const sorted = [...chapters].sort((a, b) => b.startTimeOffset - a.startTimeOffset);
+        const prev = sorted.find((c) => c.startTimeOffset < currentMs - 2000);
+        if (prev) {
+          seekFn(prev.startTimeOffset / 1000);
+          showSkipIndicator(prev.tag);
+          return;
+        }
+      }
+    }
+    // Fallback: 30s skip
+    const delta = direction === "next" ? 30 : -30;
+    const target = Math.max(0, Math.min(player.duration, player.currentTime + delta));
+    seekFn(target);
+    showSkipIndicator(direction === "next" ? "+30" : "-30");
+  }, [chapters, player.currentTime, player.duration, seekFn, showSkipIndicator]);
 
   const progressPercent =
     player.duration > 0 ? (player.currentTime / player.duration) * 100 : 0;
@@ -67,14 +158,15 @@ function PlayerControls({ player, onBack, visible, syncIndicator, audioEnhanceme
   const handleSeekMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
     setIsDragging(true);
+    onActivity?.();
     const time = getSeekTime(e.clientX);
-    player.seek(time);
+    seekFn(time);
 
     const handleMouseMove = (ev: MouseEvent) => {
-      player.seek(getSeekTime(ev.clientX));
+      seekFn(getSeekTime(ev.clientX));
     };
     const handleMouseUp = (ev: MouseEvent) => {
-      player.seek(getSeekTime(ev.clientX));
+      seekFn(getSeekTime(ev.clientX));
       setIsDragging(false);
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
@@ -97,12 +189,13 @@ function PlayerControls({ player, onBack, visible, syncIndicator, audioEnhanceme
   const handleTouchStart = (e: React.TouchEvent) => {
     e.preventDefault();
     setIsDragging(true);
-    player.seek(getSeekTime(e.touches[0].clientX));
+    onActivity?.();
+    seekFn(getSeekTime(e.touches[0].clientX));
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
     if (!isDragging) return;
-    player.seek(getSeekTime(e.touches[0].clientX));
+    seekFn(getSeekTime(e.touches[0].clientX));
   };
 
   const handleTouchEnd = () => {
@@ -136,18 +229,31 @@ function PlayerControls({ player, onBack, visible, syncIndicator, audioEnhanceme
         </button>
         <div style={styles.titleArea}>
           <span style={styles.titleText}>{player.title}</span>
-          {player.subtitle && (
-            <span style={styles.subtitleText}>{player.subtitle}</span>
-          )}
+          <span style={styles.subtitleText}>
+            {player.duration > 0 && formatDurationLabel(player.duration)}
+            {player.subtitle && player.duration > 0 && " · "}
+            {player.subtitle}
+          </span>
         </div>
       </div>
+
+      {/* Skip indicator overlay */}
+      {skipIndicator && (
+        <div style={styles.skipOverlay} key={skipIndicator + Date.now()}>
+          <span style={skipIndicator.length > 5 ? styles.skipOverlayChapter : styles.skipOverlayText}>
+            {skipIndicator}
+          </span>
+        </div>
+      )}
 
       {/* Bottom controls */}
       <div style={{
         ...styles.bottomArea,
         pointerEvents: visible || isDragging ? "auto" : "none",
       }}>
-        {/* Seek bar */}
+        {/* Seek bar with time labels */}
+        <div style={styles.seekRow}>
+        <span style={styles.seekTimeLabel}>{formatTime(player.currentTime)}</span>
         <div
           ref={seekBarRef}
           role="slider"
@@ -202,11 +308,76 @@ function PlayerControls({ player, onBack, visible, syncIndicator, audioEnhanceme
             </div>
           )}
         </div>
+        <div style={styles.seekTimeRight}>
+          <span style={styles.seekTimeLabel}>
+            -{formatTime(player.duration - player.currentTime)}
+          </span>
+          {player.duration > 0 && (
+            <span style={styles.endsAt}>
+              Ends {getEndsAt(player.currentTime, player.duration)}
+            </span>
+          )}
+        </div>
+        </div>
 
         {/* Controls row */}
         <div style={styles.controlsRow}>
-          {/* Left controls */}
-          <div style={styles.controlsLeft}>
+          {/* Left controls — transport */}
+          <div style={{
+            ...styles.controlsLeft,
+            ...(mobile ? { gap: "0.25rem" } : {}),
+          }}>
+            {/* Previous episode */}
+            {onPrevEpisode && (
+              <button
+                onClick={onPrevEpisode}
+                style={{
+                  ...styles.controlButton,
+                  ...(mobile ? { padding: "0.5rem" } : {}),
+                }}
+                aria-label="Previous episode"
+              >
+                <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="currentColor">
+                  <rect x={4} y={5} width={3} height={14} rx={0.5} />
+                  <polygon points="18,5 9,12 18,19" />
+                </svg>
+              </button>
+            )}
+
+            {/* Chapter back / 30s */}
+            <button
+              onClick={() => handleChapterSkip("prev")}
+              style={{
+                ...styles.controlButton,
+                ...(mobile ? { padding: "0.5rem" } : {}),
+              }}
+              aria-label={chapters && chapters.length > 0 ? "Previous chapter" : "Rewind 30 seconds"}
+            >
+              <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="11 17 6 12 11 7" />
+                <polyline points="18 17 13 12 18 7" />
+              </svg>
+            </button>
+
+            {/* 10s back — hold to accelerate */}
+            <button
+              onPointerDown={skipBackward.onPointerDown}
+              onPointerUp={skipBackward.onPointerUp}
+              onPointerLeave={skipBackward.onPointerUp}
+              onContextMenu={(e) => e.preventDefault()}
+              style={{
+                ...styles.controlButton,
+                ...(mobile ? { padding: "0.5rem" } : {}),
+              }}
+              aria-label={`Rewind ${SKIP_SECONDS} seconds`}
+            >
+              <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round">
+                <path d="M4 12a8 8 0 1 1 2.3 5.7" />
+                <polyline points="4 8 4 12 8 12" />
+                <text x="12" y="14.5" textAnchor="middle" fontSize="7" fontWeight="700" fill="currentColor" stroke="none">10</text>
+              </svg>
+            </button>
+
             {/* Play / Pause */}
             <button
               onClick={player.togglePlay}
@@ -227,6 +398,57 @@ function PlayerControls({ player, onBack, visible, syncIndicator, audioEnhanceme
                 </svg>
               )}
             </button>
+
+            {/* 10s forward — hold to accelerate */}
+            <button
+              onPointerDown={skipForward.onPointerDown}
+              onPointerUp={skipForward.onPointerUp}
+              onPointerLeave={skipForward.onPointerUp}
+              onContextMenu={(e) => e.preventDefault()}
+              style={{
+                ...styles.controlButton,
+                ...(mobile ? { padding: "0.5rem" } : {}),
+              }}
+              aria-label={`Forward ${SKIP_SECONDS} seconds`}
+            >
+              <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round">
+                <path d="M20 12a8 8 0 1 0-2.3 5.7" />
+                <polyline points="20 8 20 12 16 12" />
+                <text x="12" y="14.5" textAnchor="middle" fontSize="7" fontWeight="700" fill="currentColor" stroke="none">10</text>
+              </svg>
+            </button>
+
+            {/* Chapter forward / 30s */}
+            <button
+              onClick={() => handleChapterSkip("next")}
+              style={{
+                ...styles.controlButton,
+                ...(mobile ? { padding: "0.5rem" } : {}),
+              }}
+              aria-label={chapters && chapters.length > 0 ? "Next chapter" : "Forward 30 seconds"}
+            >
+              <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="13 17 18 12 13 7" />
+                <polyline points="6 17 11 12 6 7" />
+              </svg>
+            </button>
+
+            {/* Next episode */}
+            {onNextEpisode && (
+              <button
+                onClick={onNextEpisode}
+                style={{
+                  ...styles.controlButton,
+                  ...(mobile ? { padding: "0.5rem" } : {}),
+                }}
+                aria-label="Next episode"
+              >
+                <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="currentColor">
+                  <polygon points="6,5 15,12 6,19" />
+                  <rect x={17} y={5} width={3} height={14} rx={0.5} />
+                </svg>
+              </button>
+            )}
 
             {/* Volume — hidden on mobile (hardware volume used instead) */}
             {!mobile && (
@@ -253,6 +475,9 @@ function PlayerControls({ player, onBack, visible, syncIndicator, audioEnhanceme
                     {player.volume > 0.5 && (
                       <path d="M19.07 4.93a10 10 0 010 14.14" />
                     )}
+                    {player.volume > 1 && (
+                      <path d="M21.07 2.93a14 14 0 010 18.14" stroke="var(--accent)" strokeWidth={1.5} />
+                    )}
                   </svg>
                 )}
               </button>
@@ -262,7 +487,7 @@ function PlayerControls({ player, onBack, visible, syncIndicator, audioEnhanceme
                     type="range"
                     aria-label="Volume"
                     min={0}
-                    max={1}
+                    max={2}
                     step={0.05}
                     value={player.isMuted ? 0 : player.volume}
                     onChange={(e) => player.setVolume(parseFloat(e.target.value))}
@@ -273,10 +498,6 @@ function PlayerControls({ player, onBack, visible, syncIndicator, audioEnhanceme
             </div>
             )}
 
-            {/* Time display */}
-            <span style={styles.timeDisplay}>
-              {formatTime(player.currentTime)} / {formatTime(player.duration)}
-            </span>
           </div>
 
           {/* Right controls */}
@@ -284,50 +505,48 @@ function PlayerControls({ player, onBack, visible, syncIndicator, audioEnhanceme
             {/* Watch Together sync indicator */}
             {syncIndicator}
 
-            {/* Subtitle button */}
-            {player.subtitleTracks.length > 0 && (
-              <button
-                onClick={() => {
-                  setSubtitleMenuOpen((o) => !o);
-                  setAudioMenuOpen(false);
-                }}
-                style={{
-                  ...styles.controlButton,
-                  ...(player.selectedSubtitleId !== null
-                    ? { color: "var(--accent)" }
-                    : {}),
-                }}
-                aria-label="Subtitles"
-              >
-                <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                  <rect x={2} y={4} width={20} height={16} rx={2} />
-                  <line x1={6} y1={12} x2={10} y2={12} />
-                  <line x1={14} y1={12} x2={18} y2={12} />
-                  <line x1={6} y1={16} x2={18} y2={16} />
-                </svg>
-              </button>
-            )}
+            {/* Subtitle button — always visible */}
+            <button
+              onClick={() => {
+                setSubtitleMenuOpen((o) => !o);
+                setAudioMenuOpen(false);
+                setEnhancementsOpen(false);
+              }}
+              style={{
+                ...styles.controlButton,
+                ...(player.selectedSubtitleId !== null
+                  ? { color: "var(--accent)" }
+                  : {}),
+              }}
+              aria-label="Subtitles"
+            >
+              <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <rect x={2} y={4} width={20} height={16} rx={2} />
+                <line x1={6} y1={12} x2={10} y2={12} />
+                <line x1={14} y1={12} x2={18} y2={12} />
+                <line x1={6} y1={16} x2={18} y2={16} />
+              </svg>
+            </button>
 
-            {/* Audio button */}
-            {player.audioTracks.length > 1 && (
-              <button
-                onClick={() => {
-                  setAudioMenuOpen((o) => !o);
-                  setSubtitleMenuOpen(false);
-                }}
-                style={{
-                  ...styles.controlButton,
-                  ...(mobile ? { padding: "0.5rem" } : {}),
-                }}
-                aria-label="Audio"
-              >
-                <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                  <path d="M9 18V5l12-2v13" />
-                  <circle cx={6} cy={18} r={3} />
-                  <circle cx={18} cy={16} r={3} />
-                </svg>
-              </button>
-            )}
+            {/* Audio button — always visible */}
+            <button
+              onClick={() => {
+                setAudioMenuOpen((o) => !o);
+                setSubtitleMenuOpen(false);
+                setEnhancementsOpen(false);
+              }}
+              style={{
+                ...styles.controlButton,
+                ...(mobile ? { padding: "0.5rem" } : {}),
+              }}
+              aria-label="Audio"
+            >
+              <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path d="M9 18V5l12-2v13" />
+                <circle cx={6} cy={18} r={3} />
+                <circle cx={18} cy={16} r={3} />
+              </svg>
+            </button>
 
             {/* Audio Enhancements */}
             {audioEnhancements && !mobile && (
@@ -346,10 +565,14 @@ function PlayerControls({ player, onBack, visible, syncIndicator, audioEnhanceme
                 }}
                 aria-label="Audio enhancements"
               >
-                <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true">
-                  <rect x={4} y={2} width={3} height={20} rx={1} />
-                  <rect x={10.5} y={6} width={3} height={12} rx={1} />
-                  <rect x={17} y={4} width={3} height={16} rx={1} />
+                <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" aria-hidden="true">
+                  {/* Sliders/mixer icon — 3 vertical tracks with knobs */}
+                  <line x1={5} y1={3} x2={5} y2={21} />
+                  <circle cx={5} cy={14} r={2.5} fill="currentColor" />
+                  <line x1={12} y1={3} x2={12} y2={21} />
+                  <circle cx={12} cy={8} r={2.5} fill="currentColor" />
+                  <line x1={19} y1={3} x2={19} y2={21} />
+                  <circle cx={19} cy={16} r={2.5} fill="currentColor" />
                 </svg>
               </button>
             )}
@@ -390,7 +613,8 @@ function PlayerControls({ player, onBack, visible, syncIndicator, audioEnhanceme
           tracks={player.subtitleTracks}
           selectedId={player.selectedSubtitleId}
           onSelect={player.selectSubtitleTrack}
-          allowNone
+          allowNone={player.subtitleTracks.length > 0}
+          emptyMessage="No subtitle tracks available"
           onClose={() => setSubtitleMenuOpen(false)}
         />
       )}
@@ -403,6 +627,7 @@ function PlayerControls({ player, onBack, visible, syncIndicator, audioEnhanceme
           onSelect={(id) => {
             if (id !== null) player.selectAudioTrack(id);
           }}
+          emptyMessage="No other audio tracks available"
           onClose={() => setAudioMenuOpen(false)}
         />
       )}
@@ -479,7 +704,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     cursor: "pointer",
-    marginBottom: "0.5rem",
+    flex: 1,
   },
   seekBarBuffered: {
     position: "absolute",
@@ -551,12 +776,57 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "center",
     borderRadius: "4px",
   },
-  timeDisplay: {
-    color: "rgba(255,255,255,0.9)",
-    fontSize: "0.85rem",
+  endsAt: {
+    color: "rgba(255,255,255,0.5)",
+    fontSize: "0.75rem",
     fontVariantNumeric: "tabular-nums",
-    marginLeft: "0.25rem",
     whiteSpace: "nowrap",
+  },
+  seekTimeRight: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: "0.1rem",
+    minWidth: "3.5rem",
+  },
+  skipOverlay: {
+    position: "absolute",
+    top: "50%",
+    left: "50%",
+    transform: "translate(-50%, -50%)",
+    zIndex: 20,
+    pointerEvents: "none",
+  },
+  skipOverlayText: {
+    fontSize: "3rem",
+    fontWeight: 700,
+    color: "rgba(255,255,255,0.85)",
+    textShadow: "0 2px 12px rgba(0,0,0,0.6)",
+    fontVariantNumeric: "tabular-nums",
+  },
+  skipOverlayChapter: {
+    fontSize: "1.5rem",
+    fontWeight: 600,
+    color: "rgba(255,255,255,0.9)",
+    textShadow: "0 2px 12px rgba(0,0,0,0.6)",
+    background: "rgba(0,0,0,0.5)",
+    padding: "0.35rem 1rem",
+    borderRadius: "8px",
+    whiteSpace: "nowrap" as const,
+  },
+  seekRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.75rem",
+    marginBottom: "0.5rem",
+  },
+  seekTimeLabel: {
+    color: "rgba(255,255,255,0.85)",
+    fontSize: "0.8rem",
+    fontVariantNumeric: "tabular-nums",
+    whiteSpace: "nowrap",
+    minWidth: "3.5rem",
+    textAlign: "center",
   },
 
   // Volume

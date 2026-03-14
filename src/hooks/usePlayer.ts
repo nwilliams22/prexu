@@ -24,6 +24,7 @@ import type {
   PlexMovie,
   PlexEpisode,
   PlexStream,
+  PlexChapter,
 } from "../types/library";
 
 const TIMELINE_INTERVAL_MS = 10_000;
@@ -48,6 +49,10 @@ export interface UsePlayerResult {
   isFullscreen: boolean;
   playbackError: string | null;
 
+  // Media info
+  chapters: PlexChapter[];
+  itemType: string;
+
   // Stream info
   audioTracks: PlexStream[];
   subtitleTracks: PlexStream[];
@@ -65,7 +70,7 @@ export interface UsePlayerResult {
   retry: () => void;
 }
 
-export function usePlayer(ratingKey: string): UsePlayerResult {
+export function usePlayer(ratingKey: string, offsetOverride?: number | null): UsePlayerResult {
   const { server } = useAuth();
   const { preferences } = usePreferences();
   const prefsRef = useRef(preferences);
@@ -92,6 +97,10 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
 
+  // Media info
+  const [chapters, setChapters] = useState<PlexChapter[]>([]);
+  const [itemType, setItemType] = useState("");
+
   // Streams
   const [audioTracks, setAudioTracks] = useState<PlexStream[]>([]);
   const [subtitleTracks, setSubtitleTracks] = useState<PlexStream[]>([]);
@@ -99,6 +108,9 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
   const [selectedSubtitleId, setSelectedSubtitleId] = useState<number | null>(
     null
   );
+
+  // Track direct play failure so we can auto-retry with transcoding
+  const directPlayFailedRef = useRef(false);
 
   // Internal refs for timeline reporting
   const currentTimeRef = useRef(0);
@@ -199,6 +211,10 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
 
       const part = media.Part[0];
 
+      // Store chapters and item type
+      setChapters(part.Chapter ?? []);
+      setItemType(item.type);
+
       // Categorize streams
       const streams = categorizeStreams(part);
       setAudioTracks(streams.audio);
@@ -230,22 +246,23 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
       }
       setSelectedSubtitleId(defaultSub?.id ?? null);
 
-      // Get resume position
-      const viewOffset = playableItem.viewOffset ?? 0;
+      // Get resume position — offsetOverride takes precedence when explicitly set
+      const viewOffset = offsetOverride != null ? offsetOverride : (playableItem.viewOffset ?? 0);
 
       const video = videoRef.current;
       if (!video) return;
 
-      // Set volume
-      video.volume = volume;
+      // Set volume (cap native at 1; above-1 boost handled by GainNode)
+      video.volume = Math.min(volume, 1);
       video.muted = isMuted;
 
       // Direct play decision based on preferences
       const shouldDirectPlay =
-        pb.directPlayPreference === "always" ||
+        !directPlayFailedRef.current &&
+        (pb.directPlayPreference === "always" ||
         (pb.directPlayPreference === "auto" &&
-          (pb.quality === "original" || canDirectPlay(media)));
-      const forceTranscode = pb.directPlayPreference === "never";
+          (pb.quality === "original" || canDirectPlay(media))));
+      const forceTranscode = pb.directPlayPreference === "never" || directPlayFailedRef.current;
 
       if (shouldDirectPlay && !forceTranscode && canDirectPlay(media)) {
         // Direct Play — native <video>
@@ -306,18 +323,48 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
           });
         });
 
+        let mediaRecoveryAttempts = 0;
         hls.on(Hls.Events.ERROR, (_event, data) => {
+          // Log ALL errors (not just fatal) for diagnostics
+          const details = [
+            `fatal: ${data.fatal}`,
+            `type: ${data.type}`,
+            `details: ${data.details}`,
+            data.url ? `url: ${data.url.substring(0, 80)}` : null,
+            data.response ? `response: ${JSON.stringify({
+              code: data.response.code,
+              text: data.response.text,
+            })}` : null,
+            data.error ? `error: ${data.error.message ?? data.error}` : null,
+            data.reason ? `reason: ${data.reason}` : null,
+          ]
+            .filter(Boolean)
+            .join("\n");
+
+          console.warn(`[HLS Error] ${data.fatal ? "FATAL" : "non-fatal"}`, details);
+
           if (data.fatal) {
             switch (data.type) {
               case Hls.ErrorTypes.NETWORK_ERROR:
-                setPlaybackError("Network error — could not load stream");
+                setPlaybackError(
+                  `Network error — could not load stream\n${details}`
+                );
                 break;
               case Hls.ErrorTypes.MEDIA_ERROR:
-                // Try to recover
-                hls.recoverMediaError();
+                if (mediaRecoveryAttempts < 2) {
+                  mediaRecoveryAttempts++;
+                  console.warn(`[HLS] Recovering from media error (attempt ${mediaRecoveryAttempts})`);
+                  hls.recoverMediaError();
+                } else {
+                  setPlaybackError(
+                    `Media error — could not decode stream\n${details}`
+                  );
+                }
                 break;
               default:
-                setPlaybackError("Playback error — stream could not be loaded");
+                setPlaybackError(
+                  `Playback error — stream could not be loaded\n${details}`
+                );
                 hls.destroy();
                 break;
             }
@@ -339,6 +386,7 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
   }, [
     server,
     ratingKey,
+    offsetOverride,
     volume,
     isMuted,
     destroyHls,
@@ -346,8 +394,9 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
     startTimeline,
   ]);
 
-  // Init on mount
+  // Init on mount / when ratingKey changes
   useEffect(() => {
+    directPlayFailedRef.current = false;
     initPlayback();
     return () => {
       destroyHls();
@@ -403,6 +452,12 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
     };
     const onError = () => {
       if (video.error) {
+        // If direct play failed, automatically retry with transcoding
+        if (!directPlayFailedRef.current && !hlsRef.current) {
+          directPlayFailedRef.current = true;
+          initPlayback();
+          return;
+        }
         setPlaybackError(`Video error: ${video.error.message || "Unknown error"}`);
       }
     };
@@ -453,19 +508,81 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
     }
   }, []);
 
-  const seek = useCallback((time: number) => {
-    const video = videoRef.current;
-    if (!video) return;
-    video.currentTime = Math.max(0, Math.min(time, video.duration || 0));
-  }, []);
+  const seek = useCallback(
+    async (time: number) => {
+      const video = videoRef.current;
+      if (!video) return;
+      const clampedTime = Math.max(0, Math.min(time, video.duration || 0));
+
+      // For HLS transcode, rebuild the transcode session at the new offset
+      // so the server generates segments starting from the seek point.
+      // Small seeks within the existing buffer can use simple currentTime assignment.
+      if (hlsRef.current && HlsCtorRef.current && server) {
+        const bufferedEnd = video.buffered.length > 0
+          ? video.buffered.end(video.buffered.length - 1)
+          : 0;
+        const isWithinBuffer = clampedTime >= (video.buffered.length > 0 ? video.buffered.start(0) : 0)
+          && clampedTime <= bufferedEnd;
+
+        if (!isWithinBuffer) {
+          const Hls = HlsCtorRef.current;
+          const savedPlaying = !video.paused;
+          destroyHls();
+          setIsBuffering(true);
+
+          const pb = prefsRef.current.playback;
+          const url = await buildTranscodeUrl(
+            server.uri,
+            server.accessToken,
+            ratingKey,
+            {
+              offset: Math.round(clampedTime * 1000),
+              audioStreamId: selectedAudioId ?? undefined,
+              subtitleStreamId: selectedSubtitleId ?? undefined,
+              quality: pb.quality,
+              subtitleSize: pb.subtitleSize,
+              audioBoost: pb.audioBoost,
+            }
+          );
+
+          const hlsConfig = buildHlsConfig(server.accessToken, {
+            maxBufferLength: 30,
+            startPosition: clampedTime,
+          });
+          const hls = new Hls(hlsConfig);
+
+          hls.loadSource(url);
+          hls.attachMedia(video);
+          hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            if (savedPlaying) {
+              video.play().catch(() => {});
+            }
+          });
+          hls.on(Hls.Events.ERROR, (_event, data) => {
+            if (data.fatal && data.type !== Hls.ErrorTypes.MEDIA_ERROR) {
+              setPlaybackError("Seek failed — try again");
+            }
+          });
+
+          hlsRef.current = hls;
+          return;
+        }
+      }
+
+      // Direct play or within-buffer HLS: simple seek
+      video.currentTime = clampedTime;
+    },
+    [server, ratingKey, selectedAudioId, selectedSubtitleId, destroyHls]
+  );
 
   const setVolume = useCallback((vol: number) => {
-    const clamped = Math.max(0, Math.min(1, vol));
+    const clamped = Math.max(0, Math.min(2, vol));
     setVolumeState(clamped);
     saveVolume(clamped);
     const video = videoRef.current;
     if (video) {
-      video.volume = clamped;
+      // 0-100%: native volume handles it. Above 100%: cap native at 1, GainNode handles the rest.
+      video.volume = Math.min(clamped, 1);
       if (clamped > 0 && video.muted) {
         video.muted = false;
         setIsMuted(false);
@@ -589,6 +706,7 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
   );
 
   const retry = useCallback(() => {
+    directPlayFailedRef.current = false;
     setPlaybackError(null);
     initPlayback();
   }, [initPlayback]);
@@ -597,6 +715,8 @@ export function usePlayer(ratingKey: string): UsePlayerResult {
     videoRef,
     title,
     subtitle,
+    chapters,
+    itemType,
     isLoading,
     isPlaying,
     isBuffering,

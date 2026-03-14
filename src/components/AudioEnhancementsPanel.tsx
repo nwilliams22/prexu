@@ -48,16 +48,29 @@ function AudioEnhancementsPanel({
       >
         <h3 style={styles.title}>Audio Enhancements</h3>
 
-        {/* Volume Boost */}
+        {/* Gain */}
         <div style={styles.section}>
-          <label style={styles.sectionLabel}>
-            Volume Boost: {Math.round(enhancements.volumeBoost * 100)}%
-          </label>
+          <div style={styles.offsetHeader}>
+            <label style={styles.sectionLabel}>
+              Gain: {Math.round(enhancements.volumeBoost * 100)}%
+            </label>
+            {enhancements.volumeBoost !== 1 && (
+              <button
+                style={styles.resetButton}
+                onClick={() => {
+                  enhancements.setVolumeBoost(1);
+                  onPersist({ volumeBoost: 1 });
+                }}
+              >
+                Reset
+              </button>
+            )}
+          </div>
           <input
             type="range"
-            aria-label="Volume boost"
-            min={1}
-            max={5}
+            aria-label="Audio gain"
+            min={0.25}
+            max={3}
             step={0.25}
             value={enhancements.volumeBoost}
             onChange={(e) => {
@@ -68,10 +81,13 @@ function AudioEnhancementsPanel({
             style={styles.slider}
           />
           <div style={styles.sliderLabels}>
+            <span>25%</span>
             <span>100%</span>
             <span>300%</span>
-            <span>500%</span>
           </div>
+          <p style={styles.hint}>
+            Reduce or amplify audio beyond the main volume slider.
+          </p>
         </div>
 
         {/* Normalization */}
@@ -150,6 +166,7 @@ const styles: Record<string, React.CSSProperties> = {
     position: "fixed",
     inset: 0,
     zIndex: 50,
+    pointerEvents: "auto", // override parent's pointerEvents: none
   },
   panel: {
     position: "absolute",

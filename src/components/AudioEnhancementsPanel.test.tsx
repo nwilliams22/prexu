@@ -15,6 +15,7 @@ function makeEnhancements(
   return {
     volumeBoost: 1.0,
     setVolumeBoost: vi.fn(),
+    setMainBoost: vi.fn(),
     normalizationPreset: "off",
     setNormalizationPreset: vi.fn(),
     audioOffsetMs: 0,
@@ -44,18 +45,18 @@ describe("AudioEnhancementsPanel", () => {
     expect(screen.getByText("Audio Enhancements")).toBeInTheDocument();
   });
 
-  it("renders volume boost slider with correct value", () => {
+  it("renders gain slider with correct value", () => {
     const enhancements = makeEnhancements({ volumeBoost: 2.5 });
     render(
       <AudioEnhancementsPanel {...defaultProps} enhancements={enhancements} />,
     );
 
-    expect(screen.getByText("Volume Boost: 250%")).toBeInTheDocument();
-    const slider = screen.getByRole("slider", { ...HIDDEN, name: /volume boost/i });
+    expect(screen.getByText("Gain: 250%")).toBeInTheDocument();
+    const slider = screen.getByRole("slider", { ...HIDDEN, name: /audio gain/i });
     expect(slider).toHaveValue("2.5");
   });
 
-  it("calls setVolumeBoost and onPersist when volume slider changes", () => {
+  it("calls setVolumeBoost and onPersist when gain slider changes", () => {
     const enhancements = makeEnhancements();
     const onPersist = vi.fn();
     render(
@@ -66,7 +67,7 @@ describe("AudioEnhancementsPanel", () => {
       />,
     );
 
-    const slider = screen.getByRole("slider", { ...HIDDEN, name: /volume boost/i });
+    const slider = screen.getByRole("slider", { ...HIDDEN, name: /audio gain/i });
     fireEvent.change(slider, { target: { value: "3" } });
 
     expect(enhancements.setVolumeBoost).toHaveBeenCalledWith(3);

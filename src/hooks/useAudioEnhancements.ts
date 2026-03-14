@@ -20,6 +20,8 @@ const NORMALIZATION_PRESETS: Record<
 export interface AudioEnhancementsResult {
   volumeBoost: number;
   setVolumeBoost: (value: number) => void;
+  /** Set the main volume's above-1.0 boost factor (from the volume slider) */
+  setMainBoost: (factor: number) => void;
   normalizationPreset: NormalizationPreset;
   setNormalizationPreset: (preset: NormalizationPreset) => void;
   audioOffsetMs: number;
@@ -51,10 +53,19 @@ export function useAudioEnhancements(
   const connectedVideoRef = useRef<HTMLVideoElement | null>(null);
 
   const [volumeBoost, setVolumeBoostState] = useState(initialBoost);
+  const mainBoostRef = useRef(1);
+  const volumeBoostRef = useRef(initialBoost);
   const [normalizationPreset, setNormalizationPresetState] =
     useState<NormalizationPreset>(initialPreset);
   const [audioOffsetMs, setAudioOffsetMsState] = useState(initialOffsetMs);
   const [isInitialized, setIsInitialized] = useState(false);
+
+  /** Update the GainNode with the combined gain: mainBoost * volumeBoost */
+  const updateCombinedGain = useCallback(() => {
+    if (gainRef.current) {
+      gainRef.current.gain.value = mainBoostRef.current * volumeBoostRef.current;
+    }
+  }, []);
 
   // ── Apply compressor parameters ──
   function applyCompressorPreset(
@@ -105,9 +116,9 @@ export function useAudioEnhancements(
       sourceRef.current = source;
       connectedVideoRef.current = video;
 
-      // GainNode — volume boost
+      // GainNode — combined gain (mainBoost * volumeBoost)
       const gain = ctx.createGain();
-      gain.gain.value = volumeBoost;
+      gain.gain.value = mainBoostRef.current * volumeBoostRef.current;
       gainRef.current = gain;
 
       // DynamicsCompressorNode — normalization
@@ -165,12 +176,16 @@ export function useAudioEnhancements(
   // ── Setters (update React state + live Web Audio nodes) ──
 
   const setVolumeBoost = useCallback((value: number) => {
-    const clamped = Math.max(1, Math.min(5, value));
+    const clamped = Math.max(0.25, Math.min(5, value));
     setVolumeBoostState(clamped);
-    if (gainRef.current) {
-      gainRef.current.gain.value = clamped;
-    }
-  }, []);
+    volumeBoostRef.current = clamped;
+    updateCombinedGain();
+  }, [updateCombinedGain]);
+
+  const setMainBoost = useCallback((factor: number) => {
+    mainBoostRef.current = Math.max(1, factor);
+    updateCombinedGain();
+  }, [updateCombinedGain]);
 
   const setNormalizationPreset = useCallback((preset: NormalizationPreset) => {
     setNormalizationPresetState(preset);
@@ -190,6 +205,7 @@ export function useAudioEnhancements(
   return {
     volumeBoost,
     setVolumeBoost,
+    setMainBoost,
     normalizationPreset,
     setNormalizationPreset,
     audioOffsetMs,

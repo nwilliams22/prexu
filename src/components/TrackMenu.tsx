@@ -13,6 +13,7 @@ interface TrackMenuProps {
   selectedId: number | null;
   onSelect: (id: number | null) => void;
   allowNone?: boolean; // true for subtitles
+  emptyMessage?: string; // shown when no tracks available
   onClose: () => void;
 }
 
@@ -22,6 +23,7 @@ function TrackMenu({
   selectedId,
   onSelect,
   allowNone = false,
+  emptyMessage,
   onClose,
 }: TrackMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
@@ -102,6 +104,11 @@ function TrackMenu({
             <span>{track.displayTitle}</span>
           </button>
         ))}
+
+        {/* Empty state when no tracks (and no "None" option either) */}
+        {tracks.length === 0 && !allowNone && emptyMessage && (
+          <div style={styles.emptyMessage}>{emptyMessage}</div>
+        )}
       </div>
     </div>
   );
@@ -112,6 +119,7 @@ const styles: Record<string, React.CSSProperties> = {
     position: "fixed",
     inset: 0,
     zIndex: 30,
+    pointerEvents: "auto", // override parent's pointerEvents: none
   },
   menu: {
     position: "absolute",
@@ -156,6 +164,12 @@ const styles: Record<string, React.CSSProperties> = {
     width: "16px",
     fontSize: "0.85rem",
     flexShrink: 0,
+  },
+  emptyMessage: {
+    padding: "0.75rem 1rem",
+    fontSize: "0.8rem",
+    color: "rgba(255,255,255,0.4)",
+    fontStyle: "italic",
   },
 };
 
