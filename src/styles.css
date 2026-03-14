@@ -59,6 +59,32 @@ a:hover {
   color: var(--accent-hover);
 }
 
+/* Auto-hiding scrollbar — only visible while scrolling, fades after idle */
+.auto-hide-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.auto-hide-scrollbar.scrolling {
+  scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+}
+/* Webkit (Chrome, Edge, Tauri) */
+.auto-hide-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+.auto-hide-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.auto-hide-scrollbar::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 4px;
+}
+.auto-hide-scrollbar.scrolling::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.3);
+}
+.auto-hide-scrollbar.scrolling::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.5);
+}
+
 /* Loading spinner animation */
 @keyframes spin {
   to {

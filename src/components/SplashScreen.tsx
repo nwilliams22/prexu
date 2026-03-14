@@ -1,20 +1,37 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+
+/** Minimum time (ms) the splash screen stays visible to avoid a flash. */
+const MIN_DISPLAY_MS = 2000;
 
 /**
  * Branded splash screen shown during app initialization.
  * Displays Prexu logo with a subtle pulse animation, then fades out
- * when `ready` becomes true.
+ * when `ready` becomes true AND the minimum display time has elapsed.
  */
 function SplashScreen({ ready }: { ready: boolean }) {
   const [fadeOut, setFadeOut] = useState(false);
   const [hidden, setHidden] = useState(false);
+  const mountTime = useRef(Date.now());
 
   useEffect(() => {
     if (!ready) return;
-    // Start fade-out, then unmount
-    setFadeOut(true);
-    const timer = setTimeout(() => setHidden(true), 400);
-    return () => clearTimeout(timer);
+
+    // Ensure splash is shown for at least MIN_DISPLAY_MS
+    const elapsed = Date.now() - mountTime.current;
+    const remaining = Math.max(0, MIN_DISPLAY_MS - elapsed);
+
+    const delayTimer = setTimeout(() => {
+      setFadeOut(true);
+    }, remaining);
+
+    const hideTimer = setTimeout(() => {
+      setHidden(true);
+    }, remaining + 400);
+
+    return () => {
+      clearTimeout(delayTimer);
+      clearTimeout(hideTimer);
+    };
   }, [ready]);
 
   if (hidden) return null;

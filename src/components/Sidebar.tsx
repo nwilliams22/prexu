@@ -40,9 +40,12 @@ function Sidebar({ collapsed, onToggle, onNavigate }: SidebarProps) {
     onNavigate?.();
   };
 
+  const iconSize = collapsed ? 24 : 20;
+
   const navItemStyle: React.CSSProperties = {
     ...styles.navItem,
     ...(touchMode ? { minHeight: "44px", padding: "0.75rem 1rem" } : {}),
+    ...(collapsed ? { justifyContent: "center", padding: "0.6rem 0", gap: 0 } : {}),
   };
 
   const openSectionMenu = (e: React.MouseEvent, sectionKey: string) => {
@@ -91,8 +94,8 @@ function Sidebar({ collapsed, onToggle, onNavigate }: SidebarProps) {
         >
           <svg
             aria-hidden="true"
-            width={20}
-            height={20}
+            width={iconSize}
+            height={iconSize}
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
@@ -122,8 +125,8 @@ function Sidebar({ collapsed, onToggle, onNavigate }: SidebarProps) {
         >
           <svg
             aria-hidden="true"
-            width={20}
-            height={20}
+            width={iconSize}
+            height={iconSize}
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
@@ -153,8 +156,8 @@ function Sidebar({ collapsed, onToggle, onNavigate }: SidebarProps) {
         >
           <svg
             aria-hidden="true"
-            width={20}
-            height={20}
+            width={iconSize}
+            height={iconSize}
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
@@ -186,8 +189,8 @@ function Sidebar({ collapsed, onToggle, onNavigate }: SidebarProps) {
         >
           <svg
             aria-hidden="true"
-            width={20}
-            height={20}
+            width={iconSize}
+            height={iconSize}
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
@@ -207,6 +210,37 @@ function Sidebar({ collapsed, onToggle, onNavigate }: SidebarProps) {
             opacity: collapsed ? 0 : 1,
             width: collapsed ? 0 : "auto",
           }}>Playlists</span>
+        </button>
+
+        {/* Requests */}
+        <button
+          onClick={() => navigateTo("/requests")}
+          style={{
+            ...navItemStyle,
+            ...(isActive("/requests") ? styles.navItemActive : {}),
+          }}
+          title="Requests"
+          aria-current={isActive("/requests") ? "page" : undefined}
+        >
+          <svg
+            aria-hidden="true"
+            width={iconSize}
+            height={iconSize}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
+            <path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z" />
+          </svg>
+          <span style={{
+            ...styles.navLabel,
+            opacity: collapsed ? 0 : 1,
+            width: collapsed ? 0 : "auto",
+          }}>Requests</span>
         </button>
 
         {/* Divider */}
@@ -239,7 +273,7 @@ function Sidebar({ collapsed, onToggle, onNavigate }: SidebarProps) {
                 title={section.title}
                 aria-current={isActive(path) ? "page" : undefined}
               >
-                <LibraryIcon type={section.type} size={20} />
+                <LibraryIcon type={section.type} size={iconSize} />
                 <span style={{
                   ...styles.navLabel,
                   opacity: collapsed ? 0 : 1,

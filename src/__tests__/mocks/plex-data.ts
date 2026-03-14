@@ -551,6 +551,7 @@ export function createPreferences(
     appearance: {
       posterSize: "medium",
       sidebarCollapsed: false,
+      skipSingleSeason: true,
       ...overrides.appearance,
       dashboardSections,
     },

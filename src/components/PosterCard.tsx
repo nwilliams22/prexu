@@ -24,6 +24,8 @@ interface PosterCardProps {
   onExpand?: () => void;
   /** Whether this card is currently expanded (rotates arrow) */
   isExpanded?: boolean;
+  /** Play button click handler — shows centered play button on hover */
+  onPlay?: (e: React.MouseEvent) => void;
 }
 
 function PosterCard({
@@ -32,7 +34,7 @@ function PosterCard({
   subtitle,
   badge,
   onClick,
-  width = 160,
+  width = 190,
   aspectRatio = 1.5,
   progress,
   onContextMenu,
@@ -42,10 +44,12 @@ function PosterCard({
   unwatchedCount,
   onExpand,
   isExpanded,
+  onPlay,
 }: PosterCardProps) {
   const [loaded, setLoaded] = useState(false);
   const [hovered, setHovered] = useState(false);
   const [active, setActive] = useState(false);
+  const [playHovered, setPlayHovered] = useState(false);
   const height = Math.round(width * aspectRatio);
 
   return (
@@ -111,6 +115,35 @@ function PosterCard({
           </button>
         )}
 
+        {/* Play button (center, shown on hover when onPlay provided) */}
+        {onPlay && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onPlay(e);
+            }}
+            onMouseEnter={() => setPlayHovered(true)}
+            onMouseLeave={() => setPlayHovered(false)}
+            style={{
+              ...styles.playOverlay,
+              opacity: hovered ? 1 : 0,
+              pointerEvents: hovered ? "auto" : "none",
+              transform: playHovered
+                ? "translate(-50%, -50%) scale(1.15)"
+                : "translate(-50%, -50%)",
+              background: playHovered
+                ? "var(--accent)"
+                : "rgba(0, 0, 0, 0.7)",
+              color: playHovered ? "#000" : "#fff",
+            }}
+            aria-label="Play"
+          >
+            <svg aria-hidden="true" width={22} height={22} viewBox="0 0 24 24" fill="currentColor">
+              <polygon points="6,3 21,12 6,21" />
+            </svg>
+          </button>
+        )}
+
         {/* Expand button (bottom center, shown on hover when onExpand provided) */}
         {onExpand && (
           <button
@@ -142,20 +175,19 @@ function PosterCard({
         {/* Badge (e.g. "+3 episodes") */}
         {badge && <span style={styles.badge}>{badge}</span>}
 
-        {/* Watched checkmark (top-right corner fold) */}
+        {/* Watched checkmark (circular badge, top-right) */}
         {watched && (
-          <div style={styles.watchedCorner} aria-label="Watched">
+          <div style={styles.watchedBadge} aria-label="Watched">
             <svg
               aria-hidden="true"
-              width={10}
-              height={10}
+              width={16}
+              height={16}
               viewBox="0 0 24 24"
               fill="none"
-              stroke="#000"
-              strokeWidth={3.5}
+              stroke="currentColor"
+              strokeWidth={3}
               strokeLinecap="round"
               strokeLinejoin="round"
-              style={styles.watchedCheck}
             >
               <polyline points="20 6 9 17 4 12" />
             </svg>
@@ -217,12 +249,32 @@ const styles: Record<string, React.CSSProperties> = {
     transition: "opacity 0.3s ease",
     display: "block",
   },
+  playOverlay: {
+    position: "absolute",
+    top: "50%",
+    left: "50%",
+    transform: "translate(-50%, -50%)",
+    width: "52px",
+    height: "52px",
+    borderRadius: "50%",
+    background: "rgba(0, 0, 0, 0.7)",
+    color: "#fff",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 0,
+    zIndex: 3,
+    border: "none",
+    cursor: "pointer",
+    transition: "opacity 0.15s ease, transform 0.2s ease, background 0.2s ease, color 0.2s ease",
+    backdropFilter: "blur(4px)",
+  },
   moreButton: {
     position: "absolute",
     bottom: "6px",
     right: "6px",
-    width: "28px",
-    height: "28px",
+    width: "32px",
+    height: "32px",
     borderRadius: "50%",
     background: "rgba(0, 0, 0, 0.7)",
     color: "var(--text-primary)",
@@ -239,8 +291,8 @@ const styles: Record<string, React.CSSProperties> = {
     position: "absolute",
     bottom: "6px",
     left: "50%",
-    width: "28px",
-    height: "28px",
+    width: "32px",
+    height: "32px",
     borderRadius: "50%",
     background: "rgba(0, 0, 0, 0.7)",
     color: "var(--text-primary)",
@@ -259,7 +311,7 @@ const styles: Record<string, React.CSSProperties> = {
     right: "6px",
     background: "var(--accent)",
     color: "#000",
-    fontSize: "0.7rem",
+    fontSize: "0.8rem",
     fontWeight: 700,
     padding: "2px 6px",
     borderRadius: "4px",
@@ -278,20 +330,21 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
     zIndex: 2,
   },
-  watchedCorner: {
+  watchedBadge: {
     position: "absolute",
-    top: 0,
-    right: 0,
+    top: "6px",
+    right: "6px",
+    background: "rgba(0,0,0,0.75)",
+    borderRadius: "50%",
     width: "28px",
     height: "28px",
-    background: "var(--accent)",
-    clipPath: "polygon(0 0, 100% 0, 100% 100%)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    color: "var(--accent)",
+    border: "2px solid rgba(255,255,255,0.15)",
+    backdropFilter: "blur(4px)",
     zIndex: 3,
-  },
-  watchedCheck: {
-    position: "absolute",
-    top: "3px",
-    right: "3px",
   },
   progressTrack: {
     position: "absolute",
@@ -314,14 +367,14 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: "hidden",
   },
   title: {
-    fontSize: "0.85rem",
+    fontSize: "0.95rem",
     fontWeight: 500,
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   },
   subtitle: {
-    fontSize: "0.75rem",
+    fontSize: "0.85rem",
     color: "var(--text-secondary)",
     overflow: "hidden",
     textOverflow: "ellipsis",

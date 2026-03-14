@@ -139,3 +139,37 @@
 - Sufficient color contrast ratios (WCAG AA)
 - Respect `prefers-reduced-motion`
 - Respect `prefers-color-scheme` (light theme option)
+
+---
+
+## Phase 6: Auto-Update System
+
+Plex-style seamless updates — app checks for updates on launch, downloads in background, shows splash screen while applying, then relaunches.
+
+### 6.1 Update Infrastructure
+- Add `tauri-plugin-updater` (Tauri v2 built-in updater)
+- Host update manifests on GitHub Releases (free, integrates with `gh` CLI)
+- Update manifest format: JSON with version, download URL, signature
+- Generate signing keys for update verification (`tauri signer generate`)
+- Configure `tauri.conf.json` with updater endpoint + pubkey
+
+### 6.2 Update Flow (Frontend)
+- On app launch, check for updates via `check()` from `@tauri-apps/plugin-updater`
+- If update available:
+  1. Show splash screen with "Updating..." message + progress bar
+  2. Download update in background (`downloadAndInstall()`)
+  3. Once complete, call `relaunch()` to restart with new version
+- If no update, proceed to normal splash → dashboard flow
+- Add "Check for Updates" button in Settings page
+
+### 6.3 Update Flow (Backend / CI)
+- Bump version in `tauri.conf.json` + `Cargo.toml` + `package.json`
+- `npx tauri build` produces the installer + update bundle (.nsis.zip)
+- `tauri signer sign` signs the update bundle
+- Publish to GitHub Releases with the manifest JSON
+- Manifest URL: `https://github.com/nwilliams22/prexu/releases/latest/download/latest.json`
+
+### 6.4 Version Display
+- Show current version in Settings page footer
+- Show "Update available" badge on Settings nav item when update is pending
+- Include version in app title bar or about dialog
