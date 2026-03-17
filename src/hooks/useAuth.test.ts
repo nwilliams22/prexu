@@ -14,12 +14,14 @@ vi.mock("../services/storage", () => ({
   saveAdminAuth: vi.fn(),
   saveActiveUser: vi.fn(),
   getActiveUser: vi.fn(),
+  migrateToSecureStorage: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Mock plex-api
 vi.mock("../services/plex-api", () => ({
   validateToken: vi.fn(),
   getPlexUser: vi.fn(),
+  onAuthInvalid: vi.fn().mockReturnValue(() => {}),
 }));
 
 import * as storage from "../services/storage";

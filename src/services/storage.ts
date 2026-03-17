@@ -1,10 +1,12 @@
 /**
  * Storage abstraction layer.
  *
- * On desktop (Tauri), this uses tauri-plugin-store for secure persistent storage.
- * This abstraction exists so we can swap in a different backend for smart TV
- * platforms later (e.g., localStorage, AsyncStorage, etc.) without changing
- * any consuming code.
+ * Sensitive data (auth tokens, API keys) is stored via tauri-plugin-store,
+ * which persists to the app data directory and is not accessible from browser
+ * DevTools or via XSS on the webview.
+ *
+ * Non-sensitive data (preferences, UI state, content requests) remains in
+ * localStorage for simplicity and performance.
  */
 
 import type { AuthData, ServerData } from "../types/plex";
@@ -20,18 +22,88 @@ const STORAGE_KEYS = {
   PREFERENCES: "prexu_preferences",
   ADMIN_AUTH: "admin_auth_data",
   ACTIVE_USER: "active_user",
-  TMDB_API_KEY: "prexu_tmdb_api_key",
   CONTENT_REQUESTS: "prexu_content_requests",
   REQUESTS_LAST_READ: "prexu_requests_last_read",
   DISMISSED_RECOMMENDATIONS: "prexu_dismissed_recommendations",
 } as const;
 
+/** Keys that hold sensitive data and must use the secure store */
+const SECURE_KEYS = new Set<string>([
+  STORAGE_KEYS.AUTH,
+  STORAGE_KEYS.ADMIN_AUTH,
+  STORAGE_KEYS.ACTIVE_USER,
+]);
+
 const DEFAULT_RELAY_PORT = 9847;
 
-// For now, use localStorage as the storage backend.
-// When tauri-plugin-store is integrated with the Rust backend,
-// we'll swap this to use Tauri IPC commands for secure storage.
-const storage = {
+// ── Secure store (tauri-plugin-store) ──
+
+type LazyStoreType = import("@tauri-apps/plugin-store").LazyStore;
+let secureStore: LazyStoreType | null = null;
+let tauriUnavailable = false;
+
+/** Check if we're running inside a Tauri webview */
+function isTauriRuntime(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+async function getSecureStore(): Promise<LazyStoreType | null> {
+  if (secureStore) return secureStore;
+  if (tauriUnavailable) return null;
+
+  if (!isTauriRuntime()) {
+    tauriUnavailable = true;
+    return null;
+  }
+
+  try {
+    const { LazyStore } = await import("@tauri-apps/plugin-store");
+    secureStore = new LazyStore("secure-store.json");
+    return secureStore;
+  } catch {
+    tauriUnavailable = true;
+    return null;
+  }
+}
+
+// ── Storage backends ──
+
+const secureStorage = {
+  async get<T>(key: string): Promise<T | null> {
+    try {
+      const store = await getSecureStore();
+      if (store) {
+        const value = await store.get<T>(key);
+        return value ?? null;
+      }
+      // Fallback to localStorage when Tauri is not available
+      const raw = localStorage.getItem(key);
+      return raw ? (JSON.parse(raw) as T) : null;
+    } catch {
+      return null;
+    }
+  },
+
+  async set<T>(key: string, value: T): Promise<void> {
+    const store = await getSecureStore();
+    if (store) {
+      await store.set(key, value);
+    } else {
+      localStorage.setItem(key, JSON.stringify(value));
+    }
+  },
+
+  async remove(key: string): Promise<void> {
+    const store = await getSecureStore();
+    if (store) {
+      await store.delete(key);
+    } else {
+      localStorage.removeItem(key);
+    }
+  },
+};
+
+const localStore = {
   async get<T>(key: string): Promise<T | null> {
     try {
       const raw = localStorage.getItem(key);
@@ -50,47 +122,80 @@ const storage = {
   },
 };
 
+/** Route to the correct backend based on key sensitivity */
+function storageFor(key: string) {
+  return SECURE_KEYS.has(key) ? secureStorage : localStore;
+}
+
+// ── Migration: move sensitive data from localStorage to secure store ──
+
+const MIGRATION_FLAG = "prexu_secure_migration_done";
+
+export async function migrateToSecureStorage(): Promise<void> {
+  // Skip if already migrated or secure store unavailable
+  if (localStorage.getItem(MIGRATION_FLAG)) return;
+  const store = await getSecureStore();
+  if (!store) return;
+
+  for (const key of SECURE_KEYS) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const value = JSON.parse(raw);
+        await store.set(key, value);
+        localStorage.removeItem(key);
+      }
+    } catch {
+      // Skip keys that fail to parse
+    }
+  }
+
+  localStorage.setItem(MIGRATION_FLAG, "1");
+}
+
+// ── Public API (unchanged signatures) ──
+
 /** Get or create a persistent client identifier for this device */
 export async function getClientIdentifier(): Promise<string> {
-  let clientId = await storage.get<string>(STORAGE_KEYS.CLIENT_ID);
+  let clientId = await localStore.get<string>(STORAGE_KEYS.CLIENT_ID);
   if (!clientId) {
     clientId = crypto.randomUUID();
-    await storage.set(STORAGE_KEYS.CLIENT_ID, clientId);
+    await localStore.set(STORAGE_KEYS.CLIENT_ID, clientId);
   }
   return clientId;
 }
 
 /** Save auth data after successful login */
 export async function saveAuth(data: AuthData): Promise<void> {
-  await storage.set(STORAGE_KEYS.AUTH, data);
+  await storageFor(STORAGE_KEYS.AUTH).set(STORAGE_KEYS.AUTH, data);
 }
 
 /** Get stored auth data (returns null if not logged in) */
 export async function getAuth(): Promise<AuthData | null> {
-  return storage.get<AuthData>(STORAGE_KEYS.AUTH);
+  return storageFor(STORAGE_KEYS.AUTH).get<AuthData>(STORAGE_KEYS.AUTH);
 }
 
 /** Clear auth data (logout) */
 export async function clearAuth(): Promise<void> {
-  await storage.remove(STORAGE_KEYS.AUTH);
-  await storage.remove(STORAGE_KEYS.SERVER);
-  await storage.remove(STORAGE_KEYS.ADMIN_AUTH);
-  await storage.remove(STORAGE_KEYS.ACTIVE_USER);
+  await storageFor(STORAGE_KEYS.AUTH).remove(STORAGE_KEYS.AUTH);
+  await storageFor(STORAGE_KEYS.SERVER).remove(STORAGE_KEYS.SERVER);
+  await storageFor(STORAGE_KEYS.ADMIN_AUTH).remove(STORAGE_KEYS.ADMIN_AUTH);
+  await storageFor(STORAGE_KEYS.ACTIVE_USER).remove(STORAGE_KEYS.ACTIVE_USER);
 }
 
 /** Save selected server */
 export async function saveServer(data: ServerData): Promise<void> {
-  await storage.set(STORAGE_KEYS.SERVER, data);
+  await storageFor(STORAGE_KEYS.SERVER).set(STORAGE_KEYS.SERVER, data);
 }
 
 /** Get stored selected server */
 export async function getServer(): Promise<ServerData | null> {
-  return storage.get<ServerData>(STORAGE_KEYS.SERVER);
+  return storageFor(STORAGE_KEYS.SERVER).get<ServerData>(STORAGE_KEYS.SERVER);
 }
 
 /** Clear selected server (to re-pick) */
 export async function clearServer(): Promise<void> {
-  await storage.remove(STORAGE_KEYS.SERVER);
+  await storageFor(STORAGE_KEYS.SERVER).remove(STORAGE_KEYS.SERVER);
 }
 
 // ── Relay Server URL ──
@@ -116,7 +221,7 @@ export function deriveRelayUrl(serverUri: string): string {
  */
 export async function getRelayUrl(serverUri?: string | null): Promise<string> {
   // Check for manual override first
-  const manual = await storage.get<string>(STORAGE_KEYS.RELAY_URL);
+  const manual = await localStore.get<string>(STORAGE_KEYS.RELAY_URL);
   if (manual) return manual;
 
   // Auto-derive from Plex server URI
@@ -128,46 +233,59 @@ export async function getRelayUrl(serverUri?: string | null): Promise<string> {
 
 /** Save a manual relay server URL override */
 export async function saveRelayUrl(url: string): Promise<void> {
-  await storage.set(STORAGE_KEYS.RELAY_URL, url);
+  await localStore.set(STORAGE_KEYS.RELAY_URL, url);
 }
 
 /** Clear the manual relay URL override (revert to auto-discovery) */
 export async function clearRelayUrl(): Promise<void> {
-  await storage.remove(STORAGE_KEYS.RELAY_URL);
+  await localStore.remove(STORAGE_KEYS.RELAY_URL);
 }
 
 /** Check if user has set a manual relay URL override */
 export async function hasManualRelayUrl(): Promise<boolean> {
-  const url = await storage.get<string>(STORAGE_KEYS.RELAY_URL);
+  const url = await localStore.get<string>(STORAGE_KEYS.RELAY_URL);
   return url !== null;
+}
+
+/**
+ * Get the relay server's HTTP base URL (for REST endpoints like TMDb proxy).
+ * Converts ws://host:port/ws → http://host:port
+ * Converts wss://host:port/ws → https://host:port
+ */
+export async function getRelayHttpUrl(serverUri?: string | null): Promise<string> {
+  const wsUrl = await getRelayUrl(serverUri);
+  return wsUrl
+    .replace(/^wss:/, "https:")
+    .replace(/^ws:/, "http:")
+    .replace(/\/ws$/, "");
 }
 
 // ── Admin Token (preserved for switching back from managed user) ──
 
 export async function saveAdminAuth(data: AuthData): Promise<void> {
-  await storage.set(STORAGE_KEYS.ADMIN_AUTH, data);
+  await storageFor(STORAGE_KEYS.ADMIN_AUTH).set(STORAGE_KEYS.ADMIN_AUTH, data);
 }
 
 export async function getAdminAuth(): Promise<AuthData | null> {
-  return storage.get<AuthData>(STORAGE_KEYS.ADMIN_AUTH);
+  return storageFor(STORAGE_KEYS.ADMIN_AUTH).get<AuthData>(STORAGE_KEYS.ADMIN_AUTH);
 }
 
 export async function clearAdminAuth(): Promise<void> {
-  await storage.remove(STORAGE_KEYS.ADMIN_AUTH);
+  await storageFor(STORAGE_KEYS.ADMIN_AUTH).remove(STORAGE_KEYS.ADMIN_AUTH);
 }
 
 // ── Active User ──
 
 export async function saveActiveUser(user: ActiveUser): Promise<void> {
-  await storage.set(STORAGE_KEYS.ACTIVE_USER, user);
+  await storageFor(STORAGE_KEYS.ACTIVE_USER).set(STORAGE_KEYS.ACTIVE_USER, user);
 }
 
 export async function getActiveUser(): Promise<ActiveUser | null> {
-  return storage.get<ActiveUser>(STORAGE_KEYS.ACTIVE_USER);
+  return storageFor(STORAGE_KEYS.ACTIVE_USER).get<ActiveUser>(STORAGE_KEYS.ACTIVE_USER);
 }
 
 export async function clearActiveUser(): Promise<void> {
-  await storage.remove(STORAGE_KEYS.ACTIVE_USER);
+  await storageFor(STORAGE_KEYS.ACTIVE_USER).remove(STORAGE_KEYS.ACTIVE_USER);
 }
 
 // ── Preferences ──
@@ -195,6 +313,7 @@ export function getDefaultPreferences(): Preferences {
         recentShows: true,
       },
       skipSingleSeason: true,
+      minCollectionSize: 2,
     },
   };
 }
@@ -215,13 +334,13 @@ function mergeWithDefaults(saved: Preferences): Preferences {
 }
 
 export async function getPreferences(): Promise<Preferences> {
-  const saved = await storage.get<Preferences>(STORAGE_KEYS.PREFERENCES);
+  const saved = await localStore.get<Preferences>(STORAGE_KEYS.PREFERENCES);
   if (!saved) return getDefaultPreferences();
   return mergeWithDefaults(saved);
 }
 
 export async function savePreferences(prefs: Preferences): Promise<void> {
-  await storage.set(STORAGE_KEYS.PREFERENCES, prefs);
+  await localStore.set(STORAGE_KEYS.PREFERENCES, prefs);
 }
 
 // ── Per-User Preferences ──
@@ -231,10 +350,10 @@ function userPrefsKey(userId: number): string {
 }
 
 export async function getUserPreferences(userId: number): Promise<Preferences> {
-  const saved = await storage.get<Preferences>(userPrefsKey(userId));
+  const saved = await localStore.get<Preferences>(userPrefsKey(userId));
   if (!saved) {
     // Fall back to global prefs (migration path for existing users)
-    const global = await storage.get<Preferences>(STORAGE_KEYS.PREFERENCES);
+    const global = await localStore.get<Preferences>(STORAGE_KEYS.PREFERENCES);
     if (global) return mergeWithDefaults(global);
     return getDefaultPreferences();
   }
@@ -245,50 +364,36 @@ export async function saveUserPreferences(
   userId: number,
   prefs: Preferences
 ): Promise<void> {
-  await storage.set(userPrefsKey(userId), prefs);
-}
-
-// ── TMDb API Key ──
-
-export async function getTmdbApiKey(): Promise<string | null> {
-  return storage.get<string>(STORAGE_KEYS.TMDB_API_KEY);
-}
-
-export async function saveTmdbApiKey(key: string): Promise<void> {
-  await storage.set(STORAGE_KEYS.TMDB_API_KEY, key);
-}
-
-export async function clearTmdbApiKey(): Promise<void> {
-  await storage.remove(STORAGE_KEYS.TMDB_API_KEY);
+  await localStore.set(userPrefsKey(userId), prefs);
 }
 
 // ── Content Requests ──
 
 export async function getContentRequests(): Promise<ContentRequest[]> {
-  const requests = await storage.get<ContentRequest[]>(STORAGE_KEYS.CONTENT_REQUESTS);
+  const requests = await localStore.get<ContentRequest[]>(STORAGE_KEYS.CONTENT_REQUESTS);
   return requests ?? [];
 }
 
 export async function saveContentRequests(requests: ContentRequest[]): Promise<void> {
-  await storage.set(STORAGE_KEYS.CONTENT_REQUESTS, requests);
+  await localStore.set(STORAGE_KEYS.CONTENT_REQUESTS, requests);
 }
 
 export async function getRequestsLastRead(): Promise<number> {
-  const ts = await storage.get<number>(STORAGE_KEYS.REQUESTS_LAST_READ);
+  const ts = await localStore.get<number>(STORAGE_KEYS.REQUESTS_LAST_READ);
   return ts ?? 0;
 }
 
 export async function saveRequestsLastRead(timestamp: number): Promise<void> {
-  await storage.set(STORAGE_KEYS.REQUESTS_LAST_READ, timestamp);
+  await localStore.set(STORAGE_KEYS.REQUESTS_LAST_READ, timestamp);
 }
 
 /** Get the set of dismissed recommendation ratingKeys */
 export async function getDismissedRecommendations(): Promise<string[]> {
-  const keys = await storage.get<string[]>(STORAGE_KEYS.DISMISSED_RECOMMENDATIONS);
+  const keys = await localStore.get<string[]>(STORAGE_KEYS.DISMISSED_RECOMMENDATIONS);
   return keys ?? [];
 }
 
 /** Save the set of dismissed recommendation ratingKeys */
 export async function saveDismissedRecommendations(keys: string[]): Promise<void> {
-  await storage.set(STORAGE_KEYS.DISMISSED_RECOMMENDATIONS, keys);
+  await localStore.set(STORAGE_KEYS.DISMISSED_RECOMMENDATIONS, keys);
 }

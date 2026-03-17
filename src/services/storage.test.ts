@@ -102,6 +102,8 @@ describe("storage", () => {
       expect(prefs.appearance).toEqual({
         posterSize: "medium",
         sidebarCollapsed: false,
+        skipSingleSeason: true,
+        minCollectionSize: 2,
         dashboardSections: {
           continueWatching: true,
           recentMovies: true,

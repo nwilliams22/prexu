@@ -13,8 +13,11 @@ import {
   saveAdminAuth,
   saveActiveUser,
   getActiveUser,
+  migrateToSecureStorage,
 } from "../services/storage";
-import { validateToken, getPlexUser } from "../services/plex-api";
+import { validateToken, getPlexUser, onAuthInvalid } from "../services/plex-api";
+
+const TOKEN_REVALIDATION_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 
 export interface AuthContextValue {
   isLoading: boolean;
@@ -49,10 +52,13 @@ export function useAuthState(): AuthContextValue {
   const [server, setServer] = useState<ServerData | null>(null);
   const [activeUser, setActiveUser] = useState<ActiveUser | null>(null);
 
-  // On mount, check for existing auth
+  // On mount, migrate storage then check for existing auth
   useEffect(() => {
     (async () => {
       try {
+        // Migrate sensitive data from localStorage to secure store (no-op if already done)
+        await migrateToSecureStorage();
+
         const stored = await getAuth();
         if (stored?.authToken) {
           // Validate the token is still good
@@ -83,6 +89,35 @@ export function useAuthState(): AuthContextValue {
       }
     })();
   }, []);
+
+  // Periodic token revalidation (every 30 minutes)
+  useEffect(() => {
+    if (!authToken) return;
+
+    const interval = setInterval(async () => {
+      const valid = await validateToken(authToken);
+      if (!valid) {
+        await clearAuth();
+        setAuthToken(null);
+        setServer(null);
+        setActiveUser(null);
+      }
+    }, TOKEN_REVALIDATION_INTERVAL_MS);
+
+    return () => clearInterval(interval);
+  }, [authToken]);
+
+  // Listen for 401 responses from any API call and auto-logout
+  useEffect(() => {
+    if (!authToken) return;
+
+    return onAuthInvalid(async () => {
+      await clearAuth();
+      setAuthToken(null);
+      setServer(null);
+      setActiveUser(null);
+    });
+  }, [authToken]);
 
   const login = useCallback(async (token: string) => {
     const clientId = await getClientIdentifier();
