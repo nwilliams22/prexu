@@ -7,7 +7,7 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useBreakpoint, isMobile, isTabletOrBelow } from "../hooks/useBreakpoint";
-import { getTmdbApiKey } from "../services/storage";
+import { isTmdbAvailable } from "../services/tmdb";
 import {
   getTmdbMovieDetail,
   getTmdbTvDetail,
@@ -54,9 +54,9 @@ function DiscoverDetail() {
       setIsLoading(true);
       setError(null);
       try {
-        const apiKey = await getTmdbApiKey();
-        if (!apiKey) {
-          setError("TMDB API key not configured.");
+        const available = await isTmdbAvailable();
+        if (!available) {
+          setError("TMDb proxy not available on relay server.");
           return;
         }
 
@@ -67,7 +67,7 @@ function DiscoverDetail() {
         }
 
         if (mediaType === "movie") {
-          const result = await getTmdbMovieDetail(apiKey, id);
+          const result = await getTmdbMovieDetail(id);
           if (!cancelled) {
             if (result) {
               setMovieDetail(result);
@@ -77,7 +77,7 @@ function DiscoverDetail() {
             }
           }
         } else {
-          const result = await getTmdbTvDetail(apiKey, id);
+          const result = await getTmdbTvDetail(id);
           if (!cancelled) {
             if (result) {
               setTvDetail(result);

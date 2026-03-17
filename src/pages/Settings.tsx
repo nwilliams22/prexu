@@ -5,14 +5,10 @@ import {
   clearRelayUrl,
   hasManualRelayUrl,
   deriveRelayUrl,
-  getTmdbApiKey,
-  saveTmdbApiKey,
-  clearTmdbApiKey,
 } from "../services/storage";
 import { useAuth } from "../hooks/useAuth";
 import { useInvites } from "../hooks/useInvites";
 import { usePreferences } from "../hooks/usePreferences";
-import { validateTmdbApiKey } from "../services/tmdb";
 import { open } from "@tauri-apps/plugin-shell";
 import type { PlaybackPreferences, AppearancePreferences, NormalizationPreset } from "../types/preferences";
 
@@ -51,13 +47,6 @@ function Settings() {
   const [showOverride, setShowOverride] = useState(false);
   const [relaySaved, setRelaySaved] = useState(false);
 
-  // TMDb API key state
-  const [tmdbKey, setTmdbKey] = useState("");
-  const [tmdbKeyStored, setTmdbKeyStored] = useState(false);
-  const [tmdbKeySaving, setTmdbKeySaving] = useState(false);
-  const [tmdbKeyError, setTmdbKeyError] = useState<string | null>(null);
-  const [tmdbKeySaved, setTmdbKeySaved] = useState(false);
-
   const autoUrl = server?.uri ? deriveRelayUrl(server.uri) : null;
 
   useEffect(() => {
@@ -69,13 +58,6 @@ function Settings() {
         const url = await getRelayUrl();
         setManualUrl(url);
       }
-
-      // Load TMDb API key status
-      const storedTmdbKey = await getTmdbApiKey();
-      if (storedTmdbKey) {
-        setTmdbKeyStored(true);
-        setTmdbKey(storedTmdbKey);
-      }
     })();
   }, []);
 
@@ -85,37 +67,6 @@ function Settings() {
     setRelaySaved(true);
     setTimeout(() => setRelaySaved(false), 2000);
     refreshInvites();
-  };
-
-  const handleSaveTmdbKey = async () => {
-    if (!tmdbKey.trim()) return;
-    setTmdbKeySaving(true);
-    setTmdbKeyError(null);
-
-    try {
-      const valid = await validateTmdbApiKey(tmdbKey.trim());
-      if (!valid) {
-        setTmdbKeyError("Invalid API key. Please check and try again.");
-        setTmdbKeySaving(false);
-        return;
-      }
-      await saveTmdbApiKey(tmdbKey.trim());
-      setTmdbKeyStored(true);
-      setTmdbKeySaved(true);
-      setTimeout(() => setTmdbKeySaved(false), 2000);
-    } catch {
-      setTmdbKeyError("Failed to validate key. Check your connection.");
-    } finally {
-      setTmdbKeySaving(false);
-    }
-  };
-
-  const handleClearTmdbKey = async () => {
-    await clearTmdbApiKey();
-    setTmdbKey("");
-    setTmdbKeyStored(false);
-    setTmdbKeyError(null);
-    setTmdbKeySaved(false);
   };
 
   const handleResetToAuto = async () => {
@@ -445,6 +396,27 @@ function Settings() {
             list instead of showing a seasons page.
           </p>
         </div>
+
+        <div style={styles.field}>
+          <label style={styles.label}>Minimum Collection Size</label>
+          <select
+            value={ap.minCollectionSize}
+            onChange={(e) =>
+              updateAppearance({ minCollectionSize: Number(e.target.value) })
+            }
+            style={styles.select}
+          >
+            {Array.from({ length: 9 }, (_, i) => i + 2).map((n) => (
+              <option key={n} value={n}>
+                {n} items
+              </option>
+            ))}
+          </select>
+          <p style={styles.hint}>
+            Collections with fewer items than this will be hidden from the
+            collections browser and library view.
+          </p>
+        </div>
       </section>
 
       {/* ── Watch Together ── */}
@@ -524,63 +496,11 @@ function Settings() {
       {isAdmin && (
         <section style={styles.section}>
           <h3 style={styles.sectionTitle}>Content Requests</h3>
-
-          <div style={styles.field}>
-            <label style={styles.label}>TMDb API Key</label>
-            <p style={styles.hint}>
-              A TMDb (The Movie Database) API key is required for content request
-              search functionality. Users can search for movies and TV shows to
-              request.
-            </p>
-
-            {tmdbKeyStored ? (
-              <div>
-                <div style={styles.statusRow}>
-                  <div style={{ ...styles.statusDot, background: "var(--success)" }} />
-                  <span style={styles.statusText}>TMDb API key configured</span>
-                </div>
-                <button
-                  onClick={handleClearTmdbKey}
-                  style={styles.linkButton}
-                >
-                  Remove API key
-                </button>
-              </div>
-            ) : (
-              <div>
-                <div style={styles.inputRow}>
-                  <input
-                    type="text"
-                    value={tmdbKey}
-                    onChange={(e) => { setTmdbKey(e.target.value); setTmdbKeyError(null); }}
-                    placeholder="Enter your TMDb API key (v4 auth)"
-                    style={styles.input}
-                  />
-                  <button
-                    onClick={handleSaveTmdbKey}
-                    disabled={!tmdbKey.trim() || tmdbKeySaving}
-                    style={{
-                      ...styles.saveButton,
-                      ...((!tmdbKey.trim() || tmdbKeySaving) ? { opacity: 0.5, cursor: "not-allowed" } : {}),
-                    }}
-                  >
-                    {tmdbKeySaving ? "Validating..." : tmdbKeySaved ? "Saved!" : "Save"}
-                  </button>
-                </div>
-                {tmdbKeyError && (
-                  <p style={{ ...styles.hint, color: "var(--error)", marginTop: "0.5rem" }}>
-                    {tmdbKeyError}
-                  </p>
-                )}
-                <button
-                  onClick={() => open("https://www.themoviedb.org/settings/api")}
-                  style={{ ...styles.linkButton, marginTop: "0.5rem" }}
-                >
-                  Get a TMDb API key →
-                </button>
-              </div>
-            )}
-          </div>
+          <p style={styles.hint}>
+            Content search is powered by TMDb via the relay server.
+            The relay server admin must set the TMDB_API_KEY environment
+            variable to enable search functionality.
+          </p>
         </section>
       )}
 

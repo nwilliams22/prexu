@@ -1,6 +1,8 @@
 /**
- * TMDb (The Movie Database) API client for content search.
- * Used by the content request system for movie/TV show lookup.
+ * TMDb (The Movie Database) API client.
+ *
+ * All requests are proxied through the relay server, which holds the TMDb API
+ * key as an environment variable. This keeps the key off the client.
  */
 
 import type {
@@ -11,64 +13,57 @@ import type {
   TmdbSearchTvResponse,
   TmdbFindResponse,
 } from "../types/content-request";
+import { getRelayHttpUrl } from "./storage";
 
-const TMDB_API_BASE = "https://api.themoviedb.org/3";
 const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p";
 
-function authHeaders(apiKey: string): Record<string, string> {
-  return {
-    Accept: "application/json",
-    Authorization: `Bearer ${apiKey}`,
-  };
+/** Resolve the relay HTTP base URL, using a cached serverUri if available. */
+let cachedRelayHttp: string | null = null;
+
+async function relayBase(): Promise<string> {
+  if (cachedRelayHttp) return cachedRelayHttp;
+  cachedRelayHttp = await getRelayHttpUrl();
+  return cachedRelayHttp;
+}
+
+/** Reset cached relay URL (call when server selection changes). */
+export function resetTmdbRelayCache(): void {
+  cachedRelayHttp = null;
+}
+
+/** Fetch JSON from the relay TMDb proxy. */
+async function relayFetch<T>(path: string): Promise<T> {
+  const base = await relayBase();
+  const resp = await fetch(`${base}${path}`);
+
+  if (!resp.ok) {
+    throw new Error(`TMDb proxy error: ${resp.status} ${resp.statusText}`);
+  }
+
+  return resp.json() as Promise<T>;
 }
 
 /** Search TMDb for movies by title. */
 export async function searchTmdbMovies(
-  apiKey: string,
   query: string,
   page = 1,
 ): Promise<{ results: TmdbMovie[]; totalResults: number }> {
-  const params = new URLSearchParams({
-    query,
-    page: String(page),
-    include_adult: "false",
-    language: "en-US",
-  });
-
-  const resp = await fetch(`${TMDB_API_BASE}/search/movie?${params}`, {
-    headers: authHeaders(apiKey),
-  });
-
-  if (!resp.ok) {
-    throw new Error(`TMDb movie search failed: ${resp.status} ${resp.statusText}`);
-  }
-
-  const data: TmdbSearchMovieResponse = await resp.json();
+  const params = new URLSearchParams({ query, page: String(page) });
+  const data = await relayFetch<TmdbSearchMovieResponse>(
+    `/tmdb/search/movie?${params}`,
+  );
   return { results: data.results, totalResults: data.total_results };
 }
 
 /** Search TMDb for TV shows by title. */
 export async function searchTmdbTvShows(
-  apiKey: string,
   query: string,
   page = 1,
 ): Promise<{ results: TmdbTvShow[]; totalResults: number }> {
-  const params = new URLSearchParams({
-    query,
-    page: String(page),
-    include_adult: "false",
-    language: "en-US",
-  });
-
-  const resp = await fetch(`${TMDB_API_BASE}/search/tv?${params}`, {
-    headers: authHeaders(apiKey),
-  });
-
-  if (!resp.ok) {
-    throw new Error(`TMDb TV search failed: ${resp.status} ${resp.statusText}`);
-  }
-
-  const data: TmdbSearchTvResponse = await resp.json();
+  const params = new URLSearchParams({ query, page: String(page) });
+  const data = await relayFetch<TmdbSearchTvResponse>(
+    `/tmdb/search/tv?${params}`,
+  );
   return { results: data.results, totalResults: data.total_results };
 }
 
@@ -77,23 +72,9 @@ export async function searchTmdbTvShows(
  * Returns the first matching result with its media type, or null if not found.
  */
 export async function findByImdbId(
-  apiKey: string,
   imdbId: string,
 ): Promise<TmdbSearchResult | null> {
-  const params = new URLSearchParams({
-    external_source: "imdb_id",
-    language: "en-US",
-  });
-
-  const resp = await fetch(`${TMDB_API_BASE}/find/${imdbId}?${params}`, {
-    headers: authHeaders(apiKey),
-  });
-
-  if (!resp.ok) {
-    throw new Error(`TMDb find by IMDb ID failed: ${resp.status} ${resp.statusText}`);
-  }
-
-  const data: TmdbFindResponse = await resp.json();
+  const data = await relayFetch<TmdbFindResponse>(`/tmdb/find/${imdbId}`);
 
   if (data.movie_results.length > 0) {
     return { ...data.movie_results[0], media_type: "movie" };
@@ -106,15 +87,13 @@ export async function findByImdbId(
 }
 
 /**
- * Validate a TMDb API key by performing a test search.
- * Returns true if the key is valid, false otherwise.
+ * Check if the relay server has TMDb proxy available.
+ * Returns true if the relay has a TMDb API key configured.
  */
-export async function validateTmdbApiKey(apiKey: string): Promise<boolean> {
+export async function isTmdbAvailable(): Promise<boolean> {
   try {
-    const resp = await fetch(
-      `${TMDB_API_BASE}/search/movie?query=test&page=1`,
-      { headers: authHeaders(apiKey) },
-    );
+    const base = await relayBase();
+    const resp = await fetch(`${base}/tmdb/status`);
     return resp.ok;
   } catch {
     return false;
@@ -181,55 +160,38 @@ export interface TmdbCreditEntry {
 
 /** Search TMDB for a person by name. */
 export async function searchTmdbPerson(
-  apiKey: string,
   query: string,
 ): Promise<TmdbPersonSearchResult | null> {
-  const params = new URLSearchParams({
-    query,
-    include_adult: "false",
-    language: "en-US",
-  });
-
-  const resp = await fetch(`${TMDB_API_BASE}/search/person?${params}`, {
-    headers: authHeaders(apiKey),
-  });
-
-  if (!resp.ok) return null;
-
-  const data: { results: TmdbPersonSearchResult[] } = await resp.json();
+  const params = new URLSearchParams({ query });
+  const data = await relayFetch<{ results: TmdbPersonSearchResult[] }>(
+    `/tmdb/search/person?${params}`,
+  );
   return data.results.length > 0 ? data.results[0] : null;
 }
 
 /** Get detailed person info from TMDB by person ID. */
 export async function getTmdbPersonDetail(
-  apiKey: string,
   personId: number,
 ): Promise<TmdbPersonDetail | null> {
-  const resp = await fetch(
-    `${TMDB_API_BASE}/person/${personId}?language=en-US`,
-    { headers: authHeaders(apiKey) },
-  );
-
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    return await relayFetch<TmdbPersonDetail>(`/tmdb/person/${personId}`);
+  } catch {
+    return null;
+  }
 }
 
 /** Get combined (movie + TV) credits for a person. */
 export async function getTmdbPersonCredits(
-  apiKey: string,
   personId: number,
 ): Promise<TmdbCreditEntry[]> {
-  const resp = await fetch(
-    `${TMDB_API_BASE}/person/${personId}/combined_credits?language=en-US`,
-    { headers: authHeaders(apiKey) },
-  );
-
-  if (!resp.ok) return [];
-
-  const data: { cast: TmdbCreditEntry[]; crew: TmdbCreditEntry[] } =
-    await resp.json();
-  // Merge cast + crew, tag media_type (API returns it)
-  return [...data.cast, ...data.crew];
+  try {
+    const data = await relayFetch<{ cast: TmdbCreditEntry[]; crew: TmdbCreditEntry[] }>(
+      `/tmdb/person/${personId}/credits`,
+    );
+    return [...data.cast, ...data.crew];
+  } catch {
+    return [];
+  }
 }
 
 /** TMDB movie detail response (full detail page) */
@@ -278,28 +240,24 @@ export interface TmdbTvDetail {
 
 /** Get TMDB movie details by ID. */
 export async function getTmdbMovieDetail(
-  apiKey: string,
   movieId: number,
 ): Promise<TmdbMovieDetail | null> {
-  const resp = await fetch(
-    `${TMDB_API_BASE}/movie/${movieId}?language=en-US&append_to_response=credits`,
-    { headers: authHeaders(apiKey) },
-  );
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    return await relayFetch<TmdbMovieDetail>(`/tmdb/movie/${movieId}`);
+  } catch {
+    return null;
+  }
 }
 
 /** Get TMDB TV show details by ID. */
 export async function getTmdbTvDetail(
-  apiKey: string,
   tvId: number,
 ): Promise<TmdbTvDetail | null> {
-  const resp = await fetch(
-    `${TMDB_API_BASE}/tv/${tvId}?language=en-US&append_to_response=credits`,
-    { headers: authHeaders(apiKey) },
-  );
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    return await relayFetch<TmdbTvDetail>(`/tmdb/tv/${tvId}`);
+  } catch {
+    return null;
+  }
 }
 
 /** Validate IMDb ID format (tt followed by 7+ digits). */

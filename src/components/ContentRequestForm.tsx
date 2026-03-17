@@ -14,10 +14,9 @@ import {
   findByImdbId,
   getTmdbImageUrl,
   isValidImdbId,
-  validateTmdbApiKey,
+  isTmdbAvailable,
 } from "../services/tmdb";
 import { discoverServers } from "../services/plex-api";
-import { getTmdbApiKey } from "../services/storage";
 import type { PlexServer } from "../types/plex";
 import type {
   TmdbMovie,
@@ -44,8 +43,8 @@ function ContentRequestForm({ onClose, initialQuery, initialMediaType }: Content
   const { authToken } = useAuth();
   const { submitRequest } = useContentRequests();
 
-  const [apiKey, setApiKey] = useState<string | null>(null);
-  const [apiKeyLoading, setApiKeyLoading] = useState(true);
+  const [tmdbReady, setTmdbReady] = useState(false);
+  const [tmdbLoading, setTmdbLoading] = useState(true);
   const [servers, setServers] = useState<PlexServer[]>([]);
   const [selectedServerId, setSelectedServerId] = useState<string>("");
   const [searchMode, setSearchMode] = useState<SearchMode>("search");
@@ -61,15 +60,12 @@ function ContentRequestForm({ onClose, initialQuery, initialMediaType }: Content
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchVersionRef = useRef(0);
 
-  // Load TMDb API key and available servers on mount
+  // Check TMDb proxy availability and load servers on mount
   useEffect(() => {
     (async () => {
-      const key = await getTmdbApiKey();
-      if (key) {
-        const valid = await validateTmdbApiKey(key);
-        setApiKey(valid ? key : null);
-      }
-      setApiKeyLoading(false);
+      const available = await isTmdbAvailable();
+      setTmdbReady(available);
+      setTmdbLoading(false);
     })();
 
     // Fetch all servers the user has access to
@@ -100,7 +96,7 @@ function ContentRequestForm({ onClose, initialQuery, initialMediaType }: Content
 
   // Debounced TMDb search
   useEffect(() => {
-    if (searchMode !== "search" || !apiKey || query.trim().length < 2) {
+    if (searchMode !== "search" || !tmdbReady || query.trim().length < 2) {
       setResults([]);
       return;
     }
@@ -115,8 +111,8 @@ function ContentRequestForm({ onClose, initialQuery, initialMediaType }: Content
       try {
         const { results: data } =
           mediaTab === "movie"
-            ? await searchTmdbMovies(apiKey, query.trim())
-            : await searchTmdbTvShows(apiKey, query.trim());
+            ? await searchTmdbMovies(query.trim())
+            : await searchTmdbTvShows(query.trim());
 
         if (version === searchVersionRef.current) {
           setResults(data);
@@ -137,17 +133,17 @@ function ContentRequestForm({ onClose, initialQuery, initialMediaType }: Content
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [query, mediaTab, searchMode, apiKey]);
+  }, [query, mediaTab, searchMode, tmdbReady]);
 
   const handleImdbLookup = useCallback(async () => {
-    if (!apiKey || !isValidImdbId(imdbInput.trim())) return;
+    if (!tmdbReady || !isValidImdbId(imdbInput.trim())) return;
 
     setIsSearching(true);
     setSearchError(null);
     setResults([]);
 
     try {
-      const result = await findByImdbId(apiKey, imdbInput.trim());
+      const result = await findByImdbId(imdbInput.trim());
       if (result) {
         setSelected(result);
       } else {
@@ -160,7 +156,7 @@ function ContentRequestForm({ onClose, initialQuery, initialMediaType }: Content
     } finally {
       setIsSearching(false);
     }
-  }, [apiKey, imdbInput]);
+  }, [tmdbReady, imdbInput]);
 
   const handleSelectResult = useCallback(
     (item: TmdbMovie | TmdbTvShow) => {
@@ -205,7 +201,7 @@ function ContentRequestForm({ onClose, initialQuery, initialMediaType }: Content
 
   // ── Render ──
 
-  if (apiKeyLoading) {
+  if (tmdbLoading) {
     return (
       <div style={styles.backdrop} onClick={onClose}>
         <div ref={panelRef} style={{ ...styles.panel, ...(mobile ? styles.panelMobile : {}) }} onClick={(e) => e.stopPropagation()}>
@@ -215,15 +211,15 @@ function ContentRequestForm({ onClose, initialQuery, initialMediaType }: Content
     );
   }
 
-  if (!apiKey) {
+  if (!tmdbReady) {
     return (
       <div style={styles.backdrop} onClick={onClose}>
         <div ref={panelRef} style={{ ...styles.panel, ...(mobile ? styles.panelMobile : {}) }} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Content request">
-          <h2 style={styles.title}>TMDb API Key Required</h2>
+          <h2 style={styles.title}>TMDb Search Unavailable</h2>
           <p style={styles.description}>
-            To search for movies and TV shows, a TMDb API key needs to be
-            configured in Settings. Ask a server admin to set it up, or
-            visit Settings → Content Requests to add your key.
+            The relay server does not have a TMDb API key configured.
+            Ask the server admin to set the TMDB_API_KEY environment
+            variable on the relay server.
           </p>
           <button onClick={onClose} style={styles.closeButton}>
             Close

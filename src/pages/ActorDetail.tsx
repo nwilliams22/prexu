@@ -2,8 +2,8 @@ import { useState, useEffect } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { useBreakpoint, isMobile, isTabletOrBelow } from "../hooks/useBreakpoint";
+import { useScrollRestoration } from "../hooks/useScrollRestoration";
 import { getMediaByActor, searchLibrary, getImageUrl } from "../services/plex-library";
-import { getTmdbApiKey } from "../services/storage";
 import {
   searchTmdbPerson,
   getTmdbPersonDetail,
@@ -61,6 +61,7 @@ function ActorDetail() {
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
   const tablet = isTabletOrBelow(bp) && !mobile;
+  useScrollRestoration();
 
   const thumbPath = (location.state as { thumb?: string } | null)?.thumb;
 
@@ -104,13 +105,11 @@ function ActorDetail() {
           searchLibrary(server.uri, server.accessToken, actorName, 50),
           // TMDB: get person details + credits
           (async () => {
-            const apiKey = await getTmdbApiKey();
-            if (!apiKey) return null;
-            const person = await searchTmdbPerson(apiKey, actorName);
+            const person = await searchTmdbPerson(actorName);
             if (!person) return null;
             const [detail, creds] = await Promise.all([
-              getTmdbPersonDetail(apiKey, person.id),
-              getTmdbPersonCredits(apiKey, person.id),
+              getTmdbPersonDetail(person.id),
+              getTmdbPersonCredits(person.id),
             ]);
             return { detail, credits: creds };
           })(),
@@ -229,8 +228,7 @@ function ActorDetail() {
           // ── Frequent Collaborators ──
           // Fetch TMDB details for the actor's top on-server credits to extract co-star data
           if (!cancelled && knownForList.length > 0) {
-            const apiKey = await getTmdbApiKey();
-            if (apiKey) {
+            {
               // Pick top credits that are on the server, or fall back to top credits overall
               const serverCredits = knownForList.filter((c) =>
                 titleMap.has((c.title ?? c.name ?? "").toLowerCase())
@@ -242,8 +240,8 @@ function ActorDetail() {
               const detailResults = await Promise.allSettled(
                 creditsToFetch.map((c) =>
                   c.media_type === "movie"
-                    ? getTmdbMovieDetail(apiKey, c.id)
-                    : getTmdbTvDetail(apiKey, c.id)
+                    ? getTmdbMovieDetail(c.id)
+                    : getTmdbTvDetail(c.id)
                 )
               );
 
@@ -622,6 +620,7 @@ function ActorDetail() {
                   return (
                     <PosterCard
                       key={m.ratingKey}
+                      ratingKey={m.ratingKey}
                       imageUrl={posterUrl(m.thumb)}
                       title={m.title}
                       subtitle={year ? String(year) : ""}
@@ -652,6 +651,7 @@ function ActorDetail() {
                   return (
                     <PosterCard
                       key={s.ratingKey}
+                      ratingKey={s.ratingKey}
                       imageUrl={posterUrl(s.thumb)}
                       title={s.title}
                       subtitle={subtitle}
