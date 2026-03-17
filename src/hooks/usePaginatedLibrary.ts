@@ -1,11 +1,20 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useAuth } from "./useAuth";
 import { getLibraryItems } from "../services/plex-library";
+import { cacheGet, cacheSet, cacheInvalidate } from "../services/api-cache";
 import type { PlexMediaItem, LibraryFilters } from "../types/library";
 
 const PAGE_SIZE = 50;
 /** Batch size used during progressive background loading */
 const BG_BATCH_SIZE = 200;
+/** Cache TTL for library data (5 minutes) */
+const CACHE_TTL = 5 * 60 * 1000;
+
+interface CachedLibrary {
+  items: PlexMediaItem[];
+  totalSize: number;
+  hasMore: boolean;
+}
 
 export interface UsePaginatedLibraryResult {
   items: PlexMediaItem[];
@@ -35,16 +44,35 @@ export function usePaginatedLibrary(
   const loadingRef = useRef(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
-  const retry = useCallback(() => {
-    setRefreshTrigger((n) => n + 1);
-  }, []);
-
   const loadAll = options.loadAll ?? false;
   const plexType = options.type;
+
+  // Build a stable cache key
+  const cacheKey = useMemo(() => {
+    if (!server || !sectionId) return "";
+    return `library:${server.uri}:${sectionId}:${sort}:${filtersKey}:${plexType ?? ""}`;
+  }, [server, sectionId, sort, filtersKey, plexType]);
+
+  const retry = useCallback(() => {
+    // Invalidate cache so the next fetch is fresh
+    if (cacheKey) cacheInvalidate(cacheKey);
+    setRefreshTrigger((n) => n + 1);
+  }, [cacheKey]);
 
   // Reset when section or sort changes
   useEffect(() => {
     if (!server || !sectionId) return;
+
+    // Check cache first for instant display
+    const cached = cacheGet<CachedLibrary>(cacheKey);
+    if (cached) {
+      setItems(cached.items);
+      setTotalSize(cached.totalSize);
+      setHasMore(cached.hasMore);
+      setIsLoading(false);
+      loadingRef.current = false;
+      return;
+    }
 
     let cancelled = false;
     loadingRef.current = true;
@@ -72,11 +100,15 @@ export function usePaginatedLibrary(
           setIsLoading(false);
           loadingRef.current = false;
 
+          // Cache the first page immediately for fast re-visit
+          cacheSet(cacheKey, { items: firstPage.items, totalSize: firstPage.totalSize, hasMore: false }, CACHE_TTL);
+
           // If there are more items, fetch them in background batches
           if (firstPage.hasMore) {
             setIsLoadingMore(true);
             let offset = firstPage.items.length;
             const total = firstPage.totalSize;
+            const allItems = [...firstPage.items];
 
             while (offset < total && !cancelled) {
               const batch = await getLibraryItems(
@@ -88,7 +120,8 @@ export function usePaginatedLibrary(
 
               if (cancelled) return;
 
-              setItems((prev) => [...prev, ...batch.items]);
+              allItems.push(...batch.items);
+              setItems([...allItems]);
               offset += batch.items.length;
 
               // Safety: if server returned 0 items, stop to avoid infinite loop
@@ -97,6 +130,8 @@ export function usePaginatedLibrary(
 
             if (!cancelled) {
               setIsLoadingMore(false);
+              // Cache the complete list
+              cacheSet(cacheKey, { items: allItems, totalSize: total, hasMore: false }, CACHE_TTL);
             }
           }
         } else {
@@ -111,6 +146,7 @@ export function usePaginatedLibrary(
             setItems(result.items);
             setTotalSize(result.totalSize);
             setHasMore(result.hasMore);
+            cacheSet(cacheKey, { items: result.items, totalSize: result.totalSize, hasMore: result.hasMore }, CACHE_TTL);
           }
         }
       } catch (err) {
@@ -130,7 +166,7 @@ export function usePaginatedLibrary(
     return () => {
       cancelled = true;
     };
-  }, [server, sectionId, sort, filtersKey, refreshTrigger, loadAll, plexType]);
+  }, [server, sectionId, sort, filtersKey, refreshTrigger, loadAll, plexType, cacheKey]);
 
   const loadMore = useCallback(() => {
     if (!server || !sectionId || loadingRef.current || !hasMore) return;
@@ -146,8 +182,11 @@ export function usePaginatedLibrary(
           sectionId,
           { start: items.length, size: PAGE_SIZE, sort, filters, type: plexType }
         );
-        setItems((prev) => [...prev, ...result.items]);
+        const updated = [...items, ...result.items];
+        setItems(updated);
         setHasMore(result.hasMore);
+        // Update cache with the expanded list
+        cacheSet(cacheKey, { items: updated, totalSize, hasMore: result.hasMore }, CACHE_TTL);
       } catch (err) {
         setError(
           err instanceof Error ? err.message : "Failed to load more items"
@@ -157,7 +196,7 @@ export function usePaginatedLibrary(
         loadingRef.current = false;
       }
     })();
-  }, [server, sectionId, sort, filtersKey, items.length, hasMore, plexType]);
+  }, [server, sectionId, sort, filtersKey, items.length, hasMore, plexType, cacheKey, totalSize]);
 
   return { items, isLoading, isLoadingMore, hasMore, totalSize, error, loadMore, retry };
 }

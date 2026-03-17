@@ -14,6 +14,7 @@ import {
 import HorizontalRow from "../components/HorizontalRow";
 import PosterCard from "../components/PosterCard";
 import WatchTogetherButton from "../components/WatchTogetherButton";
+import WatchedToggleButton from "../components/WatchedToggleButton";
 import FixMatchDialog from "../components/FixMatchDialog";
 import ErrorState from "../components/ErrorState";
 import type {
@@ -27,17 +28,8 @@ import type {
   PlexChapter,
   PlexRating,
 } from "../types/library";
-
-/** Format milliseconds to HH:MM:SS or MM:SS for resume display */
-function formatResumeTime(ms: number): string {
-  const totalSeconds = Math.floor(ms / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  if (hours > 0) return `${hours}:${pad(minutes)}:${pad(seconds)}`;
-  return `${minutes}:${pad(seconds)}`;
-}
+import { formatResumeTime, decodeHtmlEntities } from "../utils/media-helpers";
+import { detailStyles } from "../utils/detail-styles";
 
 /** Parse a PlexRating or legacy ratingImage into a displayable badge */
 interface RatingBadge {
@@ -199,6 +191,8 @@ function ItemDetail() {
   const [showFixMatch, setShowFixMatch] = useState(false);
   const [seasonFading, setSeasonFading] = useState(false);
   const [failedCastImages, setFailedCastImages] = useState<Set<string>>(new Set());
+  const [refreshKey, setRefreshKey] = useState(0);
+  const refreshItem = useCallback(() => setRefreshKey((k) => k + 1), []);
 
   const handleCastImageError = useCallback((key: string) => {
     setFailedCastImages((prev) => {
@@ -337,7 +331,7 @@ function ItemDetail() {
     return () => {
       cancelled = true;
     };
-  }, [server, ratingKey]);
+  }, [server, ratingKey, refreshKey]);
 
   // Update page title when item loads
   useEffect(() => {
@@ -536,6 +530,7 @@ function ItemDetail() {
             return (
               <PosterCard
                 key={m.ratingKey}
+                ratingKey={m.ratingKey}
                 imageUrl={posterUrl(m.thumb)}
                 title={m.title}
                 subtitle={subtitle}
@@ -663,6 +658,11 @@ function ItemDetail() {
                   title={movie.title}
                   mediaType="movie"
                 />
+                <WatchedToggleButton
+                  ratingKey={movie.ratingKey}
+                  isWatched={(movie.viewCount ?? 0) > 0}
+                  onToggled={refreshItem}
+                />
                 {isAdmin && (
                   <button
                     onClick={() => setShowFixMatch(true)}
@@ -683,7 +683,7 @@ function ItemDetail() {
                   ...styles.summary,
                   maxWidth: bp === "large" ? "1000px" : "800px",
                   marginTop: "0.25rem",
-                }}>{movie.summary}</p>
+                }}>{decodeHtmlEntities(movie.summary)}</p>
               )}
             </div>
           </div>
@@ -720,6 +720,7 @@ function ItemDetail() {
               {extras.map((extra) => (
                 <PosterCard
                   key={extra.ratingKey}
+                  ratingKey={extra.ratingKey}
                   imageUrl={posterUrl(extra.thumb)}
                   title={extra.title}
                   subtitle={(extra as { subtype?: string }).subtype || "Extra"}
@@ -749,6 +750,7 @@ function ItemDetail() {
                 return (
                   <PosterCard
                     key={r.ratingKey}
+                    ratingKey={r.ratingKey}
                     imageUrl={posterUrl(r.thumb)}
                     title={r.title}
                     subtitle={subtitle}
@@ -873,7 +875,7 @@ function ItemDetail() {
                   ...styles.summary,
                   maxWidth: bp === "large" ? "1000px" : "800px",
                   marginTop: "0.25rem",
-                }}>{show.summary}</p>
+                }}>{decodeHtmlEntities(show.summary)}</p>
               )}
             </div>
           </div>
@@ -893,6 +895,7 @@ function ItemDetail() {
                 return (
                   <PosterCard
                     key={season.ratingKey}
+                    ratingKey={season.ratingKey}
                     imageUrl={posterUrl(season.thumb)}
                     title={season.title}
                     subtitle={`${season.leafCount} episode${season.leafCount !== 1 ? "s" : ""}`}
@@ -917,6 +920,7 @@ function ItemDetail() {
               {extras.map((extra) => (
                 <PosterCard
                   key={extra.ratingKey}
+                  ratingKey={extra.ratingKey}
                   imageUrl={posterUrl(extra.thumb)}
                   title={extra.title}
                   subtitle={(extra as { subtype?: string }).subtype || "Extra"}
@@ -946,6 +950,7 @@ function ItemDetail() {
                 return (
                   <PosterCard
                     key={r.ratingKey}
+                    ratingKey={r.ratingKey}
                     imageUrl={posterUrl(r.thumb)}
                     title={r.title}
                     subtitle={subtitle}
@@ -1094,7 +1099,7 @@ function ItemDetail() {
                 <p style={{
                   ...styles.summary,
                   maxWidth: bp === "large" ? "800px" : "650px",
-                }}>{ep.summary}</p>
+                }}>{decodeHtmlEntities(ep.summary)}</p>
               )}
 
               {/* Play buttons */}
@@ -1130,6 +1135,11 @@ function ItemDetail() {
                   ratingKey={ep.ratingKey}
                   title={`${ep.grandparentTitle} — ${ep.title}`}
                   mediaType="episode"
+                />
+                <WatchedToggleButton
+                  ratingKey={ep.ratingKey}
+                  isWatched={(ep.viewCount ?? 0) > 0}
+                  onToggled={refreshItem}
                 />
               </div>
 
@@ -1200,6 +1210,7 @@ function ItemDetail() {
                 .map((sib) => (
                   <PosterCard
                     key={sib.ratingKey}
+                    ratingKey={sib.ratingKey}
                     imageUrl={episodeThumbUrl(sib.thumb)}
                     title={sib.title}
                     subtitle={`Episode ${sib.index}`}
@@ -1220,6 +1231,7 @@ function ItemDetail() {
               {extras.map((extra) => (
                 <PosterCard
                   key={extra.ratingKey}
+                  ratingKey={extra.ratingKey}
                   imageUrl={posterUrl(extra.thumb)}
                   title={extra.title}
                   subtitle={(extra as { subtype?: string }).subtype || "Extra"}
@@ -1400,7 +1412,7 @@ function ItemDetail() {
                     <span style={styles.episodeGridNumber}>Episode {ep.index}{airDate ? ` · ${airDate}` : ""}</span>
                     <span style={styles.episodeGridTitle}>{ep.title}</span>
                     {ep.summary && (
-                      <span style={styles.episodeSynopsis}>{ep.summary}</span>
+                      <span style={styles.episodeSynopsis}>{decodeHtmlEntities(ep.summary)}</span>
                     )}
                   </div>
                 </button>
@@ -1424,6 +1436,9 @@ function ItemDetail() {
 }
 
 const styles: Record<string, React.CSSProperties> = {
+  // Spread shared hero/background styles
+  ...detailStyles,
+  // Page-specific styles
   container: {
     position: "relative",
     paddingBottom: "2rem",
@@ -1435,81 +1450,12 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "center",
     padding: "4rem",
   },
-  // Full-page background art
-  pageBgArt: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    width: "100%",
-    height: "100%",
-    objectFit: "cover",
-    objectPosition: "center 20%",
-    filter: "blur(4px) brightness(0.35)",
-    transform: "scale(1.02)",
-    pointerEvents: "none" as const,
-  },
-  pageBgArtFallback: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    width: "100%",
-    height: "100%",
-    objectFit: "cover",
-    objectPosition: "center 30%",
-    filter: "blur(30px) brightness(0.3) saturate(1.4)",
-    transform: "scale(1.1)",
-    pointerEvents: "none" as const,
-  },
-  pageBgOverlay: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    width: "100%",
-    height: "100%",
-    background:
-      "linear-gradient(to bottom, rgba(0,0,0,0.2) 0%, rgba(0,0,0,0.3) 30%, var(--bg-primary) 85%)",
-    pointerEvents: "none" as const,
-  },
-  heroContent: {
-    position: "relative",
-    display: "flex",
-    gap: "2.5rem",
-    padding: "2.5rem 2.5rem 2rem",
-    width: "100%",
-    zIndex: 1,
-  },
-  heroPoster: {
-    width: "240px",
-    borderRadius: "10px",
-    boxShadow: "0 6px 30px rgba(0,0,0,0.6)",
-    flexShrink: 0,
-    objectFit: "cover",
-  },
   episodeHeroThumb: {
     width: "360px",
     borderRadius: "10px",
     boxShadow: "0 6px 30px rgba(0,0,0,0.6)",
     flexShrink: 0,
     objectFit: "cover",
-  },
-  heroInfo: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "0.6rem",
-    justifyContent: "flex-start",
-  },
-  heroTitle: {
-    fontSize: "2.4rem",
-    fontWeight: 700,
-    lineHeight: 1.2,
-  },
-  metaRow: {
-    display: "flex",
-    gap: "0.85rem",
-    fontSize: "1rem",
-    color: "var(--text-secondary)",
-    flexWrap: "wrap",
-    alignItems: "center",
   },
   rating: {
     border: "1px solid var(--text-secondary)",

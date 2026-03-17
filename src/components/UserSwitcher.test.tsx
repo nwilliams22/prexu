@@ -204,6 +204,14 @@ describe("UserSwitcher", () => {
     expect(switchTo).not.toHaveBeenCalled();
   });
 
+  it("shows Watch History in dropdown menu", async () => {
+    const user = userEvent.setup();
+    renderUserSwitcher();
+
+    await user.click(screen.getByTitle("Alice"));
+    expect(screen.getByText("Watch History")).toBeInTheDocument();
+  });
+
   it("shows avatar fallback when no thumb", () => {
     mockUseAuth.mockReturnValue({
       ...defaultAuth,

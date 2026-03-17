@@ -53,12 +53,19 @@ export interface PlexActivityNotification {
   Activity: PlexActivity;
 }
 
+export interface PlexTimelineEntry {
+  itemID: number;
+  type: number; // 1=movie, 2=show, 3=season, 4=episode
+  state: number; // 0=created, 2=matching, 5=matched, 9=deleted, etc.
+  updatedAt: number;
+}
+
 export interface PlexNotificationContainer {
   type: string;
   size: number;
   ActivityNotification?: PlexActivityNotification[];
   PlaySessionStateNotification?: unknown[];
-  TimelineEntry?: unknown[];
+  TimelineEntry?: PlexTimelineEntry[];
 }
 
 // ── Helpers ──

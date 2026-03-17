@@ -8,12 +8,14 @@ import PosterCard from "../components/PosterCard";
 import SkeletonCard from "../components/SkeletonCard";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
-import type { PlexMediaItem, PlexEpisode } from "../types/library";
+import { getMediaSubtitleShort } from "../utils/media-helpers";
+import { useScrollRestoration } from "../hooks/useScrollRestoration";
 
 function SearchResults() {
   const { server } = useAuth();
   const { query, results, isSearching, error } = useSearch();
   const navigate = useNavigate();
+  useScrollRestoration();
 
   useEffect(() => {
     document.title = query ? `"${query}" — Search - Prexu` : "Search - Prexu";
@@ -26,22 +28,6 @@ function SearchResults() {
 
   const thumbUrl = (thumb: string) =>
     getImageUrl(server.uri, server.accessToken, thumb, 400, 225);
-
-  const getSubtitle = (item: PlexMediaItem): string => {
-    if (item.type === "movie") {
-      const movie = item as { year?: number };
-      return movie.year ? String(movie.year) : "";
-    }
-    if (item.type === "show") {
-      const show = item as { year?: number };
-      return show.year ? String(show.year) : "";
-    }
-    if (item.type === "episode") {
-      const ep = item as PlexEpisode;
-      return `S${String(ep.parentIndex).padStart(2, "0")}E${String(ep.index).padStart(2, "0")}`;
-    }
-    return "";
-  };
 
   const isEpisodeHub = (hubType: string): boolean =>
     hubType === "episode" || hubType === "clip";
@@ -77,13 +63,14 @@ function SearchResults() {
             {(hub.Metadata ?? []).map((item) => (
               <PosterCard
                 key={item.ratingKey}
+                ratingKey={item.ratingKey}
                 imageUrl={
                   isEpisodeHub(hub.type)
                     ? thumbUrl(item.thumb)
                     : posterUrl(item.thumb)
                 }
                 title={item.title}
-                subtitle={getSubtitle(item)}
+                subtitle={getMediaSubtitleShort(item)}
                 width={isEpisodeHub(hub.type) ? 230 : 190}
                 aspectRatio={isEpisodeHub(hub.type) ? 0.5625 : 1.5}
                 onClick={() => navigate(`/item/${item.ratingKey}`)}

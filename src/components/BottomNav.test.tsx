@@ -12,12 +12,11 @@ function renderBottomNav(initialPath = "/") {
 }
 
 describe("BottomNav", () => {
-  it("renders all five tabs", () => {
+  it("renders all four tabs", () => {
     renderBottomNav();
     expect(screen.getByLabelText("Home")).toBeInTheDocument();
     expect(screen.getByLabelText("Search")).toBeInTheDocument();
     expect(screen.getByLabelText("Library")).toBeInTheDocument();
-    expect(screen.getByLabelText("History")).toBeInTheDocument();
     expect(screen.getByLabelText("Settings")).toBeInTheDocument();
   });
 
@@ -26,14 +25,13 @@ describe("BottomNav", () => {
     expect(screen.getByText("Home")).toBeInTheDocument();
     expect(screen.getByText("Search")).toBeInTheDocument();
     expect(screen.getByText("Library")).toBeInTheDocument();
-    expect(screen.getByText("History")).toBeInTheDocument();
     expect(screen.getByText("Settings")).toBeInTheDocument();
   });
 
   it("highlights active tab based on current route", () => {
-    renderBottomNav("/history");
-    const historyTab = screen.getByLabelText("History");
-    expect(historyTab).toHaveStyle({ color: "var(--accent)" });
+    renderBottomNav("/settings");
+    const settingsTab = screen.getByLabelText("Settings");
+    expect(settingsTab).toHaveStyle({ color: "var(--accent)" });
   });
 
   it("does not highlight inactive tabs", () => {

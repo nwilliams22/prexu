@@ -4,13 +4,20 @@ import { useAuth } from "../hooks/useAuth";
 import { useWatchHistory } from "../hooks/useWatchHistory";
 import { useMediaContextMenu } from "../hooks/useMediaContextMenu";
 import { usePlayAction } from "../hooks/usePlayAction";
+import { useScrollRestoration } from "../hooks/useScrollRestoration";
 import { getImageUrl } from "../services/plex-library";
 import LibraryGrid from "../components/LibraryGrid";
 import PosterCard from "../components/PosterCard";
 import SkeletonCard from "../components/SkeletonCard";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
-import type { PlexMediaItem, PlexEpisode } from "../types/library";
+import {
+  getMediaTitle,
+  getMediaSubtitle,
+  getMediaPoster,
+  getProgress,
+  isWatched,
+} from "../utils/media-helpers";
 
 function WatchHistory() {
   const { server } = useAuth();
@@ -18,6 +25,7 @@ function WatchHistory() {
   const sentinelRef = useRef<HTMLDivElement>(null);
   const { items, isLoading, isLoadingMore, hasMore, totalSize, error, loadMore, retry } =
     useWatchHistory();
+  useScrollRestoration();
   const { openContextMenu, overlays: menuOverlays } = useMediaContextMenu({
     showAddToPlaylist: false,
   });
@@ -46,44 +54,6 @@ function WatchHistory() {
   const posterUrl = (thumb: string) =>
     getImageUrl(server.uri, server.accessToken, thumb, 300, 450);
 
-  const getTitle = (item: PlexMediaItem): string => {
-    if (item.type === "episode") {
-      const ep = item as PlexEpisode;
-      return ep.grandparentTitle || item.title;
-    }
-    return item.title;
-  };
-
-  const getSubtitle = (item: PlexMediaItem): string => {
-    if (item.type === "episode") {
-      const ep = item as PlexEpisode;
-      return `S${String(ep.parentIndex).padStart(2, "0")}E${String(ep.index).padStart(2, "0")} · ${ep.title}`;
-    }
-    const movie = item as { year?: number };
-    return movie.year ? String(movie.year) : "";
-  };
-
-  const getPoster = (item: PlexMediaItem): string => {
-    if (item.type === "episode") {
-      const ep = item as PlexEpisode;
-      return ep.grandparentThumb || item.thumb;
-    }
-    return item.thumb;
-  };
-
-  const getProgress = (item: PlexMediaItem): number | undefined => {
-    const withOffset = item as { viewOffset?: number; duration?: number };
-    if (withOffset.viewOffset && withOffset.duration) {
-      return withOffset.viewOffset / withOffset.duration;
-    }
-    return undefined;
-  };
-
-  const isWatched = (item: PlexMediaItem): boolean => {
-    const asMovie = item as { viewCount?: number };
-    return asMovie.viewCount !== undefined && asMovie.viewCount > 0;
-  };
-
   return (
     <div style={styles.container}>
       <h2 style={styles.title}>Watch History</h2>
@@ -103,9 +73,10 @@ function WatchHistory() {
         {items.map((item, index) => (
           <PosterCard
             key={`${item.ratingKey}-${index}`}
-            imageUrl={posterUrl(getPoster(item))}
-            title={getTitle(item)}
-            subtitle={getSubtitle(item)}
+            ratingKey={item.ratingKey}
+            imageUrl={posterUrl(getMediaPoster(item))}
+            title={getMediaTitle(item)}
+            subtitle={getMediaSubtitle(item)}
             progress={getProgress(item)}
             watched={isWatched(item)}
             onClick={() => navigate(`/item/${item.ratingKey}`)}

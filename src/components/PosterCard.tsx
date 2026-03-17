@@ -1,4 +1,5 @@
 import { useState, memo } from "react";
+import { useServerActivity } from "../hooks/useServerActivity";
 
 interface PosterCardProps {
   imageUrl: string;
@@ -26,6 +27,10 @@ interface PosterCardProps {
   isExpanded?: boolean;
   /** Play button click handler — shows centered play button on hover */
   onPlay?: (e: React.MouseEvent) => void;
+  /** Show a scanning/refreshing sweep animation overlay */
+  scanning?: boolean;
+  /** Item ratingKey — used to auto-detect scanning state from server activity */
+  ratingKey?: string;
 }
 
 function PosterCard({
@@ -45,7 +50,11 @@ function PosterCard({
   onExpand,
   isExpanded,
   onPlay,
+  scanning: scanningProp,
+  ratingKey,
 }: PosterCardProps) {
+  const { scanningIds } = useServerActivity();
+  const scanning = scanningProp ?? (ratingKey ? scanningIds.has(ratingKey) : false);
   const [loaded, setLoaded] = useState(false);
   const [hovered, setHovered] = useState(false);
   const [active, setActive] = useState(false);
@@ -54,6 +63,7 @@ function PosterCard({
 
   return (
     <button
+      className="card-enter"
       onClick={onClick}
       onContextMenu={(e) => {
         if (onContextMenu) {
@@ -205,6 +215,9 @@ function PosterCard({
             />
           </div>
         )}
+
+        {/* Scanning/refreshing overlay */}
+        {scanning && <div className="scan-overlay" />}
       </div>
 
       {/* Text below image */}

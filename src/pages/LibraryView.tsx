@@ -6,6 +6,10 @@ import { useLibrary } from "../hooks/useLibrary";
 import { useFilterOptions } from "../hooks/useFilterOptions";
 import { useMediaContextMenu } from "../hooks/useMediaContextMenu";
 import { usePlayAction } from "../hooks/usePlayAction";
+import { useSectionCollections } from "../hooks/useCollections";
+import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
+import { usePreferences } from "../hooks/usePreferences";
+import { useScrollRestoration } from "../hooks/useScrollRestoration";
 import { getImageUrl } from "../services/plex-library";
 import LibraryGrid from "../components/LibraryGrid";
 import SortBar from "../components/SortBar";
@@ -14,43 +18,15 @@ import PosterCard from "../components/PosterCard";
 import SkeletonCard from "../components/SkeletonCard";
 import ShowExpansionPanel from "../components/ShowExpansionPanel";
 import AlphaJumpBar from "../components/AlphaJumpBar";
+import SegmentedControl from "../components/SegmentedControl";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
-import type { PlexMediaItem, PlexShow, LibraryFilters } from "../types/library";
-
-/** Pure helper — is this item fully watched? */
-function isWatched(item: PlexMediaItem): boolean {
-  const asMovie = item as { viewCount?: number };
-  if (asMovie.viewCount !== undefined) return asMovie.viewCount > 0;
-  const asShow = item as { viewedLeafCount?: number; leafCount?: number };
-  if (asShow.viewedLeafCount !== undefined && asShow.leafCount !== undefined) {
-    return asShow.leafCount > 0 && asShow.viewedLeafCount >= asShow.leafCount;
-  }
-  return false;
-}
-
-/** Pure helper — number of unwatched episodes (shows/seasons), or undefined */
-function getUnwatchedCount(item: PlexMediaItem): number | undefined {
-  const asShow = item as { viewedLeafCount?: number; leafCount?: number };
-  if (asShow.leafCount !== undefined && asShow.viewedLeafCount !== undefined) {
-    const count = asShow.leafCount - asShow.viewedLeafCount;
-    return count > 0 ? count : undefined;
-  }
-  return undefined;
-}
-
-/** Pure helper — subtitle for a library item (year, episode count) */
-function getSubtitle(item: { type: string; year?: number; leafCount?: number }): string {
-  if (item.type === "show") {
-    const show = item as PlexShow;
-    const parts: string[] = [];
-    if (show.year) parts.push(String(show.year));
-    if (show.leafCount) parts.push(`${show.leafCount} eps`);
-    return parts.join(" · ");
-  }
-  if (item.year) return String(item.year);
-  return "";
-}
+import {
+  getMediaSubtitle,
+  isWatched,
+  getUnwatchedCount,
+} from "../utils/media-helpers";
+import type { PlexCollection, LibraryFilters } from "../types/library";
 
 function LibraryView() {
   const { sectionId } = useParams<{ sectionId: string }>();
@@ -94,6 +70,59 @@ function LibraryView() {
   const { getPlayHandler, playOverlay } = usePlayAction();
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const gridContainerRef = useRef<HTMLDivElement>(null);
+
+  // --- Collections view state ---
+  const bp = useBreakpoint();
+  const mobile = isMobile(bp);
+  const { preferences } = usePreferences();
+  const minCollectionSize = preferences.appearance.minCollectionSize;
+  useScrollRestoration();
+  const showViewToggle = section?.type === "movie";
+  const viewMode = searchParams.get("view") === "collections" ? "collections" : "library";
+  const {
+    collections: sectionCollections,
+    watchedMap: collectionWatchedMap,
+    isLoading: collectionsLoading,
+    error: collectionsError,
+    retry: collectionsRetry,
+  } = useSectionCollections(showViewToggle ? sectionId : undefined);
+
+  const [collectionSearch, setCollectionSearch] = useState("");
+  const [collectionSort, setCollectionSort] = useState<
+    "alpha-asc" | "alpha-desc" | "items-desc" | "items-asc"
+  >("alpha-asc");
+  const [collectionsUnwatchedOnly, setCollectionsUnwatchedOnly] = useState(false);
+
+  const filteredCollections = useMemo(() => {
+    let list = sectionCollections.filter((c) => (c.childCount ?? 0) >= minCollectionSize);
+    if (collectionSearch) {
+      const q = collectionSearch.toLowerCase();
+      list = list.filter((c) => c.title.toLowerCase().includes(q));
+    }
+    if (collectionsUnwatchedOnly) {
+      list = list.filter((c) => {
+        // Hide collections where all items are watched
+        const fullyWatched = collectionWatchedMap[c.ratingKey];
+        return fullyWatched !== true;
+      });
+    }
+    const sorted = [...list];
+    switch (collectionSort) {
+      case "alpha-asc":
+        sorted.sort((a, b) => a.title.localeCompare(b.title));
+        break;
+      case "alpha-desc":
+        sorted.sort((a, b) => b.title.localeCompare(a.title));
+        break;
+      case "items-desc":
+        sorted.sort((a, b) => (b.childCount ?? 0) - (a.childCount ?? 0));
+        break;
+      case "items-asc":
+        sorted.sort((a, b) => (a.childCount ?? 0) - (b.childCount ?? 0));
+        break;
+    }
+    return sorted;
+  }, [sectionCollections, collectionSearch, collectionSort, collectionsUnwatchedOnly, collectionWatchedMap, minCollectionSize]);
 
   // Compute available first-letters from loaded items for the alpha jump bar
   const availableLetters = useMemo(() => {
@@ -140,8 +169,12 @@ function LibraryView() {
     sort.startsWith("titleSort:");
 
   useEffect(() => {
-    if (section) document.title = `${section.title} - Prexu`;
-  }, [section]);
+    if (section) {
+      document.title = viewMode === "collections"
+        ? `${section.title} Collections - Prexu`
+        : `${section.title} - Prexu`;
+    }
+  }, [section, viewMode]);
 
   const updateSearchParams = useCallback(
     (updates: Record<string, string | undefined>) => {
@@ -225,117 +258,225 @@ function LibraryView() {
     <div style={styles.container}>
       <h2 style={styles.title}>{section?.title ?? `Library ${sectionId}`}</h2>
 
-      {error && <ErrorState message={error} onRetry={retry} />}
+      {/* Segmented control: Library / Collections */}
+      {showViewToggle && (
+        <SegmentedControl
+          options={[
+            { label: "Library", value: "library" },
+            { label: "Collections", value: "collections" },
+          ]}
+          value={viewMode}
+          onChange={(v) => updateSearchParams({ view: v === "library" ? undefined : v })}
+          style={{ marginBottom: "1rem" }}
+        />
+      )}
 
-      {!isLoading && !error && (
+      {/* ========= LIBRARY VIEW ========= */}
+      {viewMode === "library" && (
         <>
-          <SortBar
-            currentSort={sort}
-            onSortChange={handleSortChange}
-            totalCount={totalSize}
-            label={getLabel()}
-          />
-          <FilterBar
-            filters={filters}
-            onFiltersChange={handleFiltersChange}
-            genres={genres}
-            years={years}
-            contentRatings={contentRatings}
-            isLoading={filtersLoading}
-          />
+          {error && <ErrorState message={error} onRetry={retry} />}
+
+          {!isLoading && !error && (
+            <>
+              <SortBar
+                currentSort={sort}
+                onSortChange={handleSortChange}
+                totalCount={totalSize}
+                label={getLabel()}
+              />
+              <FilterBar
+                filters={filters}
+                onFiltersChange={handleFiltersChange}
+                genres={genres}
+                years={years}
+                contentRatings={contentRatings}
+                isLoading={filtersLoading}
+              />
+            </>
+          )}
+
+          <div ref={gridContainerRef}>
+          <LibraryGrid>
+            {isLoading &&
+              Array.from({ length: 24 }).map((_, i) => <SkeletonCard key={i} />)}
+
+            {items.map((item) => (
+              <React.Fragment key={item.ratingKey}>
+                <div data-title-sort={(item as { titleSort?: string }).titleSort || item.title}>
+                <PosterCard
+                  ratingKey={item.ratingKey}
+                  imageUrl={posterUrl(item.thumb)}
+                  title={item.title}
+                  subtitle={getMediaSubtitle(item, { showEpisodeCount: true })}
+                  watched={isWatched(item)}
+                  unwatchedCount={getUnwatchedCount(item)}
+                  onClick={() => navigate(`/item/${item.ratingKey}`)}
+                  onPlay={getPlayHandler(item)}
+                  showMoreButton
+                  onContextMenu={(e) => openContextMenu(e, item)}
+                  onMoreClick={(e) => openContextMenu(e, item)}
+                  onExpand={
+                    item.type === "show"
+                      ? () =>
+                          setExpandedKey(
+                            expandedKey === item.ratingKey ? null : item.ratingKey
+                          )
+                      : undefined
+                  }
+                  isExpanded={expandedKey === item.ratingKey}
+                />
+                </div>
+                {expandedKey === item.ratingKey && (
+                  <div style={{ gridColumn: "1 / -1" }}>
+                    <ShowExpansionPanel
+                      ratingKey={item.ratingKey}
+                      onClose={() => setExpandedKey(null)}
+                      onNavigateToShow={(key) => navigate(`/item/${key}`)}
+                      onNavigateToSeason={(key) => navigate(`/item/${key}`)}
+                    />
+                  </div>
+                )}
+              </React.Fragment>
+            ))}
+
+            {isLoadingMore &&
+              Array.from({ length: 12 }).map((_, i) => (
+                <SkeletonCard key={`more-${i}`} />
+              ))}
+          </LibraryGrid>
+          </div>
+
+          {showAlphaJump && (
+            <AlphaJumpBar
+              onJump={handleAlphaJump}
+              availableLetters={availableLetters}
+            />
+          )}
+
+          {!isLoading && !error && items.length === 0 && (
+            <EmptyState
+              icon={
+                <svg width={48} height={48} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                  <path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4M4 7l8 4M4 7v10l8 4m0-10v10" />
+                </svg>
+              }
+              title={hasActiveFilters ? "No items match your filters" : "No items in this library"}
+              subtitle={
+                hasActiveFilters
+                  ? "Try adjusting or clearing your filters to see more results."
+                  : "Add some media to this library section in Plex to see it here."
+              }
+              action={
+                hasActiveFilters
+                  ? { label: "Clear Filters", onClick: () => handleFiltersChange({}) }
+                  : undefined
+              }
+            />
+          )}
+
+          {isLoadingMore && (
+            <p style={styles.loadingMore}>Loading more...</p>
+          )}
+
+          <div ref={sentinelRef} style={styles.sentinel} />
         </>
       )}
 
-      <div ref={gridContainerRef}>
-      <LibraryGrid>
-        {/* Initial loading skeletons */}
-        {isLoading &&
-          Array.from({ length: 24 }).map((_, i) => <SkeletonCard key={i} />)}
+      {/* ========= COLLECTIONS VIEW ========= */}
+      {viewMode === "collections" && (
+        <>
+          {collectionsError && (
+            <ErrorState message={collectionsError} onRetry={collectionsRetry} />
+          )}
 
-        {/* Actual items */}
-        {items.map((item) => (
-          <React.Fragment key={item.ratingKey}>
-            <div data-title-sort={(item as { titleSort?: string }).titleSort || item.title}>
-            <PosterCard
-              imageUrl={posterUrl(item.thumb)}
-              title={item.title}
-              subtitle={getSubtitle(item as { type: string; year?: number; leafCount?: number })}
-              watched={isWatched(item)}
-              unwatchedCount={getUnwatchedCount(item)}
-              onClick={() => navigate(`/item/${item.ratingKey}`)}
-              onPlay={getPlayHandler(item)}
-              showMoreButton
-              onContextMenu={(e) => openContextMenu(e, item)}
-              onMoreClick={(e) => openContextMenu(e, item)}
-              onExpand={
-                item.type === "show"
-                  ? () =>
-                      setExpandedKey(
-                        expandedKey === item.ratingKey ? null : item.ratingKey
-                      )
+          {!collectionsLoading && !collectionsError && (
+            <div style={{ ...styles.collectionsToolbar, ...(mobile ? { flexDirection: "column" as const } : {}) }}>
+              <input
+                type="text"
+                placeholder="Search collections..."
+                value={collectionSearch}
+                onChange={(e) => setCollectionSearch(e.target.value)}
+                style={{ ...styles.collectionsSearchInput, ...(mobile ? { width: "100%" } : {}) }}
+              />
+              <div style={styles.collectionsSortGroup}>
+                <label htmlFor="collection-sort" style={styles.collectionsSortLabel}>
+                  Sort:
+                </label>
+                <select
+                  id="collection-sort"
+                  value={collectionSort}
+                  onChange={(e) =>
+                    setCollectionSort(
+                      e.target.value as typeof collectionSort
+                    )
+                  }
+                  style={styles.collectionsSortSelect}
+                >
+                  <option value="alpha-asc">A–Z</option>
+                  <option value="alpha-desc">Z–A</option>
+                  <option value="items-desc">Most Items</option>
+                  <option value="items-asc">Fewest Items</option>
+                </select>
+              </div>
+              <button
+                onClick={() => setCollectionsUnwatchedOnly((v) => !v)}
+                style={collectionsUnwatchedOnly ? styles.unwatchedToggleActive : styles.unwatchedToggle}
+                aria-pressed={collectionsUnwatchedOnly}
+                title="Show only collections with unwatched items"
+              >
+                Unwatched
+              </button>
+              <span style={styles.collectionsCount}>
+                {filteredCollections.length} collection{filteredCollections.length !== 1 ? "s" : ""}
+              </span>
+            </div>
+          )}
+
+          <LibraryGrid>
+            {collectionsLoading &&
+              Array.from({ length: 12 }).map((_, i) => <SkeletonCard key={i} />)}
+
+            {filteredCollections.map((c: PlexCollection) => (
+              <PosterCard
+                key={c.ratingKey}
+                ratingKey={c.ratingKey}
+                imageUrl={c.thumb ? posterUrl(c.thumb) : ""}
+                title={c.title}
+                subtitle={`${c.childCount ?? 0} item${(c.childCount ?? 0) !== 1 ? "s" : ""}`}
+                onClick={() => navigate(`/collection/${c.ratingKey}`)}
+              />
+            ))}
+          </LibraryGrid>
+
+          {!collectionsLoading && !collectionsError && filteredCollections.length === 0 && (
+            <EmptyState
+              icon={
+                <svg width={48} height={48} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                  <rect x={3} y={3} width={7} height={7} rx={1} />
+                  <rect x={14} y={3} width={7} height={7} rx={1} />
+                  <rect x={3} y={14} width={7} height={7} rx={1} />
+                  <rect x={14} y={14} width={7} height={7} rx={1} />
+                </svg>
+              }
+              title={
+                collectionSearch
+                  ? "No collections match your search"
+                  : "No collections in this library"
+              }
+              subtitle={
+                collectionSearch
+                  ? "Try a different search term."
+                  : "Create collections in Plex to organize your media."
+              }
+              action={
+                collectionSearch
+                  ? { label: "Clear Search", onClick: () => setCollectionSearch("") }
                   : undefined
               }
-              isExpanded={expandedKey === item.ratingKey}
             />
-            </div>
-            {expandedKey === item.ratingKey && (
-              <div style={{ gridColumn: "1 / -1" }}>
-                <ShowExpansionPanel
-                  ratingKey={item.ratingKey}
-                  onClose={() => setExpandedKey(null)}
-                  onNavigateToShow={(key) => navigate(`/item/${key}`)}
-                  onNavigateToSeason={(key) => navigate(`/item/${key}`)}
-                />
-              </div>
-            )}
-          </React.Fragment>
-        ))}
-
-        {/* Loading more skeletons */}
-        {isLoadingMore &&
-          Array.from({ length: 12 }).map((_, i) => (
-            <SkeletonCard key={`more-${i}`} />
-          ))}
-      </LibraryGrid>
-      </div>
-
-      {/* Alpha jump bar */}
-      {showAlphaJump && (
-        <AlphaJumpBar
-          onJump={handleAlphaJump}
-          availableLetters={availableLetters}
-        />
+          )}
+        </>
       )}
-
-      {/* Empty state */}
-      {!isLoading && !error && items.length === 0 && (
-        <EmptyState
-          icon={
-            <svg width={48} height={48} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-              <path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4M4 7l8 4M4 7v10l8 4m0-10v10" />
-            </svg>
-          }
-          title={hasActiveFilters ? "No items match your filters" : "No items in this library"}
-          subtitle={
-            hasActiveFilters
-              ? "Try adjusting or clearing your filters to see more results."
-              : "Add some media to this library section in Plex to see it here."
-          }
-          action={
-            hasActiveFilters
-              ? { label: "Clear Filters", onClick: () => handleFiltersChange({}) }
-              : undefined
-          }
-        />
-      )}
-
-      {/* Loading more indicator */}
-      {isLoadingMore && (
-        <p style={styles.loadingMore}>Loading more...</p>
-      )}
-
-      {/* Infinite scroll sentinel */}
-      <div ref={sentinelRef} style={styles.sentinel} />
 
       {menuOverlays}
       {playOverlay}
@@ -360,6 +501,69 @@ const styles: Record<string, React.CSSProperties> = {
   },
   sentinel: {
     height: "1px",
+  },
+  /* --- Collections toolbar --- */
+  collectionsToolbar: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.75rem",
+    marginBottom: "1rem",
+    flexWrap: "wrap",
+  },
+  collectionsSearchInput: {
+    width: "220px",
+    padding: "0.4rem 0.75rem",
+    borderRadius: "6px",
+    border: "1px solid var(--border)",
+    background: "var(--bg-secondary)",
+    color: "var(--text-primary)",
+    fontSize: "0.85rem",
+    outline: "none",
+  },
+  collectionsSortGroup: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.35rem",
+  },
+  collectionsSortLabel: {
+    fontSize: "0.8rem",
+    color: "var(--text-secondary)",
+  },
+  collectionsSortSelect: {
+    padding: "0.4rem 0.5rem",
+    borderRadius: "6px",
+    border: "1px solid var(--border)",
+    background: "var(--bg-secondary)",
+    color: "var(--text-primary)",
+    fontSize: "0.85rem",
+    outline: "none",
+    cursor: "pointer",
+  },
+  unwatchedToggle: {
+    padding: "0.35rem 0.75rem",
+    borderRadius: "6px",
+    border: "1px solid var(--border)",
+    background: "transparent",
+    color: "var(--text-secondary)",
+    fontSize: "0.8rem",
+    cursor: "pointer",
+    transition: "background 0.15s, color 0.15s, border-color 0.15s",
+  },
+  unwatchedToggleActive: {
+    padding: "0.35rem 0.75rem",
+    borderRadius: "6px",
+    border: "1px solid var(--accent)",
+    background: "rgba(229, 160, 13, 0.12)",
+    color: "var(--accent)",
+    fontSize: "0.8rem",
+    fontWeight: 600,
+    cursor: "pointer",
+    transition: "background 0.15s, color 0.15s, border-color 0.15s",
+  },
+  collectionsCount: {
+    fontSize: "0.8rem",
+    color: "var(--text-secondary)",
+    marginLeft: "auto",
   },
 };
 

@@ -89,7 +89,7 @@ function ActivityRow({ activity }: { activity: PlexActivity }) {
     <div style={styles.activityRow}>
       <div style={styles.activityHeader}>
         <span style={styles.rowTitle}>{activity.title}</span>
-        <span style={styles.progressLabel}>{Math.round(activity.progress)}%</span>
+        <span style={styles.progressLabel}>{Math.round(Math.max(0, activity.progress))}%</span>
       </div>
       {activity.subtitle && (
         <span style={styles.rowSub}>{activity.subtitle}</span>
@@ -98,7 +98,7 @@ function ActivityRow({ activity }: { activity: PlexActivity }) {
         <div
           style={{
             ...styles.progressFill,
-            width: `${Math.max(2, activity.progress)}%`,
+            width: `${Math.max(2, Math.max(0, activity.progress))}%`,
           }}
         />
       </div>

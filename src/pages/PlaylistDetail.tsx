@@ -8,17 +8,26 @@ import {
 } from "../services/plex-library";
 import { useMediaContextMenu } from "../hooks/useMediaContextMenu";
 import { usePlayAction } from "../hooks/usePlayAction";
+import { useScrollRestoration } from "../hooks/useScrollRestoration";
 import LibraryGrid from "../components/LibraryGrid";
 import PosterCard from "../components/PosterCard";
 import SkeletonCard from "../components/SkeletonCard";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
-import type { PlexMediaItem, PlexEpisode, PlexPlaylist } from "../types/library";
+import { decodeHtmlEntities } from "../utils/media-helpers";
+import {
+  getMediaTitle,
+  getMediaSubtitle,
+  getMediaPoster,
+  getProgress,
+} from "../utils/media-helpers";
+import type { PlexMediaItem, PlexPlaylist } from "../types/library";
 
 function PlaylistDetail() {
   const { playlistKey } = useParams<{ playlistKey: string }>();
   const { server } = useAuth();
   const navigate = useNavigate();
+  useScrollRestoration();
   const { openContextMenu, overlays: menuOverlays } = useMediaContextMenu();
   const { getPlayHandler, playOverlay } = usePlayAction();
   const [playlist, setPlaylist] = useState<PlexPlaylist | null>(null);
@@ -92,46 +101,12 @@ function PlaylistDetail() {
   const posterUrl = (thumb: string) =>
     getImageUrl(server.uri, server.accessToken, thumb, 300, 450);
 
-  const getTitle = (item: PlexMediaItem): string => {
-    if (item.type === "episode") {
-      const ep = item as PlexEpisode;
-      return ep.grandparentTitle || item.title;
-    }
-    return item.title;
-  };
-
-  const getSubtitle = (item: PlexMediaItem): string => {
-    if (item.type === "episode") {
-      const ep = item as PlexEpisode;
-      return `S${String(ep.parentIndex).padStart(2, "0")}E${String(ep.index).padStart(2, "0")} · ${ep.title}`;
-    }
-    const withYear = item as { year?: number };
-    if (withYear.year) return String(withYear.year);
-    return "";
-  };
-
-  const getPoster = (item: PlexMediaItem): string => {
-    if (item.type === "episode") {
-      const ep = item as PlexEpisode;
-      return ep.grandparentThumb || item.thumb;
-    }
-    return item.thumb;
-  };
-
-  const getProgress = (item: PlexMediaItem): number | undefined => {
-    const withOffset = item as { viewOffset?: number; duration?: number };
-    if (withOffset.viewOffset && withOffset.duration) {
-      return withOffset.viewOffset / withOffset.duration;
-    }
-    return undefined;
-  };
-
   return (
     <div style={styles.container}>
       <h2 style={styles.title}>{playlist?.title || "Playlist"}</h2>
 
       {playlist?.summary && (
-        <p style={styles.summary}>{playlist.summary}</p>
+        <p style={styles.summary}>{decodeHtmlEntities(playlist.summary)}</p>
       )}
 
       {error && <ErrorState message={error} onRetry={() => window.location.reload()} />}
@@ -149,9 +124,10 @@ function PlaylistDetail() {
         {items.map((item, index) => (
           <PosterCard
             key={`${item.ratingKey}-${index}`}
-            imageUrl={posterUrl(getPoster(item))}
-            title={getTitle(item)}
-            subtitle={getSubtitle(item)}
+            ratingKey={item.ratingKey}
+            imageUrl={posterUrl(getMediaPoster(item))}
+            title={getMediaTitle(item)}
+            subtitle={getMediaSubtitle(item)}
             progress={getProgress(item)}
             onClick={() => navigate(`/item/${item.ratingKey}`)}
             onPlay={getPlayHandler(item)}

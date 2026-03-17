@@ -250,6 +250,10 @@ export interface PlexCollection {
   subtype: string;
   addedAt: number;
   updatedAt: number;
+  /** Number of child items the user has watched (may be absent) */
+  viewedLeafCount?: number;
+  /** Total number of leaf items in the collection (may be absent) */
+  leafCount?: number;
 }
 
 // ── Playlists ──

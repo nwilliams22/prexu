@@ -234,6 +234,16 @@ function UserSwitcher() {
           <button
             role="menuitem"
             onClick={() => {
+              navigate("/history");
+              setIsOpen(false);
+            }}
+            style={styles.menuAction}
+          >
+            Watch History
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => {
               navigate("/settings");
               setIsOpen(false);
             }}

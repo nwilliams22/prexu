@@ -37,6 +37,7 @@ function PlaylistsBrowser() {
         {playlists.map((playlist) => (
           <PosterCard
             key={playlist.ratingKey}
+            ratingKey={playlist.ratingKey}
             imageUrl={posterUrl(playlist.composite || playlist.thumb)}
             title={playlist.title}
             subtitle={`${playlist.leafCount} item${playlist.leafCount !== 1 ? "s" : ""}`}

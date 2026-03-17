@@ -27,6 +27,7 @@ import {
   type PlexActivity,
   type PlexSession,
   type PlexActivityNotification,
+  type PlexTimelineEntry,
   type PlexNotificationContainer,
 } from "../services/plex-activity";
 
@@ -41,13 +42,18 @@ export interface ServerActivityValue {
   isActive: boolean;
   /** Increments whenever an activity finishes — use as a refresh trigger */
   completionCounter: number;
+  /** Item ratingKeys currently being scanned/updated (from timeline notifications) */
+  scanningIds: ReadonlySet<string>;
 }
+
+const EMPTY_SET: ReadonlySet<string> = new Set();
 
 const defaultValue: ServerActivityValue = {
   activities: [],
   sessions: [],
   isActive: false,
   completionCounter: 0,
+  scanningIds: EMPTY_SET,
 };
 
 const ServerActivityContext = createContext<ServerActivityValue>(defaultValue);
@@ -67,6 +73,10 @@ export function useServerActivityState(): ServerActivityValue {
   const [activities, setActivities] = useState<PlexActivity[]>([]);
   const [sessions, setSessions] = useState<PlexSession[]>([]);
   const [completionCounter, setCompletionCounter] = useState(0);
+  const [scanningIds, setScanningIds] = useState<ReadonlySet<string>>(EMPTY_SET);
+
+  // Timers for auto-removing scanning IDs after a short TTL
+  const scanTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   const mountedRef = useRef(true);
 
@@ -165,7 +175,36 @@ export function useServerActivityState(): ServerActivityValue {
 
         case "timeline": {
           // Library content changed (new items added/removed/updated).
-          // Debounce because scans emit many timeline events rapidly.
+          // Track which items are being scanned/updated.
+          const entries = toArray<PlexTimelineEntry>(container.TimelineEntry);
+          for (const entry of entries) {
+            if (entry.itemID) {
+              const id = String(entry.itemID);
+              // Add to scanning set
+              setScanningIds((prev) => {
+                const next = new Set(prev);
+                next.add(id);
+                return next;
+              });
+              // Clear any existing timer for this ID and set a new one
+              const existing = scanTimersRef.current.get(id);
+              if (existing) clearTimeout(existing);
+              scanTimersRef.current.set(
+                id,
+                setTimeout(() => {
+                  if (mountedRef.current) {
+                    setScanningIds((prev) => {
+                      const next = new Set(prev);
+                      next.delete(id);
+                      return next.size === 0 ? EMPTY_SET : next;
+                    });
+                  }
+                  scanTimersRef.current.delete(id);
+                }, 3000),
+              );
+            }
+          }
+          // Debounce the completion counter for dashboard refresh
           if (timelineDebounce) clearTimeout(timelineDebounce);
           timelineDebounce = setTimeout(() => {
             if (mountedRef.current) {
@@ -227,6 +266,9 @@ export function useServerActivityState(): ServerActivityValue {
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (timelineDebounce) clearTimeout(timelineDebounce);
       if (sessionDebounce) clearTimeout(sessionDebounce);
+      // Clean up scanning timers
+      for (const timer of scanTimersRef.current.values()) clearTimeout(timer);
+      scanTimersRef.current.clear();
       if (ws) {
         ws.onclose = null; // prevent reconnection on intentional close
         ws.close();
@@ -236,7 +278,7 @@ export function useServerActivityState(): ServerActivityValue {
 
   const isActive = activities.length > 0;
 
-  return { activities, sessions, isActive, completionCounter };
+  return { activities, sessions, isActive, completionCounter, scanningIds };
 }
 
 // Re-export for provider wrapper

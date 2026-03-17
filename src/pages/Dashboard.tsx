@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { usePreferences } from "../hooks/usePreferences";
+import { useScrollRestoration } from "../hooks/useScrollRestoration";
 import { useDashboard } from "../hooks/useDashboard";
 import { useMediaContextMenu } from "../hooks/useMediaContextMenu";
 import { usePlayAction } from "../hooks/usePlayAction";
@@ -19,6 +20,11 @@ import EpisodeExpander from "../components/EpisodeExpander";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
 import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
+import {
+  getMediaSubtitleShort as getSubtitle,
+  getProgress,
+  isWatched,
+} from "../utils/media-helpers";
 import type {
   PlexMediaItem,
   PlexEpisode,
@@ -28,19 +34,6 @@ import type {
 
 const POSTER_SIZES = { small: 150, medium: 190, large: 230 } as const;
 const POSTER_SIZES_LARGE = { small: 190, medium: 230, large: 280 } as const;
-
-/** Pure helper — subtitle for a media item (movie year, episode code) */
-function getSubtitle(item: PlexMediaItem): string {
-  if (item.type === "movie") {
-    const movie = item as { year?: number };
-    return movie.year ? String(movie.year) : "";
-  }
-  if (item.type === "episode") {
-    const ep = item as PlexEpisode;
-    return `S${String(ep.parentIndex).padStart(2, "0")}E${String(ep.index).padStart(2, "0")}`;
-  }
-  return "";
-}
 
 /** Pure helper — season label prefix for a grouped show (e.g. "Season 3 · ") */
 function getSeasonLabel(group: GroupedRecentItem): string {
@@ -79,30 +72,10 @@ function getGroupSubtitle(group: GroupedRecentItem): string {
   return "Recently Added";
 }
 
-
-/** Pure helper — playback progress ratio (0-1) or undefined */
-function getProgress(item: PlexMediaItem): number | undefined {
-  const withOffset = item as { viewOffset?: number; duration?: number };
-  if (withOffset.viewOffset && withOffset.duration) {
-    return withOffset.viewOffset / withOffset.duration;
-  }
-  return undefined;
-}
-
-/** Pure helper — is this item fully watched? */
-function isWatched(item: PlexMediaItem): boolean {
-  const asMovie = item as { viewCount?: number };
-  if (asMovie.viewCount !== undefined) return asMovie.viewCount > 0;
-  const asShow = item as { viewedLeafCount?: number; leafCount?: number };
-  if (asShow.viewedLeafCount !== undefined && asShow.leafCount !== undefined) {
-    return asShow.leafCount > 0 && asShow.viewedLeafCount >= asShow.leafCount;
-  }
-  return false;
-}
-
 function Dashboard() {
   const { server } = useAuth();
   const { preferences } = usePreferences();
+  useScrollRestoration();
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
   const { recentMovies, recentShows, onDeck, isLoading, error, refresh } =
@@ -359,6 +332,7 @@ function Dashboard() {
               return (
                 <PosterCard
                   key={item.ratingKey}
+                  ratingKey={item.ratingKey}
                   imageUrl={posterUrl(
                     ep?.grandparentThumb || item.thumb
                   )}
@@ -372,6 +346,7 @@ function Dashboard() {
                   width={posterWidth}
                   onClick={() => navigate(`/item/${item.ratingKey}`)}
                   onPlay={getPlayHandler(item)}
+
                   showMoreButton
                   onContextMenu={(e) => openContextMenu(e, item, onDeckExtras(item))}
                   onMoreClick={(e) => openContextMenu(e, item, onDeckExtras(item))}
@@ -398,6 +373,7 @@ function Dashboard() {
             {recentMovies.map((item) => (
               <PosterCard
                 key={item.ratingKey}
+                ratingKey={item.ratingKey}
                 imageUrl={posterUrl(item.thumb)}
                 title={item.title}
                 subtitle={getSubtitle(item)}
@@ -437,6 +413,7 @@ function Dashboard() {
                   style={isActive ? styles.activeCardWrapper : undefined}
                 >
                   <PosterCard
+                    ratingKey={group.groupKey}
                     imageUrl={posterUrl(group.thumb)}
                     title={group.title}
                     subtitle={getGroupSubtitle(group)}
@@ -463,6 +440,7 @@ function Dashboard() {
                         : undefined
                     }
                     isExpanded={isActive}
+  
                     showMoreButton
                     onContextMenu={(e) =>
                       openContextMenu(e, group.representativeItem)

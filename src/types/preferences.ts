@@ -23,6 +23,8 @@ export interface AppearancePreferences {
   };
   /** Skip the seasons page for single-season shows and go straight to episode list */
   skipSingleSeason: boolean;
+  /** Minimum number of items for a collection to appear (2–10, default 2) */
+  minCollectionSize: number;
 }
 
 export interface Preferences {

@@ -6,6 +6,7 @@ dist/
 
 # Rust build output
 src-tauri/target/
+relay-server/target/
 
 # Environment files
 .env
@@ -24,3 +25,8 @@ Thumbs.db
 # Tauri WIX/NSIS tooling (downloaded during build)
 src-tauri/WixTools/
 src-tauri/NSIS/
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/

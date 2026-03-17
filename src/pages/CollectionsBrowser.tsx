@@ -2,6 +2,8 @@ import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { useCollections } from "../hooks/useCollections";
+import { usePreferences } from "../hooks/usePreferences";
+import { useScrollRestoration } from "../hooks/useScrollRestoration";
 import { getImageUrl } from "../services/plex-library";
 import LibraryGrid from "../components/LibraryGrid";
 import PosterCard from "../components/PosterCard";
@@ -15,6 +17,9 @@ function CollectionsBrowser() {
   const { server } = useAuth();
   const navigate = useNavigate();
   const { collections, isLoading, error, retry } = useCollections();
+  const { preferences } = usePreferences();
+  const minSize = preferences.appearance.minCollectionSize;
+  useScrollRestoration();
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState<SortOption>("alpha-asc");
 
@@ -24,7 +29,7 @@ function CollectionsBrowser() {
       .map((group) => ({
         ...group,
         items: group.items
-          .filter((c) => c.title.toLowerCase().includes(query))
+          .filter((c) => c.childCount >= minSize && c.title.toLowerCase().includes(query))
           .sort((a, b) => {
             switch (sortBy) {
               case "alpha-asc":
@@ -41,7 +46,7 @@ function CollectionsBrowser() {
           }),
       }))
       .filter((group) => group.items.length > 0);
-  }, [collections, searchQuery, sortBy]);
+  }, [collections, searchQuery, sortBy, minSize]);
 
   const totalCount = useMemo(
     () => filteredCollections.reduce((sum, g) => sum + g.items.length, 0),
@@ -109,6 +114,7 @@ function CollectionsBrowser() {
               {group.items.map((collection) => (
                 <PosterCard
                   key={collection.ratingKey}
+                  ratingKey={collection.ratingKey}
                   imageUrl={posterUrl(collection.thumb)}
                   title={collection.title}
                   subtitle={`${collection.childCount} item${collection.childCount !== 1 ? "s" : ""}`}
