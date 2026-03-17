@@ -319,8 +319,13 @@ describe("plex-playback — pure functions", () => {
       expect(getSavedVolume()).toBe(1);
     });
 
-    it("returns 1 for out-of-range values", () => {
+    it("returns valid in-range values up to 2", () => {
       localStorage.setItem("prexu_volume", "1.5");
+      expect(getSavedVolume()).toBe(1.5);
+    });
+
+    it("returns 1 for out-of-range values", () => {
+      localStorage.setItem("prexu_volume", "2.5");
       expect(getSavedVolume()).toBe(1);
 
       localStorage.setItem("prexu_volume", "-0.5");

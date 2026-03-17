@@ -10,6 +10,30 @@ import { getClientIdentifier } from "./storage";
 const PLEX_TV_API = "https://clients.plex.tv/api/v2";
 const APP_NAME = "Prexu";
 const CONNECTIVITY_TIMEOUT_MS = 5000;
+const REQUEST_TIMEOUT_MS = 15000;
+
+// ── Auth invalidation event bus ──
+// Components can subscribe to be notified when a 401 is received from any API call.
+type AuthInvalidListener = () => void;
+const authInvalidListeners = new Set<AuthInvalidListener>();
+
+/** Subscribe to auth invalidation events. Returns an unsubscribe function. */
+export function onAuthInvalid(listener: AuthInvalidListener): () => void {
+  authInvalidListeners.add(listener);
+  return () => {
+    authInvalidListeners.delete(listener);
+  };
+}
+
+function emitAuthInvalid(): void {
+  for (const listener of authInvalidListeners) {
+    try {
+      listener();
+    } catch {
+      // Ignore listener errors
+    }
+  }
+}
 
 /** Build headers for authenticated Plex.tv API calls */
 async function getAuthHeaders(
@@ -140,8 +164,23 @@ export async function discoverServers(
 export async function validateToken(authToken: string): Promise<boolean> {
   try {
     const headers = await getAuthHeaders(authToken);
-    const response = await fetch(`${PLEX_TV_API}/user`, { headers });
-    return response.ok;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(`${PLEX_TV_API}/user`, {
+        headers,
+        signal: controller.signal,
+      });
+
+      if (response.status === 401) {
+        emitAuthInvalid();
+      }
+
+      return response.ok;
+    } finally {
+      clearTimeout(timeout);
+    }
   } catch {
     return false;
   }
@@ -154,7 +193,23 @@ export async function serverFetch(
   path: string
 ): Promise<Response> {
   const headers = await getServerHeaders(serverToken);
-  return fetch(`${serverUri}${path}`, { headers });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${serverUri}${path}`, {
+      headers,
+      signal: controller.signal,
+    });
+
+    if (response.status === 401) {
+      emitAuthInvalid();
+    }
+
+    return response;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // ── Server Account ID ──

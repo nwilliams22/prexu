@@ -112,14 +112,14 @@ describe("useAudioEnhancements", () => {
     expect(mockGain.gain.value).toBe(3.5);
   });
 
-  it("clamps volume boost to [1, 5]", () => {
+  it("clamps volume boost to [0.25, 5]", () => {
     const ref = makeVideoRef();
     const { result } = renderHook(() =>
       useAudioEnhancements(ref, 1.0, "off", 0),
     );
 
     act(() => result.current.setVolumeBoost(0));
-    expect(result.current.volumeBoost).toBe(1);
+    expect(result.current.volumeBoost).toBe(0.25);
 
     act(() => result.current.setVolumeBoost(10));
     expect(result.current.volumeBoost).toBe(5);
