@@ -1,12 +1,16 @@
 /**
  * Core playback hook — manages video element, hls.js, playback state,
  * stream tracks, and timeline reporting to Plex.
+ *
+ * Composes sub-hooks for HLS management, timeline reporting, and stream selection.
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import type HlsType from "hls.js";
 import { useAuth } from "./useAuth";
 import { usePreferences } from "./usePreferences";
+import { useHlsLoader } from "./player/useHlsLoader";
+import { useTimelineReporting } from "./player/useTimelineReporting";
+import { useStreamSelection } from "./player/useStreamSelection";
 import { getItemMetadata } from "../services/plex-library";
 import {
   canDirectPlay,
@@ -15,7 +19,6 @@ import {
   buildHlsConfig,
   categorizeStreams,
   reportTimeline,
-  reportTimelineBeacon,
   getSavedVolume,
   saveVolume,
 } from "../services/plex-playback";
@@ -27,15 +30,13 @@ import type {
   PlexChapter,
 } from "../types/library";
 
-const TIMELINE_INTERVAL_MS = 10_000;
-
 export interface UsePlayerResult {
   // Refs
   videoRef: React.RefObject<HTMLVideoElement | null>;
 
   // Metadata
   title: string;
-  subtitle: string; // e.g., "S01E05 — Episode Title" or year
+  subtitle: string;
 
   // Playback state
   isLoading: boolean;
@@ -43,7 +44,7 @@ export interface UsePlayerResult {
   isBuffering: boolean;
   currentTime: number;
   duration: number;
-  buffered: number; // buffered end in seconds
+  buffered: number;
   volume: number;
   isMuted: boolean;
   isFullscreen: boolean;
@@ -76,10 +77,10 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
   const prefsRef = useRef(preferences);
   prefsRef.current = preferences;
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const hlsRef = useRef<HlsType | null>(null);
-  const HlsCtorRef = useRef<typeof HlsType | null>(null);
-  const timelineRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const ratingKeyRef = useRef(ratingKey);
+
+  // Sub-hooks
+  const hlsLoader = useHlsLoader();
+  const timeline = useTimelineReporting(server);
 
   // Metadata
   const [title, setTitle] = useState("");
@@ -101,89 +102,38 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
   const [chapters, setChapters] = useState<PlexChapter[]>([]);
   const [itemType, setItemType] = useState("");
 
-  // Streams
-  const [audioTracks, setAudioTracks] = useState<PlexStream[]>([]);
-  const [subtitleTracks, setSubtitleTracks] = useState<PlexStream[]>([]);
-  const [selectedAudioId, setSelectedAudioId] = useState<number | null>(null);
-  const [selectedSubtitleId, setSelectedSubtitleId] = useState<number | null>(
-    null
+  // Stream selection sub-hook
+  const streams = useStreamSelection(
+    server,
+    ratingKey,
+    videoRef,
+    hlsLoader,
+    prefsRef,
+    setIsBuffering,
+    setPlaybackError,
   );
 
-  // Track direct play failure so we can auto-retry with transcoding
+  // Direct play failure tracking
   const directPlayFailedRef = useRef(false);
 
-  // Internal refs for timeline reporting
-  const currentTimeRef = useRef(0);
-  const durationRef = useRef(0);
-  const isPlayingRef = useRef(false);
-
-  // Keep refs in sync
-  useEffect(() => {
-    currentTimeRef.current = currentTime;
-  }, [currentTime]);
-  useEffect(() => {
-    durationRef.current = duration;
-  }, [duration]);
-  useEffect(() => {
-    isPlayingRef.current = isPlaying;
-  }, [isPlaying]);
-
-  // ── Cleanup helper ──
-  const destroyHls = useCallback(() => {
-    if (hlsRef.current) {
-      hlsRef.current.destroy();
-      hlsRef.current = null;
-    }
-  }, []);
-
-  // ── Load hls.js dynamically ──
-  const loadHls = useCallback(async (): Promise<typeof HlsType> => {
-    if (HlsCtorRef.current) return HlsCtorRef.current;
-    const { default: Hls } = await import("hls.js");
-    HlsCtorRef.current = Hls;
-    return Hls;
-  }, []);
-
-  // ── Timeline reporting ──
-  const startTimeline = useCallback(() => {
-    if (timelineRef.current) clearInterval(timelineRef.current);
-    if (!server) return;
-
-    timelineRef.current = setInterval(() => {
-      if (isPlayingRef.current) {
-        reportTimeline(
-          server.uri,
-          server.accessToken,
-          ratingKeyRef.current,
-          "playing",
-          currentTimeRef.current * 1000,
-          durationRef.current * 1000
-        );
-      }
-    }, TIMELINE_INTERVAL_MS);
-  }, [server]);
-
-  const stopTimeline = useCallback(() => {
-    if (timelineRef.current) {
-      clearInterval(timelineRef.current);
-      timelineRef.current = null;
-    }
-  }, []);
+  // Keep timeline refs in sync
+  useEffect(() => { timeline.currentTimeRef.current = currentTime; }, [currentTime, timeline]);
+  useEffect(() => { timeline.durationRef.current = duration; }, [duration, timeline]);
+  useEffect(() => { timeline.isPlayingRef.current = isPlaying; }, [isPlaying, timeline]);
 
   // ── Initialize playback ──
   const initPlayback = useCallback(async () => {
     if (!server || !ratingKey) return;
-    ratingKeyRef.current = ratingKey;
+    timeline.ratingKeyRef.current = ratingKey;
 
     setIsLoading(true);
     setPlaybackError(null);
 
     try {
-      // Fetch full metadata
       const item = await getItemMetadata<PlexMediaItem>(
         server.uri,
         server.accessToken,
-        ratingKey
+        ratingKey,
       );
 
       // Set display title
@@ -191,7 +141,7 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
         const ep = item as PlexEpisode;
         setTitle(ep.grandparentTitle);
         setSubtitle(
-          `S${String(ep.parentIndex).padStart(2, "0")}E${String(ep.index).padStart(2, "0")} — ${ep.title}`
+          `S${String(ep.parentIndex).padStart(2, "0")}E${String(ep.index).padStart(2, "0")} — ${ep.title}`,
         );
       } else if (item.type === "movie") {
         const movie = item as PlexMovie;
@@ -210,53 +160,43 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
       }
 
       const part = media.Part[0];
-
-      // Store chapters and item type
       setChapters(part.Chapter ?? []);
       setItemType(item.type);
 
-      // Categorize streams
-      const streams = categorizeStreams(part);
-      setAudioTracks(streams.audio);
-      setSubtitleTracks(streams.subtitles);
+      // Categorize and set default streams
+      const categorized = categorizeStreams(part);
+      streams.setAudioTracks(categorized.audio);
+      streams.setSubtitleTracks(categorized.subtitles);
 
-      // Set default selected tracks (prefer user language settings)
       const pb = prefsRef.current.playback;
-      let defaultAudio: PlexStream | undefined;
-      if (pb.preferredAudioLanguage) {
-        defaultAudio = streams.audio.find(
-          (s) => s.languageCode === pb.preferredAudioLanguage
-        );
-      }
-      if (!defaultAudio) {
-        defaultAudio = streams.audio.find((s) => s.selected);
-      }
-      setSelectedAudioId(defaultAudio?.id ?? streams.audio[0]?.id ?? null);
+      let defaultAudio = pb.preferredAudioLanguage
+        ? categorized.audio.find((s) => s.languageCode === pb.preferredAudioLanguage)
+        : undefined;
+      if (!defaultAudio) defaultAudio = categorized.audio.find((s) => s.selected);
+      streams.setSelectedAudioId(defaultAudio?.id ?? categorized.audio[0]?.id ?? null);
 
       let defaultSub: PlexStream | undefined;
       if (pb.defaultSubtitles === "off") {
         defaultSub = undefined;
       } else if (pb.defaultSubtitles === "always" && pb.preferredSubtitleLanguage) {
-        defaultSub = streams.subtitles.find(
-          (s) => s.languageCode === pb.preferredSubtitleLanguage
-        ) ?? streams.subtitles[0];
+        defaultSub = categorized.subtitles.find(
+          (s) => s.languageCode === pb.preferredSubtitleLanguage,
+        ) ?? categorized.subtitles[0];
       } else {
-        // "auto" — use Plex server's default selection
-        defaultSub = streams.subtitles.find((s) => s.selected);
+        defaultSub = categorized.subtitles.find((s) => s.selected);
       }
-      setSelectedSubtitleId(defaultSub?.id ?? null);
+      streams.setSelectedSubtitleId(defaultSub?.id ?? null);
 
-      // Get resume position — offsetOverride takes precedence when explicitly set
+      // Get resume position
       const viewOffset = offsetOverride != null ? offsetOverride : (playableItem.viewOffset ?? 0);
 
       const video = videoRef.current;
       if (!video) return;
 
-      // Set volume (cap native at 1; above-1 boost handled by GainNode)
       video.volume = Math.min(volume, 1);
       video.muted = isMuted;
 
-      // Direct play decision based on preferences
+      // Direct play decision
       const shouldDirectPlay =
         !directPlayFailedRef.current &&
         (pb.directPlayPreference === "always" ||
@@ -265,30 +205,15 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
       const forceTranscode = pb.directPlayPreference === "never" || directPlayFailedRef.current;
 
       if (shouldDirectPlay && !forceTranscode && canDirectPlay(media)) {
-        // Direct Play — native <video>
-        const url = buildDirectPlayUrl(
-          server.uri,
-          server.accessToken,
-          part.key
-        );
-        destroyHls();
+        const url = buildDirectPlayUrl(server.uri, server.accessToken, part.key);
+        hlsLoader.destroyHls();
         video.src = url;
-
-        if (viewOffset > 0) {
-          video.currentTime = viewOffset / 1000;
-        }
-
-        video.play().catch(() => {
-          // Autoplay blocked — user will click play
-        });
+        if (viewOffset > 0) video.currentTime = viewOffset / 1000;
+        video.play().catch(() => {});
       } else {
-        // HLS Transcode — dynamically load hls.js
-        const Hls = await loadHls();
-
+        const Hls = await hlsLoader.loadHls();
         if (!Hls.isSupported()) {
-          throw new Error(
-            "HLS playback is not supported in this browser/webview"
-          );
+          throw new Error("HLS playback is not supported in this browser/webview");
         }
 
         const hlsUrl = await buildTranscodeUrl(
@@ -302,10 +227,10 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
             quality: pb.quality,
             subtitleSize: pb.subtitleSize,
             audioBoost: pb.audioBoost,
-          }
+          },
         );
 
-        destroyHls();
+        hlsLoader.destroyHls();
 
         const hlsConfig = buildHlsConfig(server.accessToken, {
           maxBufferLength: 30,
@@ -318,99 +243,63 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
         hls.attachMedia(video);
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          video.play().catch(() => {
-            // Autoplay blocked
-          });
+          video.play().catch(() => {});
         });
 
         let mediaRecoveryAttempts = 0;
         hls.on(Hls.Events.ERROR, (_event, data) => {
-          // Log ALL errors (not just fatal) for diagnostics
           const details = [
             `fatal: ${data.fatal}`,
             `type: ${data.type}`,
             `details: ${data.details}`,
             data.url ? `url: ${data.url.substring(0, 80)}` : null,
-            data.response ? `response: ${JSON.stringify({
-              code: data.response.code,
-              text: data.response.text,
-            })}` : null,
+            data.response ? `response: ${JSON.stringify({ code: data.response.code, text: data.response.text })}` : null,
             data.error ? `error: ${data.error.message ?? data.error}` : null,
             data.reason ? `reason: ${data.reason}` : null,
-          ]
-            .filter(Boolean)
-            .join("\n");
+          ].filter(Boolean).join("\n");
 
           console.warn(`[HLS Error] ${data.fatal ? "FATAL" : "non-fatal"}`, details);
 
           if (data.fatal) {
             switch (data.type) {
               case Hls.ErrorTypes.NETWORK_ERROR:
-                setPlaybackError(
-                  `Network error — could not load stream\n${details}`
-                );
+                setPlaybackError(`Network error — could not load stream\n${details}`);
                 break;
               case Hls.ErrorTypes.MEDIA_ERROR:
                 if (mediaRecoveryAttempts < 2) {
                   mediaRecoveryAttempts++;
-                  console.warn(`[HLS] Recovering from media error (attempt ${mediaRecoveryAttempts})`);
                   hls.recoverMediaError();
                 } else {
-                  setPlaybackError(
-                    `Media error — could not decode stream\n${details}`
-                  );
+                  setPlaybackError(`Media error — could not decode stream\n${details}`);
                 }
                 break;
               default:
-                setPlaybackError(
-                  `Playback error — stream could not be loaded\n${details}`
-                );
+                setPlaybackError(`Playback error — stream could not be loaded\n${details}`);
                 hls.destroy();
                 break;
             }
           }
         });
 
-        hlsRef.current = hls;
+        hlsLoader.hlsRef.current = hls;
       }
 
-      // Start timeline reporting
-      startTimeline();
+      timeline.startTimeline();
       setIsLoading(false);
     } catch (err) {
-      setPlaybackError(
-        err instanceof Error ? err.message : "Failed to start playback"
-      );
+      setPlaybackError(err instanceof Error ? err.message : "Failed to start playback");
       setIsLoading(false);
     }
-  }, [
-    server,
-    ratingKey,
-    offsetOverride,
-    volume,
-    isMuted,
-    destroyHls,
-    loadHls,
-    startTimeline,
-  ]);
+  }, [server, ratingKey, offsetOverride, volume, isMuted, hlsLoader, timeline, streams]);
 
   // Init on mount / when ratingKey changes
   useEffect(() => {
     directPlayFailedRef.current = false;
     initPlayback();
     return () => {
-      destroyHls();
-      stopTimeline();
-      // Report stopped on unmount
-      if (server && durationRef.current > 0) {
-        reportTimelineBeacon(
-          server.uri,
-          server.accessToken,
-          ratingKeyRef.current,
-          currentTimeRef.current * 1000,
-          durationRef.current * 1000
-        );
-      }
+      hlsLoader.destroyHls();
+      timeline.stopTimeline();
+      timeline.reportStopped();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ratingKey]);
@@ -427,7 +316,6 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
     const onCanPlay = () => setIsBuffering(false);
     const onTimeUpdate = () => {
       setCurrentTime(video.currentTime);
-      // Update buffered
       if (video.buffered.length > 0) {
         setBuffered(video.buffered.end(video.buffered.length - 1));
       }
@@ -443,17 +331,16 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
         reportTimeline(
           server.uri,
           server.accessToken,
-          ratingKeyRef.current,
+          timeline.ratingKeyRef.current,
           "stopped",
-          currentTimeRef.current * 1000,
-          durationRef.current * 1000
+          timeline.currentTimeRef.current * 1000,
+          timeline.durationRef.current * 1000,
         );
       }
     };
     const onError = () => {
       if (video.error) {
-        // If direct play failed, automatically retry with transcoding
-        if (!directPlayFailedRef.current && !hlsRef.current) {
+        if (!directPlayFailedRef.current && !hlsLoader.hlsRef.current) {
           directPlayFailedRef.current = true;
           initPlayback();
           return;
@@ -483,17 +370,13 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
       video.removeEventListener("ended", onEnded);
       video.removeEventListener("error", onError);
     };
-  }, [server]);
+  }, [server, hlsLoader, timeline, initPlayback]);
 
   // ── Fullscreen listener ──
   useEffect(() => {
-    const onFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
-    };
+    const onFullscreenChange = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener("fullscreenchange", onFullscreenChange);
-    return () => {
-      document.removeEventListener("fullscreenchange", onFullscreenChange);
-    };
+    return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
   }, []);
 
   // ── Actions ──
@@ -501,11 +384,8 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
   const togglePlay = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
-    if (video.paused) {
-      video.play().catch(() => {});
-    } else {
-      video.pause();
-    }
+    if (video.paused) video.play().catch(() => {});
+    else video.pause();
   }, []);
 
   const seek = useCallback(
@@ -514,10 +394,7 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
       if (!video) return;
       const clampedTime = Math.max(0, Math.min(time, video.duration || 0));
 
-      // For HLS transcode, rebuild the transcode session at the new offset
-      // so the server generates segments starting from the seek point.
-      // Small seeks within the existing buffer can use simple currentTime assignment.
-      if (hlsRef.current && HlsCtorRef.current && server) {
+      if (hlsLoader.hlsRef.current && hlsLoader.HlsCtorRef.current && server) {
         const bufferedEnd = video.buffered.length > 0
           ? video.buffered.end(video.buffered.length - 1)
           : 0;
@@ -525,9 +402,9 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
           && clampedTime <= bufferedEnd;
 
         if (!isWithinBuffer) {
-          const Hls = HlsCtorRef.current;
+          const Hls = hlsLoader.HlsCtorRef.current;
           const savedPlaying = !video.paused;
-          destroyHls();
+          hlsLoader.destroyHls();
           setIsBuffering(true);
 
           const pb = prefsRef.current.playback;
@@ -537,12 +414,12 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
             ratingKey,
             {
               offset: Math.round(clampedTime * 1000),
-              audioStreamId: selectedAudioId ?? undefined,
-              subtitleStreamId: selectedSubtitleId ?? undefined,
+              audioStreamId: streams.selectedAudioId ?? undefined,
+              subtitleStreamId: streams.selectedSubtitleId ?? undefined,
               quality: pb.quality,
               subtitleSize: pb.subtitleSize,
               audioBoost: pb.audioBoost,
-            }
+            },
           );
 
           const hlsConfig = buildHlsConfig(server.accessToken, {
@@ -554,9 +431,7 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
           hls.loadSource(url);
           hls.attachMedia(video);
           hls.on(Hls.Events.MANIFEST_PARSED, () => {
-            if (savedPlaying) {
-              video.play().catch(() => {});
-            }
+            if (savedPlaying) video.play().catch(() => {});
           });
           hls.on(Hls.Events.ERROR, (_event, data) => {
             if (data.fatal && data.type !== Hls.ErrorTypes.MEDIA_ERROR) {
@@ -564,15 +439,14 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
             }
           });
 
-          hlsRef.current = hls;
+          hlsLoader.hlsRef.current = hls;
           return;
         }
       }
 
-      // Direct play or within-buffer HLS: simple seek
       video.currentTime = clampedTime;
     },
-    [server, ratingKey, selectedAudioId, selectedSubtitleId, destroyHls]
+    [server, ratingKey, streams.selectedAudioId, streams.selectedSubtitleId, hlsLoader],
   );
 
   const setVolume = useCallback((vol: number) => {
@@ -581,7 +455,6 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
     saveVolume(clamped);
     const video = videoRef.current;
     if (video) {
-      // 0-100%: native volume handles it. Above 100%: cap native at 1, GainNode handles the rest.
       video.volume = Math.min(clamped, 1);
       if (clamped > 0 && video.muted) {
         video.muted = false;
@@ -598,112 +471,9 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
   }, []);
 
   const toggleFullscreen = useCallback(() => {
-    if (document.fullscreenElement) {
-      document.exitFullscreen().catch(() => {});
-    } else {
-      document.documentElement.requestFullscreen().catch(() => {});
-    }
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    else document.documentElement.requestFullscreen().catch(() => {});
   }, []);
-
-  const selectAudioTrack = useCallback(
-    async (streamId: number) => {
-      if (!server || streamId === selectedAudioId) return;
-      setSelectedAudioId(streamId);
-
-      // For HLS, we need to rebuild the transcode URL with the new stream
-      if (hlsRef.current) {
-        const Hls = await loadHls();
-        const savedTime = videoRef.current?.currentTime ?? 0;
-        destroyHls();
-        setIsBuffering(true);
-
-        const pb = prefsRef.current.playback;
-        const url = await buildTranscodeUrl(
-          server.uri,
-          server.accessToken,
-          ratingKey,
-          {
-            offset: Math.round(savedTime * 1000),
-            audioStreamId: streamId,
-            subtitleStreamId: selectedSubtitleId ?? undefined,
-            quality: pb.quality,
-            subtitleSize: pb.subtitleSize,
-            audioBoost: pb.audioBoost,
-          }
-        );
-
-        const hlsConfig = buildHlsConfig(server.accessToken, {
-          maxBufferLength: 30,
-          startPosition: savedTime,
-        });
-        const hls = new Hls(hlsConfig);
-
-        hls.loadSource(url);
-        hls.attachMedia(videoRef.current!);
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          videoRef.current?.play().catch(() => {});
-        });
-        hls.on(Hls.Events.ERROR, (_event, data) => {
-          if (data.fatal && data.type !== Hls.ErrorTypes.MEDIA_ERROR) {
-            setPlaybackError("Failed to switch audio track");
-          }
-        });
-
-        hlsRef.current = hls;
-      }
-    },
-    [server, ratingKey, selectedAudioId, selectedSubtitleId, destroyHls, loadHls]
-  );
-
-  const selectSubtitleTrack = useCallback(
-    async (streamId: number | null) => {
-      if (!server || streamId === selectedSubtitleId) return;
-      setSelectedSubtitleId(streamId);
-
-      // For HLS, rebuild transcode URL
-      if (hlsRef.current) {
-        const Hls = await loadHls();
-        const savedTime = videoRef.current?.currentTime ?? 0;
-        destroyHls();
-        setIsBuffering(true);
-
-        const pb = prefsRef.current.playback;
-        const url = await buildTranscodeUrl(
-          server.uri,
-          server.accessToken,
-          ratingKey,
-          {
-            offset: Math.round(savedTime * 1000),
-            audioStreamId: selectedAudioId ?? undefined,
-            subtitleStreamId: streamId ?? undefined,
-            quality: pb.quality,
-            subtitleSize: pb.subtitleSize,
-            audioBoost: pb.audioBoost,
-          }
-        );
-
-        const hlsConfig = buildHlsConfig(server.accessToken, {
-          maxBufferLength: 30,
-          startPosition: savedTime,
-        });
-        const hls = new Hls(hlsConfig);
-
-        hls.loadSource(url);
-        hls.attachMedia(videoRef.current!);
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          videoRef.current?.play().catch(() => {});
-        });
-        hls.on(Hls.Events.ERROR, (_event, data) => {
-          if (data.fatal && data.type !== Hls.ErrorTypes.MEDIA_ERROR) {
-            setPlaybackError("Failed to switch subtitle track");
-          }
-        });
-
-        hlsRef.current = hls;
-      }
-    },
-    [server, ratingKey, selectedAudioId, selectedSubtitleId, destroyHls, loadHls]
-  );
 
   const retry = useCallback(() => {
     directPlayFailedRef.current = false;
@@ -727,17 +497,17 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
     isMuted,
     isFullscreen,
     playbackError,
-    audioTracks,
-    subtitleTracks,
-    selectedAudioId,
-    selectedSubtitleId,
+    audioTracks: streams.audioTracks,
+    subtitleTracks: streams.subtitleTracks,
+    selectedAudioId: streams.selectedAudioId,
+    selectedSubtitleId: streams.selectedSubtitleId,
     togglePlay,
     seek,
     setVolume,
     toggleMute,
     toggleFullscreen,
-    selectAudioTrack,
-    selectSubtitleTrack,
+    selectAudioTrack: streams.selectAudioTrack,
+    selectSubtitleTrack: streams.selectSubtitleTrack,
     retry,
   };
 }
