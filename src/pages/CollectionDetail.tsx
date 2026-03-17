@@ -10,6 +10,7 @@ import {
   getCollectionItems,
   getImageUrl,
 } from "../services/plex-library";
+import { getInitials } from "../utils/text-format";
 import LoadingGrid from "../components/LoadingGrid";
 import ProgressBar from "../components/ProgressBar";
 import SectionHeader from "../components/SectionHeader";
@@ -35,12 +36,6 @@ function formatDuration(ms: number): string {
   return m > 0 ? `${h}h ${m}m` : `${h}h`;
 }
 
-/** Get initials from a name for avatar fallback */
-function getInitials(name: string): string {
-  const parts = name.trim().split(/\s+/);
-  if (parts.length === 1) return parts[0][0]?.toUpperCase() ?? "";
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-}
 
 function CollectionDetail() {
   const { collectionKey } = useParams<{ collectionKey: string }>();

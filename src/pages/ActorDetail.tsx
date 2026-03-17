@@ -17,24 +17,7 @@ import {
 import HorizontalRow from "../components/HorizontalRow";
 import PosterCard from "../components/PosterCard";
 import type { PlexMediaItem } from "../types/library";
-
-/** Get initials from a name */
-function getInitials(name: string): string {
-  const parts = name.trim().split(/\s+/);
-  if (parts.length === 1) return parts[0][0]?.toUpperCase() ?? "";
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-}
-
-/** Format date string to readable format */
-function formatDate(dateStr: string | null): string {
-  if (!dateStr) return "";
-  try {
-    const d = new Date(dateStr + "T00:00:00");
-    return d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
-  } catch {
-    return dateStr;
-  }
-}
+import { getInitials, formatDate } from "../utils/text-format";
 
 /** Calculate age from birthday (and optional deathday) */
 function calcAge(birthday: string | null, deathday: string | null): number | null {

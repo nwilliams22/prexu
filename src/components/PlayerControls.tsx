@@ -10,6 +10,7 @@ import type { NormalizationPreset } from "../types/preferences";
 import type { PlexChapter } from "../types/library";
 import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
 import { useHoldToSkip } from "../hooks/useHoldToSkip";
+import { formatTime, formatDurationLabel, getEndsAt } from "../utils/time-format";
 import TrackMenu from "./TrackMenu";
 import AudioEnhancementsPanel from "./AudioEnhancementsPanel";
 
@@ -30,32 +31,6 @@ interface PlayerControlsProps {
     normalizationPreset?: NormalizationPreset;
     audioOffsetMs?: number;
   }) => void;
-}
-
-function formatTime(seconds: number): string {
-  const s = Math.max(0, Math.floor(seconds));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  if (h > 0)
-    return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
-  return `${m}:${String(sec).padStart(2, "0")}`;
-}
-
-/** Format duration as "Xh Ymin" for the title area */
-function formatDurationLabel(seconds: number): string {
-  const s = Math.max(0, Math.floor(seconds));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  if (h > 0) return `${h}h ${m}min`;
-  return `${m}min`;
-}
-
-/** Compute the "Ends at" time string, accounting for remaining time from now */
-function getEndsAt(currentTime: number, duration: number): string {
-  const remaining = Math.max(0, duration - currentTime);
-  const end = new Date(Date.now() + remaining * 1000);
-  return end.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
 const SKIP_SECONDS = 10;

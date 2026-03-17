@@ -4,6 +4,7 @@
  */
 
 import { useEffect, useRef } from "react";
+import { formatTimeMs } from "../utils/time-format";
 
 interface ResumePopoverProps {
   /** View offset in milliseconds */
@@ -16,19 +17,6 @@ interface ResumePopoverProps {
   onPlayFromBeginning: () => void;
   /** Close the popover without action */
   onClose: () => void;
-}
-
-/** Format milliseconds into HH:MM:SS or MM:SS */
-function formatTimeMs(ms: number): string {
-  const totalSeconds = Math.floor(ms / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  if (hours > 0) {
-    return `${hours}:${pad(minutes)}:${pad(seconds)}`;
-  }
-  return `${minutes}:${pad(seconds)}`;
 }
 
 function ResumePopover({

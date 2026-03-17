@@ -11,29 +11,7 @@ import { useInvites } from "../hooks/useInvites";
 import { usePreferences } from "../hooks/usePreferences";
 import { open } from "@tauri-apps/plugin-shell";
 import type { PlaybackPreferences, AppearancePreferences, NormalizationPreset } from "../types/preferences";
-
-const LANGUAGES = [
-  { code: "", label: "None" },
-  { code: "eng", label: "English" },
-  { code: "spa", label: "Spanish" },
-  { code: "fra", label: "French" },
-  { code: "deu", label: "German" },
-  { code: "ita", label: "Italian" },
-  { code: "por", label: "Portuguese" },
-  { code: "rus", label: "Russian" },
-  { code: "jpn", label: "Japanese" },
-  { code: "kor", label: "Korean" },
-  { code: "zho", label: "Chinese" },
-  { code: "ara", label: "Arabic" },
-  { code: "hin", label: "Hindi" },
-  { code: "nld", label: "Dutch" },
-  { code: "pol", label: "Polish" },
-  { code: "swe", label: "Swedish" },
-  { code: "nor", label: "Norwegian" },
-  { code: "dan", label: "Danish" },
-  { code: "fin", label: "Finnish" },
-  { code: "tur", label: "Turkish" },
-];
+import { LANGUAGES } from "../constants/languages";
 
 function Settings() {
   const { server, activeUser } = useAuth();
