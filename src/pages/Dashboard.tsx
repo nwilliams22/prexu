@@ -20,6 +20,7 @@ import EpisodeExpander from "../components/EpisodeExpander";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
 import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
+import { usePosterSize } from "../hooks/usePosterSize";
 import {
   getMediaSubtitleShort as getSubtitle,
   getProgress,
@@ -30,10 +31,6 @@ import type {
   PlexEpisode,
   GroupedRecentItem,
 } from "../types/library";
-
-
-const POSTER_SIZES = { small: 150, medium: 190, large: 230 } as const;
-const POSTER_SIZES_LARGE = { small: 190, medium: 230, large: 280 } as const;
 
 /** Pure helper — season label prefix for a grouped show (e.g. "Season 3 · ") */
 function getSeasonLabel(group: GroupedRecentItem): string {
@@ -80,8 +77,7 @@ function Dashboard() {
   const mobile = isMobile(bp);
   const { recentMovies, recentShows, onDeck, isLoading, error, refresh } =
     useDashboard();
-  const sizeMap = bp === "large" ? POSTER_SIZES_LARGE : POSTER_SIZES;
-  const posterWidth = sizeMap[preferences.appearance.posterSize];
+  const { posterWidth } = usePosterSize();
   const sections = preferences.appearance.dashboardSections;
   const navigate = useNavigate();
   const [expandedGroupKey, setExpandedGroupKey] = useState<string | null>(null);

@@ -4,11 +4,12 @@
  * Route: /discover/:mediaType/:tmdbId (e.g., /discover/movie/123 or /discover/tv/456)
  */
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useBreakpoint, isMobile, isTabletOrBelow } from "../hooks/useBreakpoint";
-import { isTmdbAvailable } from "../services/tmdb";
+import { useAsyncData } from "../hooks/useAsyncData";
 import {
+  isTmdbAvailable,
   getTmdbMovieDetail,
   getTmdbTvDetail,
   getTmdbImageUrl,
@@ -37,71 +38,32 @@ function DiscoverDetail() {
   const mobile = isMobile(bp);
   const tablet = isTabletOrBelow(bp) && !mobile;
 
-  const [movieDetail, setMovieDetail] = useState<TmdbMovieDetail | null>(null);
-  const [tvDetail, setTvDetail] = useState<TmdbTvDetail | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [hoveredCast, setHoveredCast] = useState<string | null>(null);
 
   const isMovie = mediaType === "movie";
-  const detail = isMovie ? movieDetail : tvDetail;
 
-  useEffect(() => {
-    if (!tmdbId || !mediaType) return;
-    let cancelled = false;
+  const { data: detail, isLoading, error } = useAsyncData(
+    async () => {
+      const available = await isTmdbAvailable();
+      if (!available) throw new Error("TMDb proxy not available on relay server.");
 
-    (async () => {
-      setIsLoading(true);
-      setError(null);
-      try {
-        const available = await isTmdbAvailable();
-        if (!available) {
-          setError("TMDb proxy not available on relay server.");
-          return;
-        }
+      const id = parseInt(tmdbId!, 10);
+      if (isNaN(id)) throw new Error("Invalid media ID.");
 
-        const id = parseInt(tmdbId, 10);
-        if (isNaN(id)) {
-          setError("Invalid media ID.");
-          return;
-        }
-
-        if (mediaType === "movie") {
-          const result = await getTmdbMovieDetail(id);
-          if (!cancelled) {
-            if (result) {
-              setMovieDetail(result);
-              document.title = `${result.title} - Prexu`;
-            } else {
-              setError("Movie not found.");
-            }
-          }
-        } else {
-          const result = await getTmdbTvDetail(id);
-          if (!cancelled) {
-            if (result) {
-              setTvDetail(result);
-              document.title = `${result.name} - Prexu`;
-            } else {
-              setError("TV show not found.");
-            }
-          }
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(
-            err instanceof Error ? err.message : "Failed to load details"
-          );
-        }
-      } finally {
-        if (!cancelled) setIsLoading(false);
+      if (mediaType === "movie") {
+        const result = await getTmdbMovieDetail(id);
+        if (!result) throw new Error("Movie not found.");
+        document.title = `${result.title} - Prexu`;
+        return result as TmdbMovieDetail | TmdbTvDetail;
+      } else {
+        const result = await getTmdbTvDetail(id);
+        if (!result) throw new Error("TV show not found.");
+        document.title = `${result.name} - Prexu`;
+        return result as TmdbMovieDetail | TmdbTvDetail;
       }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [tmdbId, mediaType]);
+    },
+    [tmdbId, mediaType],
+  );
 
   if (isLoading) {
     return (
