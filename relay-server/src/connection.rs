@@ -1,12 +1,20 @@
+use std::collections::VecDeque;
+
 use axum::extract::ws::{Message, WebSocket};
 use futures::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
-use tokio::time::{interval, Duration};
+use tokio::time::{interval, Duration, Instant};
 use tracing::{info, warn};
 
 use crate::messages::{ClientMessage, ServerMessage};
+use crate::plex_auth;
 use crate::session;
 use crate::state::{ConnectionHandle, SharedState};
+
+/// Max messages per connection within the rate limit window.
+const RATE_LIMIT_MAX: usize = 30;
+/// Rate limit window duration.
+const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1);
 
 /// Handle a single WebSocket connection.
 pub async fn handle_connection(ws: WebSocket, state: SharedState) {
@@ -17,12 +25,10 @@ pub async fn handle_connection(ws: WebSocket, state: SharedState) {
     let auth_result = tokio::time::timeout(Duration::from_secs(10), async {
         while let Some(Ok(msg)) = ws_receiver.next().await {
             if let Message::Text(text) = msg {
-                if let Ok(ClientMessage::Auth {
-                    plex_username,
-                    plex_thumb,
-                }) = serde_json::from_str(&text)
+                if let Ok(ClientMessage::Auth { plex_token, .. }) =
+                    serde_json::from_str(&text)
                 {
-                    return Some((plex_username, plex_thumb));
+                    return Some(plex_token);
                 }
             }
         }
@@ -30,8 +36,8 @@ pub async fn handle_connection(ws: WebSocket, state: SharedState) {
     })
     .await;
 
-    let (username, thumb) = match auth_result {
-        Ok(Some((u, t))) => (u, t),
+    let token = match auth_result {
+        Ok(Some(t)) => t,
         _ => {
             let err = ServerMessage::AuthError {
                 reason: "Auth timeout or invalid auth message".into(),
@@ -43,7 +49,24 @@ pub async fn handle_connection(ws: WebSocket, state: SharedState) {
         }
     };
 
-    info!(user = %username, "User authenticated");
+    // Validate the Plex token server-side
+    let identity = match plex_auth::validate_plex_token(&token).await {
+        Some(id) => id,
+        None => {
+            let err = ServerMessage::AuthError {
+                reason: "Invalid or expired Plex token".into(),
+            };
+            if let Ok(json) = serde_json::to_string(&err) {
+                let _ = ws_sender.send(Message::Text(json.into())).await;
+            }
+            return;
+        }
+    };
+
+    let username = identity.username;
+    let thumb = identity.thumb;
+
+    info!(user = %username, "User authenticated via Plex token");
 
     // Register connection
     state.connections.insert(
@@ -83,17 +106,35 @@ pub async fn handle_connection(ws: WebSocket, state: SharedState) {
         }
     });
 
-    // Phase 3: Reader loop with keepalive
+    // Phase 3: Reader loop with keepalive and rate limiting
     let mut keepalive = interval(Duration::from_secs(30));
     let state_clone = state.clone();
     let username_clone = username.clone();
     let thumb_clone = thumb.clone();
+    let mut msg_timestamps: VecDeque<Instant> = VecDeque::new();
 
     loop {
         tokio::select! {
             msg = ws_receiver.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
+                        // Rate limiting: sliding window
+                        let now = Instant::now();
+                        while msg_timestamps.front().is_some_and(|t| now.duration_since(*t) > RATE_LIMIT_WINDOW) {
+                            msg_timestamps.pop_front();
+                        }
+                        if msg_timestamps.len() >= RATE_LIMIT_MAX {
+                            warn!(user = %username_clone, "Rate limit exceeded, disconnecting");
+                            let err = ServerMessage::AuthError {
+                                reason: "Rate limit exceeded".into(),
+                            };
+                            if let Ok(json) = serde_json::to_string(&err) {
+                                let _ = tx.send(json);
+                            }
+                            break;
+                        }
+                        msg_timestamps.push_back(now);
+
                         handle_client_message(
                             &state_clone,
                             &username_clone,

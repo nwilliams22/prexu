@@ -76,7 +76,7 @@ export function useWatchTogether(
       if (!watchSync.isConnected && relayUrl && authToken) {
         try {
           const user = await getPlexUser(authToken);
-          watchSync.connect(relayUrl, user.username, user.thumb);
+          watchSync.connect(relayUrl, authToken, user.username, user.thumb);
 
           // Wait briefly for connection to establish
           await new Promise<void>((resolve, reject) => {

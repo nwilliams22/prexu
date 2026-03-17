@@ -97,14 +97,14 @@ describe("WatchSyncService", () => {
 
   describe("connect", () => {
     it("creates a WebSocket connection", () => {
-      watchSync.connect("ws://localhost:9847/ws", "testuser", "/thumb");
+      watchSync.connect("ws://localhost:9847/ws", "test-plex-token", "testuser", "/thumb");
 
       expect(mockWsInstance).not.toBeNull();
       expect(mockWsInstance!.url).toBe("ws://localhost:9847/ws");
     });
 
     it("sends auth message on open", async () => {
-      watchSync.connect("ws://localhost:9847/ws", "testuser", "/thumb");
+      watchSync.connect("ws://localhost:9847/ws", "test-plex-token", "testuser", "/thumb");
 
       // Let microtask (auto-open) run
       await vi.advanceTimersByTimeAsync(0);
@@ -112,12 +112,13 @@ describe("WatchSyncService", () => {
       expect(mockWsInstance!.sentMessages.length).toBeGreaterThanOrEqual(1);
       const authMsg = JSON.parse(mockWsInstance!.sentMessages[0]);
       expect(authMsg.type).toBe("auth");
+      expect(authMsg.plex_token).toBe("test-plex-token");
       expect(authMsg.plex_username).toBe("testuser");
       expect(authMsg.plex_thumb).toBe("/thumb");
     });
 
     it("starts ping interval on open", async () => {
-      watchSync.connect("ws://localhost:9847/ws", "testuser", "/thumb");
+      watchSync.connect("ws://localhost:9847/ws", "test-plex-token", "testuser", "/thumb");
       await vi.advanceTimersByTimeAsync(0);
 
       const msgCountBefore = mockWsInstance!.sentMessages.length;
@@ -137,7 +138,7 @@ describe("WatchSyncService", () => {
 
   describe("disconnect", () => {
     it("closes the WebSocket", async () => {
-      watchSync.connect("ws://localhost:9847/ws", "testuser", "/thumb");
+      watchSync.connect("ws://localhost:9847/ws", "test-plex-token", "testuser", "/thumb");
       await vi.advanceTimersByTimeAsync(0);
 
       watchSync.disconnect();
@@ -146,7 +147,7 @@ describe("WatchSyncService", () => {
     });
 
     it("stops reconnection attempts", async () => {
-      watchSync.connect("ws://localhost:9847/ws", "testuser", "/thumb");
+      watchSync.connect("ws://localhost:9847/ws", "test-plex-token", "testuser", "/thumb");
       await vi.advanceTimersByTimeAsync(0);
 
       watchSync.disconnect();
@@ -160,7 +161,7 @@ describe("WatchSyncService", () => {
 
   describe("send", () => {
     it("JSON-stringifies the message", async () => {
-      watchSync.connect("ws://localhost:9847/ws", "testuser", "/thumb");
+      watchSync.connect("ws://localhost:9847/ws", "test-plex-token", "testuser", "/thumb");
       await vi.advanceTimersByTimeAsync(0);
 
       watchSync.send({ type: "play", time: 5000 });
@@ -191,7 +192,7 @@ describe("WatchSyncService", () => {
       const listener = vi.fn();
       watchSync.on("auth_ok", listener);
 
-      watchSync.connect("ws://localhost:9847/ws", "testuser", "/thumb");
+      watchSync.connect("ws://localhost:9847/ws", "test-plex-token", "testuser", "/thumb");
       await vi.advanceTimersByTimeAsync(0);
 
       // Simulate auth_ok from server
@@ -208,7 +209,7 @@ describe("WatchSyncService", () => {
 
       unsub();
 
-      watchSync.connect("ws://localhost:9847/ws", "testuser", "/thumb");
+      watchSync.connect("ws://localhost:9847/ws", "test-plex-token", "testuser", "/thumb");
       await vi.advanceTimersByTimeAsync(0);
 
       mockWsInstance!.simulateMessage({ type: "auth_ok" });
@@ -222,7 +223,7 @@ describe("WatchSyncService", () => {
       watchSync.on("session_created", listener1);
       watchSync.on("session_created", listener2);
 
-      watchSync.connect("ws://localhost:9847/ws", "testuser", "/thumb");
+      watchSync.connect("ws://localhost:9847/ws", "test-plex-token", "testuser", "/thumb");
       await vi.advanceTimersByTimeAsync(0);
 
       mockWsInstance!.simulateMessage({ type: "session_created", sessionId: "abc" });
@@ -239,7 +240,7 @@ describe("WatchSyncService", () => {
       const listener = vi.fn();
       watchSync.on("remote_play", listener);
 
-      watchSync.connect("ws://localhost:9847/ws", "testuser", "/thumb");
+      watchSync.connect("ws://localhost:9847/ws", "test-plex-token", "testuser", "/thumb");
       await vi.advanceTimersByTimeAsync(0);
 
       mockWsInstance!.simulateMessage({ type: "play", time: 5000 });
@@ -253,7 +254,7 @@ describe("WatchSyncService", () => {
       const listener = vi.fn();
       watchSync.on("remote_pause", listener);
 
-      watchSync.connect("ws://localhost:9847/ws", "testuser", "/thumb");
+      watchSync.connect("ws://localhost:9847/ws", "test-plex-token", "testuser", "/thumb");
       await vi.advanceTimersByTimeAsync(0);
 
       mockWsInstance!.simulateMessage({ type: "pause", time: 10000 });
@@ -264,7 +265,7 @@ describe("WatchSyncService", () => {
       const listener = vi.fn();
       watchSync.on("remote_seek", listener);
 
-      watchSync.connect("ws://localhost:9847/ws", "testuser", "/thumb");
+      watchSync.connect("ws://localhost:9847/ws", "test-plex-token", "testuser", "/thumb");
       await vi.advanceTimersByTimeAsync(0);
 
       mockWsInstance!.simulateMessage({ type: "seek", time: 120000 });
@@ -275,7 +276,7 @@ describe("WatchSyncService", () => {
       const listener = vi.fn();
       watchSync.on("remote_buffering", listener);
 
-      watchSync.connect("ws://localhost:9847/ws", "testuser", "/thumb");
+      watchSync.connect("ws://localhost:9847/ws", "test-plex-token", "testuser", "/thumb");
       await vi.advanceTimersByTimeAsync(0);
 
       mockWsInstance!.simulateMessage({ type: "buffering" });
@@ -286,7 +287,7 @@ describe("WatchSyncService", () => {
       const listener = vi.fn();
       watchSync.on("remote_ready", listener);
 
-      watchSync.connect("ws://localhost:9847/ws", "testuser", "/thumb");
+      watchSync.connect("ws://localhost:9847/ws", "test-plex-token", "testuser", "/thumb");
       await vi.advanceTimersByTimeAsync(0);
 
       mockWsInstance!.simulateMessage({ type: "ready" });
@@ -297,7 +298,7 @@ describe("WatchSyncService", () => {
       const listener = vi.fn();
       watchSync.on("new_media", listener);
 
-      watchSync.connect("ws://localhost:9847/ws", "testuser", "/thumb");
+      watchSync.connect("ws://localhost:9847/ws", "test-plex-token", "testuser", "/thumb");
       await vi.advanceTimersByTimeAsync(0);
 
       mockWsInstance!.simulateMessage({ type: "new_media", ratingKey: "42" });
@@ -313,7 +314,7 @@ describe("WatchSyncService", () => {
     });
 
     it("returns true when open and authenticated", async () => {
-      watchSync.connect("ws://localhost:9847/ws", "testuser", "/thumb");
+      watchSync.connect("ws://localhost:9847/ws", "test-plex-token", "testuser", "/thumb");
       await vi.advanceTimersByTimeAsync(0);
 
       // Simulate auth success
@@ -323,7 +324,7 @@ describe("WatchSyncService", () => {
     });
 
     it("returns false when open but not authenticated", async () => {
-      watchSync.connect("ws://localhost:9847/ws", "testuser", "/thumb");
+      watchSync.connect("ws://localhost:9847/ws", "test-plex-token", "testuser", "/thumb");
       await vi.advanceTimersByTimeAsync(0);
 
       // Not authenticated yet
@@ -331,7 +332,7 @@ describe("WatchSyncService", () => {
     });
 
     it("returns false after disconnect", async () => {
-      watchSync.connect("ws://localhost:9847/ws", "testuser", "/thumb");
+      watchSync.connect("ws://localhost:9847/ws", "test-plex-token", "testuser", "/thumb");
       await vi.advanceTimersByTimeAsync(0);
       mockWsInstance!.simulateMessage({ type: "auth_ok" });
 
@@ -345,7 +346,7 @@ describe("WatchSyncService", () => {
 
   describe("reconnection", () => {
     it("schedules reconnect when connection closes unexpectedly", async () => {
-      watchSync.connect("ws://localhost:9847/ws", "testuser", "/thumb");
+      watchSync.connect("ws://localhost:9847/ws", "test-plex-token", "testuser", "/thumb");
       await vi.advanceTimersByTimeAsync(0);
 
       const firstInstance = mockWsInstance;
@@ -361,7 +362,7 @@ describe("WatchSyncService", () => {
     });
 
     it("does not reconnect after explicit disconnect", async () => {
-      watchSync.connect("ws://localhost:9847/ws", "testuser", "/thumb");
+      watchSync.connect("ws://localhost:9847/ws", "test-plex-token", "testuser", "/thumb");
       await vi.advanceTimersByTimeAsync(0);
 
       watchSync.disconnect();

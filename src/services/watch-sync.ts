@@ -40,13 +40,21 @@ class WatchSyncService {
   private shouldReconnect = false;
   private authenticated = false;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
-  private authPayload: { plexUsername: string; plexThumb: string } | null =
-    null;
+  private authPayload: {
+    plexToken: string;
+    plexUsername: string;
+    plexThumb: string;
+  } | null = null;
 
   /** Connect to the relay server and authenticate. */
-  connect(url: string, plexUsername: string, plexThumb: string): void {
+  connect(
+    url: string,
+    plexToken: string,
+    plexUsername: string,
+    plexThumb: string,
+  ): void {
     this.url = url;
-    this.authPayload = { plexUsername, plexThumb };
+    this.authPayload = { plexToken, plexUsername, plexThumb };
     this.shouldReconnect = true;
     this.authenticated = false;
     this.createConnection();
@@ -127,6 +135,7 @@ class WatchSyncService {
       if (this.authPayload) {
         this.send({
           type: "auth",
+          plex_token: this.authPayload.plexToken,
           plex_username: this.authPayload.plexUsername,
           plex_thumb: this.authPayload.plexThumb,
         });

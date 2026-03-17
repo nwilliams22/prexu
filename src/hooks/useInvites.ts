@@ -45,7 +45,7 @@ export function useInviteState(
         getRelayUrl(serverUri),
       ]);
 
-      watchSync.connect(relayUrl, user.username, user.thumb);
+      watchSync.connect(relayUrl, authToken, user.username, user.thumb);
     } catch (err) {
       console.error("[useInvites] Failed to connect to relay:", err);
     }

@@ -6,7 +6,13 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
     Auth {
+        plex_token: String,
+        /// Kept for backwards compat but ignored — server uses Plex API response
+        #[serde(default)]
+        #[allow(dead_code)]
         plex_username: String,
+        #[serde(default)]
+        #[allow(dead_code)]
         plex_thumb: String,
     },
     CreateSession {
