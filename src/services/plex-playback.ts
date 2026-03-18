@@ -128,7 +128,7 @@ export async function buildTranscodeUrl(
     audioBoost: String(options?.audioBoost ?? 100),
     location: "lan",
     autoAdjustQuality: "0",
-    directPlayAllowed: "0",
+    directPlayAllowed: "1",
     "X-Plex-Session-Identifier": sessionId,
     session: sessionId,
     "X-Plex-Client-Identifier": clientId,
@@ -138,10 +138,7 @@ export async function buildTranscodeUrl(
   });
 
   if (options?.offset !== undefined && options.offset > 0) {
-    // Round down to nearest 10s boundary for cleaner keyframe alignment.
-    // The player will seek to the precise position after the stream starts.
-    const alignedOffset = Math.max(0, Math.floor(options.offset / 10000) * 10000);
-    params.set("offset", String(alignedOffset));
+    params.set("offset", String(Math.floor(options.offset)));
   }
 
   if (options?.audioStreamId !== undefined) {
