@@ -9,6 +9,9 @@
     "core:default",
     "shell:allow-open",
     "log:default",
+    "store:default",
+    "window-state:default",
+    "updater:default",
     {
       "identifier": "http:default",
       "allow": [
