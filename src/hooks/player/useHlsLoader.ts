@@ -27,6 +27,7 @@ export interface RebuildHlsParams {
   startTime: number;
   audioStreamId?: number;
   subtitleStreamId?: number;
+  audioCodec?: string;
   quality: string;
   subtitleSize: number;
   audioBoost: number;
@@ -64,6 +65,7 @@ export function useHlsLoader(): HlsLoaderResult {
           offset: Math.round(params.startTime * 1000),
           audioStreamId: params.audioStreamId,
           subtitleStreamId: params.subtitleStreamId,
+          audioCodec: params.audioCodec,
           quality: params.quality,
           subtitleSize: params.subtitleSize,
           audioBoost: params.audioBoost,
@@ -82,7 +84,12 @@ export function useHlsLoader(): HlsLoaderResult {
         params.video.play().catch(() => {});
       });
       hls.on(Hls.Events.ERROR, (_event, data) => {
-        if (data.fatal && data.type !== Hls.ErrorTypes.MEDIA_ERROR) {
+        if (!data.fatal) return;
+
+        if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+          // Attempt automatic recovery for media errors (fragParsingError, etc.)
+          hls.recoverMediaError();
+        } else {
           params.onError(
             `Playback error — stream could not be loaded`,
           );

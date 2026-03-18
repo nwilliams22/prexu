@@ -43,6 +43,7 @@ export function useStreamSelection(
         setIsBuffering(true);
 
         const pb = prefsRef.current.playback;
+        const newAudioCodec = audioTracks.find((t) => t.id === streamId)?.codec;
         await hlsLoader.rebuildHls({
           serverUri: server.uri,
           serverToken: server.accessToken,
@@ -51,6 +52,7 @@ export function useStreamSelection(
           startTime: savedTime,
           audioStreamId: streamId,
           subtitleStreamId: selectedSubtitleId ?? undefined,
+          audioCodec: newAudioCodec,
           quality: pb.quality,
           subtitleSize: pb.subtitleSize,
           audioBoost: pb.audioBoost,
@@ -71,6 +73,7 @@ export function useStreamSelection(
         setIsBuffering(true);
 
         const pb = prefsRef.current.playback;
+        const currentAudioCodec = audioTracks.find((t) => t.id === selectedAudioId)?.codec;
         await hlsLoader.rebuildHls({
           serverUri: server.uri,
           serverToken: server.accessToken,
@@ -79,6 +82,7 @@ export function useStreamSelection(
           startTime: savedTime,
           audioStreamId: selectedAudioId ?? undefined,
           subtitleStreamId: streamId ?? undefined,
+          audioCodec: currentAudioCodec,
           quality: pb.quality,
           subtitleSize: pb.subtitleSize,
           audioBoost: pb.audioBoost,
