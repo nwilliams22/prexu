@@ -216,12 +216,13 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
           throw new Error("HLS playback is not supported in this browser/webview");
         }
 
+        // Don't pass offset to Plex — start transcode from beginning.
+        // We'll seek to the resume point after the manifest loads.
         const hlsUrl = await buildTranscodeUrl(
           server.uri,
           server.accessToken,
           ratingKey,
           {
-            offset: viewOffset > 0 ? viewOffset : undefined,
             audioStreamId: defaultAudio?.id,
             subtitleStreamId: defaultSub?.id,
             quality: pb.quality,
@@ -236,8 +237,6 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
         const hlsConfig = buildHlsConfig(server.accessToken, {
           maxBufferLength: 30,
           maxMaxBufferLength: 60,
-          // Start from the first available segment (Plex handles the offset server-side)
-          startPosition: 0,
         });
         const hls = new Hls(hlsConfig);
 
@@ -245,6 +244,10 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
         hls.attachMedia(video);
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          // Seek to resume position after manifest is ready
+          if (viewOffset > 0) {
+            video.currentTime = viewOffset / 1000;
+          }
           video.play().catch(() => {});
         });
 
