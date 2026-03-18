@@ -3,27 +3,15 @@
  * Supports TMDb search (movie/TV) and direct IMDb ID lookup.
  */
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useRef, useEffect } from "react";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
-import { useAuth } from "../hooks/useAuth";
-import { useContentRequests } from "../hooks/useContentRequests";
-import {
-  searchTmdbMovies,
-  searchTmdbTvShows,
-  findByImdbId,
-  getTmdbImageUrl,
-  isValidImdbId,
-  isTmdbAvailable,
-} from "../services/tmdb";
-import { discoverServers } from "../services/plex-api";
-import type { PlexServer } from "../types/plex";
-import type {
-  TmdbMovie,
-  TmdbTvShow,
-  TmdbSearchResult,
-  RequestMediaType,
-} from "../types/content-request";
+import { useTmdbSearch } from "../hooks/useTmdbSearch";
+import { useRequestSubmission } from "../hooks/useRequestSubmission";
+import { getTmdbImageUrl, isValidImdbId } from "../services/tmdb";
+import TmdbSearchResults from "./requests/TmdbSearchResults";
+import RequestSubmittedState from "./requests/RequestSubmittedState";
+import type { TmdbMovie, TmdbTvShow } from "../types/content-request";
 
 interface ContentRequestFormProps {
   onClose: () => void;
@@ -31,59 +19,15 @@ interface ContentRequestFormProps {
   initialMediaType?: "movie" | "tv";
 }
 
-type SearchMode = "search" | "imdb";
-type MediaTab = "movie" | "tv";
-
 function ContentRequestForm({ onClose, initialQuery, initialMediaType }: ContentRequestFormProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   useFocusTrap(panelRef, true);
 
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
-  const { authToken } = useAuth();
-  const { submitRequest } = useContentRequests();
 
-  const [tmdbReady, setTmdbReady] = useState(false);
-  const [tmdbLoading, setTmdbLoading] = useState(true);
-  const [servers, setServers] = useState<PlexServer[]>([]);
-  const [selectedServerId, setSelectedServerId] = useState<string>("");
-  const [searchMode, setSearchMode] = useState<SearchMode>("search");
-  const [mediaTab, setMediaTab] = useState<MediaTab>(initialMediaType ?? "movie");
-  const [query, setQuery] = useState(initialQuery ?? "");
-  const [imdbInput, setImdbInput] = useState("");
-  const [results, setResults] = useState<(TmdbMovie | TmdbTvShow)[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-  const [searchError, setSearchError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<TmdbSearchResult | null>(null);
-  const [submitted, setSubmitted] = useState(false);
-
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const searchVersionRef = useRef(0);
-
-  // Check TMDb proxy availability and load servers on mount
-  useEffect(() => {
-    (async () => {
-      const available = await isTmdbAvailable();
-      setTmdbReady(available);
-      setTmdbLoading(false);
-    })();
-
-    // Fetch all servers the user has access to
-    if (authToken) {
-      (async () => {
-        try {
-          const allServers = await discoverServers(authToken);
-          const online = allServers.filter((s) => s.status === "online");
-          setServers(online);
-          if (online.length === 1) {
-            setSelectedServerId(online[0].clientIdentifier);
-          }
-        } catch {
-          // Non-critical — just won't show server picker
-        }
-      })();
-    }
-  }, [authToken]);
+  const search = useTmdbSearch({ initialQuery, initialMediaType });
+  const submission = useRequestSubmission();
 
   // Close on Escape
   useEffect(() => {
@@ -94,114 +38,25 @@ function ContentRequestForm({ onClose, initialQuery, initialMediaType }: Content
     return () => window.removeEventListener("keydown", handleKey);
   }, [onClose]);
 
-  // Debounced TMDb search
-  useEffect(() => {
-    if (searchMode !== "search" || !tmdbReady || query.trim().length < 2) {
-      setResults([]);
-      return;
+  const handleSelectResult = (item: TmdbMovie | TmdbTvShow) => {
+    const result = search.handleSelectResult(item);
+    submission.setSelected(result);
+  };
+
+  const handleImdbLookup = async () => {
+    const result = await search.handleImdbLookup();
+    if (result) {
+      submission.setSelected(result);
     }
+  };
 
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-
-    debounceRef.current = setTimeout(async () => {
-      const version = ++searchVersionRef.current;
-      setIsSearching(true);
-      setSearchError(null);
-
-      try {
-        const { results: data } =
-          mediaTab === "movie"
-            ? await searchTmdbMovies(query.trim())
-            : await searchTmdbTvShows(query.trim());
-
-        if (version === searchVersionRef.current) {
-          setResults(data);
-        }
-      } catch (err) {
-        if (version === searchVersionRef.current) {
-          setSearchError(
-            err instanceof Error ? err.message : "Search failed",
-          );
-        }
-      } finally {
-        if (version === searchVersionRef.current) {
-          setIsSearching(false);
-        }
-      }
-    }, 300);
-
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-  }, [query, mediaTab, searchMode, tmdbReady]);
-
-  const handleImdbLookup = useCallback(async () => {
-    if (!tmdbReady || !isValidImdbId(imdbInput.trim())) return;
-
-    setIsSearching(true);
-    setSearchError(null);
-    setResults([]);
-
-    try {
-      const result = await findByImdbId(imdbInput.trim());
-      if (result) {
-        setSelected(result);
-      } else {
-        setSearchError("No results found for this IMDb ID");
-      }
-    } catch (err) {
-      setSearchError(
-        err instanceof Error ? err.message : "Lookup failed",
-      );
-    } finally {
-      setIsSearching(false);
-    }
-  }, [tmdbReady, imdbInput]);
-
-  const handleSelectResult = useCallback(
-    (item: TmdbMovie | TmdbTvShow) => {
-      if ("title" in item) {
-        setSelected({ ...item, media_type: "movie" });
-      } else {
-        setSelected({ ...item, media_type: "tv" });
-      }
-    },
-    [],
-  );
-
-  const handleSubmit = useCallback(() => {
-    if (!selected) return;
-
-    const isMovie = selected.media_type === "movie";
-    const title = isMovie
-      ? (selected as TmdbMovie).title
-      : (selected as TmdbTvShow).name;
-    const year = isMovie
-      ? (selected as TmdbMovie).release_date?.split("-")[0] ?? ""
-      : (selected as TmdbTvShow).first_air_date?.split("-")[0] ?? "";
-
-    const targetServer = servers.find(
-      (s) => s.clientIdentifier === selectedServerId
-    );
-
-    submitRequest({
-      tmdbId: selected.id,
-      imdbId: imdbInput.trim() || undefined,
-      mediaType: selected.media_type as RequestMediaType,
-      title,
-      year,
-      posterPath: selected.poster_path,
-      overview: selected.overview,
-      targetServerName: targetServer?.name,
-      targetServerId: targetServer?.clientIdentifier,
-    });
-
-    setSubmitted(true);
-  }, [selected, imdbInput, submitRequest, servers, selectedServerId]);
+  const handleSubmit = () => {
+    submission.handleSubmit(search.imdbInput);
+  };
 
   // ── Render ──
 
-  if (tmdbLoading) {
+  if (search.tmdbLoading) {
     return (
       <div style={styles.backdrop} onClick={onClose}>
         <div ref={panelRef} style={{ ...styles.panel, ...(mobile ? styles.panelMobile : {}) }} onClick={(e) => e.stopPropagation()}>
@@ -211,7 +66,7 @@ function ContentRequestForm({ onClose, initialQuery, initialMediaType }: Content
     );
   }
 
-  if (!tmdbReady) {
+  if (!search.tmdbReady) {
     return (
       <div style={styles.backdrop} onClick={onClose}>
         <div ref={panelRef} style={{ ...styles.panel, ...(mobile ? styles.panelMobile : {}) }} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Content request">
@@ -229,29 +84,18 @@ function ContentRequestForm({ onClose, initialQuery, initialMediaType }: Content
     );
   }
 
-  if (submitted) {
-    const targetServer = servers.find(
-      (s) => s.clientIdentifier === selectedServerId
-    );
+  if (submission.submitted) {
     return (
-      <div style={styles.backdrop} onClick={onClose}>
-        <div ref={panelRef} style={{ ...styles.panel, ...(mobile ? styles.panelMobile : {}) }} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Request submitted">
-          <h2 style={styles.title}>Request Submitted!</h2>
-          <p style={styles.description}>
-            Your request has been sent
-            {targetServer ? ` to the admin of ${targetServer.name}` : ""}.
-            You can track its status on the Requests page.
-          </p>
-          <button onClick={onClose} style={styles.submitButton}>
-            Done
-          </button>
-        </div>
-      </div>
+      <RequestSubmittedState
+        onClose={onClose}
+        targetServerName={submission.targetServer?.name}
+      />
     );
   }
 
   // Selected item confirmation
-  if (selected) {
+  if (submission.selected) {
+    const { selected } = submission;
     const isMovie = selected.media_type === "movie";
     const title = isMovie
       ? (selected as TmdbMovie).title
@@ -287,17 +131,17 @@ function ContentRequestForm({ onClose, initialQuery, initialMediaType }: Content
               )}
             </div>
           </div>
-          {/* Server picker — shown when user has access to multiple servers */}
-          {servers.length > 1 && (
+          {/* Server picker -- shown when user has access to multiple servers */}
+          {submission.servers.length > 1 && (
             <div style={styles.serverPickerRow}>
               <label style={styles.serverPickerLabel}>Send request to:</label>
               <select
-                value={selectedServerId}
-                onChange={(e) => setSelectedServerId(e.target.value)}
+                value={submission.selectedServerId}
+                onChange={(e) => submission.setSelectedServerId(e.target.value)}
                 style={styles.serverSelect}
               >
                 <option value="">Select a server...</option>
-                {servers.map((s) => (
+                {submission.servers.map((s) => (
                   <option key={s.clientIdentifier} value={s.clientIdentifier}>
                     {s.name}
                   </option>
@@ -308,17 +152,17 @@ function ContentRequestForm({ onClose, initialQuery, initialMediaType }: Content
 
           <div style={styles.buttonRow}>
             <button
-              onClick={() => setSelected(null)}
+              onClick={() => submission.setSelected(null)}
               style={styles.backButton}
             >
               Back
             </button>
             <button
               onClick={handleSubmit}
-              disabled={servers.length > 1 && !selectedServerId}
+              disabled={submission.servers.length > 1 && !submission.selectedServerId}
               style={{
                 ...styles.submitButton,
-                ...(servers.length > 1 && !selectedServerId ? styles.buttonDisabled : {}),
+                ...(submission.servers.length > 1 && !submission.selectedServerId ? styles.buttonDisabled : {}),
               }}
             >
               Submit Request
@@ -337,43 +181,43 @@ function ContentRequestForm({ onClose, initialQuery, initialMediaType }: Content
         {/* Mode toggle */}
         <div style={styles.tabRow}>
           <button
-            onClick={() => { setSearchMode("search"); setResults([]); setSearchError(null); }}
+            onClick={() => { search.setSearchMode("search"); search.clearResults(); search.clearError(); }}
             style={{
               ...styles.tab,
-              ...(searchMode === "search" ? styles.tabActive : {}),
+              ...(search.searchMode === "search" ? styles.tabActive : {}),
             }}
           >
             Search
           </button>
           <button
-            onClick={() => { setSearchMode("imdb"); setResults([]); setSearchError(null); }}
+            onClick={() => { search.setSearchMode("imdb"); search.clearResults(); search.clearError(); }}
             style={{
               ...styles.tab,
-              ...(searchMode === "imdb" ? styles.tabActive : {}),
+              ...(search.searchMode === "imdb" ? styles.tabActive : {}),
             }}
           >
             IMDb ID
           </button>
         </div>
 
-        {searchMode === "search" ? (
+        {search.searchMode === "search" ? (
           <>
             {/* Media type toggle */}
             <div style={styles.tabRow}>
               <button
-                onClick={() => { setMediaTab("movie"); setResults([]); }}
+                onClick={() => { search.setMediaTab("movie"); search.clearResults(); }}
                 style={{
                   ...styles.miniTab,
-                  ...(mediaTab === "movie" ? styles.miniTabActive : {}),
+                  ...(search.mediaTab === "movie" ? styles.miniTabActive : {}),
                 }}
               >
                 Movies
               </button>
               <button
-                onClick={() => { setMediaTab("tv"); setResults([]); }}
+                onClick={() => { search.setMediaTab("tv"); search.clearResults(); }}
                 style={{
                   ...styles.miniTab,
-                  ...(mediaTab === "tv" ? styles.miniTabActive : {}),
+                  ...(search.mediaTab === "tv" ? styles.miniTabActive : {}),
                 }}
               >
                 TV Shows
@@ -383,54 +227,21 @@ function ContentRequestForm({ onClose, initialQuery, initialMediaType }: Content
             {/* Search input */}
             <input
               type="text"
-              placeholder={`Search ${mediaTab === "movie" ? "movies" : "TV shows"}...`}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              placeholder={`Search ${search.mediaTab === "movie" ? "movies" : "TV shows"}...`}
+              value={search.query}
+              onChange={(e) => search.setQuery(e.target.value)}
               style={styles.input}
               autoFocus
             />
 
             {/* Results */}
-            <div style={styles.resultsList}>
-              {isSearching && <p style={styles.loadingText}>Searching...</p>}
-              {searchError && <p style={styles.errorText}>{searchError}</p>}
-              {!isSearching && results.length === 0 && query.length >= 2 && (
-                <p style={styles.emptyText}>No results found</p>
-              )}
-              {results.map((item) => {
-                const isMovie = "title" in item;
-                const title = isMovie ? item.title : (item as TmdbTvShow).name;
-                const year = isMovie
-                  ? item.release_date?.split("-")[0]
-                  : (item as TmdbTvShow).first_air_date?.split("-")[0];
-                const posterUrl = getTmdbImageUrl(item.poster_path, "w92");
-
-                return (
-                  <button
-                    key={item.id}
-                    onClick={() => handleSelectResult(item)}
-                    style={styles.resultItem}
-                  >
-                    {posterUrl ? (
-                      <img src={posterUrl} alt="" style={styles.resultPoster} />
-                    ) : (
-                      <div style={styles.resultPosterPlaceholder} />
-                    )}
-                    <div style={styles.resultInfo}>
-                      <span style={styles.resultTitle}>{title}</span>
-                      <span style={styles.resultYear}>{year || "Unknown year"}</span>
-                      {item.overview && (
-                        <span style={styles.resultOverview}>
-                          {item.overview.length > 100
-                            ? item.overview.slice(0, 100) + "..."
-                            : item.overview}
-                        </span>
-                      )}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
+            <TmdbSearchResults
+              results={search.results}
+              isSearching={search.isSearching}
+              searchError={search.searchError}
+              query={search.query}
+              onSelect={handleSelectResult}
+            />
           </>
         ) : (
           <>
@@ -439,28 +250,28 @@ function ContentRequestForm({ onClose, initialQuery, initialMediaType }: Content
               <input
                 type="text"
                 placeholder="tt1234567"
-                value={imdbInput}
-                onChange={(e) => setImdbInput(e.target.value)}
+                value={search.imdbInput}
+                onChange={(e) => search.setImdbInput(e.target.value)}
                 style={{ ...styles.input, flex: 1 }}
                 autoFocus
               />
               <button
                 onClick={handleImdbLookup}
-                disabled={!isValidImdbId(imdbInput.trim()) || isSearching}
+                disabled={!isValidImdbId(search.imdbInput.trim()) || search.isSearching}
                 style={{
                   ...styles.submitButton,
-                  ...((!isValidImdbId(imdbInput.trim()) || isSearching)
+                  ...((!isValidImdbId(search.imdbInput.trim()) || search.isSearching)
                     ? styles.buttonDisabled
                     : {}),
                 }}
               >
-                {isSearching ? "Looking up..." : "Look up"}
+                {search.isSearching ? "Looking up..." : "Look up"}
               </button>
             </div>
             <p style={styles.hintText}>
               Enter an IMDb ID (e.g., tt1234567) to look up the exact title.
             </p>
-            {searchError && <p style={styles.errorText}>{searchError}</p>}
+            {search.searchError && <p style={styles.errorText}>{search.searchError}</p>}
           </>
         )}
 
@@ -570,69 +381,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: "var(--text-secondary)",
     margin: 0,
     opacity: 0.7,
-  },
-  resultsList: {
-    flex: 1,
-    overflowY: "auto",
-    maxHeight: "300px",
-    display: "flex",
-    flexDirection: "column",
-    gap: "0.25rem",
-  },
-  resultItem: {
-    display: "flex",
-    gap: "0.75rem",
-    padding: "0.5rem",
-    background: "transparent",
-    border: "1px solid transparent",
-    borderRadius: "6px",
-    textAlign: "left",
-    cursor: "pointer",
-    color: "var(--text-primary)",
-    alignItems: "flex-start",
-    width: "100%",
-  },
-  resultPoster: {
-    width: "46px",
-    height: "69px",
-    borderRadius: "4px",
-    objectFit: "cover",
-    flexShrink: 0,
-    background: "rgba(255,255,255,0.05)",
-  },
-  resultPosterPlaceholder: {
-    width: "46px",
-    height: "69px",
-    borderRadius: "4px",
-    flexShrink: 0,
-    background: "rgba(255,255,255,0.05)",
-  },
-  resultInfo: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "0.15rem",
-    overflow: "hidden",
-    flex: 1,
-  },
-  resultTitle: {
-    fontSize: "0.85rem",
-    fontWeight: 600,
-    whiteSpace: "nowrap",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-  },
-  resultYear: {
-    fontSize: "0.7rem",
-    color: "var(--text-secondary)",
-  },
-  resultOverview: {
-    fontSize: "0.7rem",
-    color: "var(--text-secondary)",
-    lineHeight: 1.3,
-    display: "-webkit-box",
-    WebkitLineClamp: 2,
-    WebkitBoxOrient: "vertical",
-    overflow: "hidden",
   },
   selectedCard: {
     display: "flex",
@@ -750,13 +498,6 @@ const styles: Record<string, React.CSSProperties> = {
   errorText: {
     fontSize: "0.8rem",
     color: "var(--error)",
-    margin: 0,
-  },
-  emptyText: {
-    fontSize: "0.8rem",
-    color: "var(--text-secondary)",
-    textAlign: "center",
-    padding: "1rem 0",
     margin: 0,
   },
 };
