@@ -1,0 +1,202 @@
+import type React from "react";
+
+export const styles: Record<string, React.CSSProperties> = {
+  section: {
+    marginBottom: "1.75rem",
+    paddingBottom: "1.5rem",
+    borderBottom: "1px solid var(--border)",
+  },
+  sectionTitle: {
+    fontSize: "1.15rem",
+    fontWeight: 600,
+    marginBottom: "1rem",
+    color: "var(--accent)",
+  },
+  field: {
+    marginBottom: "1.25rem",
+  },
+  label: {
+    fontSize: "0.9rem",
+    fontWeight: 500,
+    marginBottom: "0.35rem",
+    display: "block",
+  },
+  hint: {
+    fontSize: "0.8rem",
+    color: "var(--text-secondary)",
+    marginBottom: "0.75rem",
+    lineHeight: 1.4,
+  },
+  select: {
+    width: "100%",
+    padding: "0.5rem 0.75rem",
+    borderRadius: "8px",
+    border: "1px solid var(--border)",
+    background: "var(--bg-primary)",
+    color: "var(--text-primary)",
+    fontSize: "0.9rem",
+    outline: "none",
+  },
+  slider: {
+    width: "100%",
+    accentColor: "var(--accent)",
+  },
+  sliderLabels: {
+    display: "flex",
+    justifyContent: "space-between",
+    fontSize: "0.7rem",
+    color: "var(--text-secondary)",
+    marginTop: "0.15rem",
+  },
+  radioGroup: {
+    display: "flex",
+    gap: "1.25rem",
+  },
+  radioLabel: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.4rem",
+    fontSize: "0.9rem",
+    color: "var(--text-primary)",
+    cursor: "pointer",
+  },
+  radio: {
+    accentColor: "var(--accent)",
+  },
+  checkboxGroup: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "0.5rem",
+  },
+  checkboxLabel: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.5rem",
+    fontSize: "0.9rem",
+    color: "var(--text-primary)",
+    cursor: "pointer",
+  },
+  checkbox: {
+    accentColor: "var(--accent)",
+  },
+
+  // Watch Together / Account
+  autoRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.5rem",
+    marginBottom: "0.5rem",
+  },
+  autoLabel: {
+    fontSize: "0.8rem",
+    color: "var(--text-secondary)",
+  },
+  autoUrl: {
+    fontSize: "0.8rem",
+    color: "var(--text-primary)",
+    background: "var(--bg-card)",
+    padding: "0.2rem 0.5rem",
+    borderRadius: "4px",
+    fontFamily: "monospace",
+  },
+  autoBadge: {
+    fontSize: "0.7rem",
+    fontWeight: 600,
+    color: "#000",
+    background: "var(--accent)",
+    padding: "0.1rem 0.4rem",
+    borderRadius: "4px",
+  },
+  statusRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.5rem",
+    marginBottom: "0.75rem",
+  },
+  statusDot: {
+    width: "8px",
+    height: "8px",
+    borderRadius: "50%",
+  },
+  statusText: {
+    fontSize: "0.8rem",
+    color: "var(--text-secondary)",
+  },
+  linkButton: {
+    background: "transparent",
+    color: "var(--text-secondary)",
+    border: "none",
+    fontSize: "0.8rem",
+    textDecoration: "underline",
+    cursor: "pointer",
+    padding: 0,
+    marginTop: "0.5rem",
+    display: "block",
+  },
+  overrideSection: {
+    marginTop: "0.5rem",
+    padding: "0.75rem",
+    background: "var(--bg-card)",
+    borderRadius: "8px",
+    border: "1px solid var(--border)",
+  },
+  overrideLabel: {
+    fontSize: "0.85rem",
+    fontWeight: 500,
+    marginBottom: "0.5rem",
+    display: "block",
+  },
+  inputRow: {
+    display: "flex",
+    gap: "0.5rem",
+  },
+  input: {
+    flex: 1,
+    padding: "0.5rem 0.75rem",
+    borderRadius: "8px",
+    border: "1px solid var(--border)",
+    background: "var(--bg-primary)",
+    color: "var(--text-primary)",
+    fontSize: "0.9rem",
+    outline: "none",
+  },
+  saveButton: {
+    background: "var(--accent)",
+    color: "#000",
+    border: "none",
+    borderRadius: "8px",
+    padding: "0.5rem 1.25rem",
+    fontSize: "0.9rem",
+    fontWeight: 600,
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  },
+
+  // About
+  aboutRow: {
+    display: "flex",
+    alignItems: "baseline",
+    gap: "0.5rem",
+    marginBottom: "0.25rem",
+  },
+  aboutLabel: {
+    fontSize: "1rem",
+    fontWeight: 600,
+  },
+  aboutVersion: {
+    fontSize: "0.85rem",
+    color: "var(--text-secondary)",
+  },
+  bugButton: {
+    display: "inline-flex",
+    alignItems: "center",
+    background: "transparent",
+    color: "var(--text-primary)",
+    border: "1px solid var(--border)",
+    borderRadius: "8px",
+    padding: "0.5rem 1.25rem",
+    fontSize: "0.85rem",
+    cursor: "pointer",
+    marginTop: "0.5rem",
+  },
+};
