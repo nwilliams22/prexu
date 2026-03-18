@@ -19,6 +19,12 @@ export function buildHlsConfig(
 ): Record<string, unknown> {
   return {
     loader: createTauriLoaderClass(serverToken),
+    // Buffer tuning for smoother playback
+    maxBufferLength: 60,           // buffer up to 60s ahead
+    maxMaxBufferLength: 120,       // allow up to 120s in good conditions
+    maxBufferSize: 60 * 1000000,   // 60MB buffer cap
+    maxBufferHole: 0.5,            // tolerate 0.5s gaps
+    lowLatencyMode: false,         // not live streaming, prioritize smoothness
     ...extraConfig,
   };
 }
@@ -96,7 +102,7 @@ export async function buildTranscodeUrl(
     fastSeek: "1",
     directPlay: "0",
     directStream: "1",
-    directStreamAudio: "1",
+    directStreamAudio: "0",
     videoQuality: "100",
     videoResolution: preset.resolution,
     maxVideoBitrate: String(preset.bitrate),
