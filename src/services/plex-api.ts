@@ -6,6 +6,11 @@ import type { PlexResource, PlexServer, PlexConnection } from "../types/plex";
 import { logger } from "./logger";
 import type { HomeUser } from "../types/home-user";
 import { getClientIdentifier } from "./storage";
+import {
+  validateResponse,
+  plexUserResponseSchema,
+  plexResourcesResponseSchema,
+} from "./validation";
 
 const PLEX_TV_API = "https://clients.plex.tv/api/v2";
 const APP_NAME = "Prexu";
@@ -164,7 +169,9 @@ export async function discoverServers(
     );
   }
 
-  const resources = (await response.json()) as PlexResource[];
+  const rawResources = await response.json();
+  validateResponse(plexResourcesResponseSchema, rawResources, "discoverServers");
+  const resources = rawResources as PlexResource[];
 
   // Filter to only server-type resources
   const serverResources = resources.filter((r) =>
@@ -348,7 +355,8 @@ export async function getPlexUser(authToken: string): Promise<PlexUser> {
     throw new Error(`Failed to fetch user profile: ${response.status}`);
   }
 
-  const data = await response.json();
+  const rawData = await response.json();
+  const data = validateResponse(plexUserResponseSchema, rawData, "getPlexUser");
   return {
     id: data.id,
     username: data.username ?? data.title ?? "",

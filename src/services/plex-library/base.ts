@@ -4,6 +4,7 @@
 
 import { serverFetch } from "../plex-api";
 import type { LibrarySection, PlexMediaContainer } from "../../types/library";
+import { validateResponse, librarySectionsResponseSchema } from "../validation";
 
 /** JSON fetch helper — shared by all plex-library modules */
 export async function fetchJson<T>(
@@ -31,5 +32,6 @@ export async function getLibrarySections(
     serverToken,
     "/library/sections"
   );
+  validateResponse(librarySectionsResponseSchema, data, "getLibrarySections");
   return data.MediaContainer.Directory ?? [];
 }
