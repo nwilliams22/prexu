@@ -1,11 +1,3 @@
-mod connection;
-mod messages;
-mod plex_auth;
-mod server;
-mod session;
-mod state;
-mod tmdb_proxy;
-
 use std::fs::File;
 use std::io::BufReader;
 use std::sync::Arc;
@@ -17,8 +9,7 @@ use tokio_rustls::TlsAcceptor;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
-use crate::server::{build_router, spawn_cleanup_task};
-use crate::state::AppState;
+use prexu_relay::{build_router, AppState, spawn_cleanup_task};
 
 #[derive(Parser, Debug)]
 #[command(name = "prexu-relay", about = "WebSocket relay for Prexu Watch Together")]

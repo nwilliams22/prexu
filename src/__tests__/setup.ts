@@ -26,6 +26,26 @@ if (!navigator.sendBeacon) {
   });
 }
 
+// Polyfill IntersectionObserver — jsdom doesn't provide it, useLazyImage uses it
+if (!globalThis.IntersectionObserver) {
+  globalThis.IntersectionObserver = class IntersectionObserver {
+    constructor(callback: IntersectionObserverCallback) {
+      // Immediately report all observed elements as intersecting
+      this._callback = callback;
+    }
+    private _callback: IntersectionObserverCallback;
+    observe() {
+      // Trigger callback immediately with isIntersecting: true
+      this._callback(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        this as unknown as globalThis.IntersectionObserver,
+      );
+    }
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof globalThis.IntersectionObserver;
+}
+
 // Polyfill ResizeObserver — jsdom doesn't provide it, HorizontalRow uses it
 if (!globalThis.ResizeObserver) {
   globalThis.ResizeObserver = class ResizeObserver {

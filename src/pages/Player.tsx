@@ -3,7 +3,7 @@
  * Sits outside the AppLayout (no header/sidebar).
  */
 
-import { useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useParams, useNavigate, useSearchParams, Navigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { usePlayer } from "../hooks/usePlayer";
@@ -15,11 +15,13 @@ import { useVideoClickHandling } from "../hooks/player/useVideoClickHandling";
 import { useEpisodeNavigation } from "../hooks/player/useEpisodeNavigation";
 import { useNextEpisodeDetection } from "../hooks/player/useNextEpisodeDetection";
 import { usePlayerKeyboardShortcuts } from "../hooks/player/usePlayerKeyboardShortcuts";
+import { usePictureInPicture } from "../hooks/player/usePictureInPicture";
 import PlayerControls from "../components/PlayerControls";
 import ParticipantOverlay from "../components/ParticipantOverlay";
 import SyncIndicator from "../components/SyncIndicator";
 import NextEpisodePrompt from "../components/NextEpisodePrompt";
 import ErrorOverlay from "../components/player/ErrorOverlay";
+import KeyboardShortcutsOverlay from "../components/player/KeyboardShortcutsOverlay";
 import type { NormalizationPreset } from "../types/preferences";
 
 function Player() {
@@ -76,6 +78,9 @@ function Player() {
     audioEnhancements.setMainBoost(Math.max(player.volume, 1));
   }, [player.volume, audioEnhancements]);
 
+  // Picture-in-Picture
+  const pip = usePictureInPicture(player.videoRef);
+
   // Controls visibility (auto-hide on inactivity)
   const { controlsVisible, resetHideTimer, handleMouseMove } =
     usePlayerControlsVisibility(player.isPlaying);
@@ -106,6 +111,10 @@ function Player() {
     ratingKey,
   );
 
+  // Keyboard shortcuts overlay
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const toggleShortcuts = useCallback(() => setShowShortcuts((v) => !v), []);
+
   // Keyboard shortcuts
   const handleBack = useCallback(() => navigate(-1), [navigate]);
 
@@ -127,6 +136,8 @@ function Player() {
     onAudioEnhancementChange: handleAudioEnhancementChange,
     onNextEpisode: handleNextEpisode,
     onPrevEpisode: handlePrevEpisode,
+    togglePiP: pip.togglePiP,
+    onToggleShortcuts: toggleShortcuts,
   });
 
   // Set document title
@@ -197,6 +208,12 @@ function Player() {
         />
       )}
 
+      {/* Keyboard shortcuts overlay */}
+      <KeyboardShortcutsOverlay
+        visible={showShortcuts}
+        onClose={toggleShortcuts}
+      />
+
       {/* Player controls overlay */}
       {!player.isLoading && !player.playbackError && (
         <PlayerControls
@@ -210,6 +227,9 @@ function Player() {
           onPrevEpisode={handlePrevEpisode}
           audioEnhancements={audioEnhancements}
           onAudioEnhancementChange={handleAudioEnhancementChange}
+          isPiPActive={pip.isPiPActive}
+          isPiPSupported={pip.isPiPSupported}
+          onTogglePiP={pip.togglePiP}
           syncIndicator={
             wt.isInSession ? (
               <SyncIndicator

@@ -41,6 +41,10 @@ export interface KeyboardShortcutDeps {
   /** Episode navigation */
   onNextEpisode?: () => void;
   onPrevEpisode?: () => void;
+  /** Picture-in-Picture toggle */
+  togglePiP?: () => void;
+  /** Toggle keyboard shortcuts overlay */
+  onToggleShortcuts?: () => void;
 }
 
 export function usePlayerKeyboardShortcuts(deps: KeyboardShortcutDeps): void {
@@ -134,7 +138,14 @@ export function usePlayerKeyboardShortcuts(deps: KeyboardShortcutDeps): void {
           break;
         case "p":
         case "P":
-          if (e.shiftKey && deps.onPrevEpisode) deps.onPrevEpisode();
+          if (e.shiftKey) {
+            if (deps.onPrevEpisode) deps.onPrevEpisode();
+          } else {
+            if (deps.togglePiP) deps.togglePiP();
+          }
+          break;
+        case "?":
+          if (deps.onToggleShortcuts) deps.onToggleShortcuts();
           break;
       }
     };

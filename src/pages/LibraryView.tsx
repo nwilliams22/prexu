@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { usePaginatedLibrary } from "../hooks/usePaginatedLibrary";
@@ -12,6 +12,7 @@ import { usePreferences } from "../hooks/usePreferences";
 import { useScrollRestoration } from "../hooks/useScrollRestoration";
 import { getImageUrl } from "../services/plex-library";
 import LibraryGrid from "../components/LibraryGrid";
+import VirtualizedLibraryGrid from "../components/VirtualizedLibraryGrid";
 import SortBar from "../components/SortBar";
 import FilterBar from "../components/FilterBar";
 import PosterCard from "../components/PosterCard";
@@ -26,7 +27,7 @@ import {
   isWatched,
   getUnwatchedCount,
 } from "../utils/media-helpers";
-import type { PlexCollection, LibraryFilters } from "../types/library";
+import type { PlexMediaItem, PlexCollection, LibraryFilters } from "../types/library";
 
 function LibraryView() {
   const { sectionId } = useParams<{ sectionId: string }>();
@@ -215,6 +216,57 @@ function LibraryView() {
   const hasActiveFilters =
     !!filters.genre || !!filters.year || !!filters.contentRating || !!filters.unwatched;
 
+  const posterUrl = useCallback(
+    (thumb: string) =>
+      server ? getImageUrl(server.uri, server.accessToken, thumb, 300, 450) : "",
+    [server],
+  );
+
+  const renderLibraryItem = useCallback(
+    (item: PlexMediaItem) => (
+      <div data-title-sort={(item as { titleSort?: string }).titleSort || item.title}>
+        <PosterCard
+          ratingKey={item.ratingKey}
+          imageUrl={posterUrl(item.thumb)}
+          title={item.title}
+          subtitle={getMediaSubtitle(item, { showEpisodeCount: true })}
+          watched={isWatched(item)}
+          unwatchedCount={getUnwatchedCount(item)}
+          onClick={() => navigate(`/item/${item.ratingKey}`)}
+          onPlay={getPlayHandler(item)}
+          showMoreButton
+          onContextMenu={(e) => openContextMenu(e, item)}
+          onMoreClick={(e) => openContextMenu(e, item)}
+          onExpand={
+            item.type === "show"
+              ? () =>
+                  setExpandedKey(
+                    expandedKey === item.ratingKey ? null : item.ratingKey
+                  )
+              : undefined
+          }
+          isExpanded={expandedKey === item.ratingKey}
+        />
+      </div>
+    ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [expandedKey, navigate, openContextMenu, getPlayHandler, posterUrl],
+  );
+
+  const renderExpansion = useCallback(
+    (item: PlexMediaItem) => (
+      <ShowExpansionPanel
+        ratingKey={item.ratingKey}
+        onClose={() => setExpandedKey(null)}
+        onNavigateToShow={(key) => navigate(`/item/${key}`)}
+        onNavigateToSeason={(key) => navigate(`/item/${key}`)}
+      />
+    ),
+    [navigate],
+  );
+
+  const getItemKey = useCallback((item: PlexMediaItem, _index: number) => item.ratingKey, []);
+
   // Infinite scroll via IntersectionObserver
   useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -234,9 +286,6 @@ function LibraryView() {
   }, [hasMore, isLoadingMore, loadMore]);
 
   if (!server) return null;
-
-  const posterUrl = (thumb: string) =>
-    getImageUrl(server.uri, server.accessToken, thumb, 300, 450);
 
   const getLabel = (): string => {
     if (!section) return "items";
@@ -296,54 +345,25 @@ function LibraryView() {
           )}
 
           <div ref={gridContainerRef}>
-          <LibraryGrid>
-            {isLoading &&
-              Array.from({ length: 24 }).map((_, i) => <SkeletonCard key={i} />)}
-
-            {items.map((item) => (
-              <React.Fragment key={item.ratingKey}>
-                <div data-title-sort={(item as { titleSort?: string }).titleSort || item.title}>
-                <PosterCard
-                  ratingKey={item.ratingKey}
-                  imageUrl={posterUrl(item.thumb)}
-                  title={item.title}
-                  subtitle={getMediaSubtitle(item, { showEpisodeCount: true })}
-                  watched={isWatched(item)}
-                  unwatchedCount={getUnwatchedCount(item)}
-                  onClick={() => navigate(`/item/${item.ratingKey}`)}
-                  onPlay={getPlayHandler(item)}
-                  showMoreButton
-                  onContextMenu={(e) => openContextMenu(e, item)}
-                  onMoreClick={(e) => openContextMenu(e, item)}
-                  onExpand={
-                    item.type === "show"
-                      ? () =>
-                          setExpandedKey(
-                            expandedKey === item.ratingKey ? null : item.ratingKey
-                          )
-                      : undefined
-                  }
-                  isExpanded={expandedKey === item.ratingKey}
-                />
-                </div>
-                {expandedKey === item.ratingKey && (
-                  <div style={{ gridColumn: "1 / -1" }}>
-                    <ShowExpansionPanel
-                      ratingKey={item.ratingKey}
-                      onClose={() => setExpandedKey(null)}
-                      onNavigateToShow={(key) => navigate(`/item/${key}`)}
-                      onNavigateToSeason={(key) => navigate(`/item/${key}`)}
-                    />
-                  </div>
-                )}
-              </React.Fragment>
-            ))}
-
-            {isLoadingMore &&
-              Array.from({ length: 12 }).map((_, i) => (
-                <SkeletonCard key={`more-${i}`} />
-              ))}
-          </LibraryGrid>
+            <VirtualizedLibraryGrid
+              items={items}
+              renderItem={renderLibraryItem}
+              getKey={getItemKey}
+              expandedKey={expandedKey}
+              renderExpansion={renderExpansion}
+              header={
+                isLoading
+                  ? Array.from({ length: 24 }).map((_, i) => <SkeletonCard key={i} />)
+                  : undefined
+              }
+              footer={
+                isLoadingMore
+                  ? Array.from({ length: 12 }).map((_, i) => (
+                      <SkeletonCard key={`more-${i}`} />
+                    ))
+                  : undefined
+              }
+            />
           </div>
 
           {showAlphaJump && (

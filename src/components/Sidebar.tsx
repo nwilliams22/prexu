@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { useLibrary } from "../hooks/useLibrary";
 import { useBreakpoint, isTabletOrBelow } from "../hooks/useBreakpoint";
+import { useServerHealth } from "../hooks/useServerHealth";
 import {
   scanLibrary,
   refreshLibraryMetadata,
@@ -10,6 +11,8 @@ import {
 } from "../services/plex-library";
 import LibraryIcon from "./LibraryIcon";
 import ContextMenu from "./ContextMenu";
+import UpdateNotification from "./UpdateNotification";
+import ServerHealthBadge from "./ServerHealthBadge";
 import type { ContextMenuItem } from "./ContextMenu";
 
 interface SidebarProps {
@@ -26,6 +29,7 @@ interface SectionMenuState {
 function Sidebar({ collapsed, onToggle, onNavigate }: SidebarProps) {
   const { server } = useAuth();
   const { sections, isLoading } = useLibrary();
+  const health = useServerHealth(server);
   const bp = useBreakpoint();
   const touchMode = isTabletOrBelow(bp);
   const navigate = useNavigate();
@@ -239,6 +243,23 @@ function Sidebar({ collapsed, onToggle, onNavigate }: SidebarProps) {
         })}
       </div>
 
+      {/* Server health indicator */}
+      {server && (
+        <div style={{
+          ...styles.healthRow,
+          justifyContent: collapsed ? "center" : "flex-start",
+          padding: collapsed ? "0.5rem 0" : "0.5rem 0.75rem",
+        }}>
+          <ServerHealthBadge status={health.status} latencyMs={health.latencyMs} />
+          {!collapsed && (
+            <span style={styles.healthLabel}>{server.name ?? "Server"}</span>
+          )}
+        </div>
+      )}
+
+      {/* Update notification */}
+      <UpdateNotification collapsed={collapsed} />
+
       {/* Collapse toggle */}
       <button onClick={onToggle} style={styles.collapseButton} title="Toggle sidebar">
         <svg
@@ -348,6 +369,20 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
     zIndex: 1,
     transition: "opacity 0.15s ease",
+  },
+  healthRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.5rem",
+    margin: "0 0.5rem",
+    borderTop: "1px solid var(--border)",
+  },
+  healthLabel: {
+    fontSize: "0.78rem",
+    color: "var(--text-secondary)",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap" as const,
   },
   collapseButton: {
     display: "flex",

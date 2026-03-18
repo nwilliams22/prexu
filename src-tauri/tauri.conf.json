@@ -41,6 +41,15 @@
       "nsis": {
         "installerHooks": "nsis-hooks/hooks.nsh"
       }
+    },
+    "createUpdaterArtifacts": "v2Compatible"
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": [
+        "https://releases.prexu.com/{{target}}/{{arch}}/{{current_version}}"
+      ]
     }
   }
 }
