@@ -267,9 +267,15 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
                 setPlaybackError(`Network error — could not load stream\n${details}`);
                 break;
               case Hls.ErrorTypes.MEDIA_ERROR:
-                if (mediaRecoveryAttempts < 5) {
+                if (mediaRecoveryAttempts < 3) {
                   mediaRecoveryAttempts++;
                   hls.recoverMediaError();
+                } else if (mediaRecoveryAttempts < 6) {
+                  // After 3 failed recoveries, skip ahead 10s past the bad segment
+                  mediaRecoveryAttempts++;
+                  const skipTime = (videoRef.current?.currentTime ?? 0) + 10;
+                  hls.recoverMediaError();
+                  if (videoRef.current) videoRef.current.currentTime = skipTime;
                 } else {
                   setPlaybackError(`Media error — could not decode stream\n${details}`);
                 }
