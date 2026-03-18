@@ -4,6 +4,7 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
+use tower_http::cors::{CorsLayer, Any};
 use tokio::time::{interval, Duration};
 use tracing::info;
 
@@ -14,6 +15,11 @@ use crate::tmdb_proxy;
 
 /// Build the axum router with WebSocket and health endpoints.
 pub fn build_router(state: SharedState) -> Router {
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
     Router::new()
         .route("/ws", get(ws_handler))
         .route("/health", get(health_handler))
@@ -27,6 +33,7 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/tmdb/person/{person_id}/credits", get(tmdb_proxy::person_credits))
         .route("/tmdb/movie/{movie_id}", get(tmdb_proxy::movie_detail))
         .route("/tmdb/tv/{tv_id}", get(tmdb_proxy::tv_detail))
+        .layer(cors)
         .with_state(state)
 }
 

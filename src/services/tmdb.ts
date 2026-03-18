@@ -13,7 +13,7 @@ import type {
   TmdbSearchTvResponse,
   TmdbFindResponse,
 } from "../types/content-request";
-import { getRelayHttpUrl } from "./storage";
+import { getRelayHttpUrl, getServer } from "./storage";
 import { timedFetch } from "./plex-api";
 
 const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p";
@@ -23,7 +23,9 @@ let cachedRelayHttp: string | null = null;
 
 async function relayBase(): Promise<string> {
   if (cachedRelayHttp) return cachedRelayHttp;
-  cachedRelayHttp = await getRelayHttpUrl();
+  const server = await getServer();
+  cachedRelayHttp = await getRelayHttpUrl(server?.uri);
+  console.log("[TMDb] relay base URL:", cachedRelayHttp, "| server URI:", server?.uri);
   return cachedRelayHttp;
 }
 
@@ -35,13 +37,23 @@ export function resetTmdbRelayCache(): void {
 /** Fetch JSON from the relay TMDb proxy. */
 async function relayFetch<T>(path: string): Promise<T> {
   const base = await relayBase();
-  const resp = await timedFetch(`${base}${path}`);
+  const url = `${base}${path}`;
 
-  if (!resp.ok) {
-    throw new Error(`TMDb proxy error: ${resp.status} ${resp.statusText}`);
+  try {
+    const resp = await timedFetch(url);
+
+    if (!resp.ok) {
+      throw new Error(`TMDb proxy error: ${resp.status} ${resp.statusText} (${url})`);
+    }
+
+    return resp.json() as Promise<T>;
+  } catch (err) {
+    // Include the URL in the error so we can see what was tried
+    if (err instanceof Error && !err.message.includes(base)) {
+      throw new Error(`${err.message} — relay URL: ${url}`);
+    }
+    throw err;
   }
-
-  return resp.json() as Promise<T>;
 }
 
 /** Search TMDb for movies by title. */
