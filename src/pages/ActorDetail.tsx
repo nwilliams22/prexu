@@ -15,6 +15,7 @@ import ActorCreditsSection from "../components/actor/ActorCreditsSection";
 import ActorCollaboratorsSection from "../components/actor/ActorCollaboratorsSection";
 import type { PlexMediaItem } from "../types/library";
 import { getInitials, formatDate } from "../utils/text-format";
+import { isWatched } from "../utils/media-helpers";
 
 function ActorDetail() {
   const { actorName } = useParams<{ actorName: string }>();
@@ -244,6 +245,7 @@ function ActorDetail() {
                       imageUrl={posterUrl(m.thumb)}
                       title={m.title}
                       subtitle={year ? String(year) : ""}
+                      watched={isWatched(m as unknown as PlexMediaItem)}
                       width={200}
                       onClick={() => navigate(`/item/${m.ratingKey}`)}
                     />
@@ -275,6 +277,7 @@ function ActorDetail() {
                       imageUrl={posterUrl(s.thumb)}
                       title={s.title}
                       subtitle={subtitle}
+                      watched={isWatched(s as unknown as PlexMediaItem)}
                       width={200}
                       onClick={() => navigate(`/item/${s.ratingKey}`)}
                     />
