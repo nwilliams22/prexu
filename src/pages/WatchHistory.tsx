@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { useWatchHistory } from "../hooks/useWatchHistory";
@@ -6,7 +6,7 @@ import { useMediaContextMenu } from "../hooks/useMediaContextMenu";
 import { usePlayAction } from "../hooks/usePlayAction";
 import { useScrollRestoration } from "../hooks/useScrollRestoration";
 import { getImageUrl } from "../services/plex-library";
-import LibraryGrid from "../components/LibraryGrid";
+import VirtualizedLibraryGrid from "../components/VirtualizedLibraryGrid";
 import PosterCard from "../components/PosterCard";
 import SkeletonCard from "../components/SkeletonCard";
 import EmptyState from "../components/EmptyState";
@@ -18,6 +18,7 @@ import {
   getProgress,
   isWatched,
 } from "../utils/media-helpers";
+import type { PlexMediaItem } from "../types/library";
 
 function WatchHistory() {
   const { server } = useAuth();
@@ -49,10 +50,38 @@ function WatchHistory() {
     return () => observer.disconnect();
   }, [hasMore, isLoadingMore, loadMore]);
 
-  if (!server) return null;
+  const posterUrl = useCallback(
+    (thumb: string) =>
+      server ? getImageUrl(server.uri, server.accessToken, thumb, 300, 450) : "",
+    [server],
+  );
 
-  const posterUrl = (thumb: string) =>
-    getImageUrl(server.uri, server.accessToken, thumb, 300, 450);
+  const renderItem = useCallback(
+    (item: PlexMediaItem) => (
+      <PosterCard
+        ratingKey={item.ratingKey}
+        imageUrl={posterUrl(getMediaPoster(item))}
+        title={getMediaTitle(item)}
+        subtitle={getMediaSubtitle(item)}
+        progress={getProgress(item)}
+        watched={isWatched(item)}
+        onClick={() => navigate(`/item/${item.ratingKey}`)}
+        onPlay={getPlayHandler(item)}
+        showMoreButton
+        onContextMenu={(e) => openContextMenu(e, item)}
+        onMoreClick={(e) => openContextMenu(e, item)}
+      />
+    ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [posterUrl, navigate, openContextMenu, getPlayHandler],
+  );
+
+  const getKey = useCallback(
+    (item: PlexMediaItem, index: number) => `${item.ratingKey}-${index}`,
+    [],
+  );
+
+  if (!server) return null;
 
   return (
     <div style={styles.container}>
@@ -66,32 +95,23 @@ function WatchHistory() {
         </p>
       )}
 
-      <LibraryGrid>
-        {isLoading &&
-          Array.from({ length: 24 }).map((_, i) => <SkeletonCard key={i} />)}
-
-        {items.map((item, index) => (
-          <PosterCard
-            key={`${item.ratingKey}-${index}`}
-            ratingKey={item.ratingKey}
-            imageUrl={posterUrl(getMediaPoster(item))}
-            title={getMediaTitle(item)}
-            subtitle={getMediaSubtitle(item)}
-            progress={getProgress(item)}
-            watched={isWatched(item)}
-            onClick={() => navigate(`/item/${item.ratingKey}`)}
-            onPlay={getPlayHandler(item)}
-            showMoreButton
-            onContextMenu={(e) => openContextMenu(e, item)}
-            onMoreClick={(e) => openContextMenu(e, item)}
-          />
-        ))}
-
-        {isLoadingMore &&
-          Array.from({ length: 12 }).map((_, i) => (
-            <SkeletonCard key={`more-${i}`} />
-          ))}
-      </LibraryGrid>
+      <VirtualizedLibraryGrid
+        items={items}
+        renderItem={renderItem}
+        getKey={getKey}
+        header={
+          isLoading
+            ? Array.from({ length: 24 }).map((_, i) => <SkeletonCard key={i} />)
+            : undefined
+        }
+        footer={
+          isLoadingMore
+            ? Array.from({ length: 12 }).map((_, i) => (
+                <SkeletonCard key={`more-${i}`} />
+              ))
+            : undefined
+        }
+      />
 
       {!isLoading && !error && items.length === 0 && (
         <EmptyState

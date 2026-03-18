@@ -22,3 +22,11 @@ rustls-pemfile = "2"
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "server-auto", "http1"] }
 urlencoding = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.28"
+futures-util = "0.3"
+axum = { version = "0.8", features = ["ws"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+serde_json = "1"

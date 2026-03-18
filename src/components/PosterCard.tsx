@@ -1,5 +1,6 @@
 import { useState, memo } from "react";
 import { useServerActivity } from "../hooks/useServerActivity";
+import { useLazyImage } from "../hooks/useLazyImage";
 
 interface PosterCardProps {
   imageUrl: string;
@@ -55,6 +56,7 @@ function PosterCard({
 }: PosterCardProps) {
   const { scanningIds } = useServerActivity();
   const scanning = scanningProp ?? (ratingKey ? scanningIds.has(ratingKey) : false);
+  const { containerRef, shouldLoad, onLoad: onLazyLoad, onError: onLazyError } = useLazyImage();
   const [loaded, setLoaded] = useState(false);
   const [hovered, setHovered] = useState(false);
   const [active, setActive] = useState(false);
@@ -87,21 +89,22 @@ function PosterCard({
       }}
     >
       {/* Image container */}
-      <div style={{ ...styles.imageContainer, height }}>
+      <div ref={containerRef} style={{ ...styles.imageContainer, height }}>
         {/* Skeleton shown until image loads */}
         {!loaded && <div className="shimmer" style={styles.skeleton} />}
 
-        <img
-          src={imageUrl}
-          alt=""
-          loading="lazy"
-          onLoad={() => setLoaded(true)}
-          onError={() => setLoaded(true)}
-          style={{
-            ...styles.image,
-            opacity: loaded ? 1 : 0,
-          }}
-        />
+        {shouldLoad && (
+          <img
+            src={imageUrl}
+            alt=""
+            onLoad={() => { setLoaded(true); onLazyLoad(); }}
+            onError={() => { setLoaded(true); onLazyError(); }}
+            style={{
+              ...styles.image,
+              opacity: loaded ? 1 : 0,
+            }}
+          />
+        )}
 
         {/* Three-dot menu button */}
         {showMoreButton && (

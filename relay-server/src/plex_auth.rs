@@ -17,7 +17,18 @@ pub struct PlexIdentity {
 
 /// Validate a Plex auth token by calling the Plex API.
 /// Returns the verified username and thumb from Plex (not client-supplied).
+///
+/// When the `PREXU_TEST_MODE` environment variable is set, auth validation is
+/// bypassed and the token is treated as the username (for integration testing).
 pub async fn validate_plex_token(token: &str) -> Option<PlexIdentity> {
+    // In test mode, accept any token and treat it as the username
+    if std::env::var("PREXU_TEST_MODE").is_ok() {
+        return Some(PlexIdentity {
+            username: token.to_string(),
+            thumb: format!("https://plex.tv/users/{}/avatar", token),
+        });
+    }
+
     let client = reqwest::Client::new();
 
     let resp = client

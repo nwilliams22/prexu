@@ -31,6 +31,10 @@ interface ControlsBottomBarProps {
     normalizationPreset?: NormalizationPreset;
     audioOffsetMs?: number;
   }) => void;
+  /** Picture-in-Picture */
+  isPiPActive?: boolean;
+  isPiPSupported?: boolean;
+  onTogglePiP?: () => void;
 }
 
 function ControlsBottomBar({
@@ -46,6 +50,9 @@ function ControlsBottomBar({
   onPrevEpisode,
   audioEnhancements,
   onAudioEnhancementChange,
+  isPiPActive,
+  isPiPSupported,
+  onTogglePiP,
 }: ControlsBottomBarProps) {
   const [volumeOpen, setVolumeOpen] = useState(false);
   const [subtitleMenuOpen, setSubtitleMenuOpen] = useState(false);
@@ -210,6 +217,33 @@ function ControlsBottomBar({
                   <line x1={19} y1={3} x2={19} y2={21} />
                   <circle cx={19} cy={16} r={2.5} fill="currentColor" />
                 </svg>
+              </button>
+            )}
+
+            {/* Picture-in-Picture */}
+            {isPiPSupported && onTogglePiP && (
+              <button
+                onClick={onTogglePiP}
+                style={{
+                  ...styles.controlButton,
+                  ...(isPiPActive ? { color: "var(--accent)" } : {}),
+                  ...(mobile ? { padding: "0.5rem" } : {}),
+                }}
+                aria-label={isPiPActive ? "Exit picture-in-picture" : "Picture-in-picture"}
+              >
+                {isPiPActive ? (
+                  <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                    <rect x={2} y={3} width={20} height={14} rx={2} />
+                    <rect x={10} y={9} width={8} height={6} rx={1} fill="currentColor" opacity={0.3} />
+                    <path d="M18 21H6" />
+                  </svg>
+                ) : (
+                  <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                    <rect x={2} y={3} width={20} height={14} rx={2} />
+                    <rect x={10} y={9} width={8} height={6} rx={1} />
+                    <path d="M18 21H6" />
+                  </svg>
+                )}
               </button>
             )}
 

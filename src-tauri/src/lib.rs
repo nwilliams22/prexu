@@ -227,6 +227,7 @@ pub fn run() {
         )
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_store::Builder::default().build())
+        .plugin(tauri_plugin_updater::Builder::default().build())
         .invoke_handler(tauri::generate_handler![start_proxy])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {

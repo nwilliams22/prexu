@@ -29,9 +29,13 @@ interface PlayerControlsProps {
     normalizationPreset?: NormalizationPreset;
     audioOffsetMs?: number;
   }) => void;
+  /** Picture-in-Picture */
+  isPiPActive?: boolean;
+  isPiPSupported?: boolean;
+  onTogglePiP?: () => void;
 }
 
-function PlayerControls({ player, onBack, visible, syncIndicator, chapters, onSeek, onActivity, onNextEpisode, onPrevEpisode, audioEnhancements, onAudioEnhancementChange }: PlayerControlsProps) {
+function PlayerControls({ player, onBack, visible, syncIndicator, chapters, onSeek, onActivity, onNextEpisode, onPrevEpisode, audioEnhancements, onAudioEnhancementChange, isPiPActive, isPiPSupported, onTogglePiP }: PlayerControlsProps) {
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
 
@@ -95,6 +99,9 @@ function PlayerControls({ player, onBack, visible, syncIndicator, chapters, onSe
         onPrevEpisode={onPrevEpisode}
         audioEnhancements={audioEnhancements}
         onAudioEnhancementChange={onAudioEnhancementChange}
+        isPiPActive={isPiPActive}
+        isPiPSupported={isPiPSupported}
+        onTogglePiP={onTogglePiP}
       />
     </div>
   );
