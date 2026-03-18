@@ -20,16 +20,17 @@ vi.mock("./storage", () => ({
   getClientIdentifier: vi.fn().mockResolvedValue("test-client-id"),
 }));
 
+const mockFetch = vi.fn().mockResolvedValue({ ok: true } as Response);
+vi.stubGlobal("fetch", mockFetch);
+
 vi.mock("./plex-api", () => ({
   getServerHeaders: vi.fn().mockResolvedValue({
     Accept: "application/json",
     "X-Plex-Token": "server-token",
     "X-Plex-Client-Identifier": "test-client-id",
   }),
+  timedFetch: (...args: unknown[]) => mockFetch(...args),
 }));
-
-const mockFetch = vi.fn().mockResolvedValue({ ok: true } as Response);
-vi.stubGlobal("fetch", mockFetch);
 
 describe("plex-playback — pure functions", () => {
   // ── canDirectPlay ──
@@ -498,13 +499,12 @@ describe("plex-playback — async functions", () => {
       );
 
       expect(mockFetch).toHaveBeenCalledOnce();
-      const [url, options] = mockFetch.mock.calls[0];
+      const [url] = mockFetch.mock.calls[0];
       expect(url).toContain("https://server:32400/:/timeline?");
       expect(url).toContain("ratingKey=12345");
       expect(url).toContain("state=playing");
       expect(url).toContain("time=60000");
       expect(url).toContain("duration=7200000");
-      expect(options.method).toBe("GET");
     });
 
     it("does not throw on fetch failure (best-effort)", async () => {

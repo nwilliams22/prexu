@@ -2,7 +2,7 @@
  * Library administration: scan, refresh metadata, empty trash.
  */
 
-import { serverFetch, getServerHeaders } from "../plex-api";
+import { serverFetch, getServerHeaders, timedFetch } from "../plex-api";
 
 export async function scanLibrary(
   serverUri: string,
@@ -25,7 +25,7 @@ export async function refreshLibraryMetadata(
   sectionId: string
 ): Promise<void> {
   const headers = await getServerHeaders(serverToken);
-  const response = await fetch(
+  const response = await timedFetch(
     `${serverUri}/library/sections/${sectionId}/refresh?force=1`,
     { method: "PUT", headers }
   );
@@ -40,7 +40,7 @@ export async function emptyLibraryTrash(
   sectionId: string
 ): Promise<void> {
   const headers = await getServerHeaders(serverToken);
-  const response = await fetch(
+  const response = await timedFetch(
     `${serverUri}/library/sections/${sectionId}/emptyTrash`,
     { method: "PUT", headers }
   );

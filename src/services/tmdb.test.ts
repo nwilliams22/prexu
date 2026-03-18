@@ -20,6 +20,11 @@ vi.mock("./storage", () => ({
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
 
+// Mock plex-api to provide timedFetch that delegates to the mocked fetch
+vi.mock("./plex-api", () => ({
+  timedFetch: (...args: unknown[]) => mockFetch(...args),
+}));
+
 function jsonResponse(data: unknown, ok = true, status = 200) {
   return Promise.resolve({
     ok,

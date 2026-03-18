@@ -14,6 +14,7 @@ import type {
   TmdbFindResponse,
 } from "../types/content-request";
 import { getRelayHttpUrl } from "./storage";
+import { timedFetch } from "./plex-api";
 
 const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p";
 
@@ -34,7 +35,7 @@ export function resetTmdbRelayCache(): void {
 /** Fetch JSON from the relay TMDb proxy. */
 async function relayFetch<T>(path: string): Promise<T> {
   const base = await relayBase();
-  const resp = await fetch(`${base}${path}`);
+  const resp = await timedFetch(`${base}${path}`);
 
   if (!resp.ok) {
     throw new Error(`TMDb proxy error: ${resp.status} ${resp.statusText}`);
@@ -93,7 +94,7 @@ export async function findByImdbId(
 export async function isTmdbAvailable(): Promise<boolean> {
   try {
     const base = await relayBase();
-    const resp = await fetch(`${base}/tmdb/status`);
+    const resp = await timedFetch(`${base}/tmdb/status`);
     return resp.ok;
   } catch {
     return false;

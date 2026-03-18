@@ -9,6 +9,7 @@
 
 import type { PlexPin } from "../types/plex";
 import { getClientIdentifier } from "./storage";
+import { timedFetch } from "./plex-api";
 
 const PLEX_API_BASE = "https://clients.plex.tv/api/v2";
 const APP_NAME = "Prexu";
@@ -31,7 +32,7 @@ async function getPlexHeaders(): Promise<Record<string, string>> {
 export async function createPin(): Promise<PlexPin> {
   const headers = await getPlexHeaders();
 
-  const response = await fetch(`${PLEX_API_BASE}/pins`, {
+  const response = await timedFetch(`${PLEX_API_BASE}/pins`, {
     method: "POST",
     headers: {
       ...headers,
@@ -64,7 +65,7 @@ export async function pollForAuth(pinId: number): Promise<string> {
   const startTime = Date.now();
 
   while (Date.now() - startTime < POLL_TIMEOUT_MS) {
-    const response = await fetch(`${PLEX_API_BASE}/pins/${pinId}`, {
+    const response = await timedFetch(`${PLEX_API_BASE}/pins/${pinId}`, {
       headers,
     });
 

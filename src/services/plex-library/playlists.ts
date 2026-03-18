@@ -3,7 +3,7 @@
  */
 
 import { fetchJson } from "./base";
-import { getServerHeaders } from "../plex-api";
+import { getServerHeaders, timedFetch } from "../plex-api";
 import type {
   PlexMediaContainer,
   PlexMediaItem,
@@ -69,7 +69,7 @@ export async function addToPlaylist(
 ): Promise<void> {
   const uri = `server://${machineIdentifier}/com.plexapp.plugins.library/library/metadata/${ratingKey}`;
   const headers = await getServerHeaders(serverToken);
-  const response = await fetch(
+  const response = await timedFetch(
     `${serverUri}/playlists/${playlistId}/items?uri=${encodeURIComponent(uri)}`,
     { method: "PUT", headers }
   );
@@ -94,7 +94,7 @@ export async function createPlaylist(
     uri,
   });
   const headers = await getServerHeaders(serverToken);
-  const response = await fetch(
+  const response = await timedFetch(
     `${serverUri}/playlists?${params.toString()}`,
     { method: "POST", headers }
   );

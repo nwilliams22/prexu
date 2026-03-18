@@ -3,7 +3,7 @@
  * Used to search for metadata matches and apply corrections to library items.
  */
 
-import { getServerHeaders } from "./plex-api";
+import { getServerHeaders, timedFetch } from "./plex-api";
 import type { PlexSearchResult, PlexMatchSearchResponse } from "../types/fix-match";
 
 /**
@@ -27,7 +27,7 @@ export async function searchMatches(
   if (year) params.set("year", year);
   if (agent) params.set("agent", agent);
 
-  const resp = await fetch(
+  const resp = await timedFetch(
     `${serverUri}/library/metadata/${ratingKey}/matches?${params}`,
     { headers },
   );
@@ -76,7 +76,7 @@ export async function applyMatch(
 
   if (year) params.set("year", String(year));
 
-  const resp = await fetch(
+  const resp = await timedFetch(
     `${serverUri}/library/metadata/${ratingKey}/match?${params}`,
     { method: "PUT", headers },
   );
@@ -97,7 +97,7 @@ export async function refreshMetadata(
 ): Promise<void> {
   const headers = await getServerHeaders(serverToken);
 
-  const resp = await fetch(
+  const resp = await timedFetch(
     `${serverUri}/library/metadata/${ratingKey}/refresh`,
     { method: "PUT", headers },
   );

@@ -3,7 +3,7 @@
  * and timeline reporting.
  */
 
-import { getServerHeaders } from "./plex-api";
+import { getServerHeaders, timedFetch } from "./plex-api";
 import { getClientIdentifier } from "./storage";
 import { createTauriLoaderClass } from "./tauri-loader";
 import type { PlexMediaInfo, PlexMediaPart, PlexStream } from "../types/library";
@@ -179,8 +179,7 @@ export async function reportTimeline(
   });
 
   try {
-    await fetch(`${serverUri}/:/timeline?${params.toString()}`, {
-      method: "GET",
+    await timedFetch(`${serverUri}/:/timeline?${params.toString()}`, {
       headers,
     });
   } catch {
@@ -219,7 +218,7 @@ export async function reportTimelineBeacon(
     // Fallback
     try {
       const headers = await getServerHeaders(serverToken);
-      await fetch(url, { method: "GET", headers, keepalive: true });
+      await timedFetch(url, { headers, keepalive: true });
     } catch {
       // Best effort
     }

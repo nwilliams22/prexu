@@ -12,6 +12,48 @@ const APP_NAME = "Prexu";
 const CONNECTIVITY_TIMEOUT_MS = 5000;
 const REQUEST_TIMEOUT_MS = 15000;
 
+// ── Request deduplication ──
+// For identical GET requests that are already in-flight, return the existing promise.
+const inflightRequests = new Map<string, Promise<Response>>();
+
+/**
+ * Fetch with automatic timeout. Wraps the native fetch with an AbortController.
+ * GET requests are deduplicated: if an identical URL is already in-flight,
+ * the existing promise is returned instead of firing a duplicate request.
+ */
+export async function timedFetch(
+  url: string,
+  init?: RequestInit & { timeoutMs?: number },
+): Promise<Response> {
+  const timeout = init?.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  const method = (init?.method ?? "GET").toUpperCase();
+
+  // Dedup GET requests
+  if (method === "GET" && inflightRequests.has(url)) {
+    return inflightRequests.get(url)!.then((r) => r.clone());
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+
+  // Merge any existing signal (unlikely but safe)
+  const signal = init?.signal
+    ? AbortSignal.any([init.signal, controller.signal])
+    : controller.signal;
+
+  const promise = fetch(url, { ...init, signal, timeoutMs: undefined } as RequestInit)
+    .finally(() => {
+      clearTimeout(timer);
+      if (method === "GET") inflightRequests.delete(url);
+    });
+
+  if (method === "GET") {
+    inflightRequests.set(url, promise);
+  }
+
+  return promise;
+}
+
 // ── Auth invalidation event bus ──
 // Components can subscribe to be notified when a 401 is received from any API call.
 type AuthInvalidListener = () => void;
@@ -66,19 +108,11 @@ export async function getServerHeaders(
 /** Test if a server connection URI is reachable */
 async function testConnection(uri: string, token: string): Promise<boolean> {
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(
-      () => controller.abort(),
-      CONNECTIVITY_TIMEOUT_MS
-    );
-
     const headers = await getServerHeaders(token);
-    const response = await fetch(`${uri}/identity`, {
+    const response = await timedFetch(`${uri}/identity`, {
       headers,
-      signal: controller.signal,
+      timeoutMs: CONNECTIVITY_TIMEOUT_MS,
     });
-
-    clearTimeout(timeout);
     return response.ok;
   } catch {
     return false;
@@ -119,9 +153,9 @@ export async function discoverServers(
 ): Promise<PlexServer[]> {
   const headers = await getAuthHeaders(authToken);
 
-  const response = await fetch(
+  const response = await timedFetch(
     `${PLEX_TV_API}/resources?includeHttps=1&includeRelay=1`,
-    { headers }
+    { headers },
   );
 
   if (!response.ok) {
@@ -164,23 +198,13 @@ export async function discoverServers(
 export async function validateToken(authToken: string): Promise<boolean> {
   try {
     const headers = await getAuthHeaders(authToken);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const response = await timedFetch(`${PLEX_TV_API}/user`, { headers });
 
-    try {
-      const response = await fetch(`${PLEX_TV_API}/user`, {
-        headers,
-        signal: controller.signal,
-      });
-
-      if (response.status === 401) {
-        emitAuthInvalid();
-      }
-
-      return response.ok;
-    } finally {
-      clearTimeout(timeout);
+    if (response.status === 401) {
+      emitAuthInvalid();
     }
+
+    return response.ok;
   } catch {
     return false;
   }
@@ -193,23 +217,13 @@ export async function serverFetch(
   path: string
 ): Promise<Response> {
   const headers = await getServerHeaders(serverToken);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const response = await timedFetch(`${serverUri}${path}`, { headers });
 
-  try {
-    const response = await fetch(`${serverUri}${path}`, {
-      headers,
-      signal: controller.signal,
-    });
-
-    if (response.status === 401) {
-      emitAuthInvalid();
-    }
-
-    return response;
-  } finally {
-    clearTimeout(timeout);
+  if (response.status === 401) {
+    emitAuthInvalid();
   }
+
+  return response;
 }
 
 // ── Server Account ID ──
@@ -225,7 +239,7 @@ export async function getServerAccountId(
 
     // Strategy 1: Fetch /myplex/account which returns the authenticated user's
     // MyPlex account info — try multiple known response shapes
-    const myPlexResp = await fetch(`${serverUri}/myplex/account`, { headers });
+    const myPlexResp = await timedFetch(`${serverUri}/myplex/account`, { headers });
     if (myPlexResp.ok) {
       const data = await myPlexResp.json();
       logger.info(TAG, "/myplex/account response:", JSON.stringify(data).slice(0, 500));
@@ -254,8 +268,8 @@ export async function getServerAccountId(
     // Strategy 2: Check the server root which includes myPlexUsername,
     // then match against /accounts
     const [rootResp, accountsResp] = await Promise.all([
-      fetch(`${serverUri}/`, { headers }),
-      fetch(`${serverUri}/accounts`, { headers }),
+      timedFetch(`${serverUri}/`, { headers }),
+      timedFetch(`${serverUri}/accounts`, { headers }),
     ]);
     if (rootResp.ok && accountsResp.ok) {
       const rootData = await rootResp.json();
@@ -328,7 +342,7 @@ export interface PlexFriend {
 /** Fetch the current authenticated user's profile */
 export async function getPlexUser(authToken: string): Promise<PlexUser> {
   const headers = await getAuthHeaders(authToken);
-  const response = await fetch(`${PLEX_TV_API}/user`, { headers });
+  const response = await timedFetch(`${PLEX_TV_API}/user`, { headers });
 
   if (!response.ok) {
     throw new Error(`Failed to fetch user profile: ${response.status}`);
@@ -352,7 +366,7 @@ export async function getPlexFriends(
 
   // Try v2 JSON endpoint first
   try {
-    const response = await fetch(`${PLEX_TV_API}/friends`, { headers });
+    const response = await timedFetch(`${PLEX_TV_API}/friends`, { headers });
     if (response.ok) {
       const data = await response.json();
       if (Array.isArray(data)) {
@@ -375,7 +389,7 @@ export async function getPlexFriends(
   // Fallback: v1 XML endpoint
   try {
     const xmlHeaders = { ...headers, Accept: "application/xml" };
-    const response = await fetch("https://plex.tv/api/users", {
+    const response = await timedFetch("https://plex.tv/api/users", {
       headers: xmlHeaders,
     });
 
@@ -417,7 +431,7 @@ export async function getHomeUsers(authToken: string): Promise<HomeUser[]> {
   const headers = await getAuthHeaders(authToken);
 
   try {
-    const response = await fetch(`${PLEX_TV_API}/home/users`, { headers });
+    const response = await timedFetch(`${PLEX_TV_API}/home/users`, { headers });
 
     if (!response.ok) {
       // 401 or 403 means not a Plex Home member — graceful degradation
@@ -465,7 +479,7 @@ export async function switchHomeUser(
     body.set("pin", pin);
   }
 
-  const response = await fetch(`${PLEX_TV_API}/home/users/${userId}/switch`, {
+  const response = await timedFetch(`${PLEX_TV_API}/home/users/${userId}/switch`, {
     method: "POST",
     headers: {
       ...headers,
