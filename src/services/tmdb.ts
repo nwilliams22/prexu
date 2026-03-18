@@ -25,7 +25,6 @@ async function relayBase(): Promise<string> {
   if (cachedRelayHttp) return cachedRelayHttp;
   const server = await getServer();
   cachedRelayHttp = await getRelayHttpUrl(server?.uri);
-  console.log("[TMDb] relay base URL:", cachedRelayHttp, "| server URI:", server?.uri);
   return cachedRelayHttp;
 }
 
