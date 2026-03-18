@@ -32,8 +32,8 @@ export function buildHlsConfig(
 // ── Direct Play Detection ──
 
 /** Browser-playable codec/container combos (WebView2/Chromium) */
-const DIRECT_PLAY_CONTAINERS = ["mp4", "m4v", "mov"];
-const DIRECT_PLAY_VIDEO_CODECS = ["h264", "avc1"];
+const DIRECT_PLAY_CONTAINERS = ["mp4", "m4v", "mov", "mkv"];
+const DIRECT_PLAY_VIDEO_CODECS = ["h264", "avc1", "hevc", "h265", "hev1"];
 const DIRECT_PLAY_AUDIO_CODECS = ["aac", "mp3", "flac", "opus", "ac3", "eac3"];
 
 /** Check if an audio codec can be played directly by the browser (WebView2/Chromium) */
@@ -144,10 +144,14 @@ export async function buildTranscodeUrl(
     params.set("subtitles", "burn");
   }
 
-  // Client profile: tell Plex we accept H264+AAC in HLS/MPEGTS
+  // Client profile: tell Plex what we accept in HLS/MPEGTS
+  // H264 + HEVC video, AAC/MP3 audio
   params.set(
     "X-Plex-Client-Profile-Extra",
-    "add-transcode-target(type=videoProfile&context=streaming&protocol=hls&container=mpegts&videoCodec=h264&audioCodec=aac,mp3)"
+    [
+      "add-transcode-target(type=videoProfile&context=streaming&protocol=hls&container=mpegts&videoCodec=h264,hevc&audioCodec=aac,mp3,ac3,eac3)",
+      "add-limitation(scope=videoCodec&scopeName=hevc&type=upperBound&name=video.bitDepth&value=10)",
+    ].join("+")
   );
 
   return `${serverUri}/video/:/transcode/universal/start.m3u8?${params.toString()}`;
