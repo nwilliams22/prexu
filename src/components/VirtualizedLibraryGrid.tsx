@@ -71,9 +71,13 @@ function VirtualizedLibraryGrid<T>({
 
     const measure = () => {
       const w = el.clientWidth;
-      setCols(Math.max(1, Math.floor((w + GAP_X) / (minWidth + GAP_X))));
+      if (w > 0) {
+        setCols(Math.max(1, Math.floor((w + GAP_X) / (minWidth + GAP_X))));
+      }
     };
-    measure();
+
+    // Defer initial measurement to ensure layout is complete
+    requestAnimationFrame(measure);
 
     const observer = new ResizeObserver(measure);
     observer.observe(el);
