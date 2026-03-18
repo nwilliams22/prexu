@@ -236,7 +236,8 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
         const hlsConfig = buildHlsConfig(server.accessToken, {
           maxBufferLength: 30,
           maxMaxBufferLength: 60,
-          startPosition: viewOffset > 0 ? viewOffset / 1000 : -1,
+          // Plex handles the offset server-side — the HLS stream starts at the resume point
+          startPosition: -1,
         });
         const hls = new Hls(hlsConfig);
 
