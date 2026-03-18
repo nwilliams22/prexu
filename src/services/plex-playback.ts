@@ -31,15 +31,21 @@ export function buildHlsConfig(
 
 // ── Direct Play Detection ──
 
-/** Browser-playable codec/container combos (WebView2/Chromium) */
-const DIRECT_PLAY_CONTAINERS = ["mp4", "m4v", "mov", "mkv"];
-const DIRECT_PLAY_VIDEO_CODECS = ["h264", "avc1", "hevc", "h265", "hev1"];
-const DIRECT_PLAY_AUDIO_CODECS = ["aac", "mp3", "flac", "opus", "ac3", "eac3"];
+/** Browser-playable codec/container combos for raw file direct play (WebView2/Chromium) */
+const DIRECT_PLAY_CONTAINERS = ["mp4", "m4v", "mov"];
+const DIRECT_PLAY_VIDEO_CODECS = ["h264", "avc1"];
+const DIRECT_PLAY_AUDIO_CODECS = ["aac", "mp3", "flac", "opus"];
 
-/** Check if an audio codec can be played directly by the browser (WebView2/Chromium) */
+/**
+ * Audio codecs that can be passed through (direct-streamed) in HLS/MPEGTS.
+ * This is broader than direct play because HLS containers handle more codecs.
+ */
+const HLS_DIRECT_AUDIO_CODECS = ["aac", "mp3", "flac", "opus", "ac3", "eac3"];
+
+/** Check if an audio codec can be direct-streamed in HLS (no transcoding needed) */
 export function canDirectStreamAudio(audioCodec: string | undefined): boolean {
   if (!audioCodec) return false;
-  return DIRECT_PLAY_AUDIO_CODECS.includes(audioCodec.toLowerCase());
+  return HLS_DIRECT_AUDIO_CODECS.includes(audioCodec.toLowerCase());
 }
 
 export function canDirectPlay(media: PlexMediaInfo): boolean {
