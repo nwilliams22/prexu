@@ -14,7 +14,7 @@ import PosterCard from "../components/PosterCard";
 import SkeletonCard from "../components/SkeletonCard";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
-import { decodeHtmlEntities } from "../utils/media-helpers";
+import { decodeHtmlEntities, isWatched } from "../utils/media-helpers";
 import {
   getMediaTitle,
   getMediaSubtitle,
@@ -129,6 +129,7 @@ function PlaylistDetail() {
             title={getMediaTitle(item)}
             subtitle={getMediaSubtitle(item)}
             progress={getProgress(item)}
+            watched={isWatched(item)}
             onClick={() => navigate(`/item/${item.ratingKey}`)}
             onPlay={getPlayHandler(item)}
             showMoreButton
