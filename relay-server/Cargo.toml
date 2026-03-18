@@ -21,6 +21,7 @@ tokio-rustls = "0.26"
 rustls-pemfile = "2"
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "server-auto", "http1"] }
+tower = "0.5"
 urlencoding = "2"
 
 [dev-dependencies]
