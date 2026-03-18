@@ -436,10 +436,12 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
 
           const hlsConfig = buildHlsConfig(server.accessToken, {
             maxBufferLength: 30,
-            startPosition: clampedTime,
+            // Plex handles the offset server-side — stream starts at the seek point
+            startPosition: -1,
           });
           const hls = new Hls(hlsConfig);
 
+          let seekRecoveryAttempts = 0;
           hls.loadSource(url);
           hls.attachMedia(video);
           hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -447,7 +449,8 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
           });
           hls.on(Hls.Events.ERROR, (_event, data) => {
             if (!data.fatal) return;
-            if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+            if (data.type === Hls.ErrorTypes.MEDIA_ERROR && seekRecoveryAttempts < 3) {
+              seekRecoveryAttempts++;
               hls.recoverMediaError();
             } else {
               setPlaybackError("Seek failed — try again");
