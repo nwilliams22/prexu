@@ -10,7 +10,7 @@
  * the standard CSS grid to keep things simple.
  */
 
-import { useRef, useState, useEffect, useCallback, useMemo, type ReactNode } from "react";
+import { useRef, useState, useEffect, useCallback, useMemo, useLayoutEffect, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useBreakpoint } from "../hooks/useBreakpoint";
 import type { Breakpoint } from "../hooks/useBreakpoint";
@@ -188,8 +188,14 @@ function VirtualizedGridInner<T>({
     overscan: 3,
   });
 
+  // Hide the grid briefly on first render to avoid visual jitter from measurement
+  const [settled, setSettled] = useState(false);
+  useLayoutEffect(() => {
+    requestAnimationFrame(() => setSettled(true));
+  }, []);
+
   return (
-    <div ref={parentRef}>
+    <div ref={parentRef} style={{ opacity: settled ? 1 : 0 }}>
       {header && (
         <div
           style={{
