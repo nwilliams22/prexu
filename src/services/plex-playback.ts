@@ -128,7 +128,7 @@ export async function buildTranscodeUrl(
     audioBoost: String(options?.audioBoost ?? 100),
     location: "lan",
     autoAdjustQuality: "0",
-    directPlayAllowed: "1",
+    directPlayAllowed: "0",
     "X-Plex-Session-Identifier": sessionId,
     session: sessionId,
     "X-Plex-Client-Identifier": clientId,

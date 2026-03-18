@@ -267,7 +267,7 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
                 setPlaybackError(`Network error — could not load stream\n${details}`);
                 break;
               case Hls.ErrorTypes.MEDIA_ERROR:
-                if (mediaRecoveryAttempts < 2) {
+                if (mediaRecoveryAttempts < 5) {
                   mediaRecoveryAttempts++;
                   hls.recoverMediaError();
                 } else {
