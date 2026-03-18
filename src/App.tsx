@@ -3,11 +3,7 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import AppLayout from "./components/AppLayout";
 import SplashScreen from "./components/SplashScreen";
 import { useAuth, useAuthState, AuthProvider } from "./hooks/useAuth";
-import { useInviteState, InviteProvider } from "./hooks/useInvites";
-import { useContentRequestState, ContentRequestProvider } from "./hooks/useContentRequests";
-import { usePreferencesState, PreferencesProvider } from "./hooks/usePreferences";
-import { useHomeUsersState, HomeUsersProvider } from "./hooks/useHomeUsers";
-import { useServerActivityState, ServerActivityProvider } from "./hooks/useServerActivity";
+import AppProviders from "./contexts/AppProviders";
 import { getLibrarySections } from "./services/plex-library";
 import { cacheSet } from "./services/api-cache";
 
@@ -135,39 +131,14 @@ function AppRoutes() {
   );
 }
 
-/**
- * Inner app component — runs inside AuthProvider so useAuth() is available
- * for hooks that depend on auth state (home users, invites, preferences).
- */
-function AppWithAuth() {
-  const auth = useAuth();
-  const homeUsersState = useHomeUsersState();
-  const inviteState = useInviteState(auth.authToken, auth.server?.uri ?? null);
-  const contentRequestState = useContentRequestState(auth.authToken, auth.activeUser);
-  const prefsState = usePreferencesState(auth.activeUser?.id ?? null);
-  const activityState = useServerActivityState();
-
-  return (
-    <HomeUsersProvider value={homeUsersState}>
-      <PreferencesProvider value={prefsState}>
-        <ServerActivityProvider value={activityState}>
-          <InviteProvider value={inviteState}>
-            <ContentRequestProvider value={contentRequestState}>
-              <AppRoutes />
-            </ContentRequestProvider>
-          </InviteProvider>
-        </ServerActivityProvider>
-      </PreferencesProvider>
-    </HomeUsersProvider>
-  );
-}
-
 function App() {
   const auth = useAuthState();
 
   return (
     <AuthProvider value={auth}>
-      <AppWithAuth />
+      <AppProviders>
+        <AppRoutes />
+      </AppProviders>
     </AuthProvider>
   );
 }
