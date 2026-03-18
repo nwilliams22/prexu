@@ -227,6 +227,7 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
             quality: pb.quality,
             subtitleSize: pb.subtitleSize,
             audioBoost: pb.audioBoost,
+            audioCodec: defaultAudio?.codec ?? media.audioCodec,
           },
         );
 
@@ -408,6 +409,9 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
           setIsBuffering(true);
 
           const pb = prefsRef.current.playback;
+          const selectedAudioCodec = streams.audioTracks.find(
+            (t) => t.id === streams.selectedAudioId,
+          )?.codec;
           const url = await buildTranscodeUrl(
             server.uri,
             server.accessToken,
@@ -419,6 +423,7 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
               quality: pb.quality,
               subtitleSize: pb.subtitleSize,
               audioBoost: pb.audioBoost,
+              audioCodec: selectedAudioCodec,
             },
           );
 
@@ -434,7 +439,10 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
             if (savedPlaying) video.play().catch(() => {});
           });
           hls.on(Hls.Events.ERROR, (_event, data) => {
-            if (data.fatal && data.type !== Hls.ErrorTypes.MEDIA_ERROR) {
+            if (!data.fatal) return;
+            if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+              hls.recoverMediaError();
+            } else {
               setPlaybackError("Seek failed — try again");
             }
           });

@@ -36,6 +36,12 @@ const DIRECT_PLAY_CONTAINERS = ["mp4", "m4v", "mov"];
 const DIRECT_PLAY_VIDEO_CODECS = ["h264", "avc1"];
 const DIRECT_PLAY_AUDIO_CODECS = ["aac", "mp3", "flac", "opus", "ac3", "eac3"];
 
+/** Check if an audio codec can be played directly by the browser (WebView2/Chromium) */
+export function canDirectStreamAudio(audioCodec: string | undefined): boolean {
+  if (!audioCodec) return false;
+  return DIRECT_PLAY_AUDIO_CODECS.includes(audioCodec.toLowerCase());
+}
+
 export function canDirectPlay(media: PlexMediaInfo): boolean {
   const part = media.Part?.[0];
   if (!part) return false;
@@ -85,6 +91,8 @@ export async function buildTranscodeUrl(
     quality?: string;
     subtitleSize?: number;
     audioBoost?: number;
+    /** Audio codec of the selected stream — used to decide if audio can be direct-streamed */
+    audioCodec?: string;
   }
 ): Promise<string> {
   const clientId = await getClientIdentifier();
@@ -92,6 +100,10 @@ export async function buildTranscodeUrl(
 
   const preset =
     QUALITY_PRESETS[options?.quality ?? "1080p"] ?? QUALITY_PRESETS["1080p"];
+
+  // Only direct-stream audio if the codec is browser-compatible (e.g., AAC, MP3, AC3)
+  // DTS, TrueHD, and other exotic codecs must be transcoded to AAC
+  const allowDirectAudio = canDirectStreamAudio(options?.audioCodec) ? "1" : "0";
 
   const params = new URLSearchParams({
     hasMDE: "1",
@@ -102,7 +114,7 @@ export async function buildTranscodeUrl(
     fastSeek: "1",
     directPlay: "0",
     directStream: "1",
-    directStreamAudio: "0",
+    directStreamAudio: allowDirectAudio,
     videoQuality: "100",
     videoResolution: preset.resolution,
     maxVideoBitrate: String(preset.bitrate),
