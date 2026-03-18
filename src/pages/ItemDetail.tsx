@@ -19,6 +19,8 @@ import type {
   PlexChapter,
 } from "../types/library";
 import { detailStyles } from "../utils/detail-styles";
+import { isWatched } from "../utils/media-helpers";
+import type { PlexMediaItem } from "../types/library";
 
 function ItemDetail() {
   const { server, activeUser } = useAuth();
@@ -89,6 +91,7 @@ function ItemDetail() {
                 imageUrl={posterUrl(m.thumb)}
                 title={m.title}
                 subtitle={subtitle}
+                watched={isWatched(m as unknown as PlexMediaItem)}
                 width={230}
                 onClick={() => navigate(`/item/${m.ratingKey}`)}
               />
@@ -166,6 +169,7 @@ function ItemDetail() {
                 imageUrl={posterUrl(r.thumb)}
                 title={r.title}
                 subtitle={subtitle}
+                watched={isWatched(r as unknown as PlexMediaItem)}
                 width={230}
                 onClick={() => navigate(`/item/${r.ratingKey}`)}
               />
