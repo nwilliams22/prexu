@@ -96,6 +96,7 @@ export function useMediaContextMenu(options: UseMediaContextMenuOptions = {}) {
       if (!server) return [];
       const items: ContextMenuItem[] = [];
       const hasView = (item as { viewCount?: number }).viewCount;
+      const hasProgress = (item as { viewOffset?: number }).viewOffset;
 
       // ── Watched / Unwatched toggle ──
       if (hasView) {
@@ -122,6 +123,20 @@ export function useMediaContextMenu(options: UseMediaContextMenuOptions = {}) {
             onRefreshRef.current?.();
           },
         });
+        // Also offer "Mark as Unwatched" for partially-watched items
+        if (hasProgress) {
+          items.push({
+            label: "Mark as Unwatched",
+            onClick: async () => {
+              await markAsUnwatched(
+                server.uri,
+                server.accessToken,
+                item.ratingKey,
+              );
+              onRefreshRef.current?.();
+            },
+          });
+        }
       }
 
       // ── Page-specific extra items ──
