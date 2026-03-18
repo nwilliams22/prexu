@@ -402,66 +402,8 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
       if (!video) return;
       const clampedTime = Math.max(0, Math.min(time, video.duration || 0));
 
-      if (hlsLoader.hlsRef.current && hlsLoader.HlsCtorRef.current && server) {
-        const bufferedEnd = video.buffered.length > 0
-          ? video.buffered.end(video.buffered.length - 1)
-          : 0;
-        const isWithinBuffer = clampedTime >= (video.buffered.length > 0 ? video.buffered.start(0) : 0)
-          && clampedTime <= bufferedEnd;
-
-        if (!isWithinBuffer) {
-          const Hls = hlsLoader.HlsCtorRef.current;
-          const savedPlaying = !video.paused;
-          hlsLoader.destroyHls();
-          setIsBuffering(true);
-
-          const pb = prefsRef.current.playback;
-          const selectedAudioCodec = streams.audioTracks.find(
-            (t) => t.id === streams.selectedAudioId,
-          )?.codec;
-          const url = await buildTranscodeUrl(
-            server.uri,
-            server.accessToken,
-            ratingKey,
-            {
-              offset: Math.round(clampedTime * 1000),
-              audioStreamId: streams.selectedAudioId ?? undefined,
-              subtitleStreamId: streams.selectedSubtitleId ?? undefined,
-              quality: pb.quality,
-              subtitleSize: pb.subtitleSize,
-              audioBoost: pb.audioBoost,
-              audioCodec: selectedAudioCodec,
-            },
-          );
-
-          const hlsConfig = buildHlsConfig(server.accessToken, {
-            maxBufferLength: 30,
-            // Plex handles the offset server-side — stream starts at the seek point
-            startPosition: -1,
-          });
-          const hls = new Hls(hlsConfig);
-
-          let seekRecoveryAttempts = 0;
-          hls.loadSource(url);
-          hls.attachMedia(video);
-          hls.on(Hls.Events.MANIFEST_PARSED, () => {
-            if (savedPlaying) video.play().catch(() => {});
-          });
-          hls.on(Hls.Events.ERROR, (_event, data) => {
-            if (!data.fatal) return;
-            if (data.type === Hls.ErrorTypes.MEDIA_ERROR && seekRecoveryAttempts < 3) {
-              seekRecoveryAttempts++;
-              hls.recoverMediaError();
-            } else {
-              setPlaybackError("Seek failed — try again");
-            }
-          });
-
-          hlsLoader.hlsRef.current = hls;
-          return;
-        }
-      }
-
+      // Simply set currentTime — hls.js handles seeking natively by requesting
+      // the correct segments. No need to rebuild the transcode session.
       video.currentTime = clampedTime;
     },
     [server, ratingKey, streams.selectedAudioId, streams.selectedSubtitleId, hlsLoader],
