@@ -55,16 +55,22 @@ function ServerSelect() {
   return (
     <div style={styles.container}>
       <div style={styles.card}>
-        <h1 style={styles.title}>Select a Server</h1>
-        <p style={styles.subtitle}>
-          Choose which Plex server you'd like to connect to.
-        </p>
-
-        {loading && (
+        {loading ? (
           <div style={styles.loadingContainer}>
             <div style={styles.spinner} />
-            <p style={styles.loadingText}>Discovering servers...</p>
+            <p style={styles.loadingText}>Connecting...</p>
           </div>
+        ) : (
+          <>
+            {servers.length > 1 && (
+              <>
+                <h1 style={styles.title}>Select a Server</h1>
+                <p style={styles.subtitle}>
+                  Choose which Plex server you'd like to connect to.
+                </p>
+              </>
+            )}
+          </>
         )}
 
         {error && (

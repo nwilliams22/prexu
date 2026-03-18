@@ -65,9 +65,12 @@ export async function pollForAuth(pinId: number): Promise<string> {
   const startTime = Date.now();
 
   while (Date.now() - startTime < POLL_TIMEOUT_MS) {
-    const response = await timedFetch(`${PLEX_API_BASE}/pins/${pinId}`, {
-      headers,
-    });
+    // Use a cache-busting param to bypass request deduplication —
+    // each poll must be a fresh request to check for updated authToken.
+    const response = await timedFetch(
+      `${PLEX_API_BASE}/pins/${pinId}?_t=${Date.now()}`,
+      { headers },
+    );
 
     if (!response.ok) {
       throw new Error(`Failed to check PIN: ${response.status}`);
