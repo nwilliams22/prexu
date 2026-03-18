@@ -138,7 +138,10 @@ export async function buildTranscodeUrl(
   });
 
   if (options?.offset !== undefined && options.offset > 0) {
-    params.set("offset", String(Math.floor(options.offset)));
+    // Round down to nearest 10s boundary for cleaner keyframe alignment.
+    // The player will seek to the precise position after the stream starts.
+    const alignedOffset = Math.max(0, Math.floor(options.offset / 10000) * 10000);
+    params.set("offset", String(alignedOffset));
   }
 
   if (options?.audioStreamId !== undefined) {
