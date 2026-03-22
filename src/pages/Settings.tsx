@@ -1,8 +1,9 @@
 import { useAuth } from "../hooks/useAuth";
 import { useInvites } from "../hooks/useInvites";
 import { usePreferences } from "../hooks/usePreferences";
-import type { PlaybackPreferences, AppearancePreferences } from "../types/preferences";
+import type { PlaybackPreferences, AppearancePreferences, SubtitleStylePreferences } from "../types/preferences";
 import { PlaybackSettingsPanel } from "../components/settings/PlaybackSettingsPanel";
+import { SubtitleStylePanel } from "../components/settings/SubtitleStylePanel";
 import { AccessibilitySettingsPanel } from "../components/settings/AccessibilitySettingsPanel";
 import { AudioSettingsPanel } from "../components/settings/AudioSettingsPanel";
 import { AppearanceSettingsPanel } from "../components/settings/AppearanceSettingsPanel";
@@ -21,6 +22,12 @@ function Settings() {
     updatePreferences({ playback: partial });
   };
 
+  const updateSubtitleStyle = (partial: Partial<SubtitleStylePreferences>) => {
+    updatePreferences({
+      playback: { subtitleStyle: { ...pb.subtitleStyle, ...partial } },
+    });
+  };
+
   const updateAppearance = (partial: Partial<AppearancePreferences>) => {
     updatePreferences({ appearance: partial });
   };
@@ -30,6 +37,7 @@ function Settings() {
       <h2 style={styles.title}>Settings</h2>
 
       <PlaybackSettingsPanel playback={pb} updatePlayback={updatePlayback} />
+      <SubtitleStylePanel subtitleStyle={pb.subtitleStyle} updateSubtitleStyle={updateSubtitleStyle} />
       <AccessibilitySettingsPanel playback={pb} updatePlayback={updatePlayback} />
       <AudioSettingsPanel playback={pb} updatePlayback={updatePlayback} />
       <AppearanceSettingsPanel

@@ -20,6 +20,11 @@ vi.mock("../services/plex-library", () => ({
 
 vi.mock("../utils/media-helpers", () => ({
   getMediaSubtitleShort: vi.fn(() => "2023"),
+  isWatched: vi.fn(() => false),
+}));
+
+vi.mock("../hooks/useScrollRestoration", () => ({
+  useScrollRestoration: vi.fn(),
 }));
 
 vi.mock("../components/HorizontalRow", () => ({

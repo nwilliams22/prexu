@@ -1,6 +1,7 @@
 import { useState, memo } from "react";
 import { useServerActivity } from "../hooks/useServerActivity";
 import { useLazyImage } from "../hooks/useLazyImage";
+import type { MediaBadge } from "../utils/media-badges";
 
 interface PosterCardProps {
   imageUrl: string;
@@ -32,6 +33,8 @@ interface PosterCardProps {
   scanning?: boolean;
   /** Item ratingKey — used to auto-detect scanning state from server activity */
   ratingKey?: string;
+  /** Media quality badges (4K, HDR, Atmos, etc.) shown at bottom-left */
+  mediaBadges?: MediaBadge[];
 }
 
 function PosterCard({
@@ -53,6 +56,7 @@ function PosterCard({
   onPlay,
   scanning: scanningProp,
   ratingKey,
+  mediaBadges,
 }: PosterCardProps) {
   const { scanningIds } = useServerActivity();
   const scanning = scanningProp ?? (ratingKey ? scanningIds.has(ratingKey) : false);
@@ -204,6 +208,23 @@ function PosterCard({
             >
               <polyline points="20 6 9 17 4 12" />
             </svg>
+          </div>
+        )}
+
+        {/* Media quality badges (4K, HDR, Atmos, etc.) */}
+        {mediaBadges && mediaBadges.length > 0 && (
+          <div style={styles.mediaBadgeRow}>
+            {mediaBadges.map((b) => (
+              <span
+                key={b.label}
+                style={{
+                  ...styles.mediaBadge,
+                  ...(b.type === "hdr" ? styles.mediaBadgeHdr : {}),
+                }}
+              >
+                {b.label}
+              </span>
+            ))}
           </div>
         )}
 
@@ -361,6 +382,31 @@ const styles: Record<string, React.CSSProperties> = {
     border: "2px solid rgba(255,255,255,0.15)",
     backdropFilter: "blur(4px)",
     zIndex: 3,
+  },
+  mediaBadgeRow: {
+    position: "absolute",
+    bottom: "8px",
+    left: "6px",
+    display: "flex",
+    gap: "3px",
+    zIndex: 2,
+    pointerEvents: "none",
+  },
+  mediaBadge: {
+    fontSize: "0.6rem",
+    fontWeight: 700,
+    padding: "1px 5px",
+    borderRadius: "3px",
+    background: "rgba(0, 0, 0, 0.75)",
+    color: "rgba(255, 255, 255, 0.9)",
+    backdropFilter: "blur(4px)",
+    letterSpacing: "0.02em",
+    lineHeight: "1.4",
+    textTransform: "uppercase" as const,
+  },
+  mediaBadgeHdr: {
+    background: "rgba(229, 160, 13, 0.85)",
+    color: "#000",
   },
   progressTrack: {
     position: "absolute",

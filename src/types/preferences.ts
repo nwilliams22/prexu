@@ -1,5 +1,15 @@
 export type NormalizationPreset = "off" | "light" | "night";
 
+export interface SubtitleStylePreferences {
+  fontFamily: string;
+  textColor: string;
+  backgroundColor: string;
+  backgroundOpacity: number; // 0-1
+  outlineColor: string;
+  outlineWidth: number;     // 0-4 px
+  shadowEnabled: boolean;
+}
+
 export interface PlaybackPreferences {
   quality: "original" | "1080p" | "720p" | "480p";
   preferredAudioLanguage: string;
@@ -11,6 +21,9 @@ export interface PlaybackPreferences {
   volumeBoost: number;
   normalizationPreset: NormalizationPreset;
   audioOffsetMs: number;
+  skipIntroEnabled: boolean;
+  skipCreditsEnabled: boolean;
+  subtitleStyle: SubtitleStylePreferences;
 }
 
 export interface AppearancePreferences {

@@ -13,6 +13,7 @@ import SeekBar from "./SeekBar";
 import SkipButtons from "./SkipButtons";
 import TrackMenu from "../TrackMenu";
 import AudioEnhancementsPanel from "../AudioEnhancementsPanel";
+import SubtitleSearchPanel from "./SubtitleSearchPanel";
 
 interface ControlsBottomBarProps {
   player: UsePlayerResult;
@@ -35,6 +36,14 @@ interface ControlsBottomBarProps {
   isPiPActive?: boolean;
   isPiPSupported?: boolean;
   onTogglePiP?: () => void;
+  /** Queue */
+  queueCount?: number;
+  onToggleQueue?: () => void;
+  /** Subtitle search */
+  serverUri?: string;
+  serverToken?: string;
+  ratingKey?: string;
+  onSubtitleDownloaded?: () => void;
 }
 
 function ControlsBottomBar({
@@ -53,11 +62,18 @@ function ControlsBottomBar({
   isPiPActive,
   isPiPSupported,
   onTogglePiP,
+  queueCount,
+  onToggleQueue,
+  serverUri,
+  serverToken,
+  ratingKey,
+  onSubtitleDownloaded,
 }: ControlsBottomBarProps) {
   const [volumeOpen, setVolumeOpen] = useState(false);
   const [subtitleMenuOpen, setSubtitleMenuOpen] = useState(false);
   const [audioMenuOpen, setAudioMenuOpen] = useState(false);
   const [enhancementsOpen, setEnhancementsOpen] = useState(false);
+  const [subtitleSearchOpen, setSubtitleSearchOpen] = useState(false);
 
   const iconSmall = mobile ? 26 : 22;
   const iconLarge = mobile ? 32 : 28;
@@ -220,6 +236,34 @@ function ControlsBottomBar({
               </button>
             )}
 
+            {/* Queue */}
+            {onToggleQueue && (
+              <button
+                onClick={() => {
+                  onToggleQueue();
+                  setSubtitleMenuOpen(false);
+                  setAudioMenuOpen(false);
+                  setEnhancementsOpen(false);
+                }}
+                style={{
+                  ...styles.controlButton,
+                  position: "relative",
+                }}
+                aria-label="Playback queue"
+              >
+                <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
+                  <line x1={4} y1={6} x2={16} y2={6} />
+                  <line x1={4} y1={10} x2={16} y2={10} />
+                  <line x1={4} y1={14} x2={12} y2={14} />
+                  <line x1={4} y1={18} x2={10} y2={18} />
+                  <polygon points="16,14 22,17 16,20" fill="currentColor" stroke="none" />
+                </svg>
+                {queueCount !== undefined && queueCount > 0 && (
+                  <span style={styles.queueBadge}>{queueCount}</span>
+                )}
+              </button>
+            )}
+
             {/* Picture-in-Picture */}
             {isPiPSupported && onTogglePiP && (
               <button
@@ -286,6 +330,7 @@ function ControlsBottomBar({
           allowNone={player.subtitleTracks.length > 0}
           emptyMessage="No subtitle tracks available"
           onClose={() => setSubtitleMenuOpen(false)}
+          onSearchDownload={serverUri ? () => setSubtitleSearchOpen(true) : undefined}
         />
       )}
 
@@ -307,6 +352,19 @@ function ControlsBottomBar({
           enhancements={audioEnhancements}
           onClose={() => setEnhancementsOpen(false)}
           onPersist={onAudioEnhancementChange}
+        />
+      )}
+
+      {subtitleSearchOpen && serverUri && serverToken && ratingKey && (
+        <SubtitleSearchPanel
+          serverUri={serverUri}
+          serverToken={serverToken}
+          ratingKey={ratingKey}
+          subtitleTracks={player.subtitleTracks}
+          onSelectTrack={player.selectSubtitleTrack}
+          selectedSubtitleId={player.selectedSubtitleId}
+          onSubtitleDownloaded={onSubtitleDownloaded ?? (() => {})}
+          onClose={() => setSubtitleSearchOpen(false)}
         />
       )}
     </>
@@ -360,6 +418,19 @@ const styles: Record<string, React.CSSProperties> = {
     height: "4px",
     accentColor: "#e5a00d",
     cursor: "pointer",
+  },
+  queueBadge: {
+    position: "absolute",
+    top: "2px",
+    right: "0px",
+    fontSize: "0.55rem",
+    fontWeight: 700,
+    background: "var(--accent)",
+    color: "#000",
+    padding: "0px 4px",
+    borderRadius: "6px",
+    lineHeight: "1.4",
+    pointerEvents: "none",
   },
 };
 

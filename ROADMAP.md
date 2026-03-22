@@ -14,162 +14,169 @@
 - [x] Loading/error/empty states
 - [x] Animations & transitions
 - [x] Visual consistency pass
+- [x] Library filtering (genre, year, rating, unwatched) with filter chips UI
+- [x] Persistent filter/sort preferences via URL params
+- [x] Watch History page with infinite scroll and virtualized grid
+- [x] Collections browsing and detail pages
+- [x] Playlists browsing and detail pages
+- [x] Related items, extras/trailers, and chapter markers on ItemDetail
+- [x] User profiles & multi-user switching with PIN support and avatars
+- [x] Code splitting (all routes lazy-loaded via React.lazy + Suspense)
+- [x] Image lazy loading via IntersectionObserver
+- [x] In-memory TTL cache with localStorage persistence and SWR pattern
+- [x] Library section prefetching on auth
+- [x] Virtualized library grid (@tanstack/react-virtual)
+- [x] Memoized PosterCard and render optimizations
+- [x] Unit tests (services, hooks, utilities — 97 test files)
+- [x] Component tests (PosterCard, FilterBar, modals, forms)
+- [x] E2E tests (auth, navigation, watch history, playlists, performance)
+- [x] Responsive design (mobile bottom nav, tablet hamburger menu, breakpoint system)
+- [x] Accessibility (ARIA attributes, keyboard nav, focus traps, reduced motion, route announcer)
 
 ---
 
-## Phase 1: New Features
+## Up Next
 
-### 1.1 Library Filtering & Advanced Sort
-- Filter by genre, year, rating, resolution, unwatched
-- Multi-column sort (e.g. title + year)
-- Persistent filter/sort preferences per library section
-- Filter chips UI below the sort bar
+### Remaining Gaps
 
-### 1.2 Watch History
-- Dedicated "Watch History" page showing recently watched items with timestamps
-- Pull from Plex `/status/sessions/history/all` endpoint
-- Infinite scroll or pagination
-- Quick resume button per item
+Small items left over from earlier phases:
 
-### 1.3 Collections & Playlists
-- Browse Plex collections within each library
-- View collection detail (items, description, poster)
-- Browse user playlists
-- Play all / shuffle playlist
-
-### 1.4 Pre-play Screen Enhancements
-- Related/similar items row on ItemDetail
-- Extras (trailers, behind the scenes) if available
-- Reviews/ratings from Plex metadata
-- Chapter markers display for movies
-
-### 1.5 User Profiles & Multi-user
-- Switch between managed users on the same Plex account
-- Per-user watch state and preferences
-- Profile avatar in header
+- [ ] Play all / shuffle buttons for playlists and collections
+- [ ] Reviews/ratings display on ItemDetail (from Plex metadata)
+- [ ] Progressive image loading (blur-up placeholder → full image)
+- [ ] srcSet for different poster sizes
 
 ---
 
-## Phase 2: Performance
+### Auto-Update System
 
-### 2.1 Code Splitting
-- Lazy-load routes with `React.lazy()` + `Suspense`
-- Split Player (largest component) into its own chunk
-- Target: main bundle under 500KB
+Plex-style seamless updates — app checks for updates on launch, downloads in background, and relaunches.
 
-### 2.2 Image Optimization
-- Intersection Observer for lazy-loading poster images
-- Progressive image loading (blur-up placeholder → full image)
-- Proper srcSet for different poster sizes
-- Cache poster URLs in memory
+**Done:**
+- [x] `useAutoUpdate` hook checks for updates on launch
+- [x] `UpdateNotification` component shows update banner in sidebar
+- [x] Version display in Settings page
 
-### 2.3 Data Caching & Prefetching
-- In-memory cache for library metadata and section data
-- Prefetch adjacent pages in LibraryView
-- Prefetch item detail on poster hover
-- Stale-while-revalidate pattern for dashboard data
-
-### 2.4 Render Optimization
-- Virtualized lists for large libraries (react-window or similar)
-- Memoize PosterCard and episode rows
-- Debounce resize observers
-- Profile and fix unnecessary re-renders
+**Remaining:**
+- [ ] Install and configure `tauri-plugin-updater` in Cargo.toml
+- [ ] Generate signing keys (`tauri signer generate`)
+- [ ] Configure `tauri.conf.json` with updater endpoint + pubkey
+- [ ] Update splash screen with progress bar during install
+- [ ] CI pipeline: build → sign → publish to GitHub Releases
+- [ ] Update manifest hosted at GitHub Releases
+- [ ] "Update available" badge on Settings nav item
 
 ---
 
-## Phase 3: Testing
+## ~~Phase A: Player & Playback Enhancements~~ ✅ Completed
 
-### 3.1 Unit Tests
-- Service layer tests (plex-api, plex-library, plex-playback)
-- Hook tests (useAuth, useLibrary, usePreferences)
-- Utility function tests
+### Skip Intro / Skip Credits
+- [x] Detect and use Plex intro/credits markers
+- [x] "Skip Intro" overlay button (Netflix-style) during detected intro segments
+- [x] "Skip Credits" / "Next Episode" prompt at credits
+- [x] Fall back to chapter-based detection if markers unavailable
+- [x] Configurable in Settings (skip intro / skip credits toggles)
 
-### 3.2 Component Tests
-- PosterCard, HorizontalRow, Sidebar render tests
-- Modal/overlay interaction tests
-- Form input tests (Settings, SearchBar)
+### Up Next Queue
+- [x] Playback queue showing upcoming items (next episodes, playlist items)
+- [x] Reorder and add/remove items from queue
+- [x] Mini queue panel accessible from player controls
+- [x] Auto-populate queue for sequential TV episodes
+- [x] Post-play screen with countdown timer and auto-play toggle
 
-### 3.3 Integration Tests
-- Auth flow (login → server select → dashboard)
-- Navigation and routing
-- Player playback lifecycle
-- Watch Together session flow
+### Subtitle Styling
+- [x] Font selection for subtitles
+- [x] Text color and background color/opacity
+- [x] Outline/shadow options
+- [x] Preview of subtitle style in settings
+- [x] Applied via ::cue CSS in player
 
----
+### Subtitle Search & Download
+- [x] Search external subtitle providers (OpenSubtitles) via Plex server API
+- [x] Filter by language, hearing impaired, and match confidence
+- [x] Download and apply subtitles to the current playback session
+- [x] Upload downloaded subs to Plex server for future use
+- [x] Search/filter through available embedded tracks when a file has many subtitle streams
 
-## Phase 4: Responsive Design
-
-### 4.1 Tablet Layout (768px–1024px)
-- Collapsible sidebar → hamburger menu
-- Responsive poster grid (fewer columns)
-- Touch-friendly hit targets (min 44px)
-- Swipe gestures on horizontal rows
-
-### 4.2 Mobile Layout (<768px)
-- Bottom tab navigation replacing sidebar
-- Full-width poster cards
-- Stacked item detail layout
-- Mobile-optimized player controls
-- Pull-to-refresh on dashboard
-
-### 4.3 Large Screen (>1440px)
-- Max-width container for content
-- Larger poster sizes
-- More columns in library grid
+### 4K / HDR Badges
+- [x] Resolution badges (720p, 1080p, 4K) on poster cards and detail pages
+- [x] HDR / Dolby Vision / Atmos indicators
+- [x] Bitrate and codec info on detail page media info section
 
 ---
 
-## Phase 5: Accessibility
+## Phase B: Search & Discovery
 
-### 5.1 Keyboard Navigation
-- Tab order through all interactive elements
-- Arrow key navigation in poster grids and horizontal rows
-- Escape to close modals/menus
-- Enter/Space to activate buttons
-- Focus trap in modals
+### Search Autocomplete
+- Live suggestions as-you-type (debounced against Plex hub search)
+- Recent searches dropdown
+- Highlight matching text in suggestions
+- Keyboard navigation through suggestion list (arrow keys + enter)
 
-### 5.2 Screen Reader Support
-- ARIA labels on all icon-only buttons
-- ARIA live regions for loading/error states
-- Role attributes on custom widgets
-- Announce route changes
-
-### 5.3 Visual Accessibility
-- Focus ring styles (visible focus indicators)
-- Sufficient color contrast ratios (WCAG AA)
-- Respect `prefers-reduced-motion`
-- Respect `prefers-color-scheme` (light theme option)
+### New on Server Alerts
+- Track newly added content since last app launch
+- "New" badge on library sections with new content
+- Optional "What's New" summary on dashboard
+- Dismissible per-item or bulk dismiss
 
 ---
 
-## Phase 6: Auto-Update System
+## Phase C: Playlist & Library Management
 
-Plex-style seamless updates — app checks for updates on launch, downloads in background, shows splash screen while applying, then relaunches.
+### Playlist Management
+- Create new playlists from UI
+- Add items to playlist via context menu and detail page
+- Remove items and reorder playlist contents
+- Edit playlist title and description
+- Delete playlists
 
-### 6.1 Update Infrastructure
-- Add `tauri-plugin-updater` (Tauri v2 built-in updater)
-- Host update manifests on GitHub Releases (free, integrates with `gh` CLI)
-- Update manifest format: JSON with version, download URL, signature
-- Generate signing keys for update verification (`tauri signer generate`)
-- Configure `tauri.conf.json` with updater endpoint + pubkey
+### Play All / Shuffle
+- Play all button on playlist and collection detail pages
+- Shuffle mode for playlists and collections
+- Shuffle indicator in player UI
 
-### 6.2 Update Flow (Frontend)
-- On app launch, check for updates via `check()` from `@tauri-apps/plugin-updater`
-- If update available:
-  1. Show splash screen with "Updating..." message + progress bar
-  2. Download update in background (`downloadAndInstall()`)
-  3. Once complete, call `relaunch()` to restart with new version
-- If no update, proceed to normal splash → dashboard flow
-- Add "Check for Updates" button in Settings page
+---
 
-### 6.3 Update Flow (Backend / CI)
-- Bump version in `tauri.conf.json` + `Cargo.toml` + `package.json`
-- `npx tauri build` produces the installer + update bundle (.nsis.zip)
-- `tauri signer sign` signs the update bundle
-- Publish to GitHub Releases with the manifest JSON
-- Manifest URL: `https://github.com/nwilliams22/prexu/releases/latest/download/latest.json`
+## Phase D: Polish & UX
 
-### 6.4 Version Display
-- Show current version in Settings page footer
-- Show "Update available" badge on Settings nav item when update is pending
-- Include version in app title bar or about dialog
+### Toast Notification System
+- Generic toast component for transient feedback
+- Success/error/info variants with auto-dismiss
+- Use for: "Added to playlist", "Marked as watched", copy confirmations, errors
+- Stack multiple toasts, dismiss on click
+
+### Parental Controls
+- Per-profile content rating restrictions (G, PG, PG-13, R, etc.)
+- Content rating filter enforcement in library browsing and search
+- Settings UI to configure restrictions per managed user
+- Locked profiles require PIN to change restrictions
+
+---
+
+## Future: Non-Video Media
+
+Items deferred until core video streaming is fully polished.
+
+### Music Player
+- Dedicated music player UI with mini player
+- Album art display and track listing
+- Music library browsing (artists, albums, tracks, genres)
+- Background playback while browsing
+
+### Photo / Gallery Viewer
+- Lightbox-style photo viewer
+- Photo library and album browsing
+- Slideshow mode
+- EXIF data display
+
+---
+
+## Future Ideas
+
+Items not yet planned or scoped — add here as they come up.
+
+- Light theme option (foundation exists via `prefers-color-scheme` support)
+- Swipe gestures on horizontal rows (mobile)
+- Pull-to-refresh on dashboard (mobile)
+- About dialog with version info
+- Download for offline viewing (Tauri filesystem access)

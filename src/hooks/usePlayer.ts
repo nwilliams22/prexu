@@ -28,6 +28,7 @@ import type {
   PlexEpisode,
   PlexStream,
   PlexChapter,
+  PlexMarker,
 } from "../types/library";
 
 export interface UsePlayerResult {
@@ -52,6 +53,7 @@ export interface UsePlayerResult {
 
   // Media info
   chapters: PlexChapter[];
+  markers: PlexMarker[];
   itemType: string;
 
   // Stream info
@@ -100,6 +102,7 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
 
   // Media info
   const [chapters, setChapters] = useState<PlexChapter[]>([]);
+  const [markers, setMarkers] = useState<PlexMarker[]>([]);
   const [itemType, setItemType] = useState("");
 
   // Stream selection sub-hook
@@ -169,6 +172,7 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
 
       const part = media.Part[0];
       setChapters(part.Chapter ?? []);
+      setMarkers(playableItem.Marker ?? []);
       setItemType(item.type);
 
       // Categorize and set default streams
@@ -456,6 +460,7 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
     title,
     subtitle,
     chapters,
+    markers,
     itemType,
     isLoading,
     isPlaying,

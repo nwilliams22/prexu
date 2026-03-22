@@ -15,6 +15,7 @@ import {
 // Mock storage to return a known relay URL
 vi.mock("./storage", () => ({
   getRelayHttpUrl: vi.fn().mockResolvedValue("http://relay.test:9847"),
+  getServer: vi.fn().mockResolvedValue(null),
 }));
 
 const mockFetch = vi.fn();

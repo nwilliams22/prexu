@@ -9,6 +9,11 @@ vi.mock("./storage", () => ({
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
+// Mock plex-api to use our mockFetch via timedFetch
+vi.mock("./plex-api", () => ({
+  timedFetch: (...args: unknown[]) => mockFetch(...args),
+}));
+
 function jsonResponse(data: unknown, status = 200): Response {
   return {
     ok: status >= 200 && status < 300,
@@ -147,7 +152,7 @@ describe("plex-auth", () => {
 
       await pollForAuth(999);
 
-      expect(mockFetch.mock.calls[0][0]).toBe(
+      expect(mockFetch.mock.calls[0][0]).toContain(
         "https://clients.plex.tv/api/v2/pins/999"
       );
     });

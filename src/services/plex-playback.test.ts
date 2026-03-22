@@ -90,22 +90,22 @@ describe("plex-playback — pure functions", () => {
       expect(canDirectPlay(media)).toBe(true);
     });
 
-    it("returns true for mp4 + h264 + ac3", () => {
+    it("returns false for mp4 + h264 + ac3 (not browser direct-playable)", () => {
       const media = createPlexMediaInfo({
         videoCodec: "h264",
         audioCodec: "ac3",
         Part: [createPlexMediaPart({ container: "mp4" })],
       });
-      expect(canDirectPlay(media)).toBe(true);
+      expect(canDirectPlay(media)).toBe(false);
     });
 
-    it("returns true for mp4 + h264 + eac3", () => {
+    it("returns false for mp4 + h264 + eac3 (not browser direct-playable)", () => {
       const media = createPlexMediaInfo({
         videoCodec: "h264",
         audioCodec: "eac3",
         Part: [createPlexMediaPart({ container: "mp4" })],
       });
-      expect(canDirectPlay(media)).toBe(true);
+      expect(canDirectPlay(media)).toBe(false);
     });
 
     it("returns false for mkv container", () => {

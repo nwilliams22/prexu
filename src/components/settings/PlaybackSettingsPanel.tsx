@@ -43,6 +43,36 @@ export function PlaybackSettingsPanel({ playback: pb, updatePlayback }: Playback
       </div>
 
       <div style={styles.field}>
+        <label style={styles.label}>Skip Intro</label>
+        <p style={styles.hint}>
+          Show a "Skip Intro" button during detected intro segments.
+        </p>
+        <label style={styles.checkboxLabel}>
+          <input
+            type="checkbox"
+            checked={pb.skipIntroEnabled}
+            onChange={(e) => updatePlayback({ skipIntroEnabled: e.target.checked })}
+          />
+          Enable skip intro button
+        </label>
+      </div>
+
+      <div style={styles.field}>
+        <label style={styles.label}>Skip Credits</label>
+        <p style={styles.hint}>
+          Show a "Skip Credits" or "Next Episode" button during credits.
+        </p>
+        <label style={styles.checkboxLabel}>
+          <input
+            type="checkbox"
+            checked={pb.skipCreditsEnabled}
+            onChange={(e) => updatePlayback({ skipCreditsEnabled: e.target.checked })}
+          />
+          Enable skip credits button
+        </label>
+      </div>
+
+      <div style={styles.field}>
         <label style={styles.label}>Preferred Audio Language</label>
         <select
           value={pb.preferredAudioLanguage}
