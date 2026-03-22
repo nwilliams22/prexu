@@ -15,6 +15,8 @@ interface TrackMenuProps {
   allowNone?: boolean; // true for subtitles
   emptyMessage?: string; // shown when no tracks available
   onClose: () => void;
+  /** Show "Search & Download..." link at bottom (for subtitle menus) */
+  onSearchDownload?: () => void;
 }
 
 function TrackMenu({
@@ -25,6 +27,7 @@ function TrackMenu({
   allowNone = false,
   emptyMessage,
   onClose,
+  onSearchDownload,
 }: TrackMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   useFocusTrap(menuRef, true);
@@ -109,6 +112,26 @@ function TrackMenu({
         {tracks.length === 0 && !allowNone && emptyMessage && (
           <div style={styles.emptyMessage}>{emptyMessage}</div>
         )}
+
+        {/* Search & Download link */}
+        {onSearchDownload && (
+          <>
+            <div style={styles.divider} />
+            <button
+              onClick={() => {
+                onClose();
+                onSearchDownload();
+              }}
+              style={styles.searchLink}
+            >
+              <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
+                <circle cx={11} cy={11} r={8} />
+                <line x1={21} y1={21} x2={16.65} y2={16.65} />
+              </svg>
+              Search &amp; Download...
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
@@ -170,6 +193,25 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "0.8rem",
     color: "rgba(255,255,255,0.4)",
     fontStyle: "italic",
+  },
+  divider: {
+    height: "1px",
+    background: "rgba(255,255,255,0.1)",
+    margin: "0.25rem 0",
+  },
+  searchLink: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.5rem",
+    width: "100%",
+    padding: "0.5rem 1rem",
+    background: "transparent",
+    color: "var(--text-secondary)",
+    fontSize: "0.8rem",
+    textAlign: "left",
+    borderRadius: 0,
+    cursor: "pointer",
+    border: "none",
   },
 };
 

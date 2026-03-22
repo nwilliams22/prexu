@@ -33,9 +33,17 @@ interface PlayerControlsProps {
   isPiPActive?: boolean;
   isPiPSupported?: boolean;
   onTogglePiP?: () => void;
+  /** Queue */
+  queueCount?: number;
+  onToggleQueue?: () => void;
+  /** Subtitle search */
+  serverUri?: string;
+  serverToken?: string;
+  ratingKey?: string;
+  onSubtitleDownloaded?: () => void;
 }
 
-function PlayerControls({ player, onBack, visible, syncIndicator, chapters, onSeek, onActivity, onNextEpisode, onPrevEpisode, audioEnhancements, onAudioEnhancementChange, isPiPActive, isPiPSupported, onTogglePiP }: PlayerControlsProps) {
+function PlayerControls({ player, onBack, visible, syncIndicator, chapters, onSeek, onActivity, onNextEpisode, onPrevEpisode, audioEnhancements, onAudioEnhancementChange, isPiPActive, isPiPSupported, onTogglePiP, queueCount, onToggleQueue, serverUri, serverToken, ratingKey, onSubtitleDownloaded }: PlayerControlsProps) {
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
 
@@ -102,6 +110,12 @@ function PlayerControls({ player, onBack, visible, syncIndicator, chapters, onSe
         isPiPActive={isPiPActive}
         isPiPSupported={isPiPSupported}
         onTogglePiP={onTogglePiP}
+        queueCount={queueCount}
+        onToggleQueue={onToggleQueue}
+        serverUri={serverUri}
+        serverToken={serverToken}
+        ratingKey={ratingKey}
+        onSubtitleDownloaded={onSubtitleDownloaded}
       />
     </div>
   );

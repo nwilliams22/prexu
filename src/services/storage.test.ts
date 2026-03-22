@@ -90,10 +90,21 @@ describe("storage", () => {
         defaultSubtitles: "auto",
         subtitleSize: 100,
         audioBoost: 100,
-        directPlayPreference: "auto",
+        directPlayPreference: "never",
         volumeBoost: 1.0,
         normalizationPreset: "off",
         audioOffsetMs: 0,
+        skipIntroEnabled: true,
+        skipCreditsEnabled: true,
+        subtitleStyle: {
+          fontFamily: "sans-serif",
+          textColor: "#FFFFFF",
+          backgroundColor: "#000000",
+          backgroundOpacity: 0.75,
+          outlineColor: "#000000",
+          outlineWidth: 2,
+          shadowEnabled: true,
+        },
       });
     });
 

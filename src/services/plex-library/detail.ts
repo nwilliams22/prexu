@@ -15,7 +15,7 @@ export async function getItemMetadata<T extends PlexMediaItem>(
   const data = await fetchJson<PlexMediaContainer<T>>(
     serverUri,
     serverToken,
-    `/library/metadata/${ratingKey}?includeRatings=1`
+    `/library/metadata/${ratingKey}?includeRatings=1&includeMarkers=1`
   );
   const items = data.MediaContainer.Metadata;
   if (!items || items.length === 0) {

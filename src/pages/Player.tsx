@@ -3,16 +3,20 @@
  * Sits outside the AppLayout (no header/sidebar).
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useParams, useNavigate, useSearchParams, Navigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
+import { getImageUrl } from "../services/plex-library";
 import { usePlayer } from "../hooks/usePlayer";
 import { useWatchTogether } from "../hooks/useWatchTogether";
 import { useAudioEnhancements } from "../hooks/useAudioEnhancements";
 import { usePreferences } from "../hooks/usePreferences";
+import { useSkipSegments } from "../hooks/player/useSkipSegments";
 import { usePlayerControlsVisibility } from "../hooks/player/usePlayerControlsVisibility";
 import { useVideoClickHandling } from "../hooks/player/useVideoClickHandling";
 import { useEpisodeNavigation } from "../hooks/player/useEpisodeNavigation";
+import { useQueueAutoPopulate } from "../hooks/player/useQueueAutoPopulate";
+import { useQueue } from "../contexts/QueueContext";
 import { useNextEpisodeDetection } from "../hooks/player/useNextEpisodeDetection";
 import { usePlayerKeyboardShortcuts } from "../hooks/player/usePlayerKeyboardShortcuts";
 import { usePictureInPicture } from "../hooks/player/usePictureInPicture";
@@ -21,8 +25,12 @@ import ParticipantOverlay from "../components/ParticipantOverlay";
 import SyncIndicator from "../components/SyncIndicator";
 import NextEpisodePrompt from "../components/NextEpisodePrompt";
 import ErrorOverlay from "../components/player/ErrorOverlay";
+import SkipSegmentButton from "../components/player/SkipSegmentButton";
+import QueuePanel from "../components/player/QueuePanel";
+import PostPlayScreen from "../components/player/PostPlayScreen";
 import KeyboardShortcutsOverlay from "../components/player/KeyboardShortcutsOverlay";
 import type { NormalizationPreset } from "../types/preferences";
+import { buildSubtitleCss } from "../utils/subtitle-css";
 
 function Player() {
   const { ratingKey } = useParams<{ ratingKey: string }>();
@@ -44,6 +52,22 @@ function Player() {
 
   const { preferences, updatePreferences } = usePreferences();
   const pb = preferences.playback;
+
+  // Subtitle styling via ::cue CSS
+  const subtitleCss = useMemo(() => buildSubtitleCss(pb.subtitleStyle), [pb.subtitleStyle]);
+  useEffect(() => {
+    const id = "prexu-subtitle-style";
+    let styleEl = document.getElementById(id) as HTMLStyleElement | null;
+    if (!styleEl) {
+      styleEl = document.createElement("style");
+      styleEl.id = id;
+      document.head.appendChild(styleEl);
+    }
+    styleEl.textContent = subtitleCss;
+    return () => {
+      styleEl?.remove();
+    };
+  }, [subtitleCss]);
 
   // Audio enhancements — Web Audio API processing graph
   const audioEnhancements = useAudioEnhancements(
@@ -96,12 +120,91 @@ function Player() {
     resetHideTimer,
   );
 
-  // Episode navigation (prev/next)
-  const { handleNextEpisode, handlePrevEpisode } = useEpisodeNavigation(
+  // Playback queue
+  const { queue, remainingCount, playNext, playPrev } = useQueue();
+  const [queuePanelOpen, setQueuePanelOpen] = useState(false);
+  const toggleQueuePanel = useCallback(() => setQueuePanelOpen((v) => !v), []);
+
+  // Auto-populate queue for episodes
+  useQueueAutoPopulate(server?.uri, server?.accessToken, ratingKey, player.itemType);
+
+  // Episode navigation — uses queue when available, falls back to Plex API
+  const episodeNav = useEpisodeNavigation(
     server,
     ratingKey,
     player.itemType,
   );
+
+  const handleNextEpisode = useCallback(() => {
+    const next = playNext();
+    if (next) {
+      navigate(`/play/${next.ratingKey}`);
+    } else if (episodeNav.handleNextEpisode) {
+      episodeNav.handleNextEpisode();
+    }
+  }, [playNext, episodeNav.handleNextEpisode, navigate]);
+
+  const handlePrevEpisode = useCallback(() => {
+    const prev = playPrev();
+    if (prev) {
+      navigate(`/play/${prev.ratingKey}`);
+    } else if (episodeNav.handlePrevEpisode) {
+      episodeNav.handlePrevEpisode();
+    }
+  }, [playPrev, episodeNav.handlePrevEpisode, navigate]);
+
+  // Post-play screen — show when playback ends and queue has next item
+  const [showPostPlay, setShowPostPlay] = useState(false);
+  const postPlayShownRef = useRef(false);
+
+  useEffect(() => {
+    const video = player.videoRef.current;
+    if (!video) return;
+    const handleEnded = () => {
+      if (remainingCount > 0 && !wt.isInSession && !postPlayShownRef.current) {
+        postPlayShownRef.current = true;
+        setShowPostPlay(true);
+      }
+    };
+    video.addEventListener("ended", handleEnded);
+    return () => video.removeEventListener("ended", handleEnded);
+  }, [player.videoRef, remainingCount, wt.isInSession]);
+
+  // Reset post-play state when ratingKey changes
+  useEffect(() => {
+    postPlayShownRef.current = false;
+    setShowPostPlay(false);
+  }, [ratingKey]);
+
+  const handlePostPlayNext = useCallback(() => {
+    setShowPostPlay(false);
+    handleNextEpisode();
+  }, [handleNextEpisode]);
+
+  const handlePostPlayStop = useCallback(() => {
+    setShowPostPlay(false);
+  }, []);
+
+  // Get the next queue item for the post-play screen
+  const nextQueueItem = useMemo(() => {
+    const { items, currentIndex } = queue;
+    const nextIdx = currentIndex + 1;
+    return nextIdx < items.length ? items[nextIdx] : null;
+  }, [queue]);
+
+  // Skip intro/credits segments
+  const { activeSegment, dismissSegment } = useSkipSegments(
+    player.markers,
+    player.chapters,
+    player.currentTime,
+    { intro: pb.skipIntroEnabled, credits: pb.skipCreditsEnabled },
+  );
+
+  const handleSkipSegment = useCallback(() => {
+    if (activeSegment) {
+      seek(activeSegment.endTime);
+    }
+  }, [activeSegment, seek]);
 
   // Next episode detection for Watch Together host
   const nextEp = useNextEpisodeDetection(
@@ -188,6 +291,17 @@ function Player() {
         />
       )}
 
+      {/* Skip intro/credits button */}
+      {activeSegment && !player.isLoading && !player.playbackError && (
+        <SkipSegmentButton
+          segment={activeSegment}
+          onSkip={handleSkipSegment}
+          onDismiss={dismissSegment}
+          hasNextEpisode={!!handleNextEpisode}
+          onNextEpisode={handleNextEpisode}
+        />
+      )}
+
       {/* Watch Together participant overlay */}
       {wt.isInSession && (
         <ParticipantOverlay
@@ -230,6 +344,12 @@ function Player() {
           isPiPActive={pip.isPiPActive}
           isPiPSupported={pip.isPiPSupported}
           onTogglePiP={pip.togglePiP}
+          queueCount={remainingCount}
+          onToggleQueue={toggleQueuePanel}
+          serverUri={server?.uri}
+          serverToken={server?.accessToken}
+          ratingKey={ratingKey}
+          onSubtitleDownloaded={player.retry}
           syncIndicator={
             wt.isInSession ? (
               <SyncIndicator
@@ -238,6 +358,24 @@ function Player() {
               />
             ) : undefined
           }
+        />
+      )}
+
+      {/* Post-play screen */}
+      {showPostPlay && nextQueueItem && server && (
+        <PostPlayScreen
+          nextItem={nextQueueItem}
+          onPlayNext={handlePostPlayNext}
+          onStop={handlePostPlayStop}
+          posterUrl={(path) => getImageUrl(server.uri, server.accessToken, path, 320, 220)}
+        />
+      )}
+
+      {/* Queue panel */}
+      {queuePanelOpen && server && (
+        <QueuePanel
+          onClose={() => setQueuePanelOpen(false)}
+          posterUrl={(path) => getImageUrl(server.uri, server.accessToken, path, 100, 68)}
         />
       )}
     </div>

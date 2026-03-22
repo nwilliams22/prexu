@@ -56,7 +56,9 @@ describe("ServerSelect", () => {
   it("renders title and subtitle", async () => {
     renderPage();
 
-    expect(screen.getByText("Select a Server")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("Select a Server")).toBeInTheDocument();
+    });
     expect(screen.getByText(/Choose which Plex server/)).toBeInTheDocument();
   });
 
@@ -64,7 +66,7 @@ describe("ServerSelect", () => {
     mockDiscoverServers.mockImplementation(() => new Promise(() => {}));
     renderPage();
 
-    expect(screen.getByText("Discovering servers...")).toBeInTheDocument();
+    expect(screen.getByText("Connecting...")).toBeInTheDocument();
   });
 
   it("displays discovered servers", async () => {

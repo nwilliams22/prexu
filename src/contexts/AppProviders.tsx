@@ -21,6 +21,7 @@ import {
   useServerActivityState,
   ServerActivityProvider,
 } from "../hooks/useServerActivity";
+import { QueueProvider } from "./QueueContext";
 
 interface AppProvidersProps {
   children: React.ReactNode;
@@ -47,7 +48,9 @@ export default function AppProviders({ children }: AppProvidersProps) {
         <ServerActivityProvider value={activityState}>
           <InviteProvider value={inviteState}>
             <ContentRequestProvider value={contentRequestState}>
-              {children}
+              <QueueProvider>
+                {children}
+              </QueueProvider>
             </ContentRequestProvider>
           </InviteProvider>
         </ServerActivityProvider>

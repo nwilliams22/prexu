@@ -18,6 +18,13 @@ import type {
   PlexEpisode,
   PlexRating,
 } from "../../types/library";
+import {
+  getResolutionBadge,
+  getHdrBadge,
+  getAudioBadge,
+  formatBitrate,
+  extractStreamsForBadges,
+} from "../../utils/media-badges";
 
 type HeroItem = PlexMovie | PlexShow | PlexSeason | PlexEpisode;
 
@@ -76,9 +83,39 @@ export default function ItemHeroSection({
     ));
   };
 
+  const buildMovieMediaDetails = (movie: PlexMovie) => {
+    const details: { label: string; value: string }[] = [];
+    const mediaInfo = movie.Media?.[0];
+    if (!mediaInfo) return details;
+    const { videoStream, audioStream } = extractStreamsForBadges(mediaInfo);
+    if (mediaInfo.videoResolution || mediaInfo.videoCodec) {
+      const parts = [];
+      const resBadge = mediaInfo.videoResolution ? getResolutionBadge(mediaInfo.videoResolution) : null;
+      if (resBadge) parts.push(resBadge);
+      else if (mediaInfo.videoResolution) parts.push(mediaInfo.videoResolution.toUpperCase());
+      if (mediaInfo.videoCodec) parts.push(mediaInfo.videoCodec.toUpperCase());
+      const hdrBadge = getHdrBadge(videoStream, mediaInfo.videoProfile);
+      if (hdrBadge) parts.push(hdrBadge);
+      if (mediaInfo.bitrate) parts.push(formatBitrate(mediaInfo.bitrate));
+      details.push({ label: "Video", value: parts.join(" \u00b7 ") });
+    }
+    if (mediaInfo.audioCodec) {
+      const channelStr = mediaInfo.audioChannels > 0
+        ? ` \u00b7 ${mediaInfo.audioChannels === 6 ? "5.1" : mediaInfo.audioChannels === 8 ? "7.1" : `${mediaInfo.audioChannels}ch`}`
+        : "";
+      const audioBadge = getAudioBadge(mediaInfo.audioCodec, mediaInfo.audioChannels, mediaInfo.audioProfile, audioStream);
+      const audioLabel = audioBadge
+        ? `${mediaInfo.audioCodec.toUpperCase()}${channelStr} \u00b7 ${audioBadge}`
+        : `${mediaInfo.audioCodec.toUpperCase()}${channelStr}`;
+      details.push({ label: "Audio", value: audioLabel });
+    }
+    return details;
+  };
+
   // ── Movie ──
   if (item.type === "movie") {
     const movie = item as PlexMovie;
+    const movieMediaDetails = buildMovieMediaDetails(movie);
     return (
       <>
         <img
@@ -195,6 +232,35 @@ export default function ItemHeroSection({
                 maxWidth: bp === "large" ? "1000px" : "800px",
                 marginTop: "0.25rem",
               }}>{decodeHtmlEntities(movie.summary)}</p>
+            )}
+            {movieMediaDetails.length > 0 && (
+              <div style={{
+                display: "grid",
+                gridTemplateColumns: "auto 1fr",
+                gap: "0.3rem 1.25rem",
+                marginTop: "0.5rem",
+                ...(mobile ? { justifyItems: "center", gridTemplateColumns: "1fr" } : {}),
+              }}>
+                {movieMediaDetails.map((d) => (
+                  mobile ? (
+                    <span key={d.label} style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+                      <span style={{ fontWeight: 500, color: "var(--text-primary)" }}>{d.label}:</span> {d.value}
+                    </span>
+                  ) : (
+                    <span key={d.label} style={{ display: "contents" }}>
+                      <span style={{
+                        fontSize: "0.85rem",
+                        color: "var(--text-secondary)",
+                        textAlign: "right",
+                      }}>{d.label}</span>
+                      <span style={{
+                        fontSize: "0.85rem",
+                        color: "var(--text-primary)",
+                      }}>{d.value}</span>
+                    </span>
+                  )
+                ))}
+              </div>
             )}
           </div>
         </div>
@@ -374,17 +440,27 @@ export default function ItemHeroSection({
       mediaDetails.push({ label: "Written by", value: ep.Writer.map((w) => w.tag).join(", ") });
     }
     if (mediaInfo) {
+      const { videoStream, audioStream } = extractStreamsForBadges(mediaInfo);
       if (mediaInfo.videoResolution || mediaInfo.videoCodec) {
         const parts = [];
-        if (mediaInfo.videoResolution) parts.push(mediaInfo.videoResolution.toUpperCase());
+        const resBadge = mediaInfo.videoResolution ? getResolutionBadge(mediaInfo.videoResolution) : null;
+        if (resBadge) parts.push(resBadge);
+        else if (mediaInfo.videoResolution) parts.push(mediaInfo.videoResolution.toUpperCase());
         if (mediaInfo.videoCodec) parts.push(mediaInfo.videoCodec.toUpperCase());
+        const hdrBadge = getHdrBadge(videoStream, mediaInfo.videoProfile);
+        if (hdrBadge) parts.push(hdrBadge);
+        if (mediaInfo.bitrate) parts.push(formatBitrate(mediaInfo.bitrate));
         mediaDetails.push({ label: "Video", value: parts.join(" \u00b7 ") });
       }
       if (mediaInfo.audioCodec) {
-        const channels = mediaInfo.audioChannels > 0
+        const channelStr = mediaInfo.audioChannels > 0
           ? ` \u00b7 ${mediaInfo.audioChannels === 6 ? "5.1" : mediaInfo.audioChannels === 8 ? "7.1" : `${mediaInfo.audioChannels}ch`}`
           : "";
-        mediaDetails.push({ label: "Audio", value: `${mediaInfo.audioCodec.toUpperCase()}${channels}` });
+        const audioBadge = getAudioBadge(mediaInfo.audioCodec, mediaInfo.audioChannels, mediaInfo.audioProfile, audioStream);
+        const audioLabel = audioBadge
+          ? `${mediaInfo.audioCodec.toUpperCase()}${channelStr} \u00b7 ${audioBadge}`
+          : `${mediaInfo.audioCodec.toUpperCase()}${channelStr}`;
+        mediaDetails.push({ label: "Audio", value: audioLabel });
       }
     }
 

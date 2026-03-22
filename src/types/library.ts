@@ -41,6 +41,7 @@ export interface PlexStream {
   // Subtitle-specific
   key?: string; // URL to download external subtitle
   format?: string; // "srt", "ass", etc.
+  hearingImpaired?: boolean;
   // Audio-specific
   channels?: number;
   audioChannelLayout?: string;
@@ -48,6 +49,17 @@ export interface PlexStream {
   width?: number;
   height?: number;
   bitrate?: number;
+  bitDepth?: number;
+  colorSpace?: string;       // "bt2020", "bt709"
+  DOVIPresent?: boolean;
+  extendedDisplayTitle?: string;
+}
+
+export interface PlexMarker {
+  id: number;
+  type: "intro" | "credits";
+  startTimeOffset: number; // milliseconds
+  endTimeOffset: number;   // milliseconds
 }
 
 export interface PlexChapter {
@@ -77,6 +89,9 @@ export interface PlexMediaInfo {
   videoCodec: string;
   audioCodec: string;
   audioChannels: number;
+  videoProfile?: string;   // "main", "main 10", "high", etc.
+  audioProfile?: string;   // "dts", "lc", "he-aac", etc.
+  videoFrameRate?: string;  // "24p", "NTSC", "PAL"
   Part?: PlexMediaPart[];
 }
 
@@ -123,6 +138,7 @@ export interface PlexMovie extends PlexMediaItem {
   Role?: PlexRole[];
   Rating?: PlexRating[];
   Media?: PlexMediaInfo[];
+  Marker?: PlexMarker[];
 }
 
 // ── TV Shows ──
@@ -176,6 +192,7 @@ export interface PlexEpisode extends PlexMediaItem {
   audienceRatingImage?: string;
   Rating?: PlexRating[];
   Media?: PlexMediaInfo[];
+  Marker?: PlexMarker[];
   Role?: PlexRole[];
   Director?: PlexTag[];
   Writer?: PlexTag[];

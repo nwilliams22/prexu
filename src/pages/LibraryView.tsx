@@ -27,7 +27,17 @@ import {
   isWatched,
   getUnwatchedCount,
 } from "../utils/media-helpers";
-import type { PlexMediaItem, PlexCollection, LibraryFilters } from "../types/library";
+import type { PlexMediaItem, PlexMediaInfo, PlexCollection, LibraryFilters } from "../types/library";
+import { getMediaBadges, extractStreamsForBadges } from "../utils/media-badges";
+import type { MediaBadge } from "../utils/media-badges";
+
+function getItemMediaBadges(item: PlexMediaItem): MediaBadge[] | undefined {
+  const media = (item as { Media?: PlexMediaInfo[] }).Media?.[0];
+  if (!media) return undefined;
+  const { videoStream, audioStream } = extractStreamsForBadges(media);
+  const badges = getMediaBadges(media, videoStream, audioStream);
+  return badges.length > 0 ? badges : undefined;
+}
 
 function LibraryView() {
   const { sectionId } = useParams<{ sectionId: string }>();
@@ -234,6 +244,7 @@ function LibraryView() {
           unwatchedCount={getUnwatchedCount(item)}
           onClick={() => navigate(`/item/${item.ratingKey}`)}
           onPlay={getPlayHandler(item)}
+          mediaBadges={getItemMediaBadges(item)}
           showMoreButton
           onContextMenu={(e) => openContextMenu(e, item)}
           onMoreClick={(e) => openContextMenu(e, item)}

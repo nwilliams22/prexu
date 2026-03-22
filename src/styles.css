@@ -194,6 +194,34 @@ a:hover {
   }
 }
 
+/* Generic fade-in */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Queue panel slide in from right */
+@keyframes slideLeft {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+/* Skip intro/credits button slide-in from right */
+@keyframes skipSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(40px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
 /* Card entrance — fade + slight scale up */
 @keyframes cardEnter {
   from {
