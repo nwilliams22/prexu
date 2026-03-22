@@ -25,6 +25,9 @@ tower = "0.5"
 tower-http = { version = "0.6", features = ["cors"] }
 urlencoding = "2"
 
+[features]
+test-mode = []
+
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = "0.28"
@@ -32,3 +35,4 @@ futures-util = "0.3"
 axum = { version = "0.8", features = ["ws"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 serde_json = "1"
+prexu-relay = { path = ".", features = ["test-mode"] }

@@ -4,7 +4,7 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
-use tower_http::cors::{CorsLayer, Any};
+use tower_http::cors::CorsLayer;
 use tokio::time::{interval, Duration};
 use tracing::info;
 
@@ -15,10 +15,17 @@ use crate::tmdb_proxy;
 
 /// Build the axum router with WebSocket and health endpoints.
 pub fn build_router(state: SharedState) -> Router {
+    // Restrict CORS to the Tauri desktop app origin.
+    // WebSocket upgrades are not subject to CORS, so this primarily
+    // protects the TMDb proxy HTTP endpoints from cross-origin abuse.
+    // These are compile-time-known valid origins; parse errors here indicate a code bug.
     let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_origin([
+            "https://tauri.localhost".parse().expect("invalid CORS origin literal"),
+            "tauri://localhost".parse().expect("invalid CORS origin literal"),
+        ])
+        .allow_methods([axum::http::Method::GET])
+        .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::ACCEPT]);
 
     Router::new()
         .route("/ws", get(ws_handler))

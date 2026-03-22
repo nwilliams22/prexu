@@ -23,6 +23,18 @@ fn default_page() -> u32 {
 
 const TMDB_API_BASE: &str = "https://api.themoviedb.org/3";
 
+/// Check global TMDb rate limit. Returns an error response if exceeded.
+fn check_rate_limit(state: &SharedState) -> Result<(), Response> {
+    if !state.check_tmdb_rate_limit() {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            "Rate limit exceeded for TMDb proxy (60 requests/minute)",
+        )
+            .into_response());
+    }
+    Ok(())
+}
+
 /// Get the TMDb API key from environment, or return a 503 error.
 fn get_api_key() -> Result<String, Response> {
     std::env::var("TMDB_API_KEY").map_err(|_| {
@@ -79,9 +91,11 @@ async fn proxy_tmdb(
 
 /// GET /tmdb/search/movie?query=...&page=...
 pub async fn search_movie(
-    State(_state): State<SharedState>,
+    State(state): State<SharedState>,
+
     Query(params): Query<SearchParams>,
 ) -> Result<Json<serde_json::Value>, Response> {
+    check_rate_limit(&state)?;
     let api_key = get_api_key()?;
     let client = reqwest::Client::new();
     let url = format!(
@@ -95,9 +109,11 @@ pub async fn search_movie(
 
 /// GET /tmdb/search/tv?query=...&page=...
 pub async fn search_tv(
-    State(_state): State<SharedState>,
+    State(state): State<SharedState>,
+
     Query(params): Query<SearchParams>,
 ) -> Result<Json<serde_json::Value>, Response> {
+    check_rate_limit(&state)?;
     let api_key = get_api_key()?;
     let client = reqwest::Client::new();
     let url = format!(
@@ -111,9 +127,11 @@ pub async fn search_tv(
 
 /// GET /tmdb/search/person?query=...
 pub async fn search_person(
-    State(_state): State<SharedState>,
+    State(state): State<SharedState>,
+
     Query(params): Query<SearchParams>,
 ) -> Result<Json<serde_json::Value>, Response> {
+    check_rate_limit(&state)?;
     let api_key = get_api_key()?;
     let client = reqwest::Client::new();
     let url = format!(
@@ -126,9 +144,11 @@ pub async fn search_person(
 
 /// GET /tmdb/find/:id
 pub async fn find_by_external_id(
-    State(_state): State<SharedState>,
+    State(state): State<SharedState>,
+
     Path(external_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, Response> {
+    check_rate_limit(&state)?;
     let api_key = get_api_key()?;
     let client = reqwest::Client::new();
     let url = format!(
@@ -140,9 +160,11 @@ pub async fn find_by_external_id(
 
 /// GET /tmdb/person/:id
 pub async fn person_detail(
-    State(_state): State<SharedState>,
+    State(state): State<SharedState>,
+
     Path(person_id): Path<u64>,
 ) -> Result<Json<serde_json::Value>, Response> {
+    check_rate_limit(&state)?;
     let api_key = get_api_key()?;
     let client = reqwest::Client::new();
     let url = format!("{}/person/{}?language=en-US", TMDB_API_BASE, person_id);
@@ -151,9 +173,11 @@ pub async fn person_detail(
 
 /// GET /tmdb/person/:id/credits
 pub async fn person_credits(
-    State(_state): State<SharedState>,
+    State(state): State<SharedState>,
+
     Path(person_id): Path<u64>,
 ) -> Result<Json<serde_json::Value>, Response> {
+    check_rate_limit(&state)?;
     let api_key = get_api_key()?;
     let client = reqwest::Client::new();
     let url = format!(
@@ -165,9 +189,11 @@ pub async fn person_credits(
 
 /// GET /tmdb/movie/:id
 pub async fn movie_detail(
-    State(_state): State<SharedState>,
+    State(state): State<SharedState>,
+
     Path(movie_id): Path<u64>,
 ) -> Result<Json<serde_json::Value>, Response> {
+    check_rate_limit(&state)?;
     let api_key = get_api_key()?;
     let client = reqwest::Client::new();
     let url = format!(
@@ -179,9 +205,11 @@ pub async fn movie_detail(
 
 /// GET /tmdb/tv/:id
 pub async fn tv_detail(
-    State(_state): State<SharedState>,
+    State(state): State<SharedState>,
+
     Path(tv_id): Path<u64>,
 ) -> Result<Json<serde_json::Value>, Response> {
+    check_rate_limit(&state)?;
     let api_key = get_api_key()?;
     let client = reqwest::Client::new();
     let url = format!(

@@ -7,7 +7,9 @@ use crate::state::{now_ms, Participant, Session, SharedState};
 fn send_to_user(state: &SharedState, username: &str, msg: &ServerMessage) {
     if let Some(conn) = state.connections.get(username) {
         if let Ok(json) = serde_json::to_string(msg) {
-            let _ = conn.sender.send(json);
+            if conn.sender.try_send(json).is_err() {
+                warn!(user = %username, "Failed to deliver message (channel full or closed)");
+            }
         }
     }
 }
@@ -28,7 +30,9 @@ fn broadcast_to_session(
             if Some(entry.key().as_str()) == exclude {
                 continue;
             }
-            let _ = entry.value().sender.send(json.clone());
+            if entry.value().sender.try_send(json.clone()).is_err() {
+                warn!(user = %entry.key(), "Broadcast message dropped (channel full or closed)");
+            }
         }
     }
 }
@@ -42,7 +46,7 @@ pub fn create_session(
     media_title: String,
     media_rating_key: String,
     media_type: String,
-    sender: tokio::sync::mpsc::UnboundedSender<String>,
+    sender: tokio::sync::mpsc::Sender<String>,
 ) {
     // Check if session already exists
     if state.sessions.contains_key(&session_id) {
@@ -101,7 +105,7 @@ pub fn join_session(
     session_id: &str,
     username: &str,
     plex_thumb: &str,
-    sender: tokio::sync::mpsc::UnboundedSender<String>,
+    sender: tokio::sync::mpsc::Sender<String>,
 ) {
     let session = match state.sessions.get(session_id) {
         Some(s) => s,
@@ -317,7 +321,7 @@ pub fn relay_playback_event(state: &SharedState, username: &str, msg: &ServerMes
     broadcast_to_session(state, &session_id, msg, Some(username));
 }
 
-/// Handle new_media event: relay to all participants including sender.
+/// Handle new_media event: only the host can change media.
 pub fn handle_new_media(
     state: &SharedState,
     username: &str,
@@ -332,6 +336,21 @@ pub fn handle_new_media(
         },
         None => return,
     };
+
+    // Only the host can change media
+    if let Some(session) = state.sessions.get(&session_id) {
+        if session.host_username != username {
+            warn!(user = %username, session_id = %session_id, "Non-host tried to change media");
+            send_to_user(
+                state,
+                username,
+                &ServerMessage::SessionError {
+                    reason: "Only the host can change media".into(),
+                },
+            );
+            return;
+        }
+    }
 
     // Update session media info
     if let Some(mut session) = state.sessions.get_mut(&session_id) {

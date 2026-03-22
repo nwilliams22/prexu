@@ -4,7 +4,7 @@
  * Used by ItemDetail, Dashboard, LibraryView, CollectionDetail, PlaylistDetail.
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useAuth } from "./useAuth";
 import { markAsWatched, markAsUnwatched } from "../services/plex-library";
 
@@ -23,11 +23,13 @@ export interface WatchedToggleResult {
 export function useWatchedToggle(onToggled?: () => void): WatchedToggleResult {
   const { server } = useAuth();
   const [isToggling, setIsToggling] = useState(false);
+  const isTogglingRef = useRef(false);
 
   const toggle = useCallback(
     async (ratingKey: string, currentlyWatched: boolean): Promise<boolean> => {
-      if (!server || isToggling) return currentlyWatched;
+      if (!server || isTogglingRef.current) return currentlyWatched;
 
+      isTogglingRef.current = true;
       setIsToggling(true);
       try {
         if (currentlyWatched) {
@@ -41,10 +43,11 @@ export function useWatchedToggle(onToggled?: () => void): WatchedToggleResult {
         // Rollback: return the original state
         return currentlyWatched;
       } finally {
+        isTogglingRef.current = false;
         setIsToggling(false);
       }
     },
-    [server, isToggling, onToggled],
+    [server, onToggled],
   );
 
   return { isToggling, toggle };
