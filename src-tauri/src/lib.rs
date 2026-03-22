@@ -28,6 +28,22 @@ impl ProxyState {
     }
 }
 
+/// Validate that a server URL looks like a legitimate Plex server.
+/// Accepts http/https URLs only — rejects file://, ftp://, etc.
+fn validate_server_url(url: &str) -> Result<(), String> {
+    let parsed = url::Url::parse(url).map_err(|e| format!("Invalid server URL: {}", e))?;
+    match parsed.scheme() {
+        "http" | "https" => {}
+        scheme => return Err(format!("Unsupported URL scheme: {}", scheme)),
+    }
+    let host = parsed.host_str().ok_or("Server URL has no host")?;
+    // Block well-known metadata endpoints (cloud provider SSRF targets)
+    if host == "169.254.169.254" || host == "metadata.google.internal" {
+        return Err("Blocked: cloud metadata endpoint".into());
+    }
+    Ok(())
+}
+
 /// Start (or reuse) the local HTTP proxy. Returns the port number.
 /// Called from JS before HLS playback begins.
 #[tauri::command]
@@ -36,12 +52,15 @@ fn start_proxy(
     token: String,
     state: tauri::State<'_, ProxyState>,
 ) -> Result<u16, String> {
+    // Validate server URL before storing
+    validate_server_url(&server_url)?;
+
     // Always update the server URL and token (user may switch servers)
-    *state.server_url.lock().unwrap() = server_url;
-    *state.token.lock().unwrap() = token;
+    *state.server_url.lock().map_err(|e| format!("Lock poisoned: {}", e))? = server_url;
+    *state.token.lock().map_err(|e| format!("Lock poisoned: {}", e))? = token;
 
     // If proxy is already running, reuse it
-    let mut port_guard = state.port.lock().unwrap();
+    let mut port_guard = state.port.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
     if let Some(port) = *port_guard {
         return Ok(port);
     }
@@ -49,19 +68,24 @@ fn start_proxy(
     // Bind to a random available port on localhost
     let listener = TcpListener::bind("127.0.0.1:0")
         .map_err(|e| format!("Failed to bind proxy: {}", e))?;
-    let port = listener.local_addr().unwrap().port();
+    let port = listener.local_addr()
+        .map_err(|e| format!("Failed to get proxy address: {}", e))?.port();
 
     let server_url_ref = state.server_url.clone();
     let token_ref = state.token.clone();
 
     thread::spawn(move || {
-        let client = reqwest::blocking::Client::builder()
-            .build()
-            .expect("Failed to build HTTP client for proxy");
+        let client = match reqwest::blocking::Client::builder().build() {
+            Ok(c) => c,
+            Err(e) => {
+                log::error!("[Proxy] Failed to build HTTP client: {}", e);
+                return;
+            }
+        };
 
         for stream in listener.incoming().flatten() {
-            let su = server_url_ref.lock().unwrap().clone();
-            let tk = token_ref.lock().unwrap().clone();
+            let su = server_url_ref.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            let tk = token_ref.lock().unwrap_or_else(|e| e.into_inner()).clone();
             let client = client.clone();
             thread::spawn(move || {
                 if let Err(e) = handle_proxy_request(stream, &su, &tk, &client) {
@@ -115,7 +139,7 @@ fn handle_proxy_request(
     // Handle CORS preflight
     if method == "OPTIONS" {
         let response = "HTTP/1.1 200 OK\r\n\
-            Access-Control-Allow-Origin: *\r\n\
+            Access-Control-Allow-Origin: https://tauri.localhost\r\n\
             Access-Control-Allow-Methods: GET, OPTIONS\r\n\
             Access-Control-Allow-Headers: Range, Content-Type\r\n\
             Content-Length: 0\r\n\
@@ -161,7 +185,7 @@ fn handle_proxy_request(
         "HTTP/1.1 {} {}\r\n\
          Content-Type: {}\r\n\
          Content-Length: {}\r\n\
-         Access-Control-Allow-Origin: *\r\n\
+         Access-Control-Allow-Origin: https://tauri.localhost\r\n\
          Connection: close\r\n",
         status.as_u16(),
         status.canonical_reason().unwrap_or(""),
@@ -189,7 +213,7 @@ fn write_error(
         "HTTP/1.1 {} {}\r\n\
          Content-Type: text/plain\r\n\
          Content-Length: {}\r\n\
-         Access-Control-Allow-Origin: *\r\n\
+         Access-Control-Allow-Origin: https://tauri.localhost\r\n\
          Connection: close\r\n\
          \r\n\
          {}",
@@ -236,5 +260,7 @@ pub fn run() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .unwrap_or_else(|e| {
+            log::error!("Failed to run tauri application: {}", e);
+        });
 }

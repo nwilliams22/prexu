@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use std::sync::{Arc, Once};
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -13,21 +13,12 @@ type WsStream = tokio_tungstenite::WebSocketStream<MaybeTlsStream<tokio::net::Tc
 /// Default timeout for receiving a WebSocket message in tests.
 const RECV_TIMEOUT: Duration = Duration::from_secs(5);
 
-static INIT_TEST_ENV: Once = Once::new();
-
-fn init_test_env() {
-    INIT_TEST_ENV.call_once(|| {
-        // Setting this env var once before any server starts is safe here because
-        // all tests set the same value and it happens inside a Once guard.
-        #[allow(deprecated)]
-        std::env::set_var("PREXU_TEST_MODE", "1");
-    });
-}
-
 /// Start the relay server on an ephemeral port and return its address.
 /// The server runs in a background task and will be dropped when the test ends.
+///
+/// Auth bypass is enabled at compile time via the `test-mode` feature
+/// (activated automatically for dev/test builds in Cargo.toml).
 async fn start_test_server() -> SocketAddr {
-    init_test_env();
 
     let listener = TcpListener::bind("127.0.0.1:0")
         .await

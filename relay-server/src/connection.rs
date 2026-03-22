@@ -19,7 +19,7 @@ const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1);
 /// Handle a single WebSocket connection.
 pub async fn handle_connection(ws: WebSocket, state: SharedState) {
     let (mut ws_sender, mut ws_receiver) = ws.split();
-    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    let (tx, mut rx) = mpsc::channel::<String>(crate::state::CHANNEL_CAPACITY);
 
     // Phase 1: Auth handshake (must receive auth within 10 seconds)
     let auth_result = tokio::time::timeout(Duration::from_secs(10), async {
@@ -84,7 +84,7 @@ pub async fn handle_connection(ws: WebSocket, state: SharedState) {
         plex_username: username.clone(),
     };
     if let Ok(json) = serde_json::to_string(&auth_ok) {
-        let _ = tx.send(json);
+        let _ = tx.try_send(json);
     }
 
     // Deliver any pending invites
@@ -92,7 +92,7 @@ pub async fn handle_connection(ws: WebSocket, state: SharedState) {
         if !invites.is_empty() {
             let msg = ServerMessage::PendingInvites { invites };
             if let Ok(json) = serde_json::to_string(&msg) {
-                let _ = tx.send(json);
+                let _ = tx.try_send(json);
             }
         }
     }
@@ -129,7 +129,7 @@ pub async fn handle_connection(ws: WebSocket, state: SharedState) {
                                 reason: "Rate limit exceeded".into(),
                             };
                             if let Ok(json) = serde_json::to_string(&err) {
-                                let _ = tx.send(json);
+                                let _ = tx.try_send(json);
                             }
                             break;
                         }
@@ -150,7 +150,7 @@ pub async fn handle_connection(ws: WebSocket, state: SharedState) {
             _ = keepalive.tick() => {
                 let pong = ServerMessage::Pong;
                 if let Ok(json) = serde_json::to_string(&pong) {
-                    if tx.send(json).is_err() {
+                    if tx.try_send(json).is_err() {
                         break;
                     }
                 }
@@ -171,7 +171,7 @@ fn handle_client_message(
     username: &str,
     thumb: &str,
     raw: &str,
-    sender: &mpsc::UnboundedSender<String>,
+    sender: &mpsc::Sender<String>,
 ) {
     let msg: ClientMessage = match serde_json::from_str(raw) {
         Ok(m) => m,
@@ -303,7 +303,7 @@ fn handle_client_message(
         ClientMessage::Ping => {
             let pong = ServerMessage::Pong;
             if let Ok(json) = serde_json::to_string(&pong) {
-                let _ = sender.send(json);
+                let _ = sender.try_send(json);
             }
         }
     }

@@ -116,6 +116,14 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
   // Direct play failure tracking
   const directPlayFailedRef = useRef(false);
 
+  // Refs for values used in initPlayback but that shouldn't trigger re-init
+  const volumeRef = useRef(volume);
+  volumeRef.current = volume;
+  const isMutedRef = useRef(isMuted);
+  isMutedRef.current = isMuted;
+  const offsetOverrideRef = useRef(offsetOverride);
+  offsetOverrideRef.current = offsetOverride;
+
   // Keep timeline refs in sync
   useEffect(() => { timeline.currentTimeRef.current = currentTime; }, [currentTime, timeline]);
   useEffect(() => { timeline.durationRef.current = duration; }, [duration, timeline]);
@@ -188,13 +196,13 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
       streams.setSelectedSubtitleId(defaultSub?.id ?? null);
 
       // Get resume position
-      const viewOffset = offsetOverride != null ? offsetOverride : (playableItem.viewOffset ?? 0);
+      const viewOffset = offsetOverrideRef.current != null ? offsetOverrideRef.current : (playableItem.viewOffset ?? 0);
 
       const video = videoRef.current;
       if (!video) return;
 
-      video.volume = Math.min(volume, 1);
-      video.muted = isMuted;
+      video.volume = Math.min(volumeRef.current, 1);
+      video.muted = isMutedRef.current;
 
       // Direct play decision
       const shouldDirectPlay =
@@ -301,7 +309,7 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
       setPlaybackError(err instanceof Error ? err.message : "Failed to start playback");
       setIsLoading(false);
     }
-  }, [server, ratingKey, offsetOverride, volume, isMuted, hlsLoader, timeline, streams]);
+  }, [server, ratingKey, hlsLoader, timeline, streams]);
 
   // Init on mount / when ratingKey changes
   useEffect(() => {
@@ -312,8 +320,7 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
       timeline.stopTimeline();
       timeline.reportStopped();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ratingKey]);
+  }, [initPlayback]);
 
   // ── Video event listeners ──
   useEffect(() => {

@@ -31,30 +31,30 @@ struct Args {
     tls_key: Option<String>,
 }
 
-fn load_tls_config(cert_path: &str, key_path: &str) -> Arc<rustls::ServerConfig> {
+fn load_tls_config(cert_path: &str, key_path: &str) -> Result<Arc<rustls::ServerConfig>, Box<dyn std::error::Error>> {
     let cert_file = File::open(cert_path)
-        .unwrap_or_else(|e| panic!("Failed to open TLS cert file '{}': {}", cert_path, e));
+        .map_err(|e| format!("Failed to open TLS cert file '{}': {}", cert_path, e))?;
     let key_file = File::open(key_path)
-        .unwrap_or_else(|e| panic!("Failed to open TLS key file '{}': {}", key_path, e));
+        .map_err(|e| format!("Failed to open TLS key file '{}': {}", key_path, e))?;
 
     let certs: Vec<_> = rustls_pemfile::certs(&mut BufReader::new(cert_file))
         .collect::<Result<_, _>>()
-        .expect("Failed to parse TLS certificates");
+        .map_err(|e| format!("Failed to parse TLS certificates: {}", e))?;
 
     let key = rustls_pemfile::private_key(&mut BufReader::new(key_file))
-        .expect("Failed to read TLS private key")
-        .expect("No private key found in key file");
+        .map_err(|e| format!("Failed to read TLS private key: {}", e))?
+        .ok_or("No private key found in key file")?;
 
     let config = rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, key)
-        .expect("Invalid TLS certificate/key pair");
+        .map_err(|e| format!("Invalid TLS certificate/key pair: {}", e))?;
 
-    Arc::new(config)
+    Ok(Arc::new(config))
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -74,11 +74,11 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
-        .expect("Failed to bind address");
+        .map_err(|e| format!("Failed to bind to {}: {}", addr, e))?;
 
     match (&args.tls_cert, &args.tls_key) {
         (Some(cert), Some(key)) => {
-            let tls_config = load_tls_config(cert, key);
+            let tls_config = load_tls_config(cert, key)?;
             let tls_acceptor = TlsAcceptor::from(tls_config);
 
             info!("Prexu Relay Server (TLS) starting on {}", addr);
@@ -126,10 +126,12 @@ async fn main() {
 
             axum::serve(listener, app)
                 .await
-                .expect("Server error");
+                .map_err(|e| format!("Server error: {}", e))?;
         }
         _ => {
-            panic!("Both --tls-cert and --tls-key must be provided together");
+            return Err("Both --tls-cert and --tls-key must be provided together".into());
         }
     }
+
+    Ok(())
 }

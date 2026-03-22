@@ -42,6 +42,8 @@ export function usePaginatedLibrary(
   const [totalSize, setTotalSize] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const loadingRef = useRef(false);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   const loadAll = options.loadAll ?? false;
@@ -174,19 +176,22 @@ export function usePaginatedLibrary(
     loadingRef.current = true;
     setIsLoadingMore(true);
 
+    const offset = itemsRef.current.length;
+
     (async () => {
       try {
         const result = await getLibraryItems(
           server.uri,
           server.accessToken,
           sectionId,
-          { start: items.length, size: PAGE_SIZE, sort, filters, type: plexType }
+          { start: offset, size: PAGE_SIZE, sort, filters, type: plexType }
         );
-        const updated = [...items, ...result.items];
-        setItems(updated);
+        setItems((prev) => {
+          const updated = [...prev, ...result.items];
+          cacheSet(cacheKey, { items: updated, totalSize, hasMore: result.hasMore }, CACHE_TTL);
+          return updated;
+        });
         setHasMore(result.hasMore);
-        // Update cache with the expanded list
-        cacheSet(cacheKey, { items: updated, totalSize, hasMore: result.hasMore }, CACHE_TTL);
       } catch (err) {
         setError(
           err instanceof Error ? err.message : "Failed to load more items"
@@ -196,7 +201,7 @@ export function usePaginatedLibrary(
         loadingRef.current = false;
       }
     })();
-  }, [server, sectionId, sort, filtersKey, items.length, hasMore, plexType, cacheKey, totalSize]);
+  }, [server, sectionId, sort, filtersKey, hasMore, plexType, cacheKey, totalSize]);
 
   return { items, isLoading, isLoadingMore, hasMore, totalSize, error, loadMore, retry };
 }
