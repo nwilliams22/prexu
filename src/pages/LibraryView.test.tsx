@@ -41,6 +41,7 @@ vi.mock("../hooks/useFilterOptions", () => ({
     genres: [],
     years: [],
     contentRatings: [],
+    resolutions: [],
     isLoading: false,
   }),
 }));
@@ -113,13 +114,6 @@ vi.mock("../components/LibraryGrid", () => ({
   ),
 }));
 
-vi.mock("../components/SortBar", () => ({
-  default: ({ totalCount, label }: { totalCount: number; label: string }) => (
-    <div data-testid="sort-bar">
-      {totalCount} {label}
-    </div>
-  ),
-}));
 
 vi.mock("../components/FilterBar", () => ({
   default: () => <div data-testid="filter-bar" />,

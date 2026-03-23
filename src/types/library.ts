@@ -315,6 +315,7 @@ export interface LibraryFilters {
   genre?: string;
   year?: string;
   contentRating?: string;
+  resolution?: string;
   unwatched?: boolean;
   /** Used to send the correct unwatched param to the Plex API */
   sectionType?: "movie" | "show" | "artist" | "photo";

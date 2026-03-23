@@ -113,7 +113,6 @@ function VirtualizedLibraryGrid<T>({
       estimateHeight={estimateHeight}
       parentRef={parentRef}
       cols={cols}
-      minWidth={minWidth}
       expandedKey={expandedKey}
       renderExpansion={renderExpansion}
       header={header}
@@ -130,7 +129,6 @@ function VirtualizedGridInner<T>({
   estimateHeight,
   parentRef,
   cols,
-  minWidth,
   expandedKey,
   renderExpansion,
   header,
@@ -142,7 +140,6 @@ function VirtualizedGridInner<T>({
   estimateHeight: number;
   parentRef: React.RefObject<HTMLDivElement | null>;
   cols: number;
-  minWidth: number;
   expandedKey?: string | null;
   renderExpansion?: (item: T) => ReactNode;
   header?: ReactNode;
@@ -200,7 +197,7 @@ function VirtualizedGridInner<T>({
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: `repeat(auto-fill, minmax(${minWidth}px, 1fr))`,
+            gridTemplateColumns: `repeat(${cols}, 1fr)`,
             gap: `${GAP_Y}px ${GAP_X}px`,
             marginBottom: items.length > 0 ? `${GAP_Y}px` : 0,
           }}
@@ -250,7 +247,7 @@ function VirtualizedGridInner<T>({
                 width: "100%",
                 transform: `translateY(${virtualRow.start}px)`,
                 display: "grid",
-                gridTemplateColumns: `repeat(auto-fill, minmax(${minWidth}px, 1fr))`,
+                gridTemplateColumns: `repeat(${cols}, 1fr)`,
                 gap: `0 ${GAP_X}px`,
                 alignItems: "start",
                 paddingBottom: `${GAP_Y}px`,
@@ -270,7 +267,7 @@ function VirtualizedGridInner<T>({
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: `repeat(auto-fill, minmax(${minWidth}px, 1fr))`,
+            gridTemplateColumns: `repeat(${cols}, 1fr)`,
             gap: `${GAP_Y}px ${GAP_X}px`,
             marginTop: items.length > 0 ? 0 : undefined,
           }}

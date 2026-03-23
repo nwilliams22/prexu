@@ -14,7 +14,6 @@ import { useScrollRestoration } from "../hooks/useScrollRestoration";
 import { getImageUrl, getPlaceholderUrl, getImageSrcSet } from "../services/plex-library";
 import LibraryGrid from "../components/LibraryGrid";
 import VirtualizedLibraryGrid from "../components/VirtualizedLibraryGrid";
-import SortBar from "../components/SortBar";
 import FilterBar from "../components/FilterBar";
 import PosterCard from "../components/PosterCard";
 import SkeletonCard from "../components/SkeletonCard";
@@ -56,10 +55,12 @@ function LibraryView() {
     const genre = searchParams.get("genre");
     const year = searchParams.get("year");
     const contentRating = searchParams.get("contentRating");
+    const resolution = searchParams.get("resolution");
     const unwatched = searchParams.get("unwatched");
     if (genre) f.genre = genre;
     if (year) f.year = year;
     if (contentRating) f.contentRating = contentRating;
+    if (resolution) f.resolution = resolution;
     if (unwatched === "1") f.unwatched = true;
     if (section) f.sectionType = section.type as LibraryFilters["sectionType"];
     return f;
@@ -76,7 +77,7 @@ function LibraryView() {
       loadAll: shouldLoadAll,
       type: section?.type === "show" ? 2 : section?.type === "movie" ? 1 : undefined,
     });
-  const { genres, years, contentRatings, isLoading: filtersLoading } =
+  const { genres, years, contentRatings, resolutions, isLoading: filtersLoading } =
     useFilterOptions(sectionId);
   const { restrictionsEnabled, filterByRating } = useParentalControls();
   const { openContextMenu, overlays: menuOverlays } = useMediaContextMenu();
@@ -225,6 +226,7 @@ function LibraryView() {
         genre: newFilters.genre || undefined,
         year: newFilters.year || undefined,
         contentRating: newFilters.contentRating || undefined,
+        resolution: newFilters.resolution || undefined,
         unwatched: newFilters.unwatched ? "1" : undefined,
       });
     },
@@ -232,7 +234,7 @@ function LibraryView() {
   );
 
   const hasActiveFilters =
-    !!filters.genre || !!filters.year || !!filters.contentRating || !!filters.unwatched;
+    !!filters.genre || !!filters.year || !!filters.contentRating || !!filters.resolution || !!filters.unwatched;
 
   const posterUrl = useCallback(
     (thumb: string) =>
@@ -360,20 +362,20 @@ function LibraryView() {
 
           {!isLoading && !error && (
             <>
-              <SortBar
-                currentSort={sort}
-                onSortChange={handleSortChange}
-                totalCount={totalSize}
-                label={getLabel()}
-              />
+              <span style={{ fontSize: "0.9rem", color: "var(--text-secondary)", marginBottom: "0.5rem", display: "block" }}>
+                {totalSize.toLocaleString()} {getLabel()}
+              </span>
               <FilterBar
                 filters={filters}
                 onFiltersChange={handleFiltersChange}
                 genres={genres}
                 years={years}
                 contentRatings={contentRatings}
+                resolutions={resolutions}
                 isLoading={filtersLoading}
                 hideContentRating={restrictionsEnabled}
+                currentSort={sort}
+                onSortChange={handleSortChange}
               />
             </>
           )}

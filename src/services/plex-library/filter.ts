@@ -38,6 +38,8 @@ export async function getLibraryItems(
   if (options.filters?.year) params.set("year", options.filters.year);
   if (options.filters?.contentRating)
     params.set("contentRating", options.filters.contentRating);
+  if (options.filters?.resolution)
+    params.set("resolution", options.filters.resolution);
   if (options.filters?.unwatched) {
     // Movies use `unwatched=1`; shows/seasons use `unwatchedLeaves=1`
     if (options.filters.sectionType === "show") {
@@ -75,7 +77,7 @@ export async function getFilterOptions(
   serverUri: string,
   serverToken: string,
   sectionId: string,
-  filterType: "genre" | "year" | "contentRating"
+  filterType: "genre" | "year" | "contentRating" | "resolution"
 ): Promise<FilterOption[]> {
   const data = await fetchJson<PlexMediaContainer<never>>(
     serverUri,
