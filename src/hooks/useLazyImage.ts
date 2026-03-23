@@ -1,6 +1,6 @@
 /**
- * Intersection Observer-based lazy image loading.
- * Shows a placeholder until the image enters the viewport.
+ * Intersection Observer-based lazy image loading with blur-up support.
+ * Shows a tiny blurred placeholder that transitions to the full image.
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -14,10 +14,14 @@ interface UseLazyImageResult {
   isLoaded: boolean;
   /** Whether the image failed to load */
   hasError: boolean;
+  /** Whether the blur-up placeholder has loaded */
+  placeholderLoaded: boolean;
   /** Call when the image's onLoad fires */
   onLoad: () => void;
   /** Call when the image's onError fires */
   onError: () => void;
+  /** Call when the placeholder image's onLoad fires */
+  onPlaceholderLoad: () => void;
 }
 
 export function useLazyImage(rootMargin = "200px"): UseLazyImageResult {
@@ -25,6 +29,7 @@ export function useLazyImage(rootMargin = "200px"): UseLazyImageResult {
   const [shouldLoad, setShouldLoad] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
   const [hasError, setHasError] = useState(false);
+  const [placeholderLoaded, setPlaceholderLoaded] = useState(false);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -46,6 +51,16 @@ export function useLazyImage(rootMargin = "200px"): UseLazyImageResult {
 
   const onLoad = useCallback(() => setIsLoaded(true), []);
   const onError = useCallback(() => setHasError(true), []);
+  const onPlaceholderLoad = useCallback(() => setPlaceholderLoaded(true), []);
 
-  return { containerRef, shouldLoad, isLoaded, hasError, onLoad, onError };
+  return {
+    containerRef,
+    shouldLoad,
+    isLoaded,
+    hasError,
+    placeholderLoaded,
+    onLoad,
+    onError,
+    onPlaceholderLoad,
+  };
 }

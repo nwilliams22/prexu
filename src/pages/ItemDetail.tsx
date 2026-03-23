@@ -6,7 +6,7 @@ import { useToast } from "../hooks/useToast";
 import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
 import { useItemDetailData } from "../hooks/useItemDetailData";
 import { useSeasonSwitch } from "../hooks/useSeasonSwitch";
-import { getImageUrl } from "../services/plex-library";
+import { getImageUrl, getPlaceholderUrl, getImageSrcSet } from "../services/plex-library";
 import HorizontalRow from "../components/HorizontalRow";
 import PosterCard from "../components/PosterCard";
 import ErrorState from "../components/ErrorState";
@@ -14,6 +14,7 @@ import ItemHeroSection from "../components/detail/ItemHeroSection";
 import EpisodeListSection from "../components/detail/EpisodeListSection";
 import CastSection from "../components/detail/CastSection";
 import AdminActionsBar from "../components/detail/AdminActionsBar";
+import RatingsSection from "../components/detail/RatingsSection";
 import type {
   PlexMovie,
   PlexShow,
@@ -62,6 +63,10 @@ function ItemDetail() {
     getImageUrl(server.uri, server.accessToken, path, 1920, 1080);
   const posterUrl = (path: string) =>
     getImageUrl(server.uri, server.accessToken, path, 300, 450);
+  const posterPlaceholder = (path: string) =>
+    getPlaceholderUrl(server.uri, server.accessToken, path);
+  const posterSrcSet = (path: string) =>
+    getImageSrcSet(server.uri, server.accessToken, path, 300);
   const episodeThumbUrl = (path: string) =>
     getImageUrl(server.uri, server.accessToken, path, 400, 225);
   const actorThumbUrl = (path: string) =>
@@ -94,6 +99,8 @@ function ItemDetail() {
                 key={m.ratingKey}
                 ratingKey={m.ratingKey}
                 imageUrl={posterUrl(m.thumb)}
+                placeholderUrl={posterPlaceholder(m.thumb)}
+                srcSet={posterSrcSet(m.thumb)}
                 title={m.title}
                 subtitle={subtitle}
                 watched={isWatched(m as unknown as PlexMediaItem)}
@@ -172,6 +179,8 @@ function ItemDetail() {
                 key={r.ratingKey}
                 ratingKey={r.ratingKey}
                 imageUrl={posterUrl(r.thumb)}
+                placeholderUrl={posterPlaceholder(r.thumb)}
+                srcSet={posterSrcSet(r.thumb)}
                 title={r.title}
                 subtitle={subtitle}
                 watched={isWatched(r as unknown as PlexMediaItem)}
@@ -228,6 +237,13 @@ function ItemDetail() {
           onFixMatch={() => setShowFixMatch(true)}
           refreshItem={refreshItem}
         />
+        <RatingsSection
+          ratings={movie.Rating}
+          rating={movie.rating}
+          audienceRating={movie.audienceRating}
+          ratingImage={movie.ratingImage}
+          audienceRatingImage={movie.audienceRatingImage}
+        />
         {renderChapters(chapters)}
         <CastSection
           roles={movie.Role}
@@ -268,6 +284,13 @@ function ItemDetail() {
           onFixMatch={() => setShowFixMatch(true)}
           refreshItem={refreshItem}
         />
+        <RatingsSection
+          ratings={show.Rating}
+          rating={show.rating}
+          audienceRating={show.audienceRating}
+          ratingImage={show.ratingImage}
+          audienceRatingImage={show.audienceRatingImage}
+        />
 
         {/* Seasons grid */}
         {seasons.length > 0 && (
@@ -286,6 +309,8 @@ function ItemDetail() {
                     key={season.ratingKey}
                     ratingKey={season.ratingKey}
                     imageUrl={posterUrl(season.thumb)}
+                    placeholderUrl={posterPlaceholder(season.thumb)}
+                    srcSet={posterSrcSet(season.thumb)}
                     title={season.title}
                     subtitle={`${season.leafCount} episode${season.leafCount !== 1 ? "s" : ""}`}
                     width={mobile ? 140 : bp === "large" ? 200 : 170}

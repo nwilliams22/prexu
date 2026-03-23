@@ -7,7 +7,12 @@ import { useScrollRestoration } from "../hooks/useScrollRestoration";
 import { useDashboard } from "../hooks/useDashboard";
 import { useMediaContextMenu } from "../hooks/useMediaContextMenu";
 import { usePlayAction } from "../hooks/usePlayAction";
-import { getImageUrl, markAsWatched } from "../services/plex-library";
+import {
+  getImageUrl,
+  getPlaceholderUrl,
+  getImageSrcSet,
+  markAsWatched,
+} from "../services/plex-library";
 import {
   getDismissedRecommendations,
   saveDismissedRecommendations,
@@ -218,6 +223,10 @@ function Dashboard() {
 
   const posterUrl = (thumb: string) =>
     getImageUrl(server.uri, server.accessToken, thumb, 300, 450);
+  const posterPlaceholder = (thumb: string) =>
+    getPlaceholderUrl(server.uri, server.accessToken, thumb);
+  const posterSrcSet = (thumb: string) =>
+    getImageSrcSet(server.uri, server.accessToken, thumb, 300);
 
   const backdropUrl = (art: string) =>
     getImageUrl(server.uri, server.accessToken, art, 1920, 1080);
@@ -372,6 +381,8 @@ function Dashboard() {
                   imageUrl={posterUrl(
                     ep?.grandparentThumb || item.thumb
                   )}
+                  placeholderUrl={posterPlaceholder(ep?.grandparentThumb || item.thumb)}
+                  srcSet={posterSrcSet(ep?.grandparentThumb || item.thumb)}
                   title={ep?.grandparentTitle || item.title}
                   subtitle={
                     ep
@@ -411,6 +422,8 @@ function Dashboard() {
                 key={item.ratingKey}
                 ratingKey={item.ratingKey}
                 imageUrl={posterUrl(item.thumb)}
+                placeholderUrl={posterPlaceholder(item.thumb)}
+                srcSet={posterSrcSet(item.thumb)}
                 title={item.title}
                 subtitle={getSubtitle(item)}
                 width={posterWidth}
@@ -452,6 +465,8 @@ function Dashboard() {
                   <PosterCard
                     ratingKey={group.groupKey}
                     imageUrl={posterUrl(group.thumb)}
+                    placeholderUrl={posterPlaceholder(group.thumb)}
+                    srcSet={posterSrcSet(group.thumb)}
                     title={group.title}
                     subtitle={getGroupSubtitle(group)}
                     width={posterWidth}

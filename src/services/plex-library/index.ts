@@ -51,4 +51,4 @@ export {
   refreshLibraryMetadata,
   emptyLibraryTrash,
 } from "./admin";
-export { getImageUrl } from "./images";
+export { getImageUrl, getPlaceholderUrl, getImageSrcSet } from "./images";

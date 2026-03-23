@@ -42,9 +42,9 @@
 Small items left over from earlier phases:
 
 - [x] Play all / shuffle buttons for playlists and collections
-- [ ] Reviews/ratings display on ItemDetail (from Plex metadata)
-- [ ] Progressive image loading (blur-up placeholder → full image)
-- [ ] srcSet for different poster sizes
+- [x] Reviews/ratings display on ItemDetail (from Plex metadata)
+- [x] Progressive image loading (blur-up placeholder → full image)
+- [x] srcSet for different poster sizes
 
 ---
 
