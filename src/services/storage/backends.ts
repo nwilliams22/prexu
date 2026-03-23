@@ -109,6 +109,8 @@ export const STORAGE_KEYS = {
   SECTION_LAST_SEEN: "prexu_section_last_seen",
   APP_LAST_LAUNCH: "prexu_app_last_launch",
   PARENTAL_CONTROLS: "prexu_parental",
+  DOWNLOADS: "prexu_downloads",
+  PENDING_WATCH_SYNC: "prexu_pending_watch_sync",
 } as const;
 
 /** Keys that hold sensitive data and must use the secure store */

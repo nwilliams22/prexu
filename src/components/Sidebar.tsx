@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { useLibrary } from "../hooks/useLibrary";
+import { useDownloads } from "../hooks/useDownloads";
 import { useBreakpoint, isTabletOrBelow } from "../hooks/useBreakpoint";
 import { useServerHealth } from "../hooks/useServerHealth";
 import {
@@ -32,6 +33,10 @@ interface SectionMenuState {
 function Sidebar({ collapsed, onToggle, onNavigate, newSections, onMarkSectionSeen }: SidebarProps) {
   const { server } = useAuth();
   const { sections, isLoading } = useLibrary();
+  const { downloads } = useDownloads();
+  const activeDownloadCount = downloads.filter(
+    (d) => d.status === "downloading" || d.status === "queued",
+  ).length;
   const health = useServerHealth(server);
   const bp = useBreakpoint();
   const touchMode = isTabletOrBelow(bp);
@@ -164,6 +169,43 @@ function Sidebar({ collapsed, onToggle, onNavigate, newSections, onMarkSectionSe
             opacity: collapsed ? 0 : 1,
             width: collapsed ? 0 : "auto",
           }}>Playlists</span>
+        </button>
+
+        {/* Downloads */}
+        <button
+          onClick={() => navigateTo("/downloads")}
+          style={{
+            ...navItemStyle,
+            ...(isActive("/downloads") ? styles.navItemActive : {}),
+          }}
+          title="Downloads"
+          aria-current={isActive("/downloads") ? "page" : undefined}
+        >
+          <span style={{ position: "relative", display: "inline-flex" }}>
+            <svg
+              aria-hidden="true"
+              width={iconSize}
+              height={iconSize}
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1={12} y1={15} x2={12} y2={3} />
+            </svg>
+            {activeDownloadCount > 0 && (
+              <span style={styles.downloadBadge}>{activeDownloadCount}</span>
+            )}
+          </span>
+          <span style={{
+            ...styles.navLabel,
+            opacity: collapsed ? 0 : 1,
+            width: collapsed ? 0 : "auto",
+          }}>Downloads</span>
         </button>
 
         {/* Requests */}
@@ -355,6 +397,23 @@ const styles: Record<string, React.CSSProperties> = {
     textOverflow: "ellipsis",
     whiteSpace: "nowrap" as const,
     transition: "opacity 0.15s ease",
+  },
+  downloadBadge: {
+    position: "absolute",
+    top: -4,
+    right: -6,
+    background: "var(--accent)",
+    color: "#000",
+    fontSize: "0.55rem",
+    fontWeight: 700,
+    minWidth: 14,
+    height: 14,
+    borderRadius: 7,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "0 3px",
+    lineHeight: 1,
   },
   divider: {
     height: "1px",

@@ -12,6 +12,8 @@ import { useHlsLoader } from "./player/useHlsLoader";
 import { useTimelineReporting } from "./player/useTimelineReporting";
 import { useStreamSelection } from "./player/useStreamSelection";
 import { getItemMetadata } from "../services/plex-library";
+import { getLocalFilePath } from "../services/downloads";
+import { addPendingWatchSync } from "../services/storage";
 import {
   canDirectPlay,
   buildDirectPlayUrl,
@@ -118,6 +120,8 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
 
   // Direct play failure tracking
   const directPlayFailedRef = useRef(false);
+  // Track if current playback is from a local download (for offline watch sync)
+  const isLocalPlaybackRef = useRef(false);
 
   // Refs for values used in initPlayback but that shouldn't trigger re-init
   const volumeRef = useRef(volume);
@@ -207,6 +211,27 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
 
       video.volume = Math.min(volumeRef.current, 1);
       video.muted = isMutedRef.current;
+
+      // Check for downloaded local file first
+      isLocalPlaybackRef.current = false;
+      try {
+        const localPath = await getLocalFilePath(ratingKey);
+        if (localPath) {
+          // Use Tauri's asset protocol to serve local files
+          const { convertFileSrc } = await import("@tauri-apps/api/core");
+          const localUrl = convertFileSrc(localPath);
+          hlsLoader.destroyHls();
+          video.src = localUrl;
+          if (viewOffset > 0) video.currentTime = viewOffset / 1000;
+          video.play().catch(() => {});
+          isLocalPlaybackRef.current = true;
+          setIsLoading(false);
+          timeline.startTimeline();
+          return;
+        }
+      } catch {
+        // Not in Tauri or no local file — continue with streaming
+      }
 
       // Direct play decision
       const shouldDirectPlay =
@@ -349,6 +374,10 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
     };
     const onEnded = () => {
       setIsPlaying(false);
+      // Queue offline watch sync for locally-played downloaded items
+      if (isLocalPlaybackRef.current && timeline.ratingKeyRef.current) {
+        addPendingWatchSync(timeline.ratingKeyRef.current);
+      }
       if (server) {
         reportTimeline(
           server.uri,

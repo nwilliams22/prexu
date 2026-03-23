@@ -2,6 +2,7 @@ import { useNavigate } from "react-router-dom";
 import { useBreakpoint, isMobile } from "../../hooks/useBreakpoint";
 import WatchTogetherButton from "../WatchTogetherButton";
 import WatchedToggleButton from "../WatchedToggleButton";
+import DownloadButton from "./DownloadButton";
 import { formatResumeTime, decodeHtmlEntities } from "../../utils/media-helpers";
 import { detailStyles } from "../../utils/detail-styles";
 import {
@@ -212,6 +213,7 @@ export default function ItemHeroSection({
                 isWatched={(movie.viewCount ?? 0) > 0}
                 onToggled={refreshItem}
               />
+              <DownloadButton item={movie} />
               {isAdmin && (
                 <button
                   onClick={onFixMatch}
@@ -587,6 +589,7 @@ export default function ItemHeroSection({
                 isWatched={(ep.viewCount ?? 0) > 0}
                 onToggled={refreshItem}
               />
+              <DownloadButton item={ep} />
             </div>
 
             {mediaDetails.length > 0 && (

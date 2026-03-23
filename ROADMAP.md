@@ -177,4 +177,4 @@ Items deferred until core video streaming is fully polished.
 - [x] Swipe gestures on horizontal rows (mobile)
 - [x] Pull-to-refresh on dashboard (mobile)
 - [x] About dialog with dynamic version info
-- [ ] Download for offline viewing (Tauri filesystem access)
+- [x] Download for offline viewing (Tauri filesystem access)

@@ -3,6 +3,7 @@ import { Outlet, Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { usePreferences } from "../hooks/usePreferences";
 import { useThemeEffect } from "../hooks/useTheme";
+import { useWatchSync } from "../hooks/useWatchSync";
 import { useBreakpoint, isMobile, isTabletOrBelow, isDesktopOrAbove } from "../hooks/useBreakpoint";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 import { useRouteAnnouncer } from "../hooks/useRouteAnnouncer";
@@ -21,9 +22,11 @@ import BottomNav from "./BottomNav";
 export type { UseNewContentResult };
 
 function AppLayout() {
-  const { isAuthenticated, serverSelected } = useAuth();
+  const auth = useAuth();
+  const { isAuthenticated, serverSelected } = auth;
   const { preferences } = usePreferences();
   useThemeEffect(preferences.appearance.theme);
+  useWatchSync(auth.server ?? null);
   const bp = useBreakpoint();
   const navigate = useNavigate();
   const newContent = useNewContent();

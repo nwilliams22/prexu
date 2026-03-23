@@ -9,7 +9,10 @@
 import { useState, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "./useAuth";
+import { useDownloads } from "./useDownloads";
+import { useToast } from "./useToast";
 import { markAsWatched, markAsUnwatched } from "../services/plex-library";
+import { buildDownloadItem } from "../components/detail/DownloadButton";
 import ContextMenu from "../components/ContextMenu";
 import type { ContextMenuItem } from "../components/ContextMenu";
 import SessionCreator from "../components/SessionCreator";
@@ -55,6 +58,8 @@ export interface UseMediaContextMenuOptions {
 export function useMediaContextMenu(options: UseMediaContextMenuOptions = {}) {
   const { showAddToPlaylist = true } = options;
   const { server, activeUser } = useAuth();
+  const { isDownloaded, isDownloading, queueDownload } = useDownloads();
+  const { toast } = useToast();
   const isAdmin = activeUser?.isAdmin ?? false;
   const navigate = useNavigate();
 
@@ -177,6 +182,30 @@ export function useMediaContextMenu(options: UseMediaContextMenuOptions = {}) {
         });
       }
 
+      // ── Download (movies & episodes) ──
+      if (
+        (item.type === "movie" || item.type === "episode") &&
+        server
+      ) {
+        const alreadyDownloaded = isDownloaded(item.ratingKey);
+        const currentlyDownloading = isDownloading(item.ratingKey);
+        if (!alreadyDownloaded && !currentlyDownloading) {
+          items.push({
+            label: "Download",
+            onClick: () => {
+              const dlItem = buildDownloadItem(
+                item as import("../types/library").PlexMovie | import("../types/library").PlexEpisode,
+                server.uri,
+              );
+              if (dlItem) {
+                queueDownload(dlItem);
+                toast("Download started", "success");
+              }
+            },
+          });
+        }
+      }
+
       // ── Fix Match (admin — movies, shows, episodes, seasons → parent show) ──
       if (isAdmin && (item.type === "movie" || item.type === "show")) {
         items.push({
@@ -237,7 +266,7 @@ export function useMediaContextMenu(options: UseMediaContextMenuOptions = {}) {
 
       return items;
     },
-    [server, isAdmin, navigate, showAddToPlaylist],
+    [server, isAdmin, navigate, showAddToPlaylist, isDownloaded, isDownloading, queueDownload, toast],
   );
 
   // ── Overlays (render at the bottom of the page component) ──
