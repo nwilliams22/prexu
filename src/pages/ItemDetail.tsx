@@ -194,14 +194,6 @@ function ItemDetail() {
     );
   };
 
-  if (isLoading) {
-    return (
-      <div style={styles.loadingContainer}>
-        <div className="loading-spinner" />
-      </div>
-    );
-  }
-
   // Redirect restricted content
   const itemRating = item ? (item as { contentRating?: string }).contentRating : undefined;
   const restricted = restrictionsEnabled && item && !isItemAllowed(itemRating);
@@ -212,6 +204,14 @@ function ItemDetail() {
       navigate(-1);
     }
   }, [restricted, toast, navigate]);
+
+  if (isLoading) {
+    return (
+      <div style={styles.loadingContainer}>
+        <div className="loading-spinner" />
+      </div>
+    );
+  }
 
   if (error || !item) {
     return (
