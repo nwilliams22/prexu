@@ -3,7 +3,6 @@
  * is available. Shows version number and an install button.
  */
 
-import { useState } from "react";
 import { useAutoUpdate } from "../hooks/useAutoUpdate";
 
 interface UpdateNotificationProps {
@@ -11,20 +10,24 @@ interface UpdateNotificationProps {
 }
 
 function UpdateNotification({ collapsed }: UpdateNotificationProps) {
-  const { updateAvailable, updateVersion, installUpdate } =
+  const { updateAvailable, updateVersion, installing, downloadProgress, installUpdate } =
     useAutoUpdate();
-  const [installing, setInstalling] = useState(false);
 
   if (!updateAvailable || !updateVersion) return null;
 
   const handleInstall = async () => {
-    setInstalling(true);
     try {
       await installUpdate();
     } catch {
-      setInstalling(false);
+      // handled by hook
     }
   };
+
+  const buttonLabel = installing
+    ? downloadProgress != null
+      ? `${downloadProgress}%`
+      : "Installing..."
+    : "Update";
 
   if (collapsed) {
     return (
@@ -81,7 +84,7 @@ function UpdateNotification({ collapsed }: UpdateNotificationProps) {
           ...(installing ? { opacity: 0.6 } : {}),
         }}
       >
-        {installing ? "Installing..." : "Update"}
+        {buttonLabel}
       </button>
     </div>
   );

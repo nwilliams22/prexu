@@ -3,20 +3,31 @@ import { useState, useEffect, useRef } from "react";
 /** Minimum time (ms) the splash screen stays visible to avoid a flash. */
 const MIN_DISPLAY_MS = 2000;
 
+interface SplashScreenProps {
+  ready: boolean;
+  /** Whether an update is being installed (blocks dismissal, shows progress) */
+  updating?: boolean;
+  /** Download progress 0–100, null if indeterminate */
+  updateProgress?: number | null;
+}
+
 /**
  * Branded splash screen shown during app initialization.
  * Displays Prexu logo with a subtle pulse animation, then fades out
  * when `ready` becomes true AND the minimum display time has elapsed.
+ * If an update is being installed, shows a progress bar instead of the spinner.
  */
-function SplashScreen({ ready }: { ready: boolean }) {
+function SplashScreen({ ready, updating, updateProgress }: SplashScreenProps) {
   const [fadeOut, setFadeOut] = useState(false);
   const [hidden, setHidden] = useState(false);
   const mountTime = useRef(Date.now());
 
-  useEffect(() => {
-    if (!ready) return;
+  // Block fade-out while updating
+  const canDismiss = ready && !updating;
 
-    // Ensure splash is shown for at least MIN_DISPLAY_MS
+  useEffect(() => {
+    if (!canDismiss) return;
+
     const elapsed = Date.now() - mountTime.current;
     const remaining = Math.max(0, MIN_DISPLAY_MS - elapsed);
 
@@ -32,9 +43,11 @@ function SplashScreen({ ready }: { ready: boolean }) {
       clearTimeout(delayTimer);
       clearTimeout(hideTimer);
     };
-  }, [ready]);
+  }, [canDismiss]);
 
   if (hidden) return null;
+
+  const progressPct = updateProgress ?? 0;
 
   return (
     <div
@@ -61,9 +74,27 @@ function SplashScreen({ ready }: { ready: boolean }) {
           </svg>
         </div>
         <h1 style={styles.title}>Prexu</h1>
-        <div style={styles.spinnerRow}>
-          <div className="loading-spinner" />
-        </div>
+
+        {updating ? (
+          <div style={styles.updateSection}>
+            <span style={styles.updateLabel}>Installing update...</span>
+            <div style={styles.progressTrack}>
+              <div
+                style={{
+                  ...styles.progressFill,
+                  width: `${progressPct}%`,
+                }}
+              />
+            </div>
+            {updateProgress != null && (
+              <span style={styles.updatePct}>{progressPct}%</span>
+            )}
+          </div>
+        ) : (
+          <div style={styles.spinnerRow}>
+            <div className="loading-spinner" />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -100,6 +131,35 @@ const styles: Record<string, React.CSSProperties> = {
   },
   spinnerRow: {
     marginTop: "0.5rem",
+  },
+  updateSection: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: "0.5rem",
+    width: "240px",
+    marginTop: "0.5rem",
+  },
+  updateLabel: {
+    fontSize: "0.85rem",
+    color: "var(--text-secondary)",
+  },
+  progressTrack: {
+    width: "100%",
+    height: "4px",
+    borderRadius: "2px",
+    background: "var(--border)",
+    overflow: "hidden",
+  },
+  progressFill: {
+    height: "100%",
+    borderRadius: "2px",
+    background: "var(--accent)",
+    transition: "width 0.3s ease-out",
+  },
+  updatePct: {
+    fontSize: "0.75rem",
+    color: "var(--text-secondary)",
   },
 };
 

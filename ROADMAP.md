@@ -58,13 +58,13 @@ Plex-style seamless updates — app checks for updates on launch, downloads in b
 - [x] Version display in Settings page
 
 **Remaining:**
-- [ ] Install and configure `tauri-plugin-updater` in Cargo.toml
-- [ ] Generate signing keys (`tauri signer generate`)
-- [ ] Configure `tauri.conf.json` with updater endpoint + pubkey
-- [ ] Update splash screen with progress bar during install
-- [ ] CI pipeline: build → sign → publish to GitHub Releases
-- [ ] Update manifest hosted at GitHub Releases
-- [ ] "Update available" badge on Settings nav item
+- [x] Install and configure `tauri-plugin-updater` in Cargo.toml
+- [x] Generate signing keys (`tauri signer generate`)
+- [x] Configure `tauri.conf.json` with updater endpoint + pubkey
+- [x] Update splash screen with progress bar during install
+- [x] CI pipeline: build → sign → publish to GitHub Releases
+- [x] Update manifest hosted at GitHub Releases (via tauri-action)
+- [x] "Update available" badge on Settings nav item
 
 ---
 

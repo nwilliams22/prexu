@@ -42,12 +42,14 @@
         "installerHooks": "nsis-hooks/hooks.nsh"
       }
     },
-    "createUpdaterArtifacts": false
+    "createUpdaterArtifacts": "v2"
   },
   "plugins": {
     "updater": {
-      "pubkey": "",
-      "endpoints": []
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJBRjMyMzg0MjJBMjk2QjEKUldTeGxxSWloQ1B6S2x6bDNYR3RXTFZNT2lMa1NxdzR3SU9FWURSbWkxZjVTeXMxR2ZYRTZQYncK",
+      "endpoints": [
+        "https://github.com/nwilliams22/prexu/releases/latest/download/latest.json"
+      ]
     }
   }
 }
