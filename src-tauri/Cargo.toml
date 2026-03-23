@@ -1,6 +1,6 @@
 [package]
 name = "prexu"
-version = "0.4.2"
+version = "0.5.0"
 description = "A custom cross-platform Plex client"
 authors = ["you"]
 license = ""

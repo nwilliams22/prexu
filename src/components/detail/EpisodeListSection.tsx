@@ -31,8 +31,8 @@ export default function EpisodeListSection({
       </h2>
 
       <div style={{
-        display: "flex",
-        flexDirection: "column",
+        display: "grid",
+        gridTemplateColumns: bp === "large" ? "1fr 1fr" : bp === "desktop" ? "1fr 1fr" : "1fr",
         gap: mobile ? "0.75rem" : "1rem",
       }}>
         {episodes.map((ep) => {
@@ -112,8 +112,8 @@ const styles: Record<string, React.CSSProperties> = {
   },
   episodeGridThumbWrap: {
     position: "relative",
-    width: "240px",
-    minWidth: "240px",
+    width: "180px",
+    minWidth: "180px",
     aspectRatio: "16/9",
     borderRadius: "8px",
     overflow: "hidden",
