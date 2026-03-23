@@ -1,4 +1,5 @@
 import { useNavigate, useLocation } from "react-router-dom";
+import { useAutoUpdate } from "../hooks/useAutoUpdate";
 
 interface NavTab {
   label: string;
@@ -56,6 +57,7 @@ const TABS: NavTab[] = [
 function BottomNav() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { updateAvailable } = useAutoUpdate();
 
   const isActive = (tab: NavTab) => {
     if (tab.matchPaths) {
@@ -68,6 +70,7 @@ function BottomNav() {
     <nav aria-label="Main navigation" style={styles.container}>
       {TABS.map((tab) => {
         const active = isActive(tab);
+        const showBadge = tab.path === "/settings" && updateAvailable;
         return (
           <button
             key={tab.path}
@@ -76,10 +79,13 @@ function BottomNav() {
               ...styles.tab,
               color: active ? "var(--accent)" : "var(--text-secondary)",
             }}
-            aria-label={tab.label}
+            aria-label={showBadge ? `${tab.label} — update available` : tab.label}
             aria-current={active ? "page" : undefined}
           >
-            <span aria-hidden="true">{tab.icon}</span>
+            <span aria-hidden="true" style={{ position: "relative" }}>
+              {tab.icon}
+              {showBadge && <span style={styles.updateDot} />}
+            </span>
             <span style={styles.label}>{tab.label}</span>
           </button>
         );
@@ -121,6 +127,16 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "0.65rem",
     fontWeight: 500,
     lineHeight: 1,
+  },
+  updateDot: {
+    position: "absolute" as const,
+    top: -2,
+    right: -4,
+    width: 8,
+    height: 8,
+    borderRadius: "50%",
+    background: "var(--accent)",
+    border: "2px solid var(--bg-secondary)",
   },
 };
 

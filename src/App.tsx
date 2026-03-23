@@ -2,6 +2,7 @@ import { lazy, Suspense, useState, useEffect } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import AppLayout from "./components/AppLayout";
 import SplashScreen from "./components/SplashScreen";
+import { useAutoUpdate } from "./hooks/useAutoUpdate";
 import { useAuth, useAuthState, AuthProvider } from "./hooks/useAuth";
 import AppProviders from "./contexts/AppProviders";
 import { getLibrarySections } from "./services/plex-library";
@@ -52,6 +53,7 @@ function ServerRoute({ children }: { children: React.ReactNode }) {
 
 function AppRoutes() {
   const { isLoading, isAuthenticated, serverSelected, server } = useAuth();
+  const { installing: updaterInstalling, downloadProgress: updaterProgress } = useAutoUpdate();
   const [appReady, setAppReady] = useState(false);
 
   // Wait for auth AND initial data before dismissing the splash screen.
@@ -81,7 +83,7 @@ function AppRoutes() {
 
   return (
     <>
-      <SplashScreen ready={appReady} />
+      <SplashScreen ready={appReady} updating={updaterInstalling} updateProgress={updaterProgress} />
       <Suspense fallback={<LoadingScreen />}>
         {isLoading ? null : <Routes>
         {/* Unauthenticated */}
