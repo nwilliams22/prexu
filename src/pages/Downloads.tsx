@@ -126,7 +126,7 @@ function Downloads() {
 
   if (downloads.length === 0) {
     return (
-      <div style={{ ...styles.container, minHeight: "calc(100vh - 120px)", display: "flex", flexDirection: "column" }}>
+      <div style={{ ...styles.container, flex: 1, display: "flex", flexDirection: "column" }}>
         <h2 style={styles.title}>Downloads</h2>
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <EmptyState

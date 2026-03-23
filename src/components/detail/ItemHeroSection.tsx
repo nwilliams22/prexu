@@ -153,8 +153,8 @@ export default function ItemHeroSection({
               ...styles.metaRow,
               ...(mobile ? { justifyContent: "center" } : {}),
             }}>
-              {movie.year && <span>{movie.year}</span>}
-              {movie.contentRating && (
+              {movie.year && <span>{String(movie.year)}</span>}
+              {movie.contentRating && typeof movie.contentRating === "string" && (
                 <span style={styles.rating}>{movie.contentRating}</span>
               )}
               {movie.duration && <span>{formatDuration(movie.duration)}</span>}
@@ -173,7 +173,7 @@ export default function ItemHeroSection({
                 ))}
               </div>
             )}
-            {movie.tagline && (
+            {movie.tagline && typeof movie.tagline === "string" && (
               <p style={styles.tagline}>{movie.tagline}</p>
             )}
             <div style={{
@@ -309,8 +309,8 @@ export default function ItemHeroSection({
               ...styles.metaRow,
               ...(mobile ? { justifyContent: "center" } : {}),
             }}>
-              {show.year && <span>{show.year}</span>}
-              {show.contentRating && (
+              {show.year && <span>{String(show.year)}</span>}
+              {show.contentRating && typeof show.contentRating === "string" && (
                 <span style={styles.rating}>{show.contentRating}</span>
               )}
               <span>
@@ -528,11 +528,11 @@ export default function ItemHeroSection({
                 S{String(ep.parentIndex).padStart(2, "0")}E
                 {String(ep.index).padStart(2, "0")}
               </span>
-              {ep.originallyAvailableAt && (
+              {ep.originallyAvailableAt && typeof ep.originallyAvailableAt === "string" && (
                 <span>{ep.originallyAvailableAt}</span>
               )}
               {ep.duration && <span>{formatDuration(ep.duration)}</span>}
-              {ep.contentRating && (
+              {ep.contentRating && typeof ep.contentRating === "string" && (
                 <span style={styles.rating}>{ep.contentRating}</span>
               )}
               {renderRatings(
