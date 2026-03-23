@@ -22,6 +22,12 @@ import {
   ServerActivityProvider,
 } from "../hooks/useServerActivity";
 import { QueueProvider } from "./QueueContext";
+import { useToastState, ToastProvider } from "../hooks/useToast";
+import ToastContainer from "../components/Toast";
+import {
+  useParentalControlsState,
+  ParentalControlsProvider,
+} from "../hooks/useParentalControls";
 
 interface AppProvidersProps {
   children: React.ReactNode;
@@ -33,6 +39,7 @@ interface AppProvidersProps {
  */
 export default function AppProviders({ children }: AppProvidersProps) {
   const auth = useAuth();
+  const toastState = useToastState();
   const homeUsersState = useHomeUsersState();
   const inviteState = useInviteState(auth.authToken, auth.server?.uri ?? null);
   const contentRequestState = useContentRequestState(
@@ -40,21 +47,27 @@ export default function AppProviders({ children }: AppProvidersProps) {
     auth.activeUser,
   );
   const prefsState = usePreferencesState(auth.activeUser?.id ?? null);
+  const parentalState = useParentalControlsState(auth.activeUser?.id ?? null);
   const activityState = useServerActivityState();
 
   return (
-    <HomeUsersProvider value={homeUsersState}>
-      <PreferencesProvider value={prefsState}>
-        <ServerActivityProvider value={activityState}>
-          <InviteProvider value={inviteState}>
-            <ContentRequestProvider value={contentRequestState}>
-              <QueueProvider>
-                {children}
-              </QueueProvider>
-            </ContentRequestProvider>
-          </InviteProvider>
-        </ServerActivityProvider>
-      </PreferencesProvider>
-    </HomeUsersProvider>
+    <ToastProvider value={toastState}>
+      <HomeUsersProvider value={homeUsersState}>
+        <PreferencesProvider value={prefsState}>
+          <ParentalControlsProvider value={parentalState}>
+            <ServerActivityProvider value={activityState}>
+            <InviteProvider value={inviteState}>
+              <ContentRequestProvider value={contentRequestState}>
+                <QueueProvider>
+                  {children}
+                </QueueProvider>
+              </ContentRequestProvider>
+            </InviteProvider>
+            </ServerActivityProvider>
+          </ParentalControlsProvider>
+        </PreferencesProvider>
+      </HomeUsersProvider>
+      <ToastContainer />
+    </ToastProvider>
   );
 }

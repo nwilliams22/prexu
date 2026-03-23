@@ -8,6 +8,7 @@ import { AccessibilitySettingsPanel } from "../components/settings/Accessibility
 import { AudioSettingsPanel } from "../components/settings/AudioSettingsPanel";
 import { AppearanceSettingsPanel } from "../components/settings/AppearanceSettingsPanel";
 import { AccountSettingsPanel } from "../components/settings/AccountSettingsPanel";
+import { ParentalControlsPanel } from "../components/settings/ParentalControlsPanel";
 
 function Settings() {
   const { server, activeUser } = useAuth();
@@ -45,6 +46,7 @@ function Settings() {
         updateAppearance={updateAppearance}
         updatePreferences={updatePreferences}
       />
+      {isAdmin && <ParentalControlsPanel />}
       <AccountSettingsPanel
         serverUri={server?.uri}
         isAdmin={isAdmin}

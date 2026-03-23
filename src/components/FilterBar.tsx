@@ -8,6 +8,8 @@ interface FilterBarProps {
   years: FilterOption[];
   contentRatings: FilterOption[];
   isLoading: boolean;
+  /** Hide content rating filter (e.g. when parental controls are active) */
+  hideContentRating?: boolean;
 }
 
 function FilterBar({
@@ -17,6 +19,7 @@ function FilterBar({
   years,
   contentRatings,
   isLoading,
+  hideContentRating,
 }: FilterBarProps) {
   const bp = useBreakpoint();
   const touchMode = isTabletOrBelow(bp);
@@ -25,7 +28,7 @@ function FilterBar({
   const hasActiveFilters =
     !!filters.genre ||
     !!filters.year ||
-    !!filters.contentRating ||
+    (!hideContentRating && !!filters.contentRating) ||
     !!filters.unwatched;
 
   const updateFilter = (key: keyof LibraryFilters, value: string | boolean) => {
@@ -56,7 +59,7 @@ function FilterBar({
       onRemove: () => updateFilter("year", ""),
     });
   }
-  if (filters.contentRating) {
+  if (filters.contentRating && !hideContentRating) {
     const match = contentRatings.find((c) => c.key === filters.contentRating);
     activeChips.push({
       label: match?.title ?? filters.contentRating,
@@ -104,19 +107,21 @@ function FilterBar({
           ))}
         </select>
 
-        <select
-          aria-label="Rating filter"
-          value={filters.contentRating ?? ""}
-          onChange={(e) => updateFilter("contentRating", e.target.value)}
-          style={{ ...styles.select, ...touchPadding }}
-        >
-          <option value="">All Ratings</option>
-          {contentRatings.map((cr) => (
-            <option key={cr.key} value={cr.key}>
-              {cr.title}
-            </option>
-          ))}
-        </select>
+        {!hideContentRating && (
+          <select
+            aria-label="Rating filter"
+            value={filters.contentRating ?? ""}
+            onChange={(e) => updateFilter("contentRating", e.target.value)}
+            style={{ ...styles.select, ...touchPadding }}
+          >
+            <option value="">All Ratings</option>
+            {contentRatings.map((cr) => (
+              <option key={cr.key} value={cr.key}>
+                {cr.title}
+              </option>
+            ))}
+          </select>
+        )}
 
         <button
           onClick={() => updateFilter("unwatched", !filters.unwatched)}

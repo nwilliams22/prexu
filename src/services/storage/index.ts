@@ -64,3 +64,7 @@ export {
   getAppLastLaunch,
   saveAppLastLaunch,
 } from "./new-content";
+export {
+  getParentalControls,
+  saveParentalControls,
+} from "./parental-controls";

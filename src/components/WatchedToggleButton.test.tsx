@@ -9,6 +9,10 @@ vi.mock("../hooks/useAuth", () => ({
   }),
 }));
 
+vi.mock("../hooks/useToast", () => ({
+  useToast: () => ({ toast: vi.fn(), toasts: [], dismiss: vi.fn(), dismissAll: vi.fn() }),
+}));
+
 const mockMarkWatched = vi.fn(() => Promise.resolve());
 const mockMarkUnwatched = vi.fn(() => Promise.resolve());
 vi.mock("../services/plex-library", () => ({

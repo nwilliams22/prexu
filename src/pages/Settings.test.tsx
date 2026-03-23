@@ -67,6 +67,33 @@ vi.mock("@tauri-apps/plugin-shell", () => ({
   open: vi.fn(() => Promise.resolve()),
 }));
 
+vi.mock("../hooks/useHomeUsers", () => ({
+  useHomeUsers: () => ({
+    homeUsers: [],
+    isPlexHome: false,
+    isLoading: false,
+    isSwitching: false,
+    switchError: null,
+    switchTo: vi.fn(),
+    clearError: vi.fn(),
+  }),
+}));
+
+vi.mock("../hooks/useParentalControls", () => ({
+  useParentalControls: () => ({
+    restrictionsEnabled: false,
+    filterByRating: (items: unknown[]) => items,
+    isItemAllowed: () => true,
+    maxContentRating: "none",
+    loadForUser: vi.fn(() => Promise.resolve({ enabled: false, maxContentRating: "none" })),
+    saveForUser: vi.fn(() => Promise.resolve()),
+  }),
+}));
+
+vi.mock("../hooks/useToast", () => ({
+  useToast: () => ({ toast: vi.fn(), toasts: [], dismiss: vi.fn(), dismissAll: vi.fn() }),
+}));
+
 describe("Settings", () => {
   beforeEach(() => {
     vi.clearAllMocks();

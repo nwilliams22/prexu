@@ -1,13 +1,15 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useAuth } from "./useAuth";
+import { useParentalControls } from "./useParentalControls";
 import { searchLibrary } from "../services/plex-library";
-import type { PlexHub } from "../types/library";
+import type { PlexHub, PlexMediaItem } from "../types/library";
 
 const DEBOUNCE_MS = 300;
 
 export function useSearch() {
   const { server } = useAuth();
+  const { restrictionsEnabled, filterByRating } = useParentalControls();
   const [searchParams] = useSearchParams();
   const query = searchParams.get("q") ?? "";
 
@@ -60,5 +62,18 @@ export function useSearch() {
     };
   }, [server, query]);
 
-  return { query, results, isSearching, error };
+  // Apply parental controls filtering to search results
+  const filteredResults = useMemo(() => {
+    if (!restrictionsEnabled) return results;
+    return results
+      .map((hub) => ({
+        ...hub,
+        Metadata: filterByRating(
+          (hub.Metadata ?? []) as (PlexMediaItem & { contentRating?: string })[],
+        ),
+      }))
+      .filter((hub) => hub.Metadata.length > 0);
+  }, [results, restrictionsEnabled, filterByRating]);
+
+  return { query, results: filteredResults, isSearching, error };
 }

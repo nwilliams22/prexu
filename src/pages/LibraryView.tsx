@@ -9,6 +9,7 @@ import { usePlayAction } from "../hooks/usePlayAction";
 import { useSectionCollections } from "../hooks/useCollections";
 import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
 import { usePreferences } from "../hooks/usePreferences";
+import { useParentalControls } from "../hooks/useParentalControls";
 import { useScrollRestoration } from "../hooks/useScrollRestoration";
 import { getImageUrl } from "../services/plex-library";
 import LibraryGrid from "../components/LibraryGrid";
@@ -77,10 +78,17 @@ function LibraryView() {
     });
   const { genres, years, contentRatings, isLoading: filtersLoading } =
     useFilterOptions(sectionId);
+  const { restrictionsEnabled, filterByRating } = useParentalControls();
   const { openContextMenu, overlays: menuOverlays } = useMediaContextMenu();
   const { getPlayHandler, playOverlay } = usePlayAction();
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const gridContainerRef = useRef<HTMLDivElement>(null);
+
+  // Apply parental controls client-side filtering
+  const filteredItems = useMemo(
+    () => filterByRating(items as (PlexMediaItem & { contentRating?: string })[]),
+    [items, filterByRating],
+  );
 
   // --- Collections view state ---
   const bp = useBreakpoint();
@@ -351,13 +359,14 @@ function LibraryView() {
                 years={years}
                 contentRatings={contentRatings}
                 isLoading={filtersLoading}
+                hideContentRating={restrictionsEnabled}
               />
             </>
           )}
 
           <div ref={gridContainerRef}>
             <VirtualizedLibraryGrid
-              items={items}
+              items={filteredItems}
               renderItem={renderLibraryItem}
               getKey={getItemKey}
               expandedKey={expandedKey}

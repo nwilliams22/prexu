@@ -272,6 +272,18 @@ a:hover {
   animation: scanSweep 2s ease-in-out infinite;
 }
 
+/* Toast notification slide-in from right */
+@keyframes toastSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
 /* Global button press feedback */
 button:active:not(:disabled) {
   transform: scale(0.97);
