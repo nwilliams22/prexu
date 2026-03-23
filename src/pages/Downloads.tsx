@@ -126,19 +126,21 @@ function Downloads() {
 
   if (downloads.length === 0) {
     return (
-      <div style={styles.container}>
+      <div style={{ ...styles.container, minHeight: "calc(100vh - 120px)", display: "flex", flexDirection: "column" }}>
         <h2 style={styles.title}>Downloads</h2>
-        <EmptyState
-          icon={
-            <svg width={48} height={48} viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-              <polyline points="7 10 12 15 17 10" />
-              <line x1={12} y1={15} x2={12} y2={3} />
-            </svg>
-          }
-          title="No downloads"
-          subtitle="Right-click any movie or episode to download it for offline viewing."
-        />
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <EmptyState
+            icon={
+              <svg width={64} height={64} viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1={12} y1={15} x2={12} y2={3} />
+              </svg>
+            }
+            title="No downloads"
+            subtitle="Right-click any movie or episode to download it for offline viewing."
+          />
+        </div>
       </div>
     );
   }

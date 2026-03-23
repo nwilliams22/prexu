@@ -224,7 +224,7 @@ describe("useContentRequestState", () => {
 
   it("unreadCount is always 0 for non-admin", async () => {
     const stored = [
-      { requestId: "r1", tmdbId: 1, mediaType: "movie", title: "M1", year: "2024", posterPath: null, overview: "", requesterUsername: "u", requesterThumb: "", status: "pending", requestedAt: 5000 },
+      { requestId: "r1", tmdbId: 1, mediaType: "movie", title: "M1", year: "2024", posterPath: null, overview: "", requesterUsername: "User", requesterThumb: "", status: "pending", requestedAt: 5000 },
     ];
     mockGetContentRequests.mockResolvedValue(stored);
 

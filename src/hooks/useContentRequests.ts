@@ -115,6 +115,14 @@ export function useContentRequestState(
     saveContentRequests(requests);
   }, [requests]);
 
+  // Non-admin users should only see their own requests
+  const visibleRequests = isAdmin
+    ? requests
+    : requests.filter(
+        (r) =>
+          r.requesterUsername === (activeUser?.title || activeUser?.username),
+      );
+
   // Compute unread count (admin only — requests after lastRead timestamp)
   const unreadCount = isAdmin
     ? requests.filter(
@@ -318,7 +326,7 @@ export function useContentRequestState(
   }, []);
 
   return {
-    requests,
+    requests: visibleRequests,
     unreadCount,
     isRelayConnected,
     submitRequest,
