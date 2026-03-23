@@ -33,6 +33,7 @@ export function getDefaultPreferences(): Preferences {
       },
     },
     appearance: {
+      theme: "system",
       posterSize: "medium",
       sidebarCollapsed: false,
       dashboardSections: {

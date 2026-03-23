@@ -1,5 +1,5 @@
-import { useRef, useState, useEffect, type ReactNode } from "react";
-import { useBreakpoint, isDesktopOrAbove } from "../hooks/useBreakpoint";
+import { useRef, useState, useEffect, useCallback, type ReactNode } from "react";
+import { useBreakpoint, isDesktopOrAbove, isTabletOrBelow } from "../hooks/useBreakpoint";
 
 interface HorizontalRowProps {
   title: string;
@@ -10,9 +10,62 @@ interface HorizontalRowProps {
 function HorizontalRow({ title, children, onSeeAll }: HorizontalRowProps) {
   const bp = useBreakpoint();
   const showScrollButtons = isDesktopOrAbove(bp);
+  const isTouchDevice = isTabletOrBelow(bp);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
+
+  // ── Swipe gesture handling (mobile/tablet) ──
+  const touchStartX = useRef(0);
+  const touchStartScrollLeft = useRef(0);
+  const isSwiping = useRef(false);
+  const swipeVelocity = useRef(0);
+  const lastTouchX = useRef(0);
+  const lastTouchTime = useRef(0);
+
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    if (!isTouchDevice) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    touchStartX.current = e.touches[0].clientX;
+    touchStartScrollLeft.current = el.scrollLeft;
+    isSwiping.current = true;
+    swipeVelocity.current = 0;
+    lastTouchX.current = e.touches[0].clientX;
+    lastTouchTime.current = Date.now();
+  }, [isTouchDevice]);
+
+  const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    if (!isSwiping.current) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    const currentX = e.touches[0].clientX;
+    const diff = touchStartX.current - currentX;
+    el.scrollLeft = touchStartScrollLeft.current + diff;
+
+    // Track velocity for momentum
+    const now = Date.now();
+    const dt = now - lastTouchTime.current;
+    if (dt > 0) {
+      swipeVelocity.current = (lastTouchX.current - currentX) / dt;
+    }
+    lastTouchX.current = currentX;
+    lastTouchTime.current = now;
+  }, []);
+
+  const handleTouchEnd = useCallback(() => {
+    if (!isSwiping.current) return;
+    isSwiping.current = false;
+    const el = scrollRef.current;
+    if (!el) return;
+
+    // Apply momentum scroll
+    const velocity = swipeVelocity.current;
+    if (Math.abs(velocity) > 0.3) {
+      const momentum = velocity * 250;
+      el.scrollBy({ left: momentum, behavior: "smooth" });
+    }
+  }, []);
 
   const updateScrollState = () => {
     const el = scrollRef.current;
@@ -79,6 +132,9 @@ function HorizontalRow({ title, children, onSeeAll }: HorizontalRowProps) {
           ref={scrollRef}
           className="hide-scrollbar"
           style={styles.scrollContainer}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
           onKeyDown={(e) => {
             if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
             const container = scrollRef.current;

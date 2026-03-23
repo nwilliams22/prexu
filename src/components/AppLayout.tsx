@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { Outlet, Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { usePreferences } from "../hooks/usePreferences";
+import { useThemeEffect } from "../hooks/useTheme";
 import { useBreakpoint, isMobile, isTabletOrBelow, isDesktopOrAbove } from "../hooks/useBreakpoint";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 import { useRouteAnnouncer } from "../hooks/useRouteAnnouncer";
@@ -22,6 +23,7 @@ export type { UseNewContentResult };
 function AppLayout() {
   const { isAuthenticated, serverSelected } = useAuth();
   const { preferences } = usePreferences();
+  useThemeEffect(preferences.appearance.theme);
   const bp = useBreakpoint();
   const navigate = useNavigate();
   const newContent = useNewContent();

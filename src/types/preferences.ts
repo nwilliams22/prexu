@@ -26,7 +26,10 @@ export interface PlaybackPreferences {
   subtitleStyle: SubtitleStylePreferences;
 }
 
+export type ThemeMode = "system" | "dark" | "light";
+
 export interface AppearancePreferences {
+  theme: ThemeMode;
   posterSize: "small" | "medium" | "large";
   sidebarCollapsed: boolean;
   dashboardSections: {

@@ -111,6 +111,7 @@ describe("storage", () => {
     it("has correct appearance defaults", () => {
       const prefs = getDefaultPreferences();
       expect(prefs.appearance).toEqual({
+        theme: "system",
         posterSize: "medium",
         sidebarCollapsed: false,
         skipSingleSeason: true,

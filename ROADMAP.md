@@ -171,12 +171,10 @@ Items deferred until core video streaming is fully polished.
 
 ---
 
-## Future Ideas
+## ~~Future Ideas~~ ✅ Completed
 
-Items not yet planned or scoped — add here as they come up.
-
-- Light theme option (foundation exists via `prefers-color-scheme` support)
-- Swipe gestures on horizontal rows (mobile)
-- Pull-to-refresh on dashboard (mobile)
-- About dialog with version info
-- Download for offline viewing (Tauri filesystem access)
+- [x] Light theme option with system/dark/light toggle
+- [x] Swipe gestures on horizontal rows (mobile)
+- [x] Pull-to-refresh on dashboard (mobile)
+- [x] About dialog with dynamic version info
+- [ ] Download for offline viewing (Tauri filesystem access)
