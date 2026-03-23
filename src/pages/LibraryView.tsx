@@ -11,7 +11,7 @@ import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
 import { usePreferences } from "../hooks/usePreferences";
 import { useParentalControls } from "../hooks/useParentalControls";
 import { useScrollRestoration } from "../hooks/useScrollRestoration";
-import { getImageUrl } from "../services/plex-library";
+import { getImageUrl, getPlaceholderUrl, getImageSrcSet } from "../services/plex-library";
 import LibraryGrid from "../components/LibraryGrid";
 import VirtualizedLibraryGrid from "../components/VirtualizedLibraryGrid";
 import SortBar from "../components/SortBar";
@@ -240,12 +240,26 @@ function LibraryView() {
     [server],
   );
 
+  const placeholderForPoster = useCallback(
+    (thumb: string) =>
+      server ? getPlaceholderUrl(server.uri, server.accessToken, thumb) : "",
+    [server],
+  );
+
+  const srcSetForPoster = useCallback(
+    (thumb: string) =>
+      server ? getImageSrcSet(server.uri, server.accessToken, thumb, 300) : "",
+    [server],
+  );
+
   const renderLibraryItem = useCallback(
     (item: PlexMediaItem) => (
       <div data-title-sort={(item as { titleSort?: string }).titleSort || item.title}>
         <PosterCard
           ratingKey={item.ratingKey}
           imageUrl={posterUrl(item.thumb)}
+          placeholderUrl={placeholderForPoster(item.thumb)}
+          srcSet={srcSetForPoster(item.thumb)}
           title={item.title}
           subtitle={getMediaSubtitle(item, { showEpisodeCount: true })}
           watched={isWatched(item)}

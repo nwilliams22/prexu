@@ -97,6 +97,8 @@ vi.mock("../hooks/useScrollRestoration", () => ({
 
 vi.mock("../services/plex-library", () => ({
   getImageUrl: vi.fn(() => "http://img.test/poster.jpg"),
+  getPlaceholderUrl: vi.fn(() => "http://img.test/placeholder.jpg"),
+  getImageSrcSet: vi.fn(() => ""),
 }));
 
 vi.mock("../utils/media-helpers", () => ({

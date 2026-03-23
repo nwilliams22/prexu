@@ -63,6 +63,8 @@ vi.mock("../hooks/useBreakpoint", () => ({
 
 vi.mock("../services/plex-library", () => ({
   getImageUrl: vi.fn(() => "http://img.test/poster.jpg"),
+  getPlaceholderUrl: vi.fn(() => "http://img.test/placeholder.jpg"),
+  getImageSrcSet: vi.fn(() => ""),
   markAsWatched: vi.fn(() => Promise.resolve()),
 }));
 

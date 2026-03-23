@@ -5,6 +5,10 @@ import type { MediaBadge } from "../utils/media-badges";
 
 interface PosterCardProps {
   imageUrl: string;
+  /** Tiny low-quality image URL for blur-up placeholder */
+  placeholderUrl?: string;
+  /** Responsive srcSet for multiple resolutions */
+  srcSet?: string;
   title: string;
   subtitle?: string;
   badge?: string;
@@ -39,6 +43,8 @@ interface PosterCardProps {
 
 function PosterCard({
   imageUrl,
+  placeholderUrl,
+  srcSet,
   title,
   subtitle,
   badge,
@@ -60,7 +66,14 @@ function PosterCard({
 }: PosterCardProps) {
   const { scanningIds } = useServerActivity();
   const scanning = scanningProp ?? (ratingKey ? scanningIds.has(ratingKey) : false);
-  const { containerRef, shouldLoad, onLoad: onLazyLoad, onError: onLazyError } = useLazyImage();
+  const {
+    containerRef,
+    shouldLoad,
+    placeholderLoaded,
+    onLoad: onLazyLoad,
+    onError: onLazyError,
+    onPlaceholderLoad,
+  } = useLazyImage();
   const [loaded, setLoaded] = useState(false);
   const [hovered, setHovered] = useState(false);
   const [active, setActive] = useState(false);
@@ -94,12 +107,30 @@ function PosterCard({
     >
       {/* Image container */}
       <div ref={containerRef} style={{ ...styles.imageContainer, height }}>
-        {/* Skeleton shown until image loads */}
-        {!loaded && <div className="shimmer" style={styles.skeleton} />}
+        {/* Skeleton shown until placeholder or image loads */}
+        {!loaded && !placeholderLoaded && (
+          <div className="shimmer" style={styles.skeleton} />
+        )}
+
+        {/* Blur-up placeholder: tiny image with CSS blur */}
+        {placeholderUrl && !loaded && (
+          <img
+            src={placeholderUrl}
+            alt=""
+            onLoad={onPlaceholderLoad}
+            style={{
+              ...styles.image,
+              ...styles.placeholder,
+              opacity: placeholderLoaded ? 1 : 0,
+            }}
+          />
+        )}
 
         {shouldLoad && (
           <img
             src={imageUrl}
+            srcSet={srcSet || undefined}
+            sizes={srcSet ? `${width}px` : undefined}
             alt=""
             onLoad={() => { setLoaded(true); onLazyLoad(); }}
             onError={() => { setLoaded(true); onLazyError(); }}
@@ -285,6 +316,12 @@ const styles: Record<string, React.CSSProperties> = {
     objectFit: "cover",
     transition: "opacity 0.3s ease",
     display: "block",
+  },
+  placeholder: {
+    position: "absolute",
+    inset: 0,
+    filter: "blur(20px)",
+    transform: "scale(1.1)",
   },
   playOverlay: {
     position: "absolute",
