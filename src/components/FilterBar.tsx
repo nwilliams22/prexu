@@ -1,5 +1,13 @@
 import { useBreakpoint, isTabletOrBelow } from "../hooks/useBreakpoint";
-import type { LibraryFilters, FilterOption } from "../types/library";
+import type { LibraryFilters, FilterOption, SortOption } from "../types/library";
+
+const SORT_OPTIONS: SortOption[] = [
+  { label: "Title", value: "titleSort:asc" },
+  { label: "Date Added", value: "addedAt:desc" },
+  { label: "Rating", value: "rating:desc" },
+  { label: "Year", value: "year:desc" },
+  { label: "Release Date", value: "originallyAvailableAt:desc" },
+];
 
 interface FilterBarProps {
   filters: LibraryFilters;
@@ -7,9 +15,13 @@ interface FilterBarProps {
   genres: FilterOption[];
   years: FilterOption[];
   contentRatings: FilterOption[];
+  resolutions: FilterOption[];
   isLoading: boolean;
   /** Hide content rating filter (e.g. when parental controls are active) */
   hideContentRating?: boolean;
+  /** Current sort value */
+  currentSort: string;
+  onSortChange: (sort: string) => void;
 }
 
 function FilterBar({
@@ -18,8 +30,11 @@ function FilterBar({
   genres,
   years,
   contentRatings,
+  resolutions,
   isLoading,
   hideContentRating,
+  currentSort,
+  onSortChange,
 }: FilterBarProps) {
   const bp = useBreakpoint();
   const touchMode = isTabletOrBelow(bp);
@@ -29,6 +44,7 @@ function FilterBar({
     !!filters.genre ||
     !!filters.year ||
     (!hideContentRating && !!filters.contentRating) ||
+    !!filters.resolution ||
     !!filters.unwatched;
 
   const updateFilter = (key: keyof LibraryFilters, value: string | boolean) => {
@@ -64,6 +80,13 @@ function FilterBar({
     activeChips.push({
       label: match?.title ?? filters.contentRating,
       onRemove: () => updateFilter("contentRating", ""),
+    });
+  }
+  if (filters.resolution) {
+    const match = resolutions.find((r) => r.key === filters.resolution);
+    activeChips.push({
+      label: match?.title ?? filters.resolution,
+      onRemove: () => updateFilter("resolution", ""),
     });
   }
   if (filters.unwatched) {
@@ -123,6 +146,22 @@ function FilterBar({
           </select>
         )}
 
+        {resolutions.length > 0 && (
+          <select
+            aria-label="Resolution filter"
+            value={filters.resolution ?? ""}
+            onChange={(e) => updateFilter("resolution", e.target.value)}
+            style={{ ...styles.select, ...touchPadding }}
+          >
+            <option value="">All Qualities</option>
+            {resolutions.map((r) => (
+              <option key={r.key} value={r.key}>
+                {r.title}
+              </option>
+            ))}
+          </select>
+        )}
+
         <button
           onClick={() => updateFilter("unwatched", !filters.unwatched)}
           aria-pressed={!!filters.unwatched}
@@ -140,6 +179,22 @@ function FilterBar({
             Clear Filters
           </button>
         )}
+
+        {/* Sort control — inline with filters */}
+        <div style={styles.sortGroup}>
+          <select
+            aria-label="Sort by"
+            value={currentSort}
+            onChange={(e) => onSortChange(e.target.value)}
+            style={{ ...styles.select, ...touchPadding }}
+          >
+            {SORT_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                Sort: {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {/* Active filter chips */}
@@ -221,6 +276,9 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "0.8rem",
     cursor: "pointer",
     textDecoration: "underline",
+  },
+  sortGroup: {
+    marginLeft: "auto",
   },
   chips: {
     display: "flex",

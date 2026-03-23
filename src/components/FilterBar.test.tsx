@@ -19,13 +19,21 @@ describe("FilterBar", () => {
     { key: "R", title: "R" },
   ];
 
+  const resolutions: FilterOption[] = [
+    { key: "1080", title: "1080p" },
+    { key: "4k", title: "4K" },
+  ];
+
   const defaultProps = {
     filters: {} as LibraryFilters,
     onFiltersChange: vi.fn(),
     genres,
     years,
     contentRatings,
+    resolutions,
     isLoading: false,
+    currentSort: "titleSort:asc",
+    onSortChange: vi.fn(),
   };
 
   it("renders genre, year, and content rating selects", () => {

@@ -45,7 +45,7 @@ describe("useFilterOptions", () => {
     renderHook(() => useFilterOptions("1"));
 
     await waitFor(() => {
-      expect(mockGetFilterOptions).toHaveBeenCalledTimes(3);
+      expect(mockGetFilterOptions).toHaveBeenCalledTimes(4);
     });
 
     expect(mockGetFilterOptions).toHaveBeenCalledWith(
@@ -56,6 +56,9 @@ describe("useFilterOptions", () => {
     );
     expect(mockGetFilterOptions).toHaveBeenCalledWith(
       "https://plex.test", "token", "1", "contentRating"
+    );
+    expect(mockGetFilterOptions).toHaveBeenCalledWith(
+      "https://plex.test", "token", "1", "resolution"
     );
   });
 
@@ -79,11 +82,13 @@ describe("useFilterOptions", () => {
     const genres = [{ key: "action", title: "Action" }];
     const years = [{ key: "2024", title: "2024" }];
     const ratings = [{ key: "pg", title: "PG" }];
+    const resolutions = [{ key: "1080", title: "1080p" }];
     mockGetFilterOptions.mockImplementation(
       (_uri: string, _token: string, _id: string, type: string) => {
         if (type === "genre") return Promise.resolve(genres);
         if (type === "year") return Promise.resolve(years);
-        return Promise.resolve(ratings);
+        if (type === "contentRating") return Promise.resolve(ratings);
+        return Promise.resolve(resolutions);
       }
     );
 
@@ -95,7 +100,7 @@ describe("useFilterOptions", () => {
 
     const lastCall = mockCacheSet.mock.calls[0];
     expect(lastCall[0]).toBe("filterOptions:1");
-    expect(lastCall[1]).toEqual({ genres, years, contentRatings: ratings });
+    expect(lastCall[1]).toEqual({ genres, years, contentRatings: ratings, resolutions });
     expect(lastCall[2]).toBe(10 * 60 * 1000);
   });
 
@@ -113,7 +118,7 @@ describe("useFilterOptions", () => {
       expect(result.current.isLoading).toBe(true);
     });
 
-    // Resolve all 3 fetches (genres, years, contentRatings) and wait for loading to finish
+    // Resolve all 4 fetches (genres, years, contentRatings, resolutions) and wait for loading to finish
     await act(async () => {
       resolvers.forEach((r) => r([{ key: "a", title: "A" }]));
     });

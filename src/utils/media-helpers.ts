@@ -112,8 +112,8 @@ export function getProgress(item: PlexMediaItem): number | undefined {
 
 /** Is this item fully watched? */
 export function isWatched(item: PlexMediaItem): boolean {
-  const asMovie = item as { viewCount?: number };
-  if (asMovie.viewCount !== undefined) return asMovie.viewCount > 0;
+  // For shows/seasons, check leaf counts first — viewCount on a show
+  // only means *some* episode was watched, not all of them.
   const asShow = item as { viewedLeafCount?: number; leafCount?: number };
   if (
     asShow.viewedLeafCount !== undefined &&
@@ -121,6 +121,8 @@ export function isWatched(item: PlexMediaItem): boolean {
   ) {
     return asShow.leafCount > 0 && asShow.viewedLeafCount >= asShow.leafCount;
   }
+  const asMovie = item as { viewCount?: number };
+  if (asMovie.viewCount !== undefined) return asMovie.viewCount > 0;
   return false;
 }
 

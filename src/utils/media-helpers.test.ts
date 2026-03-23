@@ -239,6 +239,13 @@ describe("media-helpers", () => {
       const show = createPlexShow({ leafCount: 10, viewedLeafCount: 12 });
       expect(isWatched(show)).toBe(true);
     });
+
+    it("returns false for shows with viewCount but unwatched episodes", () => {
+      // Plex sets viewCount on shows when any episode is watched,
+      // but that doesn't mean all episodes are watched
+      const show = createPlexShow({ viewCount: 5, leafCount: 164, viewedLeafCount: 46 });
+      expect(isWatched(show)).toBe(false);
+    });
   });
 
   /* ------------------------------------------------------------------ */
