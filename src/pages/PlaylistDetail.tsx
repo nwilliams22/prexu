@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import {
@@ -28,8 +28,19 @@ import {
   getMediaPoster,
   getProgress,
 } from "../utils/media-helpers";
-import type { PlexMediaItem, PlexPlaylist } from "../types/library";
+import type { PlexMediaItem, PlexPlaylist, PlexEpisode } from "../types/library";
 import type { ContextMenuItem } from "../components/ContextMenu";
+
+/** A group of episodes from the same show, or a standalone movie */
+interface PlaylistGroup {
+  type: "show-group" | "movie";
+  /** For shows: grandparentRatingKey; for movies: ratingKey */
+  key: string;
+  title: string;
+  thumb: string;
+  items: PlexMediaItem[];
+  episodeCount: number;
+}
 
 function PlaylistDetail() {
   const { playlistKey } = useParams<{ playlistKey: string }>();
@@ -54,6 +65,10 @@ function PlaylistDetail() {
   // Delete confirmation
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Grouped view
+  const [grouped, setGrouped] = useState(false);
+  const [expandedShowKey, setExpandedShowKey] = useState<string | null>(null);
 
   const titleInputRef = useRef<HTMLInputElement>(null);
 
@@ -313,6 +328,59 @@ function PlaylistDetail() {
     (i) => i.type === "movie" || i.type === "episode"
   );
 
+  // Group episodes by show, keep movies as individual entries
+  const groups = useMemo<PlaylistGroup[]>(() => {
+    if (!grouped) return [];
+    const showMap = new Map<string, PlaylistGroup>();
+    const result: PlaylistGroup[] = [];
+
+    for (const item of items) {
+      const ep = item as PlexEpisode;
+      if (item.type === "episode" && ep.grandparentRatingKey) {
+        let group = showMap.get(ep.grandparentRatingKey);
+        if (!group) {
+          group = {
+            type: "show-group",
+            key: ep.grandparentRatingKey,
+            title: ep.grandparentTitle,
+            thumb: ep.grandparentThumb || item.thumb,
+            items: [],
+            episodeCount: 0,
+          };
+          showMap.set(ep.grandparentRatingKey, group);
+          result.push(group);
+        }
+        group.items.push(item);
+        group.episodeCount++;
+      } else {
+        result.push({
+          type: "movie",
+          key: item.ratingKey,
+          title: getMediaTitle(item),
+          thumb: getMediaPoster(item),
+          items: [item],
+          episodeCount: 1,
+        });
+      }
+    }
+    return result;
+  }, [items, grouped]);
+
+  // Check if grouping would actually reduce clutter (has any show with 2+ episodes)
+  const hasGroupableContent = useMemo(
+    () => {
+      const showCounts = new Map<string, number>();
+      for (const item of items) {
+        const ep = item as PlexEpisode;
+        if (item.type === "episode" && ep.grandparentRatingKey) {
+          showCounts.set(ep.grandparentRatingKey, (showCounts.get(ep.grandparentRatingKey) ?? 0) + 1);
+        }
+      }
+      return Array.from(showCounts.values()).some((c) => c >= 2);
+    },
+    [items],
+  );
+
   return (
     <div style={styles.container}>
       {/* Title — editable or static */}
@@ -401,6 +469,24 @@ function PlaylistDetail() {
               </button>
             </>
           )}
+          {hasGroupableContent && (
+            <button
+              onClick={() => { setGrouped(!grouped); setExpandedShowKey(null); }}
+              style={{
+                ...styles.shuffleButton,
+                ...(grouped ? { borderColor: "var(--accent)", color: "var(--accent)" } : {}),
+              }}
+              title={grouped ? "Show all items" : "Group by show"}
+            >
+              <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <rect x={3} y={3} width={7} height={7} rx={1} />
+                <rect x={14} y={3} width={7} height={7} rx={1} />
+                <rect x={3} y={14} width={7} height={7} rx={1} />
+                <rect x={14} y={14} width={7} height={7} rx={1} />
+              </svg>
+              {grouped ? "Show All" : "Group"}
+            </button>
+          )}
           <button onClick={handleStartEdit} style={styles.iconButton} title="Edit playlist">
             <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
               <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
@@ -451,27 +537,119 @@ function PlaylistDetail() {
         {isLoading &&
           Array.from({ length: 24 }).map((_, i) => <SkeletonCard key={i} />)}
 
-        {items.map((item, index) => (
-          <PosterCard
-            key={`${item.ratingKey}-${index}`}
-            ratingKey={item.ratingKey}
-            imageUrl={posterUrl(getMediaPoster(item))}
-            title={getMediaTitle(item)}
-            subtitle={getMediaSubtitle(item)}
-            progress={getProgress(item)}
-            watched={isWatched(item)}
-            onClick={() => navigate(`/item/${item.ratingKey}`)}
-            onPlay={getPlayHandler(item)}
-            showMoreButton
-            onContextMenu={(e) =>
-              openContextMenu(e, item, getExtraMenuItems(item, index))
+        {!grouped &&
+          items.map((item, index) => (
+            <PosterCard
+              key={`${item.ratingKey}-${index}`}
+              ratingKey={item.ratingKey}
+              imageUrl={posterUrl(getMediaPoster(item))}
+              title={getMediaTitle(item)}
+              subtitle={getMediaSubtitle(item)}
+              progress={getProgress(item)}
+              watched={isWatched(item)}
+              onClick={() => navigate(`/item/${item.ratingKey}`)}
+              onPlay={getPlayHandler(item)}
+              showMoreButton
+              onContextMenu={(e) =>
+                openContextMenu(e, item, getExtraMenuItems(item, index))
+              }
+              onMoreClick={(e) =>
+                openContextMenu(e, item, getExtraMenuItems(item, index))
+              }
+            />
+          ))}
+
+        {grouped &&
+          groups.map((group) => {
+            if (group.type === "movie") {
+              const item = group.items[0];
+              const flatIndex = items.indexOf(item);
+              return (
+                <PosterCard
+                  key={group.key}
+                  ratingKey={item.ratingKey}
+                  imageUrl={posterUrl(getMediaPoster(item))}
+                  title={getMediaTitle(item)}
+                  subtitle={getMediaSubtitle(item)}
+                  progress={getProgress(item)}
+                  watched={isWatched(item)}
+                  onClick={() => navigate(`/item/${item.ratingKey}`)}
+                  onPlay={getPlayHandler(item)}
+                  showMoreButton
+                  onContextMenu={(e) =>
+                    openContextMenu(e, item, getExtraMenuItems(item, flatIndex))
+                  }
+                  onMoreClick={(e) =>
+                    openContextMenu(e, item, getExtraMenuItems(item, flatIndex))
+                  }
+                />
+              );
             }
-            onMoreClick={(e) =>
-              openContextMenu(e, item, getExtraMenuItems(item, index))
-            }
-          />
-        ))}
+            return (
+              <PosterCard
+                key={`group-${group.key}`}
+                ratingKey={group.key}
+                imageUrl={posterUrl(group.thumb)}
+                title={group.title}
+                subtitle={`${group.episodeCount} episode${group.episodeCount !== 1 ? "s" : ""}`}
+                onClick={() =>
+                  setExpandedShowKey(expandedShowKey === group.key ? null : group.key)
+                }
+              />
+            );
+          })}
       </LibraryGrid>
+
+      {/* Expanded show episodes */}
+      {grouped && expandedShowKey && (() => {
+        const group = groups.find((g) => g.key === expandedShowKey);
+        if (!group || group.type !== "show-group") return null;
+        return (
+          <div style={styles.expandedSection}>
+            <div style={styles.expandedHeader}>
+              <h3 style={styles.expandedTitle}>{group.title}</h3>
+              <span style={styles.expandedCount}>
+                {group.episodeCount} episode{group.episodeCount !== 1 ? "s" : ""}
+              </span>
+              <button
+                onClick={() => setExpandedShowKey(null)}
+                style={styles.expandedClose}
+                aria-label="Close"
+              >
+                <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <line x1={18} y1={6} x2={6} y2={18} />
+                  <line x1={6} y1={6} x2={18} y2={18} />
+                </svg>
+              </button>
+            </div>
+            <LibraryGrid>
+              {group.items.map((item) => {
+                const flatIndex = items.indexOf(item);
+                return (
+                  <PosterCard
+                    key={`${item.ratingKey}-${flatIndex}`}
+                    ratingKey={item.ratingKey}
+                    imageUrl={posterUrl(getMediaPoster(item))}
+                    title={getMediaTitle(item)}
+                    subtitle={getMediaSubtitle(item)}
+                    progress={getProgress(item)}
+                    watched={isWatched(item)}
+                    onClick={() => navigate(`/item/${item.ratingKey}`)}
+                    onPlay={getPlayHandler(item)}
+                    showMoreButton
+                    onContextMenu={(e) =>
+                      openContextMenu(e, item, getExtraMenuItems(item, flatIndex))
+                    }
+                    onMoreClick={(e) =>
+                      openContextMenu(e, item, getExtraMenuItems(item, flatIndex))
+                    }
+                  />
+                );
+              })}
+            </LibraryGrid>
+          </div>
+        );
+      })()}
 
       {!isLoading && !error && items.length === 0 && (
         <EmptyState
@@ -646,6 +824,41 @@ const styles: Record<string, React.CSSProperties> = {
   deleteConfirmActions: {
     display: "flex",
     gap: "0.5rem",
+  },
+  expandedSection: {
+    marginTop: "1.5rem",
+    padding: "1rem",
+    borderRadius: "8px",
+    background: "var(--bg-card)",
+    border: "1px solid var(--border)",
+  },
+  expandedHeader: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.75rem",
+    marginBottom: "1rem",
+  },
+  expandedTitle: {
+    fontSize: "1.1rem",
+    fontWeight: 600,
+    margin: 0,
+  },
+  expandedCount: {
+    fontSize: "0.85rem",
+    color: "var(--text-secondary)",
+  },
+  expandedClose: {
+    marginLeft: "auto",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "28px",
+    height: "28px",
+    borderRadius: "6px",
+    border: "1px solid var(--border)",
+    background: "transparent",
+    color: "var(--text-secondary)",
+    cursor: "pointer",
   },
   deleteConfirmButton: {
     padding: "0.4rem 0.75rem",
