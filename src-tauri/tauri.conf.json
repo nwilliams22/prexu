@@ -42,7 +42,7 @@
         "installerHooks": "nsis-hooks/hooks.nsh"
       }
     },
-    "createUpdaterArtifacts": "v2"
+    "createUpdaterArtifacts": true
   },
   "plugins": {
     "updater": {
