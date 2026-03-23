@@ -109,7 +109,7 @@ export default function CastSection({
           );
         })}
       </HorizontalRow>
-      {studio && (
+      {studio && typeof studio === "string" && (
         <p style={{ ...styles.crewLine, marginTop: "0.5rem" }}>
           <strong>Studio:</strong> {studio}
         </p>
