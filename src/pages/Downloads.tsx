@@ -126,20 +126,32 @@ function Downloads() {
 
   if (downloads.length === 0) {
     return (
-      <div style={{ ...styles.container, flex: 1, display: "flex", flexDirection: "column" }}>
+      <div style={styles.container}>
         <h2 style={styles.title}>Downloads</h2>
-        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <EmptyState
-            icon={
-              <svg width={64} height={64} viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-                <polyline points="7 10 12 15 17 10" />
-                <line x1={12} y1={15} x2={12} y2={3} />
-              </svg>
-            }
-            title="No downloads"
-            subtitle="Right-click any movie or episode to download it for offline viewing."
-          />
+        <div style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          pointerEvents: "none",
+        }}>
+          <div style={{ pointerEvents: "auto" }}>
+            <EmptyState
+              icon={
+                <svg width={64} height={64} viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1={12} y1={15} x2={12} y2={3} />
+                </svg>
+              }
+              title="No downloads"
+              subtitle="Right-click any movie or episode to download it for offline viewing."
+            />
+          </div>
         </div>
       </div>
     );
