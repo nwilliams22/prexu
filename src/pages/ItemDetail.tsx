@@ -1,5 +1,8 @@
+import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
+import { useParentalControls } from "../hooks/useParentalControls";
+import { useToast } from "../hooks/useToast";
 import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
 import { useItemDetailData } from "../hooks/useItemDetailData";
 import { useSeasonSwitch } from "../hooks/useSeasonSwitch";
@@ -28,6 +31,8 @@ function ItemDetail() {
   const mobile = isMobile(bp);
   const navigate = useNavigate();
   const isAdmin = activeUser?.isAdmin ?? false;
+  const { isItemAllowed, restrictionsEnabled } = useParentalControls();
+  const { toast } = useToast();
 
   const {
     item,
@@ -188,6 +193,17 @@ function ItemDetail() {
     );
   }
 
+  // Redirect restricted content
+  const itemRating = item ? (item as { contentRating?: string }).contentRating : undefined;
+  const restricted = restrictionsEnabled && item && !isItemAllowed(itemRating);
+
+  useEffect(() => {
+    if (restricted) {
+      toast("This content is restricted on your profile", "error");
+      navigate(-1);
+    }
+  }, [restricted, toast, navigate]);
+
   if (error || !item) {
     return (
       <div style={styles.container}>
@@ -195,6 +211,8 @@ function ItemDetail() {
       </div>
     );
   }
+
+  if (restricted) return null;
 
   // ── Movie Detail ──
   if (item.type === "movie") {

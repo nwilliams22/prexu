@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 import { useAuth } from "../hooks/useAuth";
+import { useToast } from "../hooks/useToast";
 import {
   getPlaylists,
   addToPlaylist,
@@ -23,11 +24,11 @@ function PlaylistPicker({
   onSuccess,
 }: PlaylistPickerProps) {
   const { server } = useAuth();
+  const { toast } = useToast();
   const [playlists, setPlaylists] = useState<PlexPlaylist[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [adding, setAdding] = useState<string | null>(null); // playlistId being added to
-  const [success, setSuccess] = useState<string | null>(null); // playlist title after success
+  const [adding, setAdding] = useState<string | null>(null);
   const [newPlaylistName, setNewPlaylistName] = useState("");
   const [isCreating, setIsCreating] = useState(false);
   const modalRef = useRef<HTMLDivElement>(null);
@@ -80,9 +81,9 @@ function PlaylistPicker({
         server.clientIdentifier
       );
       cacheInvalidate("playlists:all");
-      setSuccess(playlist.title);
+      toast(`Added to "${playlist.title}"`, "success");
       onSuccess?.();
-      setTimeout(onClose, 1200);
+      onClose();
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Failed to add to playlist"
@@ -105,9 +106,9 @@ function PlaylistPicker({
         server.clientIdentifier
       );
       cacheInvalidate("playlists:all");
-      setSuccess(newPlaylistName.trim());
+      toast(`Added to "${newPlaylistName.trim()}"`, "success");
       onSuccess?.();
-      setTimeout(onClose, 1200);
+      onClose();
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Failed to create playlist"
@@ -137,19 +138,8 @@ function PlaylistPicker({
         </div>
         <p style={styles.subtitle}>{title}</p>
 
-        {/* Success message */}
-        {success && (
-          <div style={styles.successBanner}>
-            <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
-              <polyline points="20 6 9 17 4 12" />
-            </svg>
-            Added to "{success}"
-          </div>
-        )}
-
         {/* Playlist list */}
-        {!success && (
-          <div style={styles.list}>
+        <div style={styles.list}>
             {isLoading && (
               <p style={styles.loadingText}>Loading playlists...</p>
             )}
@@ -164,7 +154,7 @@ function PlaylistPicker({
                   opacity: adding && adding !== pl.ratingKey ? 0.5 : 1,
                 }}
                 onClick={() => handleAdd(pl)}
-                disabled={!!adding || !!success}
+                disabled={!!adding}
               >
                 <svg
                   width={18}
@@ -194,11 +184,9 @@ function PlaylistPicker({
               </button>
             ))}
           </div>
-        )}
 
         {/* Create new playlist */}
-        {!success && (
-          <div style={styles.createSection}>
+        <div style={styles.createSection}>
             <div style={styles.createRow}>
               <input
                 type="text"
@@ -225,7 +213,6 @@ function PlaylistPicker({
               </button>
             </div>
           </div>
-        )}
 
         {/* Error */}
         {error && <p style={styles.errorText}>{error}</p>}
@@ -282,15 +269,6 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
-  },
-  successBanner: {
-    display: "flex",
-    alignItems: "center",
-    gap: "0.5rem",
-    padding: "1rem 1.25rem",
-    color: "var(--accent)",
-    fontSize: "0.9rem",
-    fontWeight: 600,
   },
   list: {
     flex: 1,

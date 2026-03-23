@@ -82,6 +82,15 @@ vi.mock("../hooks/usePreferences", () => ({
   }),
 }));
 
+vi.mock("../hooks/useParentalControls", () => ({
+  useParentalControls: () => ({
+    restrictionsEnabled: false,
+    filterByRating: (items: unknown[]) => items,
+    isItemAllowed: () => true,
+    maxContentRating: "none",
+  }),
+}));
+
 vi.mock("../hooks/useScrollRestoration", () => ({
   useScrollRestoration: vi.fn(),
 }));

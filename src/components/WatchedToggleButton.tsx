@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useAuth } from "../hooks/useAuth";
+import { useToast } from "../hooks/useToast";
 import { markAsWatched, markAsUnwatched } from "../services/plex-library";
 
 interface WatchedToggleButtonProps {
@@ -20,6 +21,7 @@ function WatchedToggleButton({
   onToggled,
 }: WatchedToggleButtonProps) {
   const { server } = useAuth();
+  const { toast } = useToast();
   const [loading, setLoading] = useState(false);
 
   const handleToggle = async () => {
@@ -31,9 +33,10 @@ function WatchedToggleButton({
       } else {
         await markAsWatched(server.uri, server.accessToken, ratingKey);
       }
+      toast(watched ? "Marked as unwatched" : "Marked as watched", "success");
       onToggled?.();
     } catch {
-      // Silently fail — API errors are non-critical
+      toast("Failed to update watch status", "error");
     } finally {
       setLoading(false);
     }

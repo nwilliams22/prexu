@@ -137,19 +137,19 @@ Plex-style seamless updates — app checks for updates on launch, downloads in b
 
 ---
 
-## Phase D: Polish & UX
+## ~~Phase D: Polish & UX~~ ✅ Completed
 
 ### Toast Notification System
-- Generic toast component for transient feedback
-- Success/error/info variants with auto-dismiss
-- Use for: "Added to playlist", "Marked as watched", copy confirmations, errors
-- Stack multiple toasts, dismiss on click
+- [x] Generic toast component for transient feedback
+- [x] Success/error/info variants with auto-dismiss
+- [x] Use for: "Added to playlist", "Marked as watched", copy confirmations, errors
+- [x] Stack multiple toasts, dismiss on click
 
 ### Parental Controls
-- Per-profile content rating restrictions (G, PG, PG-13, R, etc.)
-- Content rating filter enforcement in library browsing and search
-- Settings UI to configure restrictions per managed user
-- Locked profiles require PIN to change restrictions
+- [x] Per-profile content rating restrictions (G, PG, PG-13, R, etc.)
+- [x] Content rating filter enforcement in library browsing and search
+- [x] Settings UI to configure restrictions per managed user
+- [x] Locked profiles require PIN to change restrictions
 
 ---
 

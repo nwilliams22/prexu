@@ -9,6 +9,15 @@ vi.mock("../hooks/useAuth", () => ({
   }),
 }));
 
+vi.mock("../hooks/useParentalControls", () => ({
+  useParentalControls: () => ({
+    restrictionsEnabled: false,
+    filterByRating: (items: unknown[]) => items,
+    isItemAllowed: () => true,
+    maxContentRating: "none",
+  }),
+}));
+
 const mockUsePreferences = vi.fn();
 vi.mock("../hooks/usePreferences", () => ({
   usePreferences: () => mockUsePreferences(),

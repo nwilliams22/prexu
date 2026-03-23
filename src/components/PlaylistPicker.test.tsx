@@ -32,6 +32,11 @@ vi.mock("../hooks/useAuth", () => ({
   })),
 }));
 
+const mockToast = vi.fn();
+vi.mock("../hooks/useToast", () => ({
+  useToast: () => ({ toast: mockToast, toasts: [], dismiss: vi.fn(), dismissAll: vi.fn() }),
+}));
+
 const defaultProps = {
   ratingKey: "456",
   title: "Test Movie",
@@ -129,7 +134,7 @@ describe("PlaylistPicker", () => {
     });
   });
 
-  it("shows success banner after adding to playlist", async () => {
+  it("shows toast and closes after adding to playlist", async () => {
     const user = userEvent.setup();
     const playlists = [
       createPlexPlaylist({ ratingKey: "pl1", title: "My Favorites", leafCount: 3 }),
@@ -145,7 +150,8 @@ describe("PlaylistPicker", () => {
     await user.click(screen.getByText("My Favorites"));
 
     await waitFor(() => {
-      expect(screen.getByText(/Added to "My Favorites"/)).toBeInTheDocument();
+      expect(mockToast).toHaveBeenCalledWith('Added to "My Favorites"', "success");
+      expect(defaultProps.onClose).toHaveBeenCalled();
     });
   });
 

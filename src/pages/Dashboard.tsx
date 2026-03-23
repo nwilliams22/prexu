@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { usePreferences } from "../hooks/usePreferences";
+import { useParentalControls } from "../hooks/useParentalControls";
 import { useScrollRestoration } from "../hooks/useScrollRestoration";
 import { useDashboard } from "../hooks/useDashboard";
 import { useMediaContextMenu } from "../hooks/useMediaContextMenu";
@@ -89,8 +90,23 @@ function Dashboard() {
   useScrollRestoration();
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
-  const { recentMovies, recentShows, onDeck, isLoading, error, refresh } =
-    useDashboard();
+  const { filterByRating } = useParentalControls();
+  const dashData = useDashboard();
+  const { isLoading, error, refresh } = dashData;
+
+  // Apply parental controls to dashboard data
+  const onDeck = useMemo(
+    () => filterByRating(dashData.onDeck as (PlexMediaItem & { contentRating?: string })[]),
+    [dashData.onDeck, filterByRating],
+  );
+  const recentMovies = useMemo(
+    () => filterByRating(dashData.recentMovies as (PlexMediaItem & { contentRating?: string })[]),
+    [dashData.recentMovies, filterByRating],
+  );
+  const recentShows = useMemo(
+    () => filterByRating(dashData.recentShows as (GroupedRecentItem & { contentRating?: string })[]),
+    [dashData.recentShows, filterByRating],
+  );
   const { posterWidth } = usePosterSize();
   const newContent = useOutletContext<UseNewContentResult>();
   const sections = preferences.appearance.dashboardSections;

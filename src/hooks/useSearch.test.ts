@@ -23,6 +23,15 @@ vi.mock("./useAuth", () => ({
   useAuth: () => ({ server: mockServer }),
 }));
 
+vi.mock("./useParentalControls", () => ({
+  useParentalControls: () => ({
+    restrictionsEnabled: false,
+    filterByRating: (items: unknown[]) => items,
+    isItemAllowed: () => true,
+    maxContentRating: "none",
+  }),
+}));
+
 const mockSearchLibrary = vi.fn();
 vi.mock("../services/plex-library", () => ({
   searchLibrary: (...args: unknown[]) => mockSearchLibrary(...args),
