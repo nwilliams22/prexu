@@ -66,6 +66,17 @@ export default function QueuePanel({ onClose, posterUrl }: QueuePanelProps) {
             {remainingCount > 0 && (
               <span style={styles.count}>{remainingCount}</span>
             )}
+            {queue.shuffled && (
+              <span style={styles.shuffleBadge} title="Shuffled">
+                <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="16 3 21 3 21 8" />
+                  <line x1={4} y1={20} x2={21} y2={3} />
+                  <polyline points="21 16 21 21 16 21" />
+                  <line x1={15} y1={15} x2={21} y2={21} />
+                  <line x1={4} y1={4} x2={9} y2={9} />
+                </svg>
+              </span>
+            )}
           </h3>
           <div style={styles.headerActions}>
             {queue.items.length > 0 && (
@@ -203,6 +214,12 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#000",
     padding: "1px 6px",
     borderRadius: "10px",
+  },
+  shuffleBadge: {
+    display: "inline-flex",
+    alignItems: "center",
+    color: "var(--accent)",
+    opacity: 0.8,
   },
   headerActions: {
     display: "flex",

@@ -10,7 +10,7 @@
  *   - episodes.ts    — getNextEpisode, getPreviousEpisode
  *   - history.ts     — getWatchHistory
  *   - collections.ts — getCollections, getCollectionItems
- *   - playlists.ts   — getPlaylists, getPlaylistItems, addToPlaylist, createPlaylist
+ *   - playlists.ts   — getPlaylists, getPlaylistItems, addToPlaylist, createPlaylist, deletePlaylist, removeFromPlaylist, movePlaylistItem, updatePlaylist
  *   - related.ts     — getRelatedItems, getExtras, getMediaByActor, searchLibrary
  *   - watch-state.ts — markAsWatched, markAsUnwatched
  *   - admin.ts       — scanLibrary, refreshLibraryMetadata, emptyLibraryTrash
@@ -34,6 +34,10 @@ export {
   getPlaylistItems,
   addToPlaylist,
   createPlaylist,
+  deletePlaylist,
+  removeFromPlaylist,
+  movePlaylistItem,
+  updatePlaylist,
 } from "./playlists";
 export {
   getRelatedItems,

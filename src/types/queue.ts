@@ -10,4 +10,5 @@ export interface QueueItem {
 export interface PlaybackQueue {
   items: QueueItem[];
   currentIndex: number;
+  shuffled?: boolean;
 }
