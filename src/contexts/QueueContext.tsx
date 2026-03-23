@@ -12,7 +12,7 @@ import type { QueueItem, PlaybackQueue } from "../types/queue";
 interface QueueContextValue {
   queue: PlaybackQueue;
   /** Replace the entire queue and set current index */
-  setQueue: (items: QueueItem[], startIndex: number) => void;
+  setQueue: (items: QueueItem[], startIndex: number, shuffled?: boolean) => void;
   /** Append an item to the end of the queue */
   addToQueue: (item: QueueItem) => void;
   /** Remove an item by index */
@@ -65,8 +65,8 @@ export function QueueProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const setQueue = useCallback(
-    (items: QueueItem[], startIndex: number) => {
-      setQueueAndPersist({ items, currentIndex: startIndex });
+    (items: QueueItem[], startIndex: number, shuffled?: boolean) => {
+      setQueueAndPersist({ items, currentIndex: startIndex, shuffled });
     },
     [setQueueAndPersist],
   );

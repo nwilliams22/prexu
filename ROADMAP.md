@@ -41,7 +41,7 @@
 
 Small items left over from earlier phases:
 
-- [ ] Play all / shuffle buttons for playlists and collections
+- [x] Play all / shuffle buttons for playlists and collections
 - [ ] Reviews/ratings display on ItemDetail (from Plex metadata)
 - [ ] Progressive image loading (blur-up placeholder → full image)
 - [ ] srcSet for different poster sizes
@@ -121,19 +121,19 @@ Plex-style seamless updates — app checks for updates on launch, downloads in b
 
 ---
 
-## Phase C: Playlist & Library Management
+## ~~Phase C: Playlist & Library Management~~ ✅ Completed
 
 ### Playlist Management
-- Create new playlists from UI
-- Add items to playlist via context menu and detail page
-- Remove items and reorder playlist contents
-- Edit playlist title and description
-- Delete playlists
+- [x] Create new playlists from UI
+- [x] Add items to playlist via context menu and detail page
+- [x] Remove items and reorder playlist contents
+- [x] Edit playlist title and description
+- [x] Delete playlists
 
 ### Play All / Shuffle
-- Play all button on playlist and collection detail pages
-- Shuffle mode for playlists and collections
-- Shuffle indicator in player UI
+- [x] Play all button on playlist and collection detail pages
+- [x] Shuffle mode for playlists and collections
+- [x] Shuffle indicator in player UI
 
 ---
 

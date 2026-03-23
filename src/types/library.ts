@@ -107,6 +107,8 @@ export interface PlexMediaItem {
   art: string;
   addedAt: number;
   updatedAt: number;
+  /** Present only when item is inside a playlist — used for reorder/remove operations */
+  playlistItemID?: number;
 }
 
 /** Individual rating entry from Plex (returned when includeRatings=1) */

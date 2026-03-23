@@ -1,10 +1,12 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
 import { useMediaContextMenu } from "../hooks/useMediaContextMenu";
 import { usePlayAction } from "../hooks/usePlayAction";
 import { useScrollRestoration } from "../hooks/useScrollRestoration";
+import { useQueue } from "../contexts/QueueContext";
+import { buildQueueFromItems, shuffleArray } from "../utils/queue-helpers";
 import {
   getItemMetadata,
   getCollectionItems,
@@ -46,6 +48,7 @@ function CollectionDetail() {
   useScrollRestoration();
   const { openContextMenu, overlays: menuOverlays } = useMediaContextMenu();
   const { getPlayHandler, playOverlay } = usePlayAction();
+  const { setQueue } = useQueue();
 
   const [collection, setCollection] = useState<PlexCollection | null>(null);
   const [items, setItems] = useState<PlexMediaItem[]>([]);
@@ -148,6 +151,26 @@ function CollectionDetail() {
     () => items.filter(isWatched).length,
     [items]
   );
+
+  // Check if collection has playable items (movies or episodes, not shows)
+  const hasPlayableItems = useMemo(
+    () => items.some((i) => i.type === "movie" || i.type === "episode"),
+    [items]
+  );
+
+  const handlePlayAll = useCallback(() => {
+    const queueItems = buildQueueFromItems(items);
+    if (queueItems.length === 0) return;
+    setQueue(queueItems, 0);
+    navigate(`/play/${queueItems[0].ratingKey}`);
+  }, [items, setQueue, navigate]);
+
+  const handleShuffle = useCallback(() => {
+    const queueItems = shuffleArray(buildQueueFromItems(items));
+    if (queueItems.length === 0) return;
+    setQueue(queueItems, 0, true);
+    navigate(`/play/${queueItems[0].ratingKey}`);
+  }, [items, setQueue, navigate]);
 
   if (!server) return null;
 
@@ -516,6 +539,33 @@ function CollectionDetail() {
               <ProgressBar value={watchedCount / totalSize} />
             )}
 
+            {/* Play All / Shuffle buttons */}
+            {hasPlayableItems && items.length > 0 && (
+              <div
+                style={{
+                  ...styles.playActions,
+                  ...(mobile ? { justifyContent: "center" } : {}),
+                }}
+              >
+                <button onClick={handlePlayAll} style={styles.playAllButton}>
+                  <svg width={16} height={16} viewBox="0 0 24 24" fill="currentColor">
+                    <polygon points="5,3 19,12 5,21" />
+                  </svg>
+                  Play All
+                </button>
+                <button onClick={handleShuffle} style={styles.shuffleButton}>
+                  <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="16 3 21 3 21 8" />
+                    <line x1={4} y1={20} x2={21} y2={3} />
+                    <polyline points="21 16 21 21 16 21" />
+                    <line x1={15} y1={15} x2={21} y2={21} />
+                    <line x1={4} y1={4} x2={9} y2={9} />
+                  </svg>
+                  Shuffle
+                </button>
+              </div>
+            )}
+
             {/* Summary */}
             {collection.summary && (
               <p
@@ -633,6 +683,38 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "0.8rem",
     color: "var(--text-secondary)",
     opacity: 0.7,
+  },
+  playActions: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.5rem",
+    marginTop: "0.5rem",
+  },
+  playAllButton: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "0.4rem",
+    padding: "0.5rem 1rem",
+    borderRadius: "8px",
+    border: "none",
+    background: "var(--accent)",
+    color: "#000",
+    fontSize: "0.85rem",
+    fontWeight: 600,
+    cursor: "pointer",
+  },
+  shuffleButton: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "0.4rem",
+    padding: "0.5rem 1rem",
+    borderRadius: "8px",
+    border: "1px solid rgba(255,255,255,0.2)",
+    background: "rgba(255,255,255,0.1)",
+    color: "var(--text-primary)",
+    fontSize: "0.85rem",
+    fontWeight: 500,
+    cursor: "pointer",
   },
   // Items section
   itemsSection: {

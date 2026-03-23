@@ -78,6 +78,77 @@ export async function addToPlaylist(
   }
 }
 
+/** Delete a playlist */
+export async function deletePlaylist(
+  serverUri: string,
+  serverToken: string,
+  playlistId: string
+): Promise<void> {
+  const headers = await getServerHeaders(serverToken);
+  const response = await timedFetch(
+    `${serverUri}/playlists/${playlistId}`,
+    { method: "DELETE", headers }
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to delete playlist: ${response.status}`);
+  }
+}
+
+/** Remove an item from a playlist by its playlistItemID */
+export async function removeFromPlaylist(
+  serverUri: string,
+  serverToken: string,
+  playlistId: string,
+  playlistItemID: number
+): Promise<void> {
+  const headers = await getServerHeaders(serverToken);
+  const response = await timedFetch(
+    `${serverUri}/playlists/${playlistId}/items/${playlistItemID}`,
+    { method: "DELETE", headers }
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to remove from playlist: ${response.status}`);
+  }
+}
+
+/** Move a playlist item to a new position. afterId=-1 moves to first position. */
+export async function movePlaylistItem(
+  serverUri: string,
+  serverToken: string,
+  playlistId: string,
+  playlistItemID: number,
+  afterId: number
+): Promise<void> {
+  const headers = await getServerHeaders(serverToken);
+  const response = await timedFetch(
+    `${serverUri}/playlists/${playlistId}/items/${playlistItemID}/move?after=${afterId}`,
+    { method: "PUT", headers }
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to move playlist item: ${response.status}`);
+  }
+}
+
+/** Update playlist title and/or summary */
+export async function updatePlaylist(
+  serverUri: string,
+  serverToken: string,
+  playlistId: string,
+  fields: { title?: string; summary?: string }
+): Promise<void> {
+  const params = new URLSearchParams();
+  if (fields.title !== undefined) params.set("title", fields.title);
+  if (fields.summary !== undefined) params.set("summary", fields.summary);
+  const headers = await getServerHeaders(serverToken);
+  const response = await timedFetch(
+    `${serverUri}/playlists/${playlistId}?${params.toString()}`,
+    { method: "PUT", headers }
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to update playlist: ${response.status}`);
+  }
+}
+
 /** Create a new playlist with an initial item */
 export async function createPlaylist(
   serverUri: string,
