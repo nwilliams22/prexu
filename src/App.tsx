@@ -24,6 +24,7 @@ const Requests = lazy(() => import("./pages/Requests"));
 const Player = lazy(() => import("./pages/Player"));
 const ActorDetail = lazy(() => import("./pages/ActorDetail"));
 const DiscoverDetail = lazy(() => import("./pages/DiscoverDetail"));
+const Downloads = lazy(() => import("./pages/Downloads"));
 
 function LoadingScreen() {
   return (
@@ -120,6 +121,7 @@ function AppRoutes() {
           <Route path="/actor/:actorName" element={<ActorDetail />} />
           <Route path="/discover/:mediaType/:tmdbId" element={<DiscoverDetail />} />
           <Route path="/requests" element={<Requests />} />
+          <Route path="/downloads" element={<Downloads />} />
           <Route path="/settings" element={<Settings />} />
         </Route>
 

@@ -68,3 +68,13 @@ export {
   getParentalControls,
   saveParentalControls,
 } from "./parental-controls";
+export {
+  getDownloadItems,
+  saveDownloadItems,
+} from "./downloads";
+export {
+  getPendingWatchSync,
+  savePendingWatchSync,
+  addPendingWatchSync,
+  removePendingWatchSync,
+} from "./watch-sync";

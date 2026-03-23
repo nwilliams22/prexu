@@ -22,6 +22,10 @@ import {
   ServerActivityProvider,
 } from "../hooks/useServerActivity";
 import { QueueProvider } from "./QueueContext";
+import {
+  useDownloadsState,
+  DownloadsProvider,
+} from "../hooks/useDownloads";
 import { useToastState, ToastProvider } from "../hooks/useToast";
 import ToastContainer from "../components/Toast";
 import {
@@ -48,6 +52,7 @@ export default function AppProviders({ children }: AppProvidersProps) {
   );
   const prefsState = usePreferencesState(auth.activeUser?.id ?? null);
   const parentalState = useParentalControlsState(auth.activeUser?.id ?? null);
+  const downloadsState = useDownloadsState(auth.server ?? null);
   const activityState = useServerActivityState();
 
   return (
@@ -58,9 +63,11 @@ export default function AppProviders({ children }: AppProvidersProps) {
             <ServerActivityProvider value={activityState}>
             <InviteProvider value={inviteState}>
               <ContentRequestProvider value={contentRequestState}>
-                <QueueProvider>
-                  {children}
-                </QueueProvider>
+                <DownloadsProvider value={downloadsState}>
+                  <QueueProvider>
+                    {children}
+                  </QueueProvider>
+                </DownloadsProvider>
               </ContentRequestProvider>
             </InviteProvider>
             </ServerActivityProvider>
