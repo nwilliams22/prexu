@@ -1,0 +1,30 @@
+name: Update Gist
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-gist:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download latest.json from release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "${{ github.event.release.tag_name }}" \
+            --repo "${{ github.repository }}" \
+            --pattern "latest.json" \
+            --output latest.json
+
+      - name: Push latest.json to public gist
+        env:
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+        run: |
+          # Escape JSON content for the API payload
+          CONTENT=$(jq -Rs . < latest.json)
+          curl -s -X PATCH \
+            -H "Authorization: token $GIST_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/gists/b3cbd67a3e9c82bad9f334c67f6bba24 \
+            -d "{\"files\":{\"latest.json\":{\"content\":$CONTENT}}}"
