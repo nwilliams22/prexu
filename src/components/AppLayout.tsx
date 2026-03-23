@@ -5,6 +5,8 @@ import { usePreferences } from "../hooks/usePreferences";
 import { useBreakpoint, isMobile, isTabletOrBelow, isDesktopOrAbove } from "../hooks/useBreakpoint";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 import { useRouteAnnouncer } from "../hooks/useRouteAnnouncer";
+import { useNewContent } from "../hooks/useNewContent";
+import type { UseNewContentResult } from "../hooks/useNewContent";
 import Sidebar from "./Sidebar";
 import NavButtons from "./NavButtons";
 import SearchBar from "./SearchBar";
@@ -15,11 +17,14 @@ import InviteNotification from "./InviteNotification";
 import ErrorBoundary from "./ErrorBoundary";
 import BottomNav from "./BottomNav";
 
+export type { UseNewContentResult };
+
 function AppLayout() {
   const { isAuthenticated, serverSelected } = useAuth();
   const { preferences } = usePreferences();
   const bp = useBreakpoint();
   const navigate = useNavigate();
+  const newContent = useNewContent();
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => preferences.appearance.sidebarCollapsed
@@ -112,6 +117,8 @@ function AppLayout() {
           <Sidebar
             collapsed={sidebarCollapsed}
             onToggle={() => setSidebarCollapsed((c) => !c)}
+            newSections={newContent.newSections}
+            onMarkSectionSeen={newContent.markSectionSeen}
           />
         )}
 
@@ -134,6 +141,8 @@ function AppLayout() {
                 collapsed={false}
                 onToggle={() => setSidebarOpen(false)}
                 onNavigate={() => setSidebarOpen(false)}
+                newSections={newContent.newSections}
+                onMarkSectionSeen={newContent.markSectionSeen}
               />
             </div>
           </>
@@ -151,7 +160,7 @@ function AppLayout() {
           <InviteNotification />
           <div style={styles.pageTransition}>
             <ErrorBoundary>
-              <Outlet />
+              <Outlet context={newContent} />
             </ErrorBoundary>
           </div>
         </main>

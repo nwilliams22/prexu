@@ -50,3 +50,17 @@ export {
   saveDismissedRecommendations,
 } from "./content";
 export { getClientIdentifier } from "./client";
+export {
+  getRecentSearches,
+  saveRecentSearches,
+  addRecentSearch,
+  removeRecentSearch,
+} from "./search";
+export {
+  getLastSeenTimestamps,
+  saveLastSeenTimestamps,
+  markSectionSeen,
+  markAllSectionsSeen,
+  getAppLastLaunch,
+  saveAppLastLaunch,
+} from "./new-content";

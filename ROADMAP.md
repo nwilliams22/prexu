@@ -105,19 +105,19 @@ Plex-style seamless updates — app checks for updates on launch, downloads in b
 
 ---
 
-## Phase B: Search & Discovery
+## ~~Phase B: Search & Discovery~~ ✅ Completed
 
 ### Search Autocomplete
-- Live suggestions as-you-type (debounced against Plex hub search)
-- Recent searches dropdown
-- Highlight matching text in suggestions
-- Keyboard navigation through suggestion list (arrow keys + enter)
+- [x] Live suggestions as-you-type (debounced against Plex hub search)
+- [x] Recent searches dropdown
+- [x] Highlight matching text in suggestions
+- [x] Keyboard navigation through suggestion list (arrow keys + enter)
 
 ### New on Server Alerts
-- Track newly added content since last app launch
-- "New" badge on library sections with new content
-- Optional "What's New" summary on dashboard
-- Dismissible per-item or bulk dismiss
+- [x] Track newly added content since last app launch
+- [x] "New" badge on library sections with new content
+- [x] Optional "What's New" summary on dashboard
+- [x] Dismissible per-item or bulk dismiss
 
 ---
 

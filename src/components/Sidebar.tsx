@@ -13,12 +13,15 @@ import LibraryIcon from "./LibraryIcon";
 import ContextMenu from "./ContextMenu";
 import UpdateNotification from "./UpdateNotification";
 import ServerHealthBadge from "./ServerHealthBadge";
+import NewBadge from "./NewBadge";
 import type { ContextMenuItem } from "./ContextMenu";
 
 interface SidebarProps {
   collapsed: boolean;
   onToggle: () => void;
   onNavigate?: () => void;
+  newSections?: Set<string>;
+  onMarkSectionSeen?: (sectionKey: string) => void;
 }
 
 interface SectionMenuState {
@@ -26,7 +29,7 @@ interface SectionMenuState {
   sectionKey: string;
 }
 
-function Sidebar({ collapsed, onToggle, onNavigate }: SidebarProps) {
+function Sidebar({ collapsed, onToggle, onNavigate, newSections, onMarkSectionSeen }: SidebarProps) {
   const { server } = useAuth();
   const { sections, isLoading } = useLibrary();
   const health = useServerHealth(server);
@@ -80,6 +83,17 @@ function Sidebar({ collapsed, onToggle, onNavigate }: SidebarProps) {
           await emptyLibraryTrash(server.uri, server.accessToken, sectionKey);
         },
       },
+      ...(newSections?.has(sectionKey)
+        ? [
+            {
+              label: "Mark as Seen",
+              dividerAbove: true,
+              onClick: () => {
+                onMarkSectionSeen?.(sectionKey);
+              },
+            },
+          ]
+        : []),
     ];
   };
 
@@ -204,7 +218,10 @@ function Sidebar({ collapsed, onToggle, onNavigate }: SidebarProps) {
               onMouseLeave={() => setHoveredSection(null)}
             >
               <button
-                onClick={() => navigateTo(path)}
+                onClick={() => {
+                  navigateTo(path);
+                  onMarkSectionSeen?.(section.key);
+                }}
                 onContextMenu={(e) => openSectionMenu(e, section.key)}
                 style={{
                   ...navItemStyle,
@@ -219,6 +236,9 @@ function Sidebar({ collapsed, onToggle, onNavigate }: SidebarProps) {
                   opacity: collapsed ? 0 : 1,
                   width: collapsed ? 0 : "auto",
                 }}>{section.title}</span>
+                {!collapsed && (
+                  <NewBadge visible={newSections?.has(section.key) ?? false} />
+                )}
               </button>
               {/* Three-dot menu button (non-collapsed, hovered) */}
               {!collapsed && (
