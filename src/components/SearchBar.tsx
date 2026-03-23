@@ -1,6 +1,14 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
+import { useSearchSuggestions } from "../hooks/useSearchSuggestions";
+import type { SearchSuggestion } from "../hooks/useSearchSuggestions";
+import {
+  getRecentSearches,
+  addRecentSearch,
+  removeRecentSearch,
+} from "../services/storage";
+import SearchDropdown, { DROPDOWN_ID, getDropdownItemCount } from "./SearchDropdown";
 
 const DEBOUNCE_MS = 300;
 
@@ -10,6 +18,13 @@ function SearchBar() {
   const [value, setValue] = useState(searchParams.get("q") ?? "");
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const blurTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const [recentSearches, setRecentSearches] = useState<string[]>([]);
+
+  const { suggestions, isLoading } = useSearchSuggestions(value, isDropdownOpen);
 
   // Sync input when navigating away from search page
   useEffect(() => {
@@ -17,16 +32,65 @@ function SearchBar() {
     setValue(q);
   }, [searchParams]);
 
-  // Clean up debounce timer on unmount
+  // Clean up timers on unmount
   useEffect(() => {
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
+      if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
     };
   }, []);
+
+  const loadRecents = useCallback(async () => {
+    const recents = await getRecentSearches();
+    setRecentSearches(recents);
+  }, []);
+
+  const closeDropdown = useCallback(() => {
+    setIsDropdownOpen(false);
+    setActiveIndex(-1);
+  }, []);
+
+  const navigateToSearch = useCallback(
+    (q: string) => {
+      closeDropdown();
+      if (q.trim()) {
+        navigate(`/search?q=${encodeURIComponent(q.trim())}`, { replace: true });
+        addRecentSearch(q.trim()).then(setRecentSearches);
+      }
+    },
+    [navigate, closeDropdown]
+  );
+
+  const navigateToItem = useCallback(
+    (suggestion: SearchSuggestion) => {
+      closeDropdown();
+      const path =
+        suggestion.type === "episode" || suggestion.type === "clip"
+          ? `/item/${suggestion.ratingKey}`
+          : `/item/${suggestion.ratingKey}`;
+      navigate(path);
+      addRecentSearch(suggestion.title).then(setRecentSearches);
+    },
+    [navigate, closeDropdown]
+  );
+
+  const handleFocus = () => {
+    if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
+    setIsDropdownOpen(true);
+    loadRecents();
+  };
+
+  const handleBlur = () => {
+    blurTimeoutRef.current = setTimeout(() => {
+      closeDropdown();
+    }, 150);
+  };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const q = e.target.value;
     setValue(q);
+    setActiveIndex(-1);
+    setIsDropdownOpen(true);
 
     if (debounceRef.current) clearTimeout(debounceRef.current);
 
@@ -39,33 +103,107 @@ function SearchBar() {
 
   const handleClear = () => {
     setValue("");
+    setActiveIndex(-1);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     inputRef.current?.focus();
     navigate("/", { replace: true });
   };
 
+  const itemCount = getDropdownItemCount(recentSearches, suggestions, value);
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Escape") {
-      handleClear();
+      if (isDropdownOpen) {
+        closeDropdown();
+        e.preventDefault();
+      } else {
+        handleClear();
+      }
+      return;
     }
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (!isDropdownOpen) {
+        setIsDropdownOpen(true);
+        loadRecents();
+      }
+      setActiveIndex((prev) => (prev + 1) % itemCount);
+      return;
+    }
+
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!isDropdownOpen) {
+        setIsDropdownOpen(true);
+        loadRecents();
+      }
+      setActiveIndex((prev) => (prev <= 0 ? itemCount - 1 : prev - 1));
+      return;
+    }
+
     if (e.key === "Enter") {
-      // Navigate immediately on Enter
       if (debounceRef.current) clearTimeout(debounceRef.current);
-      const q = value.trim();
-      if (q) {
-        navigate(`/search?q=${encodeURIComponent(q)}`, { replace: true });
+
+      if (activeIndex >= 0 && isDropdownOpen) {
+        e.preventDefault();
+        // Determine what's at this index
+        const trimmed = value.trim();
+        const filteredRecents = trimmed
+          ? recentSearches.filter((s) =>
+              s.toLowerCase().includes(trimmed.toLowerCase())
+            )
+          : recentSearches;
+
+        if (activeIndex < filteredRecents.length) {
+          navigateToSearch(filteredRecents[activeIndex]);
+        } else if (activeIndex < filteredRecents.length + suggestions.length) {
+          navigateToItem(suggestions[activeIndex - filteredRecents.length]);
+        } else {
+          // "Search all" item
+          navigateToSearch(trimmed);
+        }
+      } else {
+        const q = value.trim();
+        if (q) {
+          navigateToSearch(q);
+        }
       }
     }
+  };
+
+  const handleSelectRecent = (term: string) => {
+    setValue(term);
+    navigateToSearch(term);
+  };
+
+  const handleRemoveRecent = async (term: string) => {
+    const updated = await removeRecentSearch(term);
+    setRecentSearches(updated);
+  };
+
+  const handleSelectSuggestion = (suggestion: SearchSuggestion) => {
+    navigateToItem(suggestion);
+  };
+
+  const handleSearchAll = (q: string) => {
+    navigateToSearch(q);
   };
 
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
 
+  const activeOptionId =
+    activeIndex >= 0 ? `search-option-${activeIndex}` : undefined;
+
   return (
-    <div role="search" style={{
-      ...styles.container,
-      ...(mobile ? { margin: "0 0.5rem", maxWidth: "none" } : {}),
-    }}>
+    <div
+      role="search"
+      style={{
+        ...styles.container,
+        ...(mobile ? { margin: "0 0.5rem", maxWidth: "none" } : {}),
+      }}
+    >
       {/* Magnifying glass icon */}
       <svg
         aria-hidden="true"
@@ -89,15 +227,26 @@ function SearchBar() {
         value={value}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
+        onFocus={handleFocus}
+        onBlur={handleBlur}
         placeholder="Search movies, shows, episodes..."
         aria-label="Search movies, shows, episodes"
+        role="combobox"
+        aria-expanded={isDropdownOpen}
+        aria-autocomplete="list"
+        aria-controls={isDropdownOpen ? DROPDOWN_ID : undefined}
+        aria-activedescendant={activeOptionId}
         style={styles.input}
         spellCheck={false}
       />
 
       {/* Clear button */}
       {value && (
-        <button onClick={handleClear} style={styles.clearButton} aria-label="Clear search">
+        <button
+          onClick={handleClear}
+          style={styles.clearButton}
+          aria-label="Clear search"
+        >
           <svg
             width={14}
             height={14}
@@ -112,6 +261,21 @@ function SearchBar() {
             <line x1={6} y1={6} x2={18} y2={18} />
           </svg>
         </button>
+      )}
+
+      {/* Autocomplete dropdown */}
+      {isDropdownOpen && (
+        <SearchDropdown
+          recentSearches={recentSearches}
+          suggestions={suggestions}
+          isLoading={isLoading}
+          activeIndex={activeIndex}
+          query={value}
+          onSelectRecent={handleSelectRecent}
+          onRemoveRecent={handleRemoveRecent}
+          onSelectSuggestion={handleSelectSuggestion}
+          onSearchAll={handleSearchAll}
+        />
       )}
     </div>
   );
@@ -129,6 +293,7 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid var(--border)",
     padding: "0 0.5rem",
     height: "34px",
+    position: "relative",
   },
   icon: {
     color: "var(--text-secondary)",

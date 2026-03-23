@@ -105,6 +105,9 @@ export const STORAGE_KEYS = {
   CONTENT_REQUESTS: "prexu_content_requests",
   REQUESTS_LAST_READ: "prexu_requests_last_read",
   DISMISSED_RECOMMENDATIONS: "prexu_dismissed_recommendations",
+  RECENT_SEARCHES: "prexu_recent_searches",
+  SECTION_LAST_SEEN: "prexu_section_last_seen",
+  APP_LAST_LAUNCH: "prexu_app_last_launch",
 } as const;
 
 /** Keys that hold sensitive data and must use the secure store */

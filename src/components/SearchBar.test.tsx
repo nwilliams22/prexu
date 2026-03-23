@@ -62,6 +62,8 @@ describe("SearchBar", () => {
 
     const input = screen.getByPlaceholderText("Search movies, shows, episodes...");
     await user.type(input, "test");
+    // First Escape closes the autocomplete dropdown, second clears input
+    await user.keyboard("{Escape}");
     await user.keyboard("{Escape}");
 
     expect(input).toHaveValue("");
