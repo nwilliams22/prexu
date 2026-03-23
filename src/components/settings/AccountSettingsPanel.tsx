@@ -150,21 +150,77 @@ export function AccountSettingsPanel({
         <h3 style={styles.sectionTitle}>About</h3>
         <div style={styles.aboutRow}>
           <span style={styles.aboutLabel}>Prexu</span>
-          <span style={styles.aboutVersion}>v0.1.0</span>
+          <span style={styles.aboutVersion}>
+            v{typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "0.1.0"}
+          </span>
         </div>
         <p style={styles.hint}>A custom cross-platform Plex client.</p>
-        <button
-          onClick={() => open("https://github.com/nwilliams22/prexu/issues/new")}
-          style={styles.bugButton}
-        >
-          <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} style={{ marginRight: "0.4rem" }}>
-            <circle cx={12} cy={12} r={10} />
-            <line x1={12} y1={8} x2={12} y2={12} />
-            <line x1={12} y1={16} x2={12.01} y2={16} />
-          </svg>
-          Report a Bug
-        </button>
+        <div style={aboutStyles.infoGrid}>
+          <span style={aboutStyles.infoLabel}>Platform</span>
+          <span style={aboutStyles.infoValue}>
+            {navigator.userAgent.includes("Windows")
+              ? "Windows"
+              : navigator.userAgent.includes("Mac")
+                ? "macOS"
+                : navigator.userAgent.includes("Linux")
+                  ? "Linux"
+                  : "Unknown"}
+          </span>
+          {serverUri && (
+            <>
+              <span style={aboutStyles.infoLabel}>Server</span>
+              <span style={aboutStyles.infoValue}>{serverUri}</span>
+            </>
+          )}
+        </div>
+        <div style={aboutStyles.buttonRow}>
+          <button
+            onClick={() => open("https://github.com/nwilliams22/prexu/issues/new")}
+            style={styles.bugButton}
+          >
+            <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} style={{ marginRight: "0.4rem" }}>
+              <circle cx={12} cy={12} r={10} />
+              <line x1={12} y1={8} x2={12} y2={12} />
+              <line x1={12} y1={16} x2={12.01} y2={16} />
+            </svg>
+            Report a Bug
+          </button>
+          <button
+            onClick={() => open("https://github.com/nwilliams22/prexu")}
+            style={styles.bugButton}
+          >
+            <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} style={{ marginRight: "0.4rem" }}>
+              <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22" />
+            </svg>
+            GitHub
+          </button>
+        </div>
       </section>
     </>
   );
 }
+
+const aboutStyles: Record<string, React.CSSProperties> = {
+  infoGrid: {
+    display: "grid",
+    gridTemplateColumns: "auto 1fr",
+    gap: "0.25rem 0.75rem",
+    marginBottom: "0.75rem",
+    fontSize: "0.85rem",
+  },
+  infoLabel: {
+    color: "var(--text-secondary)",
+    fontWeight: 500,
+  },
+  infoValue: {
+    color: "var(--text-primary)",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  buttonRow: {
+    display: "flex",
+    gap: "0.5rem",
+    flexWrap: "wrap",
+  },
+};

@@ -1,4 +1,4 @@
-import type { AppearancePreferences, Preferences } from "../../types/preferences";
+import type { AppearancePreferences, Preferences, ThemeMode } from "../../types/preferences";
 import { styles } from "./settingsStyles";
 
 type DeepPartial<T> = {
@@ -19,6 +19,27 @@ export function AppearanceSettingsPanel({
   return (
     <section style={styles.section}>
       <h3 style={styles.sectionTitle}>Appearance</h3>
+
+      <div style={styles.field}>
+        <label style={styles.label}>Theme</label>
+        <div style={styles.radioGroup}>
+          {(["system", "dark", "light"] as ThemeMode[]).map((mode) => (
+            <label key={mode} style={styles.radioLabel}>
+              <input
+                type="radio"
+                name="theme"
+                checked={ap.theme === mode}
+                onChange={() => updateAppearance({ theme: mode })}
+                style={styles.radio}
+              />
+              {mode === "system" ? "System" : mode === "dark" ? "Dark" : "Light"}
+            </label>
+          ))}
+        </div>
+        <p style={styles.hint}>
+          System follows your operating system's light/dark preference.
+        </p>
+      </div>
 
       <div style={styles.field}>
         <label style={styles.label}>Poster Size</label>
