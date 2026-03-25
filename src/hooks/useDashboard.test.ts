@@ -7,14 +7,25 @@ vi.mock("./useAuth", () => ({
   useAuth: () => ({ server: stableServer }),
 }));
 
+vi.mock("./useLibrary", () => ({
+  useLibrary: () => ({
+    sections: [
+      { key: "1", title: "Movies", type: "movie", updatedAt: 0 },
+      { key: "2", title: "TV Shows", type: "show", updatedAt: 0 },
+    ],
+    isLoading: false,
+    error: null,
+  }),
+}));
+
 vi.mock("./useServerActivity", () => ({
   useServerActivity: () => ({ completionCounter: 0 }),
 }));
 
-const mockGetRecentlyAdded = vi.fn(() => Promise.resolve([]));
+const mockGetRecentlyAddedBySection = vi.fn(() => Promise.resolve([]));
 const mockGetOnDeck = vi.fn(() => Promise.resolve([]));
 vi.mock("../services/plex-library", () => ({
-  getRecentlyAdded: (...args: unknown[]) => mockGetRecentlyAdded(...args),
+  getRecentlyAddedBySection: (...args: unknown[]) => mockGetRecentlyAddedBySection(...args),
   getOnDeck: (...args: unknown[]) => mockGetOnDeck(...args),
 }));
 
@@ -46,13 +57,13 @@ describe("useDashboard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockCacheGet.mockReturnValue(null);
-    mockGetRecentlyAdded.mockResolvedValue([]);
+    mockGetRecentlyAddedBySection.mockResolvedValue([]);
     mockGetOnDeck.mockResolvedValue([]);
     mockGroupRecentlyAdded.mockImplementation((items: unknown[]) => items);
   });
 
   it("starts loading on mount", () => {
-    mockGetRecentlyAdded.mockReturnValue(new Promise(() => {}));
+    mockGetRecentlyAddedBySection.mockReturnValue(new Promise(() => {}));
     mockGetOnDeck.mockReturnValue(new Promise(() => {}));
 
     const { result } = renderHook(() => useDashboard());
@@ -60,17 +71,27 @@ describe("useDashboard", () => {
     expect(result.current.isLoading).toBe(true);
   });
 
-  it("fetches recent items and on deck", async () => {
+  it("fetches movies and TV separately", async () => {
     const { result } = renderHook(() => useDashboard());
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
     });
 
-    expect(mockGetRecentlyAdded).toHaveBeenCalledWith(
+    // Should be called at least twice: once for movie sections, once for TV sections
+    // (may be called more due to background refresh)
+    expect(mockGetRecentlyAddedBySection.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(mockGetRecentlyAddedBySection).toHaveBeenCalledWith(
       "https://plex.test",
       "token",
-      50
+      [{ key: "1", title: "Movies", type: "movie", updatedAt: 0 }],
+      30
+    );
+    expect(mockGetRecentlyAddedBySection).toHaveBeenCalledWith(
+      "https://plex.test",
+      "token",
+      [{ key: "2", title: "TV Shows", type: "show", updatedAt: 0 }],
+      30
     );
     expect(mockGetOnDeck).toHaveBeenCalledWith(
       "https://plex.test",
@@ -78,12 +99,15 @@ describe("useDashboard", () => {
     );
   });
 
-  it("splits items into movies and TV", async () => {
-    mockGetRecentlyAdded.mockResolvedValue([
-      makeMovie("1", "Movie A"),
-      makeTvItem("2", "Episode B"),
-      makeMovie("3", "Movie C"),
-    ]);
+  it("returns movies from movie sections", async () => {
+    mockGetRecentlyAddedBySection.mockImplementation(
+      (_uri: unknown, _token: unknown, sections: { type: string }[]) => {
+        if (sections[0]?.type === "movie") {
+          return Promise.resolve([makeMovie("1", "Movie A"), makeMovie("3", "Movie C")]);
+        }
+        return Promise.resolve([]);
+      }
+    );
 
     const { result } = renderHook(() => useDashboard());
 
@@ -97,8 +121,14 @@ describe("useDashboard", () => {
   });
 
   it("groups TV items via groupRecentlyAdded", async () => {
-    const tvItems = [makeTvItem("2", "Episode B")];
-    mockGetRecentlyAdded.mockResolvedValue(tvItems);
+    mockGetRecentlyAddedBySection.mockImplementation(
+      (_uri: unknown, _token: unknown, sections: { type: string }[]) => {
+        if (sections[0]?.type === "show") {
+          return Promise.resolve([makeTvItem("2", "Episode B")]);
+        }
+        return Promise.resolve([]);
+      }
+    );
     mockGroupRecentlyAdded.mockReturnValue([{ grouped: true }]);
 
     const { result } = renderHook(() => useDashboard());
@@ -134,7 +164,14 @@ describe("useDashboard", () => {
     };
     mockCacheGet.mockReturnValue(cachedData);
 
-    mockGetRecentlyAdded.mockResolvedValue([makeMovie("2", "New Movie")]);
+    mockGetRecentlyAddedBySection.mockImplementation(
+      (_uri: unknown, _token: unknown, sections: { type: string }[]) => {
+        if (sections[0]?.type === "movie") {
+          return Promise.resolve([makeMovie("2", "New Movie")]);
+        }
+        return Promise.resolve([]);
+      }
+    );
     mockGetOnDeck.mockResolvedValue([]);
 
     const { result } = renderHook(() => useDashboard());
@@ -148,11 +185,11 @@ describe("useDashboard", () => {
     });
 
     // API was still called for background refresh
-    expect(mockGetRecentlyAdded).toHaveBeenCalled();
+    expect(mockGetRecentlyAddedBySection).toHaveBeenCalled();
   });
 
   it("handles fetch error", async () => {
-    mockGetRecentlyAdded.mockRejectedValue(new Error("Server down"));
+    mockGetRecentlyAddedBySection.mockRejectedValue(new Error("Server down"));
 
     const { result } = renderHook(() => useDashboard());
 
@@ -190,7 +227,7 @@ describe("useDashboard", () => {
     expect(result.current.recentMovies).toHaveLength(0);
     expect(result.current.recentShows).toHaveLength(0);
     expect(result.current.onDeck).toHaveLength(0);
-    expect(mockGetRecentlyAdded).not.toHaveBeenCalled();
+    expect(mockGetRecentlyAddedBySection).not.toHaveBeenCalled();
 
     vi.restoreAllMocks();
   });
