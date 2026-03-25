@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "./useAuth";
+import { useLibrary } from "./useLibrary";
 import { useServerActivity } from "./useServerActivity";
-import { getRecentlyAdded, getOnDeck } from "../services/plex-library";
+import { getRecentlyAddedBySection, getOnDeck } from "../services/plex-library";
 import { cacheGet, cacheSet, cacheInvalidate } from "../services/api-cache";
 import { groupRecentlyAdded } from "../utils/groupRecentlyAdded";
 import type { PlexMediaItem, GroupedRecentItem } from "../types/library";
@@ -26,6 +27,7 @@ const STALE_THRESHOLD = 2 * 60 * 1000; // 2 minutes — background refetch if ol
 
 export function useDashboard(): UseDashboardResult {
   const { server } = useAuth();
+  const { sections } = useLibrary();
   const { completionCounter } = useServerActivity();
   const cacheKey = server ? `dashboard:${server.uri}` : "";
 
@@ -61,23 +63,24 @@ export function useDashboard(): UseDashboardResult {
   // Fetch from Plex and update state + cache
   const fetchDashboard = useCallback(
     async (signal: { cancelled: boolean }, showSkeleton: boolean) => {
-      if (!server) return;
+      if (!server || sections.length === 0) return;
       if (showSkeleton) setIsLoading(true);
       setError(null);
       try {
-        const [recentItems, deckItems] = await Promise.all([
-          getRecentlyAdded(server.uri, server.accessToken, 50),
+        const movieSections = sections.filter((s) => s.type === "movie");
+        const tvSections = sections.filter((s) => s.type === "show");
+
+        const [movieItems, tvItems, deckItems] = await Promise.all([
+          getRecentlyAddedBySection(server.uri, server.accessToken, movieSections, 30),
+          getRecentlyAddedBySection(server.uri, server.accessToken, tvSections, 30),
           getOnDeck(server.uri, server.accessToken),
         ]);
 
         if (!signal.cancelled) {
-          const movies = recentItems
-            .filter((i) => i.type === "movie")
-            .sort((a, b) => b.addedAt - a.addedAt);
-          const tvItems = recentItems
-            .filter((i) => i.type === "season" || i.type === "episode")
-            .sort((a, b) => b.addedAt - a.addedAt);
-          const shows = groupRecentlyAdded(tvItems);
+          const movies = movieItems.sort((a, b) => b.addedAt - a.addedAt);
+          const shows = groupRecentlyAdded(
+            tvItems.sort((a, b) => b.addedAt - a.addedAt)
+          );
 
           setRecentMovies(movies);
           setRecentShows(shows);
@@ -103,11 +106,11 @@ export function useDashboard(): UseDashboardResult {
         if (!signal.cancelled) setIsLoading(false);
       }
     },
-    [server, cacheKey]
+    [server, sections, cacheKey]
   );
 
   useEffect(() => {
-    if (!server) return;
+    if (!server || sections.length === 0) return;
 
     const cached = cacheGet<DashboardData>(cacheKey);
     const signal = { cancelled: false };
@@ -130,7 +133,7 @@ export function useDashboard(): UseDashboardResult {
     fetchDashboard(signal, !hasLoadedOnce.current);
 
     return () => { signal.cancelled = true; };
-  }, [server, cacheKey, refreshTrigger, fetchDashboard]);
+  }, [server, sections, cacheKey, refreshTrigger, fetchDashboard]);
 
   // Auto-refresh when a server activity completes (scan, metadata refresh)
   const prevCompletion = useRef(completionCounter);
