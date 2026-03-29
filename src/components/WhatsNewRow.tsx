@@ -1,10 +1,12 @@
+import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { usePosterSize } from "../hooks/usePosterSize";
 import { getImageUrl } from "../services/plex-library";
+import { groupRecentlyAdded } from "../utils/groupRecentlyAdded";
 import HorizontalRow from "./HorizontalRow";
 import PosterCard from "./PosterCard";
-import type { PlexMediaItem, PlexEpisode } from "../types/library";
+import type { PlexMediaItem } from "../types/library";
 import { getMediaSubtitleShort as getSubtitle } from "../utils/media-helpers";
 
 interface WhatsNewRowProps {
@@ -18,7 +20,9 @@ function WhatsNewRow({ items, onDismissItem, onDismissAll }: WhatsNewRowProps) {
   const navigate = useNavigate();
   const { posterWidth } = usePosterSize();
 
-  if (!server || items.length === 0) return null;
+  const grouped = useMemo(() => groupRecentlyAdded(items), [items]);
+
+  if (!server || grouped.length === 0) return null;
 
   const posterUrl = (thumb: string) =>
     getImageUrl(server.uri, server.accessToken, thumb, 300, 450);
@@ -32,40 +36,76 @@ function WhatsNewRow({ items, onDismissItem, onDismissAll }: WhatsNewRowProps) {
         </button>
       </div>
       <HorizontalRow title="">
-        {items.map((item) => {
-          const isEpisode = item.type === "episode";
-          const ep = isEpisode ? (item as PlexEpisode) : null;
+        {grouped.map((group) => {
+          if (group.kind === "movie") {
+            const item = group.representativeItem;
+            return (
+              <div key={group.groupKey} style={styles.cardWrapper}>
+                <PosterCard
+                  ratingKey={item.ratingKey}
+                  imageUrl={posterUrl(item.thumb)}
+                  title={item.title}
+                  subtitle={getSubtitle(item as PlexMediaItem)}
+                  badge="NEW"
+                  width={posterWidth}
+                  onClick={() => navigate(`/item/${item.ratingKey}`)}
+                />
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDismissItem(item.ratingKey);
+                  }}
+                  style={styles.dismissButton}
+                  aria-label={`Dismiss ${item.title}`}
+                >
+                  <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                    <line x1={18} y1={6} x2={6} y2={18} />
+                    <line x1={6} y1={6} x2={18} y2={18} />
+                  </svg>
+                </button>
+              </div>
+            );
+          }
+
+          // Show group — multiple seasons/episodes collapsed into one card
+          const hasMultipleSeasons = group.seasonIndices.length > 1;
+          const badge = hasMultipleSeasons ? "NEW SEASONS" : "NEW";
+          const subtitle = hasMultipleSeasons
+            ? `Seasons ${group.seasonIndices.sort((a, b) => a - b).join(", ")}`
+            : group.seasonIndices.length === 1
+              ? `Season ${group.seasonIndices[0]}`
+              : group.episodes.length > 0
+                ? `${group.episodeCount} episode${group.episodeCount !== 1 ? "s" : ""}`
+                : "";
+
+          // Navigate to the show page, not an individual season
+          const showKey = group.groupKey;
+
+          // All original ratingKeys in this group for dismissal
+          const groupRatingKeys = group.itemRatingKeys;
+
           return (
-            <div key={item.ratingKey} style={styles.cardWrapper}>
+            <div key={group.groupKey} style={styles.cardWrapper}>
               <PosterCard
-                ratingKey={item.ratingKey}
-                imageUrl={posterUrl(ep?.grandparentThumb || item.thumb)}
-                title={ep?.grandparentTitle || item.title}
-                subtitle={
-                  ep
-                    ? `S${String(ep.parentIndex).padStart(2, "0")}E${String(ep.index).padStart(2, "0")} · ${ep.title}`
-                    : getSubtitle(item)
-                }
-                badge="NEW"
+                ratingKey={showKey}
+                imageUrl={posterUrl(group.thumb)}
+                title={group.title}
+                subtitle={subtitle}
+                badge={badge}
                 width={posterWidth}
-                onClick={() => navigate(`/item/${item.ratingKey}`)}
+                onClick={() => navigate(`/item/${showKey}`)}
               />
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  onDismissItem(item.ratingKey);
+                  for (const key of groupRatingKeys) {
+                    onDismissItem(key);
+                  }
                 }}
                 style={styles.dismissButton}
-                aria-label={`Dismiss ${item.title}`}
+                aria-label={`Dismiss ${group.title}`}
               >
-                <svg
-                  width={14}
-                  height={14}
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
+                <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
                   <line x1={18} y1={6} x2={6} y2={18} />
                   <line x1={6} y1={6} x2={18} y2={18} />
                 </svg>

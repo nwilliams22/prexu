@@ -253,6 +253,8 @@ export interface GroupedRecentItem {
   episodeCount: number;
   /** Season indices from season-level data (when episodes array is empty) */
   seasonIndices: number[];
+  /** All original ratingKeys in this group (for dismissal) */
+  itemRatingKeys: string[];
 }
 
 // ── Collections ──
