@@ -78,3 +78,10 @@ export {
   addPendingWatchSync,
   removePendingWatchSync,
 } from "./watch-sync";
+export {
+  getInviteVolume,
+  saveInviteVolume,
+  getInviteSoundConfig,
+  saveInviteSoundConfig,
+} from "./notification";
+export type { BuiltinSound, NotificationSoundConfig } from "./notification";

@@ -1,11 +1,17 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   getRelayUrl,
   saveRelayUrl,
   clearRelayUrl,
   hasManualRelayUrl,
   deriveRelayUrl,
+  getInviteVolume,
+  saveInviteVolume,
+  getInviteSoundConfig,
+  saveInviteSoundConfig,
 } from "../../services/storage";
+import type { BuiltinSound, NotificationSoundConfig } from "../../services/storage";
+import { previewSound, previewCustomDataUrl } from "../../utils/notificationSound";
 import { open } from "@tauri-apps/plugin-shell";
 import { styles } from "./settingsStyles";
 
@@ -27,6 +33,10 @@ export function AccountSettingsPanel({
   const [showOverride, setShowOverride] = useState(false);
   const [relaySaved, setRelaySaved] = useState(false);
 
+  // Notification settings
+  const [inviteVolume, setInviteVolume] = useState(0.5);
+  const [soundConfig, setSoundConfig] = useState<NotificationSoundConfig>({ sound: "chime" });
+
   const autoUrl = serverUri ? deriveRelayUrl(serverUri) : null;
 
   useEffect(() => {
@@ -38,8 +48,72 @@ export function AccountSettingsPanel({
         const url = await getRelayUrl();
         setManualUrl(url);
       }
+
+      const vol = await getInviteVolume();
+      setInviteVolume(vol);
+      const sndCfg = await getInviteSoundConfig();
+      setSoundConfig(sndCfg);
     })();
   }, []);
+
+  const handleVolumeChange = useCallback((vol: number) => {
+    setInviteVolume(vol);
+    saveInviteVolume(vol);
+  }, []);
+
+  const handleVolumePreview = useCallback((vol: number) => {
+    const sound = soundConfig.sound === "custom" ? "chime" : soundConfig.sound;
+    previewSound(sound as BuiltinSound, vol);
+  }, [soundConfig]);
+
+  const handleSoundChange = useCallback((sound: BuiltinSound | "custom") => {
+    const newConfig: NotificationSoundConfig =
+      sound === "custom"
+        ? { sound: "custom", customPath: soundConfig.customPath }
+        : { sound };
+    setSoundConfig(newConfig);
+    saveInviteSoundConfig(newConfig);
+    if (sound !== "custom") {
+      previewSound(sound, inviteVolume);
+    }
+  }, [soundConfig.customPath, inviteVolume]);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handlePickCustomSound = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleFileSelected = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      // Read as base64 and store in tauri-plugin-store for persistence
+      const arrayBuffer = await file.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuffer);
+      let binary = "";
+      for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      const base64 = btoa(binary);
+      const dataUrl = `data:${file.type || "audio/mpeg"};base64,${base64}`;
+
+      const newConfig: NotificationSoundConfig = {
+        sound: "custom",
+        customPath: file.name,
+        customDataUrl: dataUrl,
+      };
+      setSoundConfig(newConfig);
+      saveInviteSoundConfig(newConfig);
+      previewCustomDataUrl(dataUrl, inviteVolume);
+    } catch (err) {
+      console.error("[Settings] Failed to load custom sound:", err);
+    }
+
+    // Reset input so the same file can be re-selected
+    e.target.value = "";
+  }, [inviteVolume]);
 
   const handleSaveOverride = async () => {
     await saveRelayUrl(manualUrl);
@@ -131,6 +205,88 @@ export function AccountSettingsPanel({
             </div>
           )}
         </div>
+
+        {/* Invite Notification Volume */}
+        <div style={styles.field}>
+          <label style={styles.label}>
+            Invite Notification Volume: {Math.round(inviteVolume * 100)}%
+          </label>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={Math.round(inviteVolume * 100)}
+            onChange={(e) => handleVolumeChange(Number(e.target.value) / 100)}
+            onMouseUp={() => handleVolumePreview(inviteVolume)}
+            style={styles.slider}
+          />
+          <div style={styles.sliderLabels}>
+            <span>Off</span>
+            <span>100%</span>
+          </div>
+        </div>
+
+        {/* Notification Sound */}
+        <div style={styles.field}>
+          <label style={styles.label}>Notification Sound</label>
+          <p style={styles.hint}>
+            Choose the sound that plays when you receive a Watch Together invite.
+          </p>
+          <div style={notifStyles.soundGrid}>
+            {SOUND_OPTIONS.map((opt) => (
+              <button
+                key={opt.id}
+                onClick={() => handleSoundChange(opt.id)}
+                style={{
+                  ...notifStyles.soundOption,
+                  borderColor:
+                    soundConfig.sound === opt.id
+                      ? "var(--accent)"
+                      : "var(--border)",
+                  background:
+                    soundConfig.sound === opt.id
+                      ? "rgba(229, 160, 13, 0.1)"
+                      : "transparent",
+                }}
+              >
+                {opt.label}
+              </button>
+            ))}
+            <button
+              onClick={() => handleSoundChange("custom")}
+              style={{
+                ...notifStyles.soundOption,
+                borderColor:
+                  soundConfig.sound === "custom"
+                    ? "var(--accent)"
+                    : "var(--border)",
+                background:
+                  soundConfig.sound === "custom"
+                    ? "rgba(229, 160, 13, 0.1)"
+                    : "transparent",
+              }}
+            >
+              Custom
+            </button>
+          </div>
+          {soundConfig.sound === "custom" && (
+            <div style={notifStyles.customRow}>
+              <code style={notifStyles.customPath}>
+                {soundConfig.customPath || "No file selected"}
+              </code>
+              <button onClick={handlePickCustomSound} style={styles.saveButton}>
+                Browse…
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="audio/*"
+                onChange={handleFileSelected}
+                style={{ display: "none" }}
+              />
+            </div>
+          )}
+        </div>
       </section>
 
       {/* Content Requests (Admin only) */}
@@ -199,6 +355,47 @@ export function AccountSettingsPanel({
     </>
   );
 }
+
+const SOUND_OPTIONS: { id: BuiltinSound; label: string }[] = [
+  { id: "chime", label: "Chime" },
+  { id: "bell", label: "Bell" },
+  { id: "pop", label: "Pop" },
+  { id: "ping", label: "Ping" },
+  { id: "soft", label: "Soft" },
+];
+
+const notifStyles: Record<string, React.CSSProperties> = {
+  soundGrid: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: "0.5rem",
+    marginTop: "0.5rem",
+  },
+  soundOption: {
+    padding: "0.4rem 1rem",
+    borderRadius: "8px",
+    border: "1px solid var(--border)",
+    color: "var(--text-primary)",
+    fontSize: "0.85rem",
+    fontWeight: 500,
+    cursor: "pointer",
+    transition: "all 0.15s",
+  },
+  customRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.75rem",
+    marginTop: "0.5rem",
+  },
+  customPath: {
+    flex: 1,
+    fontSize: "0.8rem",
+    color: "var(--text-secondary)",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+};
 
 const aboutStyles: Record<string, React.CSSProperties> = {
   infoGrid: {

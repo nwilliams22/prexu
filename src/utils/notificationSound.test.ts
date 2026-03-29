@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// Mock storage so playNotificationSound can read settings
+vi.mock("../services/storage", () => ({
+  getInviteVolume: vi.fn(() => Promise.resolve(0.5)),
+  getInviteSoundConfig: vi.fn(() => Promise.resolve({ sound: "chime" })),
+}));
+
 // We need fresh module state for each test since the module caches audioCtx
 beforeEach(() => {
   vi.resetModules();
@@ -35,7 +41,7 @@ describe("playNotificationSound", () => {
     );
 
     const { playNotificationSound } = await import("./notificationSound");
-    playNotificationSound();
+    await playNotificationSound();
 
     expect(createOscillator).toHaveBeenCalledTimes(2);
     expect(createGain).toHaveBeenCalledOnce();
@@ -52,7 +58,7 @@ describe("playNotificationSound", () => {
     );
 
     const { playNotificationSound } = await import("./notificationSound");
-    expect(() => playNotificationSound()).not.toThrow();
+    await expect(playNotificationSound()).resolves.not.toThrow();
   });
 
   it("resumes suspended context", async () => {
@@ -83,7 +89,7 @@ describe("playNotificationSound", () => {
     );
 
     const { playNotificationSound } = await import("./notificationSound");
-    playNotificationSound();
+    await playNotificationSound();
     expect(resume).toHaveBeenCalled();
   });
 
@@ -118,9 +124,9 @@ describe("playNotificationSound", () => {
     );
 
     const { playNotificationSound } = await import("./notificationSound");
-    playNotificationSound();
-    playNotificationSound();
-    playNotificationSound();
+    await playNotificationSound();
+    await playNotificationSound();
+    await playNotificationSound();
 
     expect(constructorCount).toBe(1);
   });

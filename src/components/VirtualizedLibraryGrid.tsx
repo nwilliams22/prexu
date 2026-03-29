@@ -10,7 +10,7 @@
  * the standard CSS grid to keep things simple.
  */
 
-import { useRef, useState, useEffect, useCallback, useMemo, useLayoutEffect, type ReactNode } from "react";
+import { useRef, useState, useCallback, useMemo, useLayoutEffect, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useBreakpoint } from "../hooks/useBreakpoint";
 import type { Breakpoint } from "../hooks/useBreakpoint";
@@ -64,8 +64,10 @@ function VirtualizedLibraryGrid<T>({
   const parentRef = useRef<HTMLDivElement>(null);
   const [cols, setCols] = useState(4);
 
-  // Recalculate columns on resize
-  useEffect(() => {
+  // Recalculate columns on resize — use useLayoutEffect so the first
+  // measurement happens synchronously before paint, avoiding a flash
+  // where items are grouped with the stale default column count.
+  useLayoutEffect(() => {
     const el = parentRef.current;
     if (!el) return;
 
@@ -76,8 +78,7 @@ function VirtualizedLibraryGrid<T>({
       }
     };
 
-    // Defer initial measurement to ensure layout is complete
-    requestAnimationFrame(measure);
+    measure();
 
     const observer = new ResizeObserver(measure);
     observer.observe(el);
@@ -185,14 +186,8 @@ function VirtualizedGridInner<T>({
     overscan: 3,
   });
 
-  // Hide the grid briefly on first render to avoid visual jitter from measurement
-  const [settled, setSettled] = useState(false);
-  useLayoutEffect(() => {
-    requestAnimationFrame(() => setSettled(true));
-  }, []);
-
   return (
-    <div ref={parentRef} style={{ opacity: settled ? 1 : 0 }}>
+    <div ref={parentRef}>
       {header && (
         <div
           style={{
