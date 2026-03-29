@@ -33,6 +33,7 @@ export function groupRecentlyAdded(
         episodes: [],
         episodeCount: 0,
         seasonIndices: [],
+        itemRatingKeys: [item.ratingKey],
       });
     } else if (item.type === "episode") {
       const episode = item as PlexEpisode;
@@ -42,6 +43,7 @@ export function groupRecentlyAdded(
         const group = showGroupMap.get(showKey)!;
         group.episodes.push(episode);
         group.episodeCount = group.episodes.length;
+        group.itemRatingKeys.push(episode.ratingKey);
       } else {
         const group: GroupedRecentItem = {
           kind: "show-group",
@@ -52,6 +54,7 @@ export function groupRecentlyAdded(
           episodes: [episode],
           episodeCount: 1,
           seasonIndices: [],
+          itemRatingKeys: [episode.ratingKey],
         };
         showGroupMap.set(showKey, group);
         result.push(group);
@@ -69,6 +72,7 @@ export function groupRecentlyAdded(
         if (season.index !== undefined) {
           group.seasonIndices.push(season.index);
         }
+        group.itemRatingKeys.push(item.ratingKey);
       } else {
         const group: GroupedRecentItem = {
           kind: "show-group",
@@ -79,6 +83,7 @@ export function groupRecentlyAdded(
           episodes: [], // No episode-level data from season items
           episodeCount: season.leafCount || 0,
           seasonIndices: season.index !== undefined ? [season.index] : [],
+          itemRatingKeys: [item.ratingKey],
         };
         showGroupMap.set(showKey, group);
         result.push(group);
