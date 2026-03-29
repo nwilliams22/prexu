@@ -111,6 +111,8 @@ export const STORAGE_KEYS = {
   PARENTAL_CONTROLS: "prexu_parental",
   DOWNLOADS: "prexu_downloads",
   PENDING_WATCH_SYNC: "prexu_pending_watch_sync",
+  INVITE_NOTIFICATION_VOLUME: "prexu_invite_notification_volume",
+  INVITE_NOTIFICATION_SOUND: "prexu_invite_notification_sound",
 } as const;
 
 /** Keys that hold sensitive data and must use the secure store */

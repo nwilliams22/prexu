@@ -5,6 +5,7 @@ import SplashScreen from "./components/SplashScreen";
 import { useAutoUpdate } from "./hooks/useAutoUpdate";
 import { useAuth, useAuthState, AuthProvider } from "./hooks/useAuth";
 import AppProviders from "./contexts/AppProviders";
+import ErrorBoundary from "./components/ErrorBoundary";
 import { getLibrarySections } from "./services/plex-library";
 import { cacheSet } from "./services/api-cache";
 
@@ -107,7 +108,7 @@ function AppRoutes() {
         />
 
         {/* Player route — no sidebar/header */}
-        <Route path="/play/:ratingKey" element={<Player />} />
+        <Route path="/play/:ratingKey" element={<ErrorBoundary><Player /></ErrorBoundary>} />
 
         {/* Authenticated app shell with sidebar */}
         <Route element={<AppLayout />}>

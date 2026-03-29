@@ -2,7 +2,7 @@
  * Detects and corrects playback drift between participants.
  */
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { UsePlayerResult } from "../usePlayer";
 import type { SyncStatus } from "./useWatchTogetherSession";
 
@@ -16,6 +16,11 @@ export function useSyncDriftDetection(
     localTimestamp: number;
   } | null>
 ): void {
+  // Use a ref so the interval callback always reads the latest currentTime
+  // without needing it in the effect dependency array.
+  const currentTimeRef = useRef(player.currentTime);
+  currentTimeRef.current = player.currentTime;
+
   useEffect(() => {
     if (!isInSession || !player.isPlaying) return;
 
@@ -25,7 +30,7 @@ export function useSyncDriftDetection(
 
       const expectedTime =
         sync.time + (Date.now() - sync.localTimestamp) / 1000;
-      const drift = Math.abs(player.currentTime - expectedTime);
+      const drift = Math.abs(currentTimeRef.current - expectedTime);
 
       if (drift > 2) {
         const video = player.videoRef.current;
@@ -42,7 +47,6 @@ export function useSyncDriftDetection(
   }, [
     isInSession,
     player.isPlaying,
-    player.currentTime,
     player.videoRef,
     setSyncStatus,
     remoteActionRef,

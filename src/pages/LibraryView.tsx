@@ -85,6 +85,11 @@ function LibraryView() {
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const gridContainerRef = useRef<HTMLDivElement>(null);
 
+  // Clear expanded state when switching sections
+  useEffect(() => {
+    setExpandedKey(null);
+  }, [sectionId]);
+
   // Apply parental controls client-side filtering
   const filteredItems = useMemo(
     () => filterByRating(items as (PlexMediaItem & { contentRating?: string })[]),

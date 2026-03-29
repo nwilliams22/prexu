@@ -61,10 +61,19 @@ vi.mock("../services/storage", () => ({
   clearRelayUrl: vi.fn(() => Promise.resolve()),
   hasManualRelayUrl: vi.fn(() => Promise.resolve(false)),
   deriveRelayUrl: vi.fn(() => "ws://localhost:9847/ws"),
+  getInviteVolume: vi.fn(() => Promise.resolve(0.5)),
+  saveInviteVolume: vi.fn(() => Promise.resolve()),
+  getInviteSoundConfig: vi.fn(() => Promise.resolve({ sound: "chime" })),
+  saveInviteSoundConfig: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("@tauri-apps/plugin-shell", () => ({
   open: vi.fn(() => Promise.resolve()),
+}));
+
+vi.mock("../utils/notificationSound", () => ({
+  previewSound: vi.fn(),
+  previewCustomDataUrl: vi.fn(),
 }));
 
 vi.mock("../hooks/useHomeUsers", () => ({

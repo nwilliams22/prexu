@@ -138,7 +138,11 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
 
   // ── Initialize playback ──
   const initPlayback = useCallback(async () => {
-    if (!server || !ratingKey) return;
+    if (!server || !ratingKey) {
+      setIsLoading(false);
+      setPlaybackError("No server or media selected");
+      return;
+    }
     timeline.ratingKeyRef.current = ratingKey;
 
     setIsLoading(true);
@@ -207,7 +211,11 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
       const viewOffset = offsetOverrideRef.current != null ? offsetOverrideRef.current : (playableItem.viewOffset ?? 0);
 
       const video = videoRef.current;
-      if (!video) return;
+      if (!video) {
+        setIsLoading(false);
+        setPlaybackError("Video element not available — try reloading");
+        return;
+      }
 
       video.volume = Math.min(volumeRef.current, 1);
       video.muted = isMutedRef.current;

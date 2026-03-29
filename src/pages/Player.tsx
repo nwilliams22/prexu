@@ -271,6 +271,15 @@ function Player() {
       {/* Loading overlay */}
       {player.isLoading && (
         <div style={styles.centerOverlay}>
+          <button
+            onClick={handleBack}
+            style={styles.loadingBackButton}
+            aria-label="Go back"
+          >
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="15 18 9 12 15 6" />
+            </svg>
+          </button>
           <div className="loading-spinner" />
         </div>
       )}
@@ -406,6 +415,22 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "center",
     background: "rgba(0,0,0,0.3)",
     zIndex: 5,
+  },
+  loadingBackButton: {
+    position: "absolute",
+    top: "1.5rem",
+    left: "1.5rem",
+    background: "rgba(0,0,0,0.5)",
+    border: "none",
+    borderRadius: "50%",
+    width: "44px",
+    height: "44px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    color: "#fff",
+    cursor: "pointer",
+    zIndex: 10,
   },
   bufferingOverlay: {
     position: "absolute",
