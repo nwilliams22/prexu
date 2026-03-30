@@ -6,7 +6,8 @@ import { useAutoUpdate } from "./hooks/useAutoUpdate";
 import { useAuth, useAuthState, AuthProvider } from "./hooks/useAuth";
 import AppProviders from "./contexts/AppProviders";
 import ErrorBoundary from "./components/ErrorBoundary";
-import { getLibrarySections } from "./services/plex-library";
+import { getLibrarySections, getRecentlyAddedBySection, getOnDeck } from "./services/plex-library";
+import { groupRecentlyAdded } from "./utils/groupRecentlyAdded";
 import { cacheSet } from "./services/api-cache";
 
 // Lazy-loaded page components
@@ -69,11 +70,31 @@ function AppRoutes() {
       return;
     }
 
-    // Authenticated with server — prefetch library sections, then dismiss splash
+    // Authenticated with server — prefetch library sections + dashboard data,
+    // then dismiss splash. This ensures the dashboard renders fully on first paint.
     getLibrarySections(server.uri, server.accessToken)
-      .then((sections) => {
-        // Cache for useLibrary to pick up instantly
+      .then(async (sections) => {
+        // Cache sections for useLibrary
         cacheSet(`library-sections:${server.uri}`, sections, 30 * 60 * 1000, true);
+
+        // Prefetch dashboard data so it's cached when useDashboard mounts
+        try {
+          const movieSections = sections.filter((s) => s.type === "movie");
+          const tvSections = sections.filter((s) => s.type === "show");
+          const [movieItems, tvItems, deckItems] = await Promise.all([
+            getRecentlyAddedBySection(server.uri, server.accessToken, movieSections, 30),
+            getRecentlyAddedBySection(server.uri, server.accessToken, tvSections, 30),
+            getOnDeck(server.uri, server.accessToken),
+          ]);
+
+          const movies = movieItems.sort((a, b) => b.addedAt - a.addedAt);
+          const shows = groupRecentlyAdded(tvItems.sort((a, b) => b.addedAt - a.addedAt));
+          const dashKey = `dashboard:${server.uri}`;
+          cacheSet(dashKey, { recentMovies: movies, recentShows: shows, onDeck: deckItems }, 60 * 60 * 1000);
+        } catch {
+          // Non-critical — dashboard will fetch on mount
+        }
+
         setAppReady(true);
       })
       .catch(() => {
