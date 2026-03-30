@@ -297,7 +297,8 @@ const styles: Record<string, React.CSSProperties> = {
     willChange: "transform",
     textAlign: "left",
     flexShrink: 0,
-  },
+    contentVisibility: "auto",
+  } as React.CSSProperties,
   imageContainer: {
     position: "relative",
     width: "100%",
