@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useCallback, type ReactNode } from "react";
+import { useRef, useState, useEffect, useCallback, type ReactNode, Children } from "react";
 import { useBreakpoint, isDesktopOrAbove, isTabletOrBelow } from "../hooks/useBreakpoint";
 
 interface HorizontalRowProps {
@@ -67,12 +67,17 @@ function HorizontalRow({ title, children, onSeeAll }: HorizontalRowProps) {
     }
   }, []);
 
-  const updateScrollState = () => {
+  const updateScrollState = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    setCanScrollLeft(el.scrollLeft > 10);
-    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 10);
-  };
+    const left = el.scrollLeft > 10;
+    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 10;
+    setCanScrollLeft((prev) => prev !== left ? left : prev);
+    setCanScrollRight((prev) => prev !== right ? right : prev);
+  }, []);
+
+  // Re-check scroll state when child count changes (async data loading)
+  const childCount = Children.count(children);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -85,7 +90,7 @@ function HorizontalRow({ title, children, onSeeAll }: HorizontalRowProps) {
       el.removeEventListener("scroll", updateScrollState);
       observer.disconnect();
     };
-  }, []);
+  }, [updateScrollState, childCount]);
 
   const scroll = (direction: "left" | "right") => {
     const el = scrollRef.current;
