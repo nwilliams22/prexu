@@ -62,9 +62,14 @@ export function useAutoUpdate(): AutoUpdateState {
 
     // Check for updates shortly after launch (non-blocking)
     const timer = setTimeout(checkForUpdates, 3000);
+
+    // Re-check periodically while the app is open (every 15 minutes)
+    const interval = setInterval(checkForUpdates, 15 * 60 * 1000);
+
     return () => {
       cancelled = true;
       clearTimeout(timer);
+      clearInterval(interval);
     };
   }, []);
 
