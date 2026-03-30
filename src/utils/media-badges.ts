@@ -10,6 +10,7 @@ export interface MediaBadge {
  * into a display-friendly badge string.
  */
 export function getResolutionBadge(resolution: string): string | null {
+  if (!resolution) return null;
   const lower = resolution.toLowerCase().replace("p", "");
   switch (lower) {
     case "2160":
@@ -84,6 +85,7 @@ export function getAudioBadge(
   if (extTitle.includes("dts:x") || extTitle.includes("dts-x")) return "DTS:X";
 
   // Check based on codec
+  if (!audioCodec) return null;
   const codec = audioCodec.toLowerCase();
   if (codec === "truehd" && audioChannels >= 6) return "TrueHD";
   if ((codec === "dts" || codec === "dca") && audioProfile === "ma") return "DTS-HD MA";
