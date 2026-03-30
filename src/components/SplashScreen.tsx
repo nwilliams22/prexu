@@ -93,6 +93,7 @@ function SplashScreen({ ready, updating, updateProgress }: SplashScreenProps) {
         ) : (
           <div style={styles.spinnerRow}>
             <div className="loading-spinner" />
+            <span style={styles.statusLabel}>Fetching server content…</span>
           </div>
         )}
       </div>
@@ -130,7 +131,15 @@ const styles: Record<string, React.CSSProperties> = {
     letterSpacing: "-0.02em",
   },
   spinnerRow: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: "0.75rem",
     marginTop: "0.5rem",
+  },
+  statusLabel: {
+    fontSize: "0.85rem",
+    color: "var(--text-secondary)",
   },
   updateSection: {
     display: "flex",

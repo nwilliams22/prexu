@@ -1,6 +1,6 @@
 {
   "name": "prexu",
-  "version": "0.5.7",
+  "version": "0.5.8",
   "private": true,
   "description": "A custom cross-platform Plex client",
   "type": "module",
