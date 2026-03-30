@@ -87,11 +87,13 @@ export function useDashboard(): UseDashboardResult {
           setOnDeck(deckItems);
           hasLoadedOnce.current = true;
 
+          // In-memory cache only — don't persist to localStorage.
+          // This prevents stale data from a previous session showing briefly
+          // on launch before being replaced by fresh data.
           cacheSet(
             cacheKey,
             { recentMovies: movies, recentShows: shows, onDeck: deckItems },
             CACHE_TTL,
-            true
           );
         }
       } catch (err) {
@@ -116,14 +118,14 @@ export function useDashboard(): UseDashboardResult {
     const signal = { cancelled: false };
 
     if (cached) {
-      // Always show cached data immediately
+      // Show cached data immediately (in-memory only — no stale cross-session data)
       setRecentMovies(cached.recentMovies);
       setRecentShows(cached.recentShows);
       setOnDeck(cached.onDeck);
       setIsLoading(false);
       hasLoadedOnce.current = true;
 
-      // Always silently refresh in the background so the order is up-to-date
+      // Silently refresh in the background so the data stays current
       // (e.g. after returning from the player, continue watching order changes)
       fetchDashboard(signal, false);
       return () => { signal.cancelled = true; };
