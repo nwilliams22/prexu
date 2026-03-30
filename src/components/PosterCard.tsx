@@ -395,7 +395,7 @@ const styles: Record<string, React.CSSProperties> = {
   unwatchedBadge: {
     position: "absolute",
     top: "6px",
-    left: "6px",
+    right: "6px",
     background: "var(--accent)",
     color: "#000",
     fontSize: "0.65rem",

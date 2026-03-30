@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { useCollections } from "../hooks/useCollections";
@@ -10,6 +10,7 @@ import PosterCard from "../components/PosterCard";
 import SkeletonCard from "../components/SkeletonCard";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
+import AlphaJumpBar from "../components/AlphaJumpBar";
 
 type SortOption = "alpha-asc" | "alpha-desc" | "items-desc" | "items-asc";
 
@@ -22,6 +23,7 @@ function CollectionsBrowser() {
   useScrollRestoration();
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState<SortOption>("alpha-asc");
+  const gridContainerRef = useRef<HTMLDivElement>(null);
 
   const filteredCollections = useMemo(() => {
     const query = searchQuery.toLowerCase();
@@ -52,6 +54,41 @@ function CollectionsBrowser() {
     () => filteredCollections.reduce((sum, g) => sum + g.items.length, 0),
     [filteredCollections]
   );
+
+  const allFilteredItems = useMemo(
+    () => filteredCollections.flatMap((g) => g.items),
+    [filteredCollections]
+  );
+
+  const availableLetters = useMemo(() => {
+    const letters = new Set<string>();
+    for (const item of allFilteredItems) {
+      const first = item.title.charAt(0).toUpperCase();
+      if (/[A-Z]/.test(first)) {
+        letters.add(first);
+      } else {
+        letters.add("#");
+      }
+    }
+    return letters;
+  }, [allFilteredItems]);
+
+  const handleAlphaJump = useCallback((letter: string) => {
+    if (!gridContainerRef.current) return;
+    const cards = gridContainerRef.current.querySelectorAll("[data-title-sort]");
+    for (const card of cards) {
+      const titleSort = card.getAttribute("data-title-sort") || "";
+      const first = titleSort.charAt(0).toUpperCase();
+      const matches = letter === "#" ? !/[A-Z]/.test(first) : first === letter;
+      if (matches) {
+        card.scrollIntoView({ behavior: "smooth", block: "center" });
+        return;
+      }
+    }
+  }, []);
+
+  const showAlphaJump =
+    !isLoading && allFilteredItems.length > 0 && (sortBy === "alpha-asc" || sortBy === "alpha-desc");
 
   if (!server) return null;
 
@@ -105,25 +142,32 @@ function CollectionsBrowser() {
         </LibraryGrid>
       )}
 
-      {!isLoading &&
-        !error &&
-        filteredCollections.map((group) => (
-          <section key={group.section.key} style={styles.section}>
-            <h3 style={styles.sectionTitle}>{group.section.title}</h3>
-            <LibraryGrid>
-              {group.items.map((collection) => (
-                <PosterCard
-                  key={collection.ratingKey}
-                  ratingKey={collection.ratingKey}
-                  imageUrl={posterUrl(collection.thumb)}
-                  title={collection.title}
-                  subtitle={`${collection.childCount} item${collection.childCount !== 1 ? "s" : ""}`}
-                  onClick={() => navigate(`/collection/${collection.ratingKey}`)}
-                />
-              ))}
-            </LibraryGrid>
-          </section>
-        ))}
+      <div ref={gridContainerRef}>
+        {!isLoading &&
+          !error &&
+          filteredCollections.map((group) => (
+            <section key={group.section.key} style={styles.section}>
+              <h3 style={styles.sectionTitle}>{group.section.title}</h3>
+              <LibraryGrid>
+                {group.items.map((collection) => (
+                  <div key={collection.ratingKey} data-title-sort={collection.title}>
+                    <PosterCard
+                      ratingKey={collection.ratingKey}
+                      imageUrl={posterUrl(collection.thumb)}
+                      title={collection.title}
+                      subtitle={`${collection.childCount} item${collection.childCount !== 1 ? "s" : ""}`}
+                      onClick={() => navigate(`/collection/${collection.ratingKey}`)}
+                    />
+                  </div>
+                ))}
+              </LibraryGrid>
+            </section>
+          ))}
+      </div>
+
+      {showAlphaJump && (
+        <AlphaJumpBar onJump={handleAlphaJump} availableLetters={availableLetters} />
+      )}
 
       {/* Empty state — no collections at all */}
       {!isLoading && !error && collections.length === 0 && (

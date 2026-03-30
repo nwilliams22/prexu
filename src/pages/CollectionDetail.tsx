@@ -898,16 +898,15 @@ const styles: Record<string, React.CSSProperties> = {
   },
   // Synopsis
   rowSynopsis: {
-    fontSize: "0.9rem",
+    fontSize: "1rem",
     color: "var(--text-secondary)",
     opacity: 0.8,
-    lineHeight: 1.5,
+    lineHeight: 1.6,
     marginTop: "0.25rem",
     display: "-webkit-box",
-    WebkitLineClamp: 2,
+    WebkitLineClamp: 3,
     WebkitBoxOrient: "vertical",
     overflow: "hidden",
-    maxWidth: "800px",
   },
   // Detail shimmer placeholder
   detailShimmer: {
