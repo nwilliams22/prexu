@@ -163,18 +163,18 @@ const styles: Record<string, React.CSSProperties> = {
     minWidth: 0,
   },
   episodeGridTitle: {
-    fontSize: "1rem",
+    fontSize: "1.1rem",
     fontWeight: 600,
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   },
   episodeGridNumber: {
-    fontSize: "0.85rem",
+    fontSize: "0.9rem",
     color: "var(--text-secondary)",
   },
   episodeSynopsis: {
-    fontSize: "0.9rem",
+    fontSize: "0.95rem",
     color: "var(--text-secondary)",
     lineHeight: 1.5,
     display: "-webkit-box",

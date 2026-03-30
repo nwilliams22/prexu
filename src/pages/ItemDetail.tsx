@@ -493,12 +493,26 @@ function ItemDetail() {
           episodeThumbUrl={episodeThumbUrl}
           formatDuration={formatDuration}
         />
-        {parentShow?.Role && parentShow.Role.length > 0 && (
-          <CastSection
-            roles={parentShow.Role}
-            actorThumbUrl={actorThumbUrl}
-          />
-        )}
+        {(() => {
+          // Aggregate cast from episodes for season-specific cast (e.g. anthology shows)
+          const seasonRoles: import("../types/library").PlexRole[] = [];
+          const seen = new Set<string>();
+          for (const ep of episodes) {
+            for (const role of ep.Role ?? []) {
+              if (!seen.has(role.tag)) {
+                seen.add(role.tag);
+                seasonRoles.push(role);
+              }
+            }
+          }
+          const roles = seasonRoles.length > 0 ? seasonRoles : parentShow?.Role;
+          return roles && roles.length > 0 ? (
+            <CastSection
+              roles={roles}
+              actorThumbUrl={actorThumbUrl}
+            />
+          ) : null;
+        })()}
       </div>
     );
   }

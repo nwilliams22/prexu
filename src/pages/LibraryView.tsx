@@ -30,6 +30,34 @@ import {
 import type { PlexMediaItem, PlexMediaInfo, PlexCollection, LibraryFilters } from "../types/library";
 import { getMediaBadges, extractStreamsForBadges } from "../utils/media-badges";
 import type { MediaBadge } from "../utils/media-badges";
+import { STORAGE_KEYS } from "../services/storage/backends";
+
+interface PersistedLibraryState {
+  sort?: string;
+  genre?: string;
+  year?: string;
+  contentRating?: string;
+  resolution?: string;
+  unwatched?: boolean;
+}
+
+function getPersistedFilters(sectionId: string): PersistedLibraryState | null {
+  try {
+    const raw = localStorage.getItem(`${STORAGE_KEYS.LIBRARY_FILTERS}:${sectionId}`);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistFilters(sectionId: string, state: PersistedLibraryState): void {
+  const hasValues = state.sort || state.genre || state.year || state.contentRating || state.resolution || state.unwatched;
+  if (hasValues) {
+    localStorage.setItem(`${STORAGE_KEYS.LIBRARY_FILTERS}:${sectionId}`, JSON.stringify(state));
+  } else {
+    localStorage.removeItem(`${STORAGE_KEYS.LIBRARY_FILTERS}:${sectionId}`);
+  }
+}
 
 function getItemMediaBadges(item: PlexMediaItem): MediaBadge[] | undefined {
   const media = (item as { Media?: PlexMediaInfo[] }).Media?.[0];
@@ -47,6 +75,40 @@ function LibraryView() {
   const [searchParams, setSearchParams] = useSearchParams();
   const sentinelRef = useRef<HTMLDivElement>(null);
   const section = sections.find((s) => s.key === sectionId);
+
+  // Restore persisted filters into URL when entering a section (when URL has no filter params)
+  const restoredSectionRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (restoredSectionRef.current === sectionId || !sectionId) return;
+    restoredSectionRef.current = sectionId;
+
+    // If URL already has filter/sort params, don't override — user navigated with explicit params
+    const hasUrlFilters = searchParams.has("genre") || searchParams.has("year") ||
+      searchParams.has("contentRating") || searchParams.has("resolution") ||
+      searchParams.has("unwatched") || searchParams.has("sort");
+    if (hasUrlFilters) return;
+
+    const persisted = getPersistedFilters(sectionId);
+    if (!persisted) return;
+
+    const updates: Record<string, string> = {};
+    if (persisted.sort && persisted.sort !== "titleSort:asc") updates.sort = persisted.sort;
+    if (persisted.genre) updates.genre = persisted.genre;
+    if (persisted.year) updates.year = persisted.year;
+    if (persisted.contentRating) updates.contentRating = persisted.contentRating;
+    if (persisted.resolution) updates.resolution = persisted.resolution;
+    if (persisted.unwatched) updates.unwatched = "1";
+
+    if (Object.keys(updates).length > 0) {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        for (const [key, value] of Object.entries(updates)) {
+          next.set(key, value);
+        }
+        return next;
+      }, { replace: true });
+    }
+  }, [sectionId, searchParams, setSearchParams]);
 
   // Initialize sort & filters from URL params
   const sort = searchParams.get("sort") || "titleSort:asc";
@@ -221,8 +283,12 @@ function LibraryView() {
   const handleSortChange = useCallback(
     (newSort: string) => {
       updateSearchParams({ sort: newSort === "titleSort:asc" ? undefined : newSort });
+      if (sectionId) {
+        const persisted = getPersistedFilters(sectionId) || {};
+        persistFilters(sectionId, { ...persisted, sort: newSort });
+      }
     },
-    [updateSearchParams]
+    [updateSearchParams, sectionId]
   );
 
   const handleFiltersChange = useCallback(
@@ -234,8 +300,19 @@ function LibraryView() {
         resolution: newFilters.resolution || undefined,
         unwatched: newFilters.unwatched ? "1" : undefined,
       });
+      if (sectionId) {
+        const persisted = getPersistedFilters(sectionId) || {};
+        persistFilters(sectionId, {
+          sort: persisted.sort,
+          genre: newFilters.genre,
+          year: newFilters.year,
+          contentRating: newFilters.contentRating,
+          resolution: newFilters.resolution,
+          unwatched: newFilters.unwatched,
+        });
+      }
     },
-    [updateSearchParams]
+    [updateSearchParams, sectionId]
   );
 
   const hasActiveFilters =
