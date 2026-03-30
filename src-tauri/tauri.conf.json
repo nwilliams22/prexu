@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Prexu",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "identifier": "com.prexu.client",
   "build": {
     "frontendDist": "../dist",
