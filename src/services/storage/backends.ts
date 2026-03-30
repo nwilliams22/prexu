@@ -113,6 +113,7 @@ export const STORAGE_KEYS = {
   PENDING_WATCH_SYNC: "prexu_pending_watch_sync",
   INVITE_NOTIFICATION_VOLUME: "prexu_invite_notification_volume",
   INVITE_NOTIFICATION_SOUND: "prexu_invite_notification_sound",
+  LIBRARY_FILTERS: "prexu_library_filters",
 } as const;
 
 /** Keys that hold sensitive data and must use the secure store */
