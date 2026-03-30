@@ -4,7 +4,7 @@ Issues and ideas found during testing. Check items off as they're addressed.
 
 ---
 
-- [ ] **Auto-update: periodic check while app is running** — Currently the updater only checks once on launch (after 3 seconds). Should periodically re-check (e.g., every 30 minutes) so users who leave the app open for long sessions still get notified of new versions.
+- [x] **Auto-update: periodic check while app is running** — Added a 15-minute periodic re-check in `useAutoUpdate` so users who leave the app open still get notified of new versions.
 
 - [ ] **Persist library filters across views and restarts** — Filter selections (genre, year, rating, resolution, unwatched) reset when navigating away from the library and back, or when the app restarts/updates. Should remember the last-used filters per library section.
 
