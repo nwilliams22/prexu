@@ -151,29 +151,36 @@ function HeroSlideshow({ slides, onDismiss, onPlay }: HeroSlideshowProps) {
           </div>
         )}
 
-        <h2
-          style={{
-            ...styles.title,
-            fontSize: mobile ? "1.5rem" : tablet ? "2rem" : "2.5rem",
-          }}
+        <div
+          onClick={() => navigate(`/item/${slide.ratingKey}`)}
+          style={styles.clickableArea}
+          role="link"
+          aria-label={`View details for ${slide.title}`}
         >
-          {slide.title}
-        </h2>
-
-        {slide.subtitle && (
-          <p style={styles.subtitle}>{slide.subtitle}</p>
-        )}
-
-        {summary && (
-          <p
+          <h2
             style={{
-              ...styles.summary,
-              maxWidth: mobile ? "100%" : "50%",
+              ...styles.title,
+              fontSize: mobile ? "1.5rem" : tablet ? "2rem" : "2.5rem",
             }}
           >
-            {summary}
-          </p>
-        )}
+            {slide.title}
+          </h2>
+
+          {slide.subtitle && (
+            <p style={styles.subtitle}>{slide.subtitle}</p>
+          )}
+
+          {summary && (
+            <p
+              style={{
+                ...styles.summary,
+                maxWidth: mobile ? "100%" : "50%",
+              }}
+            >
+              {summary}
+            </p>
+          )}
+        </div>
 
         <div style={styles.actions}>
           {/* Play / View button */}
@@ -368,6 +375,12 @@ const styles: Record<string, React.CSSProperties> = {
     color: "rgba(255,255,255,0.7)",
     lineHeight: 1.5,
     margin: 0,
+  },
+  clickableArea: {
+    cursor: "pointer",
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: "0.5rem",
   },
   actions: {
     display: "flex",

@@ -47,6 +47,7 @@ function ItemDetail() {
     related,
     extras,
     moreWithActors,
+    collectionItems,
     showFixMatch,
     setShowFixMatch,
     refreshItem,
@@ -236,6 +237,8 @@ function ItemDetail() {
           isAdmin={isAdmin}
           onFixMatch={() => setShowFixMatch(true)}
           refreshItem={refreshItem}
+          serverUri={server.uri}
+          serverToken={server.accessToken}
         />
         <RatingsSection
           ratings={movie.Rating}
@@ -253,6 +256,29 @@ function ItemDetail() {
           actorThumbUrl={actorThumbUrl}
         />
         {renderExtras()}
+        {collectionItems && (
+          <div style={styles.section}>
+            <HorizontalRow title={`In This Collection — ${collectionItems.items.length + 1} items`}>
+              {collectionItems.items.map((ci) => {
+                const asMovie = ci as unknown as { year?: number };
+                return (
+                  <PosterCard
+                    key={ci.ratingKey}
+                    ratingKey={ci.ratingKey}
+                    imageUrl={posterUrl(ci.thumb)}
+                    placeholderUrl={posterPlaceholder(ci.thumb)}
+                    srcSet={posterSrcSet(ci.thumb)}
+                    title={ci.title}
+                    subtitle={asMovie.year ? String(asMovie.year) : ""}
+                    watched={isWatched(ci as unknown as PlexMediaItem)}
+                    width={230}
+                    onClick={() => navigate(`/item/${ci.ratingKey}`)}
+                  />
+                );
+              })}
+            </HorizontalRow>
+          </div>
+        )}
         {renderRelated()}
         {renderMoreWithActors()}
         <AdminActionsBar
@@ -315,7 +341,7 @@ function ItemDetail() {
                     subtitle={`${season.leafCount} episode${season.leafCount !== 1 ? "s" : ""}`}
                     width={mobile ? 140 : bp === "large" ? 200 : 170}
                     watched={fullyWatched}
-                    unwatchedCount={!fullyWatched && unwatched > 0 && unwatched < season.leafCount ? unwatched : undefined}
+                    unwatchedCount={!fullyWatched && unwatched > 0 ? unwatched : undefined}
                     onClick={() => navigate(`/item/${season.ratingKey}`)}
                   />
                 );
@@ -361,6 +387,8 @@ function ItemDetail() {
           isAdmin={isAdmin}
           onFixMatch={() => setShowFixMatch(true)}
           refreshItem={refreshItem}
+          serverUri={server.uri}
+          serverToken={server.accessToken}
         />
         {renderChapters(chapters)}
         <CastSection
@@ -465,6 +493,12 @@ function ItemDetail() {
           episodeThumbUrl={episodeThumbUrl}
           formatDuration={formatDuration}
         />
+        {parentShow?.Role && parentShow.Role.length > 0 && (
+          <CastSection
+            roles={parentShow.Role}
+            actorThumbUrl={actorThumbUrl}
+          />
+        )}
       </div>
     );
   }

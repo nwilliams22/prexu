@@ -1,8 +1,10 @@
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useBreakpoint, isMobile } from "../../hooks/useBreakpoint";
 import WatchTogetherButton from "../WatchTogetherButton";
 import WatchedToggleButton from "../WatchedToggleButton";
 import DownloadButton from "./DownloadButton";
+import SubtitleSearchPanel from "../player/SubtitleSearchPanel";
 import { formatResumeTime, decodeHtmlEntities } from "../../utils/media-helpers";
 import { detailStyles } from "../../utils/detail-styles";
 import {
@@ -40,6 +42,9 @@ interface ItemHeroSectionProps {
   seasonFading?: boolean;
   /** For season: parent show info */
   parentShow?: { art?: string } | null;
+  /** Server connection for subtitle search */
+  serverUri?: string;
+  serverToken?: string;
 }
 
 export default function ItemHeroSection({
@@ -51,10 +56,13 @@ export default function ItemHeroSection({
   refreshItem,
   seasonFading,
   parentShow,
+  serverUri,
+  serverToken,
 }: ItemHeroSectionProps) {
   const navigate = useNavigate();
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
+  const [showSubtitleSearch, setShowSubtitleSearch] = useState(false);
 
   const formatDuration = (ms: number): string => {
     const mins = Math.round(ms / 60000);
@@ -264,6 +272,37 @@ export default function ItemHeroSection({
                 ))}
               </div>
             )}
+            {serverUri && serverToken && (
+              <button
+                onClick={() => setShowSubtitleSearch(true)}
+                style={styles.subtitleSearchButton}
+              >
+                <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx={11} cy={11} r={8} />
+                  <line x1={21} y1={21} x2={16.65} y2={16.65} />
+                </svg>
+                Search &amp; Download Subtitles
+              </button>
+            )}
+            {showSubtitleSearch && serverUri && serverToken && (
+              <div style={styles.subtitlePanelOverlay} onClick={() => setShowSubtitleSearch(false)}>
+                <div style={styles.subtitlePanelContainer} onClick={(e) => e.stopPropagation()}>
+                  <SubtitleSearchPanel
+                    serverUri={serverUri}
+                    serverToken={serverToken}
+                    ratingKey={movie.ratingKey}
+                    subtitleTracks={movie.Media?.[0]?.Part?.[0]?.Stream?.filter((s) => s.streamType === 3) ?? []}
+                    onSelectTrack={() => {}}
+                    selectedSubtitleId={null}
+                    onSubtitleDownloaded={() => {
+                      setShowSubtitleSearch(false);
+                      refreshItem();
+                    }}
+                    onClose={() => setShowSubtitleSearch(false)}
+                  />
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </>
@@ -422,6 +461,13 @@ export default function ItemHeroSection({
                 </span>
               )}
             </div>
+            {season.summary && (
+              <p style={{
+                ...styles.summary,
+                maxWidth: bp === "large" ? "800px" : "650px",
+                ...(mobile ? { textAlign: "center" } : {}),
+              }}>{decodeHtmlEntities(season.summary)}</p>
+            )}
           </div>
         </div>
       </>
@@ -621,6 +667,37 @@ export default function ItemHeroSection({
                 ))}
               </div>
             )}
+            {serverUri && serverToken && (
+              <button
+                onClick={() => setShowSubtitleSearch(true)}
+                style={styles.subtitleSearchButton}
+              >
+                <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx={11} cy={11} r={8} />
+                  <line x1={21} y1={21} x2={16.65} y2={16.65} />
+                </svg>
+                Search &amp; Download Subtitles
+              </button>
+            )}
+            {showSubtitleSearch && serverUri && serverToken && (
+              <div style={styles.subtitlePanelOverlay} onClick={() => setShowSubtitleSearch(false)}>
+                <div style={styles.subtitlePanelContainer} onClick={(e) => e.stopPropagation()}>
+                  <SubtitleSearchPanel
+                    serverUri={serverUri}
+                    serverToken={serverToken}
+                    ratingKey={ep.ratingKey}
+                    subtitleTracks={ep.Media?.[0]?.Part?.[0]?.Stream?.filter((s) => s.streamType === 3) ?? []}
+                    onSelectTrack={() => {}}
+                    selectedSubtitleId={null}
+                    onSubtitleDownloaded={() => {
+                      setShowSubtitleSearch(false);
+                      refreshItem();
+                    }}
+                    onClose={() => setShowSubtitleSearch(false)}
+                  />
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </>
@@ -726,5 +803,38 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
     color: "var(--accent)",
     fontSize: "0.85rem",
+  },
+  subtitleSearchButton: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "0.4rem",
+    padding: "0.4rem 0.8rem",
+    borderRadius: "6px",
+    border: "1px solid var(--border)",
+    background: "rgba(255,255,255,0.08)",
+    color: "var(--text-secondary)",
+    fontSize: "0.85rem",
+    cursor: "pointer",
+    marginTop: "0.5rem",
+    width: "fit-content",
+  },
+  subtitlePanelOverlay: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(0,0,0,0.6)",
+    zIndex: 100,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  subtitlePanelContainer: {
+    width: "500px",
+    maxWidth: "90vw",
+    maxHeight: "80vh",
+    overflow: "auto",
+    borderRadius: "12px",
+    background: "var(--bg-primary)",
+    border: "1px solid var(--border)",
+    boxShadow: "0 12px 40px rgba(0,0,0,0.5)",
   },
 };

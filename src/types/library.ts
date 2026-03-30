@@ -141,6 +141,7 @@ export interface PlexMovie extends PlexMediaItem {
   Rating?: PlexRating[];
   Media?: PlexMediaInfo[];
   Marker?: PlexMarker[];
+  Collection?: PlexTag[];
 }
 
 // ── TV Shows ──

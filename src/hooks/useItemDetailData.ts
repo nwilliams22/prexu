@@ -8,7 +8,10 @@ import {
   getRelatedItems,
   getExtras,
   getMediaByActor,
+  getCollections,
+  getCollectionItems,
 } from "../services/plex-library";
+import { useLibrary } from "./useLibrary";
 import type {
   PlexMediaItem,
   PlexMovie,
@@ -16,6 +19,7 @@ import type {
   PlexSeason,
   PlexEpisode,
   PlexRole,
+  PlexCollection,
 } from "../types/library";
 
 export interface ItemDetailData {
@@ -30,6 +34,7 @@ export interface ItemDetailData {
   related: PlexMediaItem[];
   extras: PlexMediaItem[];
   moreWithActors: { name: string; items: PlexMediaItem[] }[];
+  collectionItems: { collection: PlexCollection; items: PlexMediaItem[] } | null;
   showFixMatch: boolean;
   setShowFixMatch: (v: boolean) => void;
   refreshItem: () => void;
@@ -42,6 +47,7 @@ export function useItemDetailData(): ItemDetailData {
   const { ratingKey } = useParams<{ ratingKey: string }>();
   const { server } = useAuth();
   const { preferences } = usePreferences();
+  const { sections } = useLibrary();
   const navigate = useNavigate();
 
   const [item, setItem] = useState<PlexMediaItem | null>(null);
@@ -57,6 +63,10 @@ export function useItemDetailData(): ItemDetailData {
   const [moreWithActors, setMoreWithActors] = useState<
     { name: string; items: PlexMediaItem[] }[]
   >([]);
+  const [collectionItems, setCollectionItems] = useState<{
+    collection: PlexCollection;
+    items: PlexMediaItem[];
+  } | null>(null);
   const [showFixMatch, setShowFixMatch] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const refreshItem = useCallback(() => setRefreshKey((k) => k + 1), []);
@@ -81,6 +91,7 @@ export function useItemDetailData(): ItemDetailData {
     setRelated([]);
     setExtras([]);
     setMoreWithActors([]);
+    setCollectionItems(null);
 
     (async () => {
       try {
@@ -205,6 +216,56 @@ export function useItemDetailData(): ItemDetailData {
     };
   }, [server, ratingKey, item]);
 
+  // Fetch collection items if this movie belongs to a collection
+  useEffect(() => {
+    if (!server || !item || item.type !== "movie") return;
+    const movie = item as PlexMovie;
+    const collectionTags = movie.Collection;
+    if (!collectionTags || collectionTags.length === 0) return;
+
+    let cancelled = false;
+    const collectionName = collectionTags[0].tag;
+
+    // Search all movie sections for the matching collection
+    const movieSections = sections.filter((s) => s.type === "movie");
+
+    (async () => {
+      for (const section of movieSections) {
+        try {
+          const colls = await getCollections(
+            server.uri,
+            server.accessToken,
+            section.key
+          );
+          const match = colls.find((c) => c.title === collectionName);
+          if (match && !cancelled) {
+            const result = await getCollectionItems(
+              server.uri,
+              server.accessToken,
+              match.ratingKey
+            );
+            if (!cancelled) {
+              // Exclude the current movie from the list
+              const otherItems = result.items.filter(
+                (i) => i.ratingKey !== ratingKey
+              );
+              if (otherItems.length > 0) {
+                setCollectionItems({ collection: match, items: otherItems });
+              }
+            }
+            return;
+          }
+        } catch {
+          // Continue searching other sections
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [server, item, ratingKey, sections]);
+
   return {
     item,
     seasons,
@@ -217,6 +278,7 @@ export function useItemDetailData(): ItemDetailData {
     related,
     extras,
     moreWithActors,
+    collectionItems,
     showFixMatch,
     setShowFixMatch,
     refreshItem,
