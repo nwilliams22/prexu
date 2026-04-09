@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { useNavigate, useOutletContext } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { usePreferences } from "../hooks/usePreferences";
 import { useParentalControls } from "../hooks/useParentalControls";
@@ -25,10 +25,8 @@ import SkeletonCard from "../components/SkeletonCard";
 import EpisodeExpander from "../components/EpisodeExpander";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
-import WhatsNewRow from "../components/WhatsNewRow";
 import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
 import { usePosterSize } from "../hooks/usePosterSize";
-import type { UseNewContentResult } from "../components/AppLayout";
 import {
   getMediaSubtitleShort as getSubtitle,
   getProgress,
@@ -113,7 +111,6 @@ function Dashboard() {
     [dashData.recentShows, filterByRating],
   );
   const { posterWidth } = usePosterSize();
-  const newContent = useOutletContext<UseNewContentResult>();
   const sections = preferences.appearance.dashboardSections;
   const navigate = useNavigate();
   const [expandedGroupKey, setExpandedGroupKey] = useState<string | null>(null);
@@ -347,15 +344,6 @@ function Dashboard() {
       {/* Hero slideshow */}
       {!isLoading && heroSlides.length > 0 && (
         <HeroSlideshow slides={heroSlides} onDismiss={handleDismissRecommendation} onPlay={handleHeroPlay} />
-      )}
-
-      {/* What's New */}
-      {newContent && newContent.newItems.length > 0 && (
-        <WhatsNewRow
-          items={newContent.newItems}
-          onDismissItem={newContent.dismissItem}
-          onDismissAll={newContent.markAllSeen}
-        />
       )}
 
       {/* Continue Watching */}

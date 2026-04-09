@@ -8,7 +8,6 @@ import { useBreakpoint, isMobile, isTabletOrBelow, isDesktopOrAbove } from "../h
 import { useFocusTrap } from "../hooks/useFocusTrap";
 import { useRouteAnnouncer } from "../hooks/useRouteAnnouncer";
 import { useNewContent } from "../hooks/useNewContent";
-import type { UseNewContentResult } from "../hooks/useNewContent";
 import Sidebar from "./Sidebar";
 import NavButtons from "./NavButtons";
 import SearchBar from "./SearchBar";
@@ -18,8 +17,6 @@ import ActivityButton from "./ActivityButton";
 import InviteNotification from "./InviteNotification";
 import ErrorBoundary from "./ErrorBoundary";
 import BottomNav from "./BottomNav";
-
-export type { UseNewContentResult };
 
 function AppLayout() {
   const auth = useAuth();
@@ -165,7 +162,7 @@ function AppLayout() {
           <InviteNotification />
           <div style={styles.pageTransition}>
             <ErrorBoundary>
-              <Outlet context={newContent} />
+              <Outlet />
             </ErrorBoundary>
           </div>
         </main>

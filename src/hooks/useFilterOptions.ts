@@ -29,10 +29,13 @@ export function useFilterOptions(
   const [years, setYears] = useState<FilterOption[]>([]);
   const [contentRatings, setContentRatings] = useState<FilterOption[]>([]);
   const [resolutions, setResolutions] = useState<FilterOption[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    if (!server || !sectionId) return;
+    if (!server || !sectionId) {
+      setIsLoading(false);
+      return;
+    }
 
     const cacheKey = `filterOptions:${sectionId}`;
     const cached = cacheGet<FilterOptionsData>(cacheKey);
