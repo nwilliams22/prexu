@@ -96,17 +96,18 @@ function FilterBar({
     });
   }
 
-  if (isLoading) return null;
+  const disabledStyle = isLoading ? { opacity: 0.5, pointerEvents: "none" as const } : {};
 
   return (
     <div style={styles.wrapper}>
       {/* Filter controls row */}
-      <div style={styles.controls}>
+      <div style={{ ...styles.controls, ...disabledStyle }}>
         <select
           aria-label="Genre filter"
           value={filters.genre ?? ""}
           onChange={(e) => updateFilter("genre", e.target.value)}
           style={{ ...styles.select, ...touchPadding }}
+          disabled={isLoading}
         >
           <option value="">All Genres</option>
           {genres.map((g) => (
@@ -121,6 +122,7 @@ function FilterBar({
           value={filters.year ?? ""}
           onChange={(e) => updateFilter("year", e.target.value)}
           style={{ ...styles.select, ...touchPadding }}
+          disabled={isLoading}
         >
           <option value="">All Years</option>
           {years.map((y) => (
@@ -136,6 +138,7 @@ function FilterBar({
             value={filters.contentRating ?? ""}
             onChange={(e) => updateFilter("contentRating", e.target.value)}
             style={{ ...styles.select, ...touchPadding }}
+            disabled={isLoading}
           >
             <option value="">All Ratings</option>
             {contentRatings.map((cr) => (
@@ -146,12 +149,13 @@ function FilterBar({
           </select>
         )}
 
-        {resolutions.length > 0 && (
+        {(resolutions.length > 0 || isLoading) && (
           <select
             aria-label="Resolution filter"
             value={filters.resolution ?? ""}
             onChange={(e) => updateFilter("resolution", e.target.value)}
             style={{ ...styles.select, ...touchPadding }}
+            disabled={isLoading}
           >
             <option value="">All Qualities</option>
             {resolutions.map((r) => (
@@ -170,6 +174,7 @@ function FilterBar({
             ...touchPadding,
             ...(filters.unwatched ? styles.toggleActive : {}),
           }}
+          disabled={isLoading}
         >
           Unwatched
         </button>
@@ -187,6 +192,7 @@ function FilterBar({
             value={currentSort}
             onChange={(e) => onSortChange(e.target.value)}
             style={{ ...styles.select, ...touchPadding }}
+            disabled={isLoading}
           >
             {SORT_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>

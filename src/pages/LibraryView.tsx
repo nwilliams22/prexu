@@ -442,9 +442,9 @@ function LibraryView() {
         <>
           {error && <ErrorState message={error} onRetry={retry} />}
 
-          {!isLoading && !error && (
+          {!error && (
             <>
-              <span style={{ fontSize: "0.9rem", color: "var(--text-secondary)", marginBottom: "0.5rem", display: "block" }}>
+              <span style={{ fontSize: "0.9rem", color: "var(--text-secondary)", marginBottom: "0.5rem", display: "block", visibility: isLoading ? "hidden" : "visible" }}>
                 {totalSize.toLocaleString()} {getLabel()}
               </span>
               <FilterBar
@@ -454,7 +454,7 @@ function LibraryView() {
                 years={years}
                 contentRatings={contentRatings}
                 resolutions={resolutions}
-                isLoading={filtersLoading}
+                isLoading={isLoading || filtersLoading}
                 hideContentRating={restrictionsEnabled}
                 currentSort={sort}
                 onSortChange={handleSortChange}

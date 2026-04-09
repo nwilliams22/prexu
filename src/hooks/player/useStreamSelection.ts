@@ -2,7 +2,7 @@
  * Audio and subtitle track selection with HLS transcode session rebuild.
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import type { PlexStream } from "../../types/library";
 import type { HlsLoaderResult } from "./useHlsLoader";
 
@@ -93,7 +93,7 @@ export function useStreamSelection(
     [server, ratingKey, selectedAudioId, selectedSubtitleId, hlsLoader, videoRef, prefsRef, setIsBuffering, setPlaybackError],
   );
 
-  return {
+  return useMemo(() => ({
     audioTracks,
     subtitleTracks,
     selectedAudioId,
@@ -104,5 +104,12 @@ export function useStreamSelection(
     setSelectedSubtitleId,
     selectAudioTrack,
     selectSubtitleTrack,
-  };
+  }), [
+    audioTracks,
+    subtitleTracks,
+    selectedAudioId,
+    selectedSubtitleId,
+    selectAudioTrack,
+    selectSubtitleTrack,
+  ]);
 }

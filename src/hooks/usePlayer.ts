@@ -346,7 +346,8 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
       setPlaybackError(err instanceof Error ? err.message : "Failed to start playback");
       setIsLoading(false);
     }
-  }, [server, ratingKey, hlsLoader, timeline, streams]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- streams setters are stable useState refs
+  }, [server, ratingKey, hlsLoader, timeline]);
 
   // Init on mount / when ratingKey changes
   useEffect(() => {
@@ -358,6 +359,10 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
       timeline.reportStopped();
     };
   }, [initPlayback]);
+
+  // Keep a ref to initPlayback so event listeners don't need it as a dependency
+  const initPlaybackRef = useRef(initPlayback);
+  initPlaybackRef.current = initPlayback;
 
   // ── Video event listeners ──
   useEffect(() => {
@@ -401,7 +406,7 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
       if (video.error) {
         if (!directPlayFailedRef.current && !hlsLoader.hlsRef.current) {
           directPlayFailedRef.current = true;
-          initPlayback();
+          initPlaybackRef.current();
           return;
         }
         setPlaybackError(`Video error: ${video.error.message || "Unknown error"}`);
@@ -429,7 +434,7 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
       video.removeEventListener("ended", onEnded);
       video.removeEventListener("error", onError);
     };
-  }, [server, hlsLoader, timeline, initPlayback]);
+  }, [server, hlsLoader, timeline]);
 
   // ── Fullscreen listener ──
   useEffect(() => {
@@ -457,7 +462,7 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
       // the correct segments. No need to rebuild the transcode session.
       video.currentTime = clampedTime;
     },
-    [server, ratingKey, streams.selectedAudioId, streams.selectedSubtitleId, hlsLoader],
+    [],
   );
 
   const setVolume = useCallback((vol: number) => {

@@ -49,9 +49,12 @@ describe("FilterBar", () => {
     expect(screen.getByText("Unwatched")).toBeInTheDocument();
   });
 
-  it("returns null when isLoading is true", () => {
-    const { container } = render(<FilterBar {...defaultProps} isLoading />);
-    expect(container.firstChild).toBeNull();
+  it("renders disabled controls when isLoading is true", () => {
+    render(<FilterBar {...defaultProps} isLoading />);
+    const selects = screen.getAllByRole("combobox");
+    for (const select of selects) {
+      expect(select).toBeDisabled();
+    }
   });
 
   it("calls onFiltersChange when genre is selected", async () => {
