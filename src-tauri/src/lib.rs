@@ -1,4 +1,5 @@
 mod downloads;
+mod player;
 
 use tauri_plugin_log::{Target, TargetKind};
 use tauri::Manager;
@@ -344,6 +345,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(ProxyState::new())
         .manage(downloads::DownloadManager::new())
+        .manage(player::PlayerState::new())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // If a second instance is launched, focus the existing window
             if let Some(window) = app.get_webview_window("main") {
@@ -374,6 +376,17 @@ pub fn run() {
             downloads::cancel_download,
             downloads::delete_download,
             downloads::get_local_file_path,
+            player::commands::player_load_url,
+            player::commands::player_play,
+            player::commands::player_pause,
+            player::commands::player_seek,
+            player::commands::player_set_volume,
+            player::commands::player_set_muted,
+            player::commands::player_set_audio_track,
+            player::commands::player_set_sub_track,
+            player::commands::player_set_audio_delay_ms,
+            player::commands::player_set_af_chain,
+            player::commands::player_unload,
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
