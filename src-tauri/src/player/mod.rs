@@ -52,7 +52,6 @@ impl PlayerState {
         Ok(())
     }
 
-    #[allow(dead_code)] // used by future commands (1.4+)
     pub(crate) fn with_mpv<R>(
         &self,
         f: impl FnOnce(&Mpv) -> Result<R, libmpv2::Error>,

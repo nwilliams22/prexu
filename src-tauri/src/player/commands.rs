@@ -1,8 +1,7 @@
 //! Tauri commands exposing the native player to the React frontend.
 //!
-//! Phase 1: every command returns `Err("not_implemented")`. The real bodies
-//! land with the libmpv FFI wiring commit. Signatures are finalised here so
-//! the frontend can be built against the same invoke contract in parallel.
+//! Phase 1 step 1.4: load_url/play/pause/seek wired through to libmpv.
+//! Volume, mute, track selection, audio delay/chain still stubbed (step 1.6).
 
 use std::collections::HashMap;
 
@@ -14,30 +13,54 @@ const NOT_IMPLEMENTED: &str = "native player FFI not yet implemented";
 
 #[tauri::command]
 pub async fn player_load_url(
-    _url: String,
-    _headers: HashMap<String, String>,
-    _start_offset_ms: Option<u64>,
-    _state: State<'_, PlayerState>,
+    url: String,
+    headers: HashMap<String, String>,
+    start_offset_ms: Option<u64>,
+    state: State<'_, PlayerState>,
 ) -> Result<(), String> {
-    Err(NOT_IMPLEMENTED.into())
+    state.ensure_init()?;
+
+    // mpv's `http-header-fields` takes a comma-separated list of "Name: Value"
+    // entries. Plex headers (X-Plex-Token, X-Plex-Client-Identifier, …) don't
+    // contain commas so naive joining is safe; if a value ever does contain a
+    // comma we'd need to escape it as `\,` per the mpv string-list format.
+    let header_str = headers
+        .iter()
+        .map(|(k, v)| format!("{}: {}", k, v))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    state.with_mpv(|mpv| {
+        if !header_str.is_empty() {
+            mpv.set_property("http-header-fields", header_str.as_str())?;
+        }
+        // 4th arg is comma-separated per-file options. `start=<seconds>` seeks
+        // mpv to that offset on load (avoids a separate seek round-trip).
+        let start_secs = start_offset_ms.map(|ms| ms as f64 / 1000.0).unwrap_or(0.0);
+        let opts = format!("start={}", start_secs);
+        mpv.command("loadfile", &[url.as_str(), "replace", "0", opts.as_str()])
+    })
 }
 
 #[tauri::command]
-pub async fn player_play(_state: State<'_, PlayerState>) -> Result<(), String> {
-    Err(NOT_IMPLEMENTED.into())
+pub async fn player_play(state: State<'_, PlayerState>) -> Result<(), String> {
+    state.with_mpv(|mpv| mpv.set_property("pause", false))
 }
 
 #[tauri::command]
-pub async fn player_pause(_state: State<'_, PlayerState>) -> Result<(), String> {
-    Err(NOT_IMPLEMENTED.into())
+pub async fn player_pause(state: State<'_, PlayerState>) -> Result<(), String> {
+    state.with_mpv(|mpv| mpv.set_property("pause", true))
 }
 
 #[tauri::command]
 pub async fn player_seek(
-    _seconds: f64,
-    _state: State<'_, PlayerState>,
+    seconds: f64,
+    state: State<'_, PlayerState>,
 ) -> Result<(), String> {
-    Err(NOT_IMPLEMENTED.into())
+    state.with_mpv(|mpv| {
+        let s = seconds.to_string();
+        mpv.command("seek", &[s.as_str(), "absolute"])
+    })
 }
 
 #[tauri::command]
