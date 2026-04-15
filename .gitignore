@@ -30,3 +30,8 @@ src-tauri/NSIS/
 test-results/
 playwright-report/
 blob-report/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
