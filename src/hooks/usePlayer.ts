@@ -42,7 +42,7 @@ import type {
   PlexMarker,
 } from "../types/library";
 
-const IS_NATIVE_PLAYER =
+export const IS_NATIVE_PLAYER =
   typeof window !== "undefined" &&
   "__TAURI_INTERNALS__" in window &&
   typeof navigator !== "undefined" &&

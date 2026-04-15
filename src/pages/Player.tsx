@@ -7,7 +7,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useParams, useNavigate, useSearchParams, Navigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { getImageUrl } from "../services/plex-library";
-import { usePlayer } from "../hooks/usePlayer";
+import { usePlayer, IS_NATIVE_PLAYER } from "../hooks/usePlayer";
 import { useWatchTogether } from "../hooks/useWatchTogether";
 import { useAudioEnhancements } from "../hooks/useAudioEnhancements";
 import { usePreferences } from "../hooks/usePreferences";
@@ -68,6 +68,18 @@ function Player() {
       styleEl?.remove();
     };
   }, [subtitleCss]);
+
+  // On the native player path, make body transparent while this route is
+  // mounted so the underlying mpv host HWND shows through. Restore the
+  // navy background on unmount so dashboard / library look right.
+  useEffect(() => {
+    if (!IS_NATIVE_PLAYER) return;
+    const prev = document.body.style.background;
+    document.body.style.background = "transparent";
+    return () => {
+      document.body.style.background = prev;
+    };
+  }, []);
 
   // Audio enhancements — Web Audio API processing graph
   const audioEnhancements = useAudioEnhancements(
@@ -256,17 +268,26 @@ function Player() {
     <div
       style={{
         ...styles.container,
+        // On the native player path the actual video lives in a sibling
+        // Win32 HWND BEHIND this transparent webview. Painting black here
+        // would occlude it. HTML5 path keeps black so the <video> letterbox
+        // stays cinema-style.
+        background: IS_NATIVE_PLAYER ? "transparent" : styles.container.background,
         cursor: controlsVisible ? "default" : "none",
       }}
       onMouseMove={handleMouseMove}
     >
-      {/* Video element */}
-      <video
-        ref={player.videoRef}
-        style={styles.video}
-        playsInline
-        onClick={handleVideoClick}
-      />
+      {/* Video element — only used on the HTML5 path. On native path
+          videoRef is never populated, so we hide the element entirely so
+          its default black box doesn't occlude the host window. */}
+      {!IS_NATIVE_PLAYER && (
+        <video
+          ref={player.videoRef}
+          style={styles.video}
+          playsInline
+          onClick={handleVideoClick}
+        />
+      )}
 
       {/* Loading overlay */}
       {player.isLoading && (
