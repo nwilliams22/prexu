@@ -42,6 +42,9 @@
         "installerHooks": "nsis-hooks/hooks.nsh"
       }
     },
+    "resources": {
+      "bin/libmpv-2.dll": "libmpv-2.dll"
+    },
     "createUpdaterArtifacts": true
   },
   "plugins": {

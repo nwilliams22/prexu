@@ -103,25 +103,31 @@ Other commands still return `NOT_IMPLEMENTED`.
 Verified: `cargo check` clean, `cargo build --bin prexu` links and produces
 `target/debug/prexu.exe` (~3 min cold build).
 
-#### ⬜ Step 1.4 — implement core playback commands
-Real bodies for `player_load_url`, `player_play`, `player_pause`,
-`player_seek`. Use `mpv.command("loadfile", ...)`, `set_property("pause", ...)`,
-`command("seek", ...)`. Headers go via `mpv.set_property("http-header-fields", ...)`.
+#### ✅ Step 1.4 — core playback commands
+`player_load_url` joins headers into `http-header-fields` then `loadfile`
+with `start=<seconds>` per-file option (no extra seek round-trip).
+`player_play`/`player_pause` toggle the `pause` property. `player_seek`
+uses `seek <s> absolute`.
 
-#### ⬜ Step 1.5 — event pump thread
-In `player/events.rs`, spawn a thread that calls `mpv_wait_event`,
-translates events to JSON payloads, and emits via `app.emit("player://...", ...)`.
-Throttle time-pos events to 4 Hz.
+#### ✅ Step 1.5 — event pump thread
+`PlayerState` now wraps `Mpv` in `Arc`. `ensure_init` spawns a named
+`mpv-event-pump` thread that owns a separate `EventContext::new(mpv.ctx)`
+(Send), observes `time-pos`/`duration`/`pause`/`paused-for-cache`, and
+emits `player://*` events. `time-pos` throttled to 4 Hz; thread exits on
+`Event::Shutdown` when the Mpv handle is dropped. Reply user-data IDs
+keep PropertyChange dispatch O(1).
 
-#### ⬜ Step 1.6 — remaining commands
-`player_set_volume`, `player_set_muted`, `player_set_audio_track`,
-`player_set_sub_track`, `player_set_audio_delay_ms`, `player_set_af_chain`.
+#### ✅ Step 1.6 — remaining commands
+`volume` (f64), `mute` (bool), `aid`/`sid` (i64 or `"no"` sentinel),
+`audio-delay` (ms→s), `af` presets (`off`=clear, `light`=loudnorm,
+`night`=acompressor+loudnorm via `lavfi=[…]`).
 
-#### ⬜ Step 1.7 — bundle mpv-2.dll
-- Copy `mpv-2.dll` into `src-tauri/bin/`
-- Declare in `tauri.conf.json` `bundle.resources`
-- Add `src-tauri/build.rs` step that copies the DLL next to the built exe
-  for `cargo run`/`tauri dev`
+#### ✅ Step 1.7 — bundle libmpv-2.dll
+`build.rs` copies `$MPV_SOURCE/64/libmpv-2.dll` into `src-tauri/bin/`
+(gitignored) so `tauri.conf.json` `bundle.resources` picks it up at
+release-bundle time, AND copies it next to the built exe so
+`cargo run`/`tauri dev` find it via the application directory search
+path. CI runners must set `MPV_SOURCE` (release.yml change pending).
 
 ### ⬜ Phase 2 — Two-window composition + swap `<video>` (5–7 days)
 Target state after this phase: HEVC plays smoothly on Windows in Prexu.
