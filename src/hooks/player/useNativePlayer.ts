@@ -1,0 +1,419 @@
+/**
+ * Native (libmpv-backed) playback hook — Windows path for Phase 2.
+ *
+ * Replaces the HTML5 `<video>` + hls.js bindings with Tauri commands +
+ * `player://*` event subscriptions. Returns the same `UsePlayerResult` shape
+ * as `usePlayer` so PlayerControls, watch-together hooks, and the post-play
+ * screen compile unchanged.
+ *
+ * Step 2.6 will refactor `usePlayer` to delegate here on Windows.
+ */
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { useAuth } from "../useAuth";
+import { usePreferences } from "../usePreferences";
+import { useTimelineReporting } from "./useTimelineReporting";
+import { getItemMetadata } from "../../services/plex-library";
+import { getLocalFilePath } from "../../services/downloads";
+import { addPendingWatchSync } from "../../services/storage";
+import {
+  canDirectPlay,
+  buildDirectPlayUrl,
+  buildTranscodeUrl,
+  categorizeStreams,
+  reportTimeline,
+  getSavedVolume,
+  saveVolume,
+} from "../../services/plex-playback";
+import type {
+  PlexMediaItem,
+  PlexMovie,
+  PlexEpisode,
+  PlexStream,
+  PlexChapter,
+  PlexMarker,
+} from "../../types/library";
+import type { UsePlayerResult } from "../usePlayer";
+
+export function useNativePlayer(
+  ratingKey: string,
+  offsetOverride?: number | null,
+): UsePlayerResult {
+  const { server } = useAuth();
+  const { preferences } = usePreferences();
+  const prefsRef = useRef(preferences);
+  prefsRef.current = preferences;
+
+  // Phantom ref for type compat with HTML5 path. Native player has no DOM
+  // <video>; the few consumers that touch this (PiP, video click handler)
+  // are skipped on the native path.
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  const timeline = useTimelineReporting(server);
+
+  // Metadata
+  const [title, setTitle] = useState("");
+  const [subtitle, setSubtitle] = useState("");
+
+  // Playback state
+  const [isLoading, setIsLoading] = useState(true);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isBuffering, setIsBuffering] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [buffered, _setBuffered] = useState(0); // populated in step 3.10
+  const [volume, setVolumeState] = useState(getSavedVolume);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
+
+  // Media info
+  const [chapters, setChapters] = useState<PlexChapter[]>([]);
+  const [markers, setMarkers] = useState<PlexMarker[]>([]);
+  const [itemType, setItemType] = useState("");
+
+  // Streams
+  const [audioTracks, setAudioTracks] = useState<PlexStream[]>([]);
+  const [subtitleTracks, setSubtitleTracks] = useState<PlexStream[]>([]);
+  const [selectedAudioId, setSelectedAudioId] = useState<number | null>(null);
+  const [selectedSubtitleId, setSelectedSubtitleId] = useState<number | null>(null);
+
+  // Refs that don't trigger re-init
+  const directPlayFailedRef = useRef(false);
+  const isLocalPlaybackRef = useRef(false);
+  const volumeRef = useRef(volume);
+  volumeRef.current = volume;
+  const isMutedRef = useRef(isMuted);
+  isMutedRef.current = isMuted;
+  const offsetOverrideRef = useRef(offsetOverride);
+  offsetOverrideRef.current = offsetOverride;
+
+  // Keep timeline refs in sync
+  useEffect(() => {
+    timeline.currentTimeRef.current = currentTime;
+  }, [currentTime, timeline]);
+  useEffect(() => {
+    timeline.durationRef.current = duration;
+  }, [duration, timeline]);
+  useEffect(() => {
+    timeline.isPlayingRef.current = isPlaying;
+  }, [isPlaying, timeline]);
+
+  // ── Subscribe to native player events ──
+  useEffect(() => {
+    let unlisteners: UnlistenFn[] = [];
+    let cancelled = false;
+
+    (async () => {
+      const subs = await Promise.all([
+        listen<number>("player://time-pos", (e) => setCurrentTime(e.payload)),
+        listen<number>("player://duration", (e) => setDuration(e.payload)),
+        listen<boolean>("player://paused", (e) => setIsPlaying(!e.payload)),
+        listen<boolean>("player://buffering", (e) => setIsBuffering(e.payload)),
+        listen<null>("player://ready", () => {
+          setIsLoading(false);
+          setIsBuffering(false);
+        }),
+        listen<null>("player://eof", () => {
+          setIsPlaying(false);
+          if (isLocalPlaybackRef.current && timeline.ratingKeyRef.current) {
+            addPendingWatchSync(timeline.ratingKeyRef.current);
+          }
+          if (server) {
+            reportTimeline(
+              server.uri,
+              server.accessToken,
+              timeline.ratingKeyRef.current,
+              "stopped",
+              timeline.currentTimeRef.current * 1000,
+              timeline.durationRef.current * 1000,
+            );
+          }
+        }),
+        listen<string>("player://error", (e) =>
+          setPlaybackError(`Player error: ${e.payload}`),
+        ),
+      ]);
+      if (cancelled) {
+        for (const u of subs) u();
+      } else {
+        unlisteners = subs;
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      for (const u of unlisteners) u();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- timeline refs are stable
+  }, [server]);
+
+  // ── Initialize playback ──
+  const initPlayback = useCallback(async () => {
+    if (!server || !ratingKey) {
+      setIsLoading(false);
+      setPlaybackError("No server or media selected");
+      return;
+    }
+    timeline.ratingKeyRef.current = ratingKey;
+    setIsLoading(true);
+    setPlaybackError(null);
+
+    try {
+      const item = await getItemMetadata<PlexMediaItem>(
+        server.uri,
+        server.accessToken,
+        ratingKey,
+      );
+
+      if (item.type === "episode") {
+        const ep = item as PlexEpisode;
+        setTitle(ep.grandparentTitle);
+        setSubtitle(
+          `S${String(ep.parentIndex).padStart(2, "0")}E${String(ep.index).padStart(2, "0")} — ${ep.title}`,
+        );
+      } else if (item.type === "movie") {
+        const movie = item as PlexMovie;
+        setTitle(movie.title);
+        setSubtitle(movie.year ? String(movie.year) : "");
+      } else {
+        setTitle(item.title);
+        setSubtitle("");
+      }
+
+      const playableItem = item as PlexMovie | PlexEpisode;
+      const media = playableItem.Media?.[0];
+      if (!media || !media.Part || media.Part.length === 0) {
+        throw new Error("No playable media found");
+      }
+      const part = media.Part[0];
+      setChapters(part.Chapter ?? []);
+      setMarkers(playableItem.Marker ?? []);
+      setItemType(item.type);
+
+      const categorized = categorizeStreams(part);
+      setAudioTracks(categorized.audio);
+      setSubtitleTracks(categorized.subtitles);
+
+      const pb = prefsRef.current.playback;
+      let defaultAudio = pb.preferredAudioLanguage
+        ? categorized.audio.find((s) => s.languageCode === pb.preferredAudioLanguage)
+        : undefined;
+      if (!defaultAudio) defaultAudio = categorized.audio.find((s) => s.selected);
+      setSelectedAudioId(defaultAudio?.id ?? categorized.audio[0]?.id ?? null);
+
+      let defaultSub: PlexStream | undefined;
+      if (pb.defaultSubtitles === "off") {
+        defaultSub = undefined;
+      } else if (pb.defaultSubtitles === "always" && pb.preferredSubtitleLanguage) {
+        defaultSub =
+          categorized.subtitles.find(
+            (s) => s.languageCode === pb.preferredSubtitleLanguage,
+          ) ?? categorized.subtitles[0];
+      } else {
+        defaultSub = categorized.subtitles.find((s) => s.selected);
+      }
+      setSelectedSubtitleId(defaultSub?.id ?? null);
+
+      const viewOffset =
+        offsetOverrideRef.current != null
+          ? offsetOverrideRef.current
+          : (playableItem.viewOffset ?? 0);
+
+      // Pick a source URL. Local downloads first, then direct play / transcode.
+      // Step 3.7 will relax the direct-play decision since libmpv decodes
+      // everything natively.
+      let url: string;
+      isLocalPlaybackRef.current = false;
+      const localPath = await getLocalFilePath(ratingKey).catch(() => null);
+      if (localPath) {
+        url = localPath; // mpv accepts raw Windows paths
+        isLocalPlaybackRef.current = true;
+      } else {
+        const shouldDirectPlay =
+          !directPlayFailedRef.current &&
+          (pb.directPlayPreference === "always" ||
+            (pb.directPlayPreference === "auto" &&
+              (pb.quality === "original" || canDirectPlay(media))));
+        const forceTranscode =
+          pb.directPlayPreference === "never" || directPlayFailedRef.current;
+
+        if (shouldDirectPlay && !forceTranscode && canDirectPlay(media)) {
+          url = buildDirectPlayUrl(server.uri, server.accessToken, part.key);
+        } else {
+          url = await buildTranscodeUrl(server.uri, server.accessToken, ratingKey, {
+            audioStreamId: defaultAudio?.id,
+            subtitleStreamId: defaultSub?.id,
+            quality: pb.quality,
+            subtitleSize: pb.subtitleSize,
+            audioBoost: pb.audioBoost,
+            audioCodec: defaultAudio?.codec ?? media.audioCodec,
+          });
+        }
+      }
+
+      // Apply saved volume + mute before load so playback starts at the
+      // right level. mpv volume is 0..200 (we configured volume-max=200 in
+      // PlayerState::ensure_init); our `volume` is 0..2 in float.
+      await invoke("player_set_volume", {
+        vol: Math.max(0, Math.min(200, Math.round(volumeRef.current * 100))),
+      });
+      await invoke("player_set_muted", { muted: isMutedRef.current });
+
+      await invoke("player_load_url", {
+        url,
+        headers: {} as Record<string, string>,
+        startOffsetMs: viewOffset,
+      });
+
+      timeline.startTimeline();
+      // setIsLoading(false) happens when `player://ready` fires.
+    } catch (err) {
+      setPlaybackError(
+        err instanceof Error ? err.message : "Failed to start playback",
+      );
+      setIsLoading(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- ref values are stable
+  }, [server, ratingKey, timeline]);
+
+  // Init on mount / when ratingKey changes
+  useEffect(() => {
+    directPlayFailedRef.current = false;
+    initPlayback();
+    return () => {
+      timeline.stopTimeline();
+      timeline.reportStopped();
+      invoke("player_unload").catch(() => {});
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- timeline funcs are stable
+  }, [initPlayback]);
+
+  // Fullscreen listener (HTML/CSS path; step 2.8 swaps in a Tauri fullscreen)
+  useEffect(() => {
+    const onFullscreenChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
+  }, []);
+
+  // ── Actions ──
+  const togglePlay = useCallback(() => {
+    invoke(isPlaying ? "player_pause" : "player_play").catch(() => {});
+  }, [isPlaying]);
+
+  const seek = useCallback((time: number) => {
+    invoke("player_seek", { seconds: time }).catch(() => {});
+  }, []);
+
+  const setVolume = useCallback(
+    (vol: number) => {
+      const clamped = Math.max(0, Math.min(2, vol));
+      setVolumeState(clamped);
+      saveVolume(clamped);
+      invoke("player_set_volume", {
+        vol: Math.max(0, Math.min(200, Math.round(clamped * 100))),
+      }).catch(() => {});
+      if (clamped > 0 && isMutedRef.current) {
+        setIsMuted(false);
+        invoke("player_set_muted", { muted: false }).catch(() => {});
+      }
+    },
+    [],
+  );
+
+  const toggleMute = useCallback(() => {
+    const next = !isMutedRef.current;
+    setIsMuted(next);
+    invoke("player_set_muted", { muted: next }).catch(() => {});
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    // Step 2.8 will replace this with a Tauri command that toggles both
+    // windows together. CSS fullscreen is good enough as a placeholder.
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    } else {
+      document.documentElement.requestFullscreen().catch(() => {});
+    }
+  }, []);
+
+  const selectAudioTrack = useCallback((streamId: number) => {
+    setSelectedAudioId(streamId);
+    invoke("player_set_audio_track", { id: streamId }).catch(() => {});
+  }, []);
+
+  const selectSubtitleTrack = useCallback((streamId: number | null) => {
+    setSelectedSubtitleId(streamId);
+    invoke("player_set_sub_track", { id: streamId }).catch(() => {});
+  }, []);
+
+  const retry = useCallback(() => {
+    directPlayFailedRef.current = false;
+    setPlaybackError(null);
+    initPlayback();
+  }, [initPlayback]);
+
+  return useMemo<UsePlayerResult>(
+    () => ({
+      videoRef,
+      title,
+      subtitle,
+      chapters,
+      markers,
+      itemType,
+      isLoading,
+      isPlaying,
+      isBuffering,
+      currentTime,
+      duration,
+      buffered,
+      volume,
+      isMuted,
+      isFullscreen,
+      playbackError,
+      audioTracks,
+      subtitleTracks,
+      selectedAudioId,
+      selectedSubtitleId,
+      togglePlay,
+      seek,
+      setVolume,
+      toggleMute,
+      toggleFullscreen,
+      selectAudioTrack,
+      selectSubtitleTrack,
+      retry,
+    }),
+    [
+      title,
+      subtitle,
+      chapters,
+      markers,
+      itemType,
+      isLoading,
+      isPlaying,
+      isBuffering,
+      currentTime,
+      duration,
+      buffered,
+      volume,
+      isMuted,
+      isFullscreen,
+      playbackError,
+      audioTracks,
+      subtitleTracks,
+      selectedAudioId,
+      selectedSubtitleId,
+      togglePlay,
+      seek,
+      setVolume,
+      toggleMute,
+      toggleFullscreen,
+      selectAudioTrack,
+      selectSubtitleTrack,
+      retry,
+    ],
+  );
+}
