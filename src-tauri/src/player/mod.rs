@@ -3,6 +3,9 @@
 pub mod commands;
 pub mod events;
 
+#[cfg(target_os = "windows")]
+pub mod host_window;
+
 use std::sync::{Arc, Mutex};
 
 use libmpv2::Mpv;
