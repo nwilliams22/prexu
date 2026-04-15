@@ -1,15 +1,13 @@
 //! Tauri commands exposing the native player to the React frontend.
 //!
-//! Phase 1 step 1.4: load_url/play/pause/seek wired through to libmpv.
-//! Volume, mute, track selection, audio delay/chain still stubbed (step 1.6).
+//! All commands wired through to libmpv (phase 1 steps 1.3, 1.4, 1.6 done).
+//! Event-side reporting (time-pos, eof, …) lands with the event pump in 1.5.
 
 use std::collections::HashMap;
 
 use tauri::State;
 
 use super::PlayerState;
-
-const NOT_IMPLEMENTED: &str = "native player FFI not yet implemented";
 
 #[tauri::command]
 pub async fn player_load_url(
@@ -65,51 +63,67 @@ pub async fn player_seek(
 
 #[tauri::command]
 pub async fn player_set_volume(
-    _vol: u16,
-    _state: State<'_, PlayerState>,
+    vol: u16,
+    state: State<'_, PlayerState>,
 ) -> Result<(), String> {
-    Err(NOT_IMPLEMENTED.into())
+    state.with_mpv(|mpv| mpv.set_property("volume", vol as f64))
 }
 
 #[tauri::command]
 pub async fn player_set_muted(
-    _muted: bool,
-    _state: State<'_, PlayerState>,
+    muted: bool,
+    state: State<'_, PlayerState>,
 ) -> Result<(), String> {
-    Err(NOT_IMPLEMENTED.into())
+    state.with_mpv(|mpv| mpv.set_property("mute", muted))
 }
 
 #[tauri::command]
 pub async fn player_set_audio_track(
-    _id: Option<i64>,
-    _state: State<'_, PlayerState>,
+    id: Option<i64>,
+    state: State<'_, PlayerState>,
 ) -> Result<(), String> {
-    Err(NOT_IMPLEMENTED.into())
+    // mpv's `aid` accepts integer track ids OR the sentinel string "no".
+    // libmpv2's set_property is monomorphic, so we branch at the call site.
+    state.with_mpv(|mpv| match id {
+        Some(track_id) => mpv.set_property("aid", track_id),
+        None => mpv.set_property("aid", "no"),
+    })
 }
 
 #[tauri::command]
 pub async fn player_set_sub_track(
-    _id: Option<i64>,
-    _state: State<'_, PlayerState>,
+    id: Option<i64>,
+    state: State<'_, PlayerState>,
 ) -> Result<(), String> {
-    Err(NOT_IMPLEMENTED.into())
+    state.with_mpv(|mpv| match id {
+        Some(track_id) => mpv.set_property("sid", track_id),
+        None => mpv.set_property("sid", "no"),
+    })
 }
 
 #[tauri::command]
 pub async fn player_set_audio_delay_ms(
-    _ms: i32,
-    _state: State<'_, PlayerState>,
+    ms: i32,
+    state: State<'_, PlayerState>,
 ) -> Result<(), String> {
-    Err(NOT_IMPLEMENTED.into())
+    // mpv's audio-delay is in seconds (f64), negatives allowed.
+    let seconds = ms as f64 / 1000.0;
+    state.with_mpv(|mpv| mpv.set_property("audio-delay", seconds))
 }
 
 /// Audio filter-chain preset. Valid values: `"off"`, `"light"`, `"night"`.
 #[tauri::command]
 pub async fn player_set_af_chain(
-    _preset: String,
-    _state: State<'_, PlayerState>,
+    preset: String,
+    state: State<'_, PlayerState>,
 ) -> Result<(), String> {
-    Err(NOT_IMPLEMENTED.into())
+    let chain = match preset.as_str() {
+        "off" => "",
+        "light" => "lavfi=[loudnorm=I=-16:TP=-1.5:LRA=11]",
+        "night" => "lavfi=[acompressor=threshold=-20dB:ratio=4:attack=5:release=50,loudnorm=I=-18]",
+        other => return Err(format!("unknown af preset: {}", other)),
+    };
+    state.with_mpv(|mpv| mpv.set_property("af", chain))
 }
 
 #[tauri::command]
