@@ -90,6 +90,6 @@ pub async fn player_set_af_chain(
 }
 
 #[tauri::command]
-pub async fn player_unload(_state: State<'_, PlayerState>) -> Result<(), String> {
-    Err(NOT_IMPLEMENTED.into())
+pub async fn player_unload(state: State<'_, PlayerState>) -> Result<(), String> {
+    state.destroy()
 }

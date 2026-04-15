@@ -42,6 +42,9 @@ Kept on `main` as real bug fixes discovered during the session:
 
 ### 🟨 Phase 1 — Rust FFI foundation (5–7 days total)
 
+Tracked in beads as epic `prexu-1a8`. Children: `prexu-1a8.1` (1.3, done),
+`.2` (1.4), `.3` (1.5), `.4` (1.6), `.5` (1.7).
+
 #### ✅ Step 1.1 — scaffold player module (commit `5abe32b`)
 - `src-tauri/src/player/mod.rs` — `PlayerState` struct (placeholder inner)
 - `src-tauri/src/player/commands.rs` — 11 `#[tauri::command]` stubs, all
@@ -58,31 +61,47 @@ Kept on `main` as real bug fixes discovered during the session:
   commands wired into `invoke_handler`
 - `cargo check` passes. No functional change to current playback.
 
-#### ⬜ Step 1.2 — install libmpv dev files (user action needed)
-**Prerequisite for all further Rust work on this phase.**
+#### ✅ Step 1.2 — install libmpv dev files (Windows / MSVC)
+Done on this dev machine. The `libmpv2` crate's `build_libmpv` feature on
+Windows does **not** build mpv from source (that path is for Unix). It just
+adds `MPV_SOURCE/64/` to the link search. You must supply pre-built artifacts
+**plus** an MSVC-format import library (`mpv.lib`), since shinchiro's archive
+ships only the GNU-style `libmpv.dll.a`.
 
-Windows options:
-- **Recommended:** download `mpv-dev-x86_64-v3-*.7z` from
-  <https://sourceforge.net/projects/mpv-player-windows/files/libmpv/>
-  (maintainer: shinchiro). Extract to e.g. `C:\libmpv\`. Set env vars:
-  ```
-  LIBMPV_HEADERS=C:\libmpv\include
-  LIBMPV_LIB=C:\libmpv\
-  ```
-  Add `C:\libmpv` to `PATH` so `mpv-2.dll` is discoverable at runtime.
-- Alternative: `vcpkg install mpv:x64-windows` then point pkg-config.
-- Alternative: enable the `libmpv2` crate's `build-libmpv` feature, which
-  downloads and builds mpv from source on first `cargo build` (~30 min).
+Steps that worked here (replicate on a fresh Windows dev machine):
+1. Download `mpv-dev-x86_64-v3-*.7z` from the shinchiro builds at
+   <https://sourceforge.net/projects/mpv-player-windows/files/libmpv/>.
+2. Extract to `C:\libmpv\64\` (note the `64\` subfolder — required by the
+   `build_libmpv` feature's link-search layout).
+3. Generate `C:\libmpv\64\mpv.lib` from the DLL exports using MSVC tools:
+   ```cmd
+   cd C:\libmpv\64
+   dumpbin /EXPORTS libmpv-2.dll > exports.txt
+   :: write a mpv.def file: first line "LIBRARY libmpv-2", second "EXPORTS",
+   :: then one symbol name per line from column 4 of exports.txt
+   lib /def:mpv.def /out:mpv.lib /machine:x64
+   ```
+4. Set persistent env: `setx MPV_SOURCE "C:\libmpv"`.
+5. Add `C:\libmpv\64` to user `PATH` so `libmpv-2.dll` loads at runtime.
 
-#### ⬜ Step 1.3 — add libmpv2 crate (blocked on 1.2)
-Add to `src-tauri/Cargo.toml`:
+Alternatives (not used here): `vcpkg install mpv:x64-windows` (then point
+pkg-config), or building libmpv from source via MSYS2/meson.
+
+#### ✅ Step 1.3 — add libmpv2 crate, init/destroy
+Added to `src-tauri/Cargo.toml`:
 ```toml
-libmpv2 = "4"
+libmpv2 = { version = "4", features = ["build_libmpv"] }
 ```
-Implement `PlayerState::init()` — create `libmpv2::Mpv::new()` with config:
-`hwdec=auto-safe`, `vo=gpu-next`, `keep-open=always`, `force-window=no`,
-`volume-max=200`. Replace `Err(NOT_IMPLEMENTED)` in `player_unload` with
-real `destroy`. Everything else still stubs.
+(Resolves to `libmpv2 v4.1.0` + `libmpv2-sys v4.0.1`.)
+
+`PlayerState` now holds `Mutex<Option<Mpv>>`, lazily created by
+`ensure_init()` with: `hwdec=auto-safe`, `vo=gpu-next`, `keep-open=always`,
+`force-window=no`, `volume-max=200`. `player_unload` calls `destroy()`
+which drops the handle (mpv `Drop` impl tears down the underlying client).
+Other commands still return `NOT_IMPLEMENTED`.
+
+Verified: `cargo check` clean, `cargo build --bin prexu` links and produces
+`target/debug/prexu.exe` (~3 min cold build).
 
 #### ⬜ Step 1.4 — implement core playback commands
 Real bodies for `player_load_url`, `player_play`, `player_pause`,
@@ -121,10 +140,13 @@ Mini-player mode. Not started.
 
 When picking this back up:
 1. `git checkout feature/native-player`
-2. Confirm step 1.2 prerequisites (libmpv-dev on PATH, env vars set).
-   `cargo check` inside `src-tauri/` after adding `libmpv2` should succeed.
-3. Proceed with step 1.3 — add the crate and implement init/destroy.
-4. Keep commits atomic per step; update this doc's checkboxes as you go.
+2. `bd ready` — `prexu-1a8.2` (step 1.4) should be next.
+3. Confirm `MPV_SOURCE=C:\libmpv` and `C:\libmpv\64` on PATH. A fresh shell
+   `cargo check` inside `src-tauri/` should pass without changes.
+4. Implement step 1.4 — real bodies for `player_load_url`, `player_play`,
+   `player_pause`, `player_seek` using `state.ensure_init()` then
+   `state.with_mpv(|mpv| ...)`.
+5. Keep commits atomic per step; update this doc's checkboxes as you go.
 
 ## Key files in play
 

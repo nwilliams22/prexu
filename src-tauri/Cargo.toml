@@ -33,3 +33,4 @@ tauri-plugin-single-instance = "2.4.0"
 tauri-plugin-store = "2"
 tauri-plugin-updater = "2"
 url = "2"
+libmpv2 = { version = "4", features = ["build_libmpv"] }
