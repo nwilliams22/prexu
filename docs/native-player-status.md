@@ -40,10 +40,21 @@ Kept on `main` as real bug fixes discovered during the session:
 - `tauri-loader.ts` routes through `@tauri-apps/plugin-http` +
   `response.arrayBuffer()` (fixes Plex 400 from WebView2 cross-site headers)
 
-### 🟨 Phase 1 — Rust FFI foundation (5–7 days total)
+### ✅ Phase 1 — Rust FFI foundation (verified end-to-end)
 
-Tracked in beads as epic `prexu-1a8`. Children: `prexu-1a8.1` (1.3, done),
-`.2` (1.4), `.3` (1.5), `.4` (1.6), `.5` (1.7).
+Tracked in beads as epic `prexu-1a8` (closed). Manual smoke-tested on
+2026-04-15 against a local file: `[player] ready`, `[player] duration`,
+`[player] paused`, `[player] buffering`, and 4 Hz `[player] time-pos`
+all fire as expected; audio plays; mpv opens its own window since
+`vo=gpu-next` requires a render target (Phase 2 replaces with managed
+HWND). Three follow-up fixes landed during verification (`ce961f5`):
+DELAYLOAD for libmpv-2.dll, MPV_SOURCE fallback in build.rs, and an
+idempotent DLL copy + `.taurignore` to break a tauri-dev rebuild loop.
+
+**Known DLL constraint:** the shinchiro `mpv-dev-x86_64-v3-*` (AVX2 v3)
+build fails `LoadLibrary` with `ERROR_NOACCESS` on Windows 11. Use the
+baseline `mpv-dev-x86_64-*` build instead. Both are 117–121 MB because
+they bundle BD-J extras; that's not a problem, just unusual.
 
 #### ✅ Step 1.1 — scaffold player module (commit `5abe32b`)
 - `src-tauri/src/player/mod.rs` — `PlayerState` struct (placeholder inner)
