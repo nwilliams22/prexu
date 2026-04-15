@@ -257,23 +257,33 @@ export function useNativePlayer(
       // Apply saved volume + mute before load so playback starts at the
       // right level. mpv volume is 0..200 (we configured volume-max=200 in
       // PlayerState::ensure_init); our `volume` is 0..2 in float.
+      console.log("[player] setting volume + mute…");
       await invoke("player_set_volume", {
         vol: Math.max(0, Math.min(200, Math.round(volumeRef.current * 100))),
       });
       await invoke("player_set_muted", { muted: isMutedRef.current });
 
+      console.log("[player] loading URL:", url, "startOffsetMs:", viewOffset);
       await invoke("player_load_url", {
         url,
         headers: {} as Record<string, string>,
         startOffsetMs: viewOffset,
       });
+      console.log("[player] load_url command returned OK; waiting for ready event");
 
       timeline.startTimeline();
       // setIsLoading(false) happens when `player://ready` fires.
     } catch (err) {
-      setPlaybackError(
-        err instanceof Error ? err.message : "Failed to start playback",
-      );
+      // Tauri invoke rejects with a string (not Error) — the previous
+      // `err instanceof Error` path was hiding every backend failure.
+      const msg =
+        err instanceof Error
+          ? err.message
+          : typeof err === "string"
+            ? err
+            : JSON.stringify(err);
+      console.error("[player] init failed:", err);
+      setPlaybackError(msg || "Failed to start playback");
       setIsLoading(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- ref values are stable
