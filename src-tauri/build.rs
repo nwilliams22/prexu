@@ -7,16 +7,29 @@ fn main() {
     #[cfg(target_os = "windows")]
     copy_libmpv_dll();
 
+    // Delay-load libmpv-2.dll. mpv's DllMain on Windows touches state that's
+    // unsafe to use during DLL_PROCESS_ATTACH; static linking causes an
+    // access violation at process startup. With /DELAYLOAD the DLL isn't
+    // resolved until the first mpv_* call, by which time normal init is done.
+    #[cfg(target_os = "windows")]
+    {
+        println!("cargo:rustc-link-arg=/DELAYLOAD:libmpv-2.dll");
+        println!("cargo:rustc-link-arg=/DEFAULTLIB:delayimp.lib");
+    }
+
     tauri_build::build();
 }
 
 #[cfg(target_os = "windows")]
 fn copy_libmpv_dll() {
-    let Some(source) = env::var_os("MPV_SOURCE") else {
-        println!("cargo:warning=MPV_SOURCE unset; libmpv-2.dll will not be bundled");
-        return;
-    };
-    let src = PathBuf::from(source).join("64").join("libmpv-2.dll");
+    // MPV_SOURCE env var wins. Falls back to C:\libmpv (the install location
+    // documented in docs/native-player-status.md step 1.2). The fallback exists
+    // because some launchers (npm.cmd → tauri-cli → cargo) strip env vars on
+    // Windows, making MPV_SOURCE-only too brittle for `npm run tauri dev`.
+    let source = env::var_os("MPV_SOURCE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\libmpv"));
+    let src = source.join("64").join("libmpv-2.dll");
     println!("cargo:rerun-if-changed={}", src.display());
     println!("cargo:rerun-if-env-changed=MPV_SOURCE");
 
@@ -31,16 +44,11 @@ fn copy_libmpv_dll() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
 
     // 1. Copy into src-tauri/bin/ so tauri.conf.json bundle.resources picks it
-    //    up at `tauri build` time.
+    //    up at `tauri build` time. Idempotent — skipping when already current
+    //    avoids a tauri-cli watcher rebuild loop on `npm run tauri dev`.
     let bundle_dir = manifest_dir.join("bin");
     let bundle_dest = bundle_dir.join("libmpv-2.dll");
-    if let Err(e) = std::fs::copy(&src, &bundle_dest) {
-        println!(
-            "cargo:warning=Failed to copy libmpv-2.dll to {}: {}",
-            bundle_dest.display(),
-            e
-        );
-    }
+    copy_if_newer(&src, &bundle_dest);
 
     // 2. Copy next to the built exe so `cargo run` / `tauri dev` find it via
     //    the application directory search path. OUT_DIR is
@@ -49,13 +57,29 @@ fn copy_libmpv_dll() {
         let out_dir = PathBuf::from(out_dir);
         if let Some(target_dir) = out_dir.ancestors().nth(3) {
             let dev_dest = target_dir.join("libmpv-2.dll");
-            if let Err(e) = std::fs::copy(&src, &dev_dest) {
-                println!(
-                    "cargo:warning=Failed to copy libmpv-2.dll to {}: {}",
-                    dev_dest.display(),
-                    e
-                );
-            }
+            copy_if_newer(&src, &dev_dest);
         }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn copy_if_newer(src: &std::path::Path, dest: &std::path::Path) {
+    let needs_copy = match (std::fs::metadata(src), std::fs::metadata(dest)) {
+        (Ok(s), Ok(d)) => match (s.modified(), d.modified()) {
+            (Ok(s_m), Ok(d_m)) => s_m > d_m || s.len() != d.len(),
+            _ => true,
+        },
+        (Ok(_), Err(_)) => true,
+        _ => false, // src missing — caller already handled this
+    };
+    if !needs_copy {
+        return;
+    }
+    if let Err(e) = std::fs::copy(src, dest) {
+        println!(
+            "cargo:warning=Failed to copy libmpv-2.dll to {}: {}",
+            dest.display(),
+            e
+        );
     }
 }
