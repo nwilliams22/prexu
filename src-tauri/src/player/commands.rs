@@ -134,13 +134,15 @@ pub async fn player_unload(state: State<'_, PlayerState>) -> Result<(), String> 
 
 /// Toggle the Tauri main window's fullscreen state.
 ///
-/// The on_window_event listener fires Resized many times during the
-/// animated transition, each triggering a SetWindowPos on the host that
-/// rebuilds mpv's D3D11 swapchain. Doing this rapidly crashes mpv. So we:
-/// 1. Set a transition flag so the listener skips sync_geometry,
-/// 2. Toggle Tauri fullscreen,
-/// 3. Wait for the transition to settle,
-/// 4. Clear the flag and do ONE explicit sync at the final geometry.
+/// 1. Set a transition flag so the on_window_event listener skips
+///    sync_geometry during the animated transition (avoids the rapid
+///    SetWindowPos storm that crashes mpv's gpu-next vo).
+/// 2. Toggle Tauri fullscreen.
+/// 3. Wait for the transition to settle.
+/// 4. Clear the flag, then dispatch a single explicit sync onto the
+///    main thread (Win32 windows are thread-affine; cross-thread
+///    SetWindowPos uses SendMessage and can be flaky during transient
+///    states like fullscreen entry).
 #[tauri::command]
 pub async fn player_set_fullscreen(
     fullscreen: bool,
@@ -156,18 +158,39 @@ pub async fn player_set_fullscreen(
         .set_fullscreen(fullscreen)
         .map_err(|e| format!("set_fullscreen failed: {}", e));
 
-    // 300 ms covers Win11's animated fullscreen-on-monitor transition plus
-    // the Resized burst that follows. Tuned by observation; if the storm
-    // outlasts this window we'll see it in flake reports and bump.
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-
+    // 350 ms covers Win11's animated fullscreen transition plus the
+    // Resized burst that follows. Bumped from 300 after empirical hang.
+    tokio::time::sleep(std::time::Duration::from_millis(350)).await;
     state.set_fullscreen_transition(false);
 
-    // One final explicit sync now that the window has settled at its new
-    // size. Without this, the host stays at the pre-fullscreen geometry.
+    // Dispatch the trailing-edge sync to the main thread so SetWindowPos
+    // runs on the window's owning thread.
     #[cfg(target_os = "windows")]
-    if let (Ok(pos), Ok(size)) = (main.inner_position(), main.inner_size()) {
-        state.sync_geometry(pos.x, pos.y, size.width as i32, size.height as i32);
+    {
+        let app_for_main = app.clone();
+        let win_for_main = main.clone();
+        if let Err(e) = app.run_on_main_thread(move || {
+            let st = app_for_main.state::<PlayerState>();
+            match (win_for_main.inner_position(), win_for_main.inner_size()) {
+                (Ok(pos), Ok(size)) => {
+                    st.force_sync_geometry(
+                        pos.x,
+                        pos.y,
+                        size.width as i32,
+                        size.height as i32,
+                    );
+                }
+                (p, s) => {
+                    log::warn!(
+                        "[player] post-fullscreen geometry read failed: pos={:?} size={:?}",
+                        p.is_ok(),
+                        s.is_ok()
+                    );
+                }
+            }
+        }) {
+            log::warn!("[player] run_on_main_thread for FS sync failed: {}", e);
+        }
     }
 
     fs_result

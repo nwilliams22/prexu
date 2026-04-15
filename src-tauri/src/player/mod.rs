@@ -39,6 +39,10 @@ pub struct PlayerState {
     /// `GEOMETRY_SYNC_MIN_INTERVAL`. Mutex contention is negligible (only
     /// the main thread reads/writes).
     last_sync: Mutex<Instant>,
+    /// (x, y, w, h) of the last sync we actually applied. Lets us skip the
+    /// SetWindowPos call when called with identical args — common during
+    /// drag where position changes but size stays put, or vice versa.
+    last_geometry: Mutex<Option<(i32, i32, i32, i32)>>,
 }
 
 struct Inner {
@@ -63,12 +67,27 @@ impl PlayerState {
                     .checked_sub(GEOMETRY_SYNC_MIN_INTERVAL)
                     .unwrap_or_else(Instant::now),
             ),
+            last_geometry: Mutex::new(None),
         }
     }
 
     pub(crate) fn set_fullscreen_transition(&self, in_progress: bool) {
         self.fullscreen_transition
             .store(in_progress, Ordering::Release);
+    }
+
+    /// Cheap pre-check the on_window_event listener can use to skip the
+    /// `inner_position` + `inner_size` Tauri queries when we're going to
+    /// throttle the actual work anyway. Returns true if a sync would
+    /// proceed right now.
+    pub(crate) fn should_sync_geometry_now(&self) -> bool {
+        if self.fullscreen_transition.load(Ordering::Acquire) {
+            return false;
+        }
+        let Ok(last) = self.last_sync.lock() else {
+            return false;
+        };
+        Instant::now().duration_since(*last) >= GEOMETRY_SYNC_MIN_INTERVAL
     }
 
     /// Lazily create the host window + `Mpv` handle with our baseline config
@@ -150,23 +169,14 @@ impl PlayerState {
     /// area. No-op when the player hasn't been initialised yet — the
     /// listener fires from app startup, before any playback.
     ///
-    /// Skipped while a fullscreen transition is in progress (see
-    /// `fullscreen_transition` doc comment for the rationale). The Tauri
-    /// command that drives fullscreen does one explicit sync after the
-    /// transition completes.
-    ///
-    /// Leading-edge throttled to 30 Hz (see `GEOMETRY_SYNC_MIN_INTERVAL`)
-    /// so drag-resize doesn't saturate the main message pump. Trailing-edge
-    /// drift after mouse release is at most one throttle interval (~33 ms)
-    /// because the natural final Resized event arrives well after the last
-    /// throttled call.
+    /// Skipped while a fullscreen transition is in progress and
+    /// throttled to ~30 Hz on the regular path. Skips the SetWindowPos
+    /// call entirely when called with the same geometry as last time.
     #[cfg(target_os = "windows")]
     pub(crate) fn sync_geometry(&self, x: i32, y: i32, width: i32, height: i32) {
         if self.fullscreen_transition.load(Ordering::Acquire) {
             return;
         }
-        // Throttle check first so a flood of events doesn't even take the
-        // inner lock.
         {
             let now = Instant::now();
             let Ok(mut last) = self.last_sync.lock() else {
@@ -177,10 +187,44 @@ impl PlayerState {
             }
             *last = now;
         }
+        // Skip if geometry hasn't changed since last apply — avoids
+        // repeated SetWindowPos calls when only one of pos/size moved.
+        let new = (x, y, width, height);
+        if let Ok(mut last_geom) = self.last_geometry.lock() {
+            if *last_geom == Some(new) {
+                return;
+            }
+            *last_geom = Some(new);
+        }
         let Ok(guard) = self.inner.lock() else { return };
         if let Some(inner) = guard.as_ref() {
             if let Err(e) = inner.host.set_geometry(x, y, width, height) {
                 log::warn!("[player] sync_geometry failed: {}", e);
+            }
+        }
+    }
+
+    /// Force a geometry sync bypassing the throttle but NOT the transition
+    /// flag. Used for the trailing-edge sync after fullscreen settles.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn force_sync_geometry(&self, x: i32, y: i32, width: i32, height: i32) {
+        if let Ok(mut last) = self.last_sync.lock() {
+            *last = Instant::now();
+        }
+        if let Ok(mut last_geom) = self.last_geometry.lock() {
+            *last_geom = Some((x, y, width, height));
+        }
+        let Ok(guard) = self.inner.lock() else { return };
+        if let Some(inner) = guard.as_ref() {
+            log::info!(
+                "[player] force_sync_geometry to ({}, {}, {}x{})",
+                x,
+                y,
+                width,
+                height
+            );
+            if let Err(e) = inner.host.set_geometry(x, y, width, height) {
+                log::warn!("[player] force_sync_geometry failed: {}", e);
             }
         }
     }

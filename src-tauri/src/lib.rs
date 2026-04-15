@@ -402,9 +402,13 @@ pub fn run() {
                         let state = app_handle.state::<player::PlayerState>();
                         match event {
                             // Resized/Moved fire on drag, snap, restore, etc.
-                            // Always re-read both inner_position + inner_size
-                            // since Moved gives outer-position by default.
+                            // Cheap pre-check first — drag fires events at
+                            // ~60 Hz and the inner_position/inner_size
+                            // queries below are not free.
                             WindowEvent::Resized(_) | WindowEvent::Moved(_) => {
+                                if !state.should_sync_geometry_now() {
+                                    return;
+                                }
                                 if let (Ok(pos), Ok(size)) =
                                     (win_clone.inner_position(), win_clone.inner_size())
                                 {
