@@ -129,18 +129,35 @@ release-bundle time, AND copies it next to the built exe so
 `cargo run`/`tauri dev` find it via the application directory search
 path. CI runners must set `MPV_SOURCE` (release.yml change pending).
 
-### ⬜ Phase 2 — Two-window composition + swap `<video>` (5–7 days)
-Target state after this phase: HEVC plays smoothly on Windows in Prexu.
-See plan for details. Not started.
+### ⬜ Phase 2 — Two-window composition + swap `<video>` (Windows only)
+Tracked as epic `prexu-3r3` with steps 2.1–2.9. Target: HEVC Main10
+Direct Plays at native framerate on Windows. Approach: transparent Tauri
+main window over a sibling native HWND child window hosting mpv via
+`vo=gpu-next` + `--wid`, with a Rust window-group manager keeping them
+synchronised. macOS/Linux keep the HTML5 path until Phase 5 concludes.
 
-### ⬜ Phase 3 — Feature parity (4–5 days)
-Audio enhancements rewrite, stream selection via mpv props, Watch
-Together, offline downloads, subtitle styling via libass. Not started.
+### ⬜ Phase 3 — Feature parity (Windows)
+Tracked as epic `prexu-fmd` with steps 3.1–3.10. Restores audio/sub
+track switching, libass subtitle styling, audio-enhancement presets,
+Watch Together drift sync, offline-download playback, Direct Play
+relaxation, resume offset, PostPlay screen, buffered-range reporting.
 
-### ⬜ Phase 4 — PiP replacement + polish (3–4 days)
-Mini-player mode. Not started.
+### ⬜ Phase 4 — Mini-player + polish (Windows)
+Tracked as epic `prexu-a6z` with steps 4.1–4.5. Replaces browser PiP
+with a Rust-driven mini-player mode (resize both windows to corner +
+always-on-top + minimal chrome).
 
-### ⬜ Phase 5 — macOS + Linux (5–7 days, deferred)
+### ⬜ Phase 5 — Cross-platform research (deferred)
+Tracked as epic `prexu-efy` (single research issue). ADR-style decision
+on whether to extend native player to macOS (NSView + VideoToolbox) and
+Linux (X11/Wayland). Output goes back into this doc.
+
+### ⬜ Phase 6 — Release/CI for bundled libmpv
+Tracked as epic `prexu-2zo` with steps 6.1–6.4. Without this, Phase 2–4
+work isn't shippable: release.yml needs to install/cache libmpv on the
+Windows runner, generate `mpv.lib`, export `MPV_SOURCE`, and ship
+`libmpv-2.dll` inside the NSIS installer. Includes code-signing impact
+assessment for the third-party DLL.
 
 ## Resume instructions
 
