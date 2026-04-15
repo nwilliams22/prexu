@@ -387,6 +387,7 @@ pub fn run() {
             player::commands::player_set_audio_delay_ms,
             player::commands::player_set_af_chain,
             player::commands::player_unload,
+            player::commands::player_set_fullscreen,
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {

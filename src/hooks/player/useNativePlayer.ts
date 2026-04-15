@@ -291,12 +291,9 @@ export function useNativePlayer(
   // eslint-disable-next-line react-hooks/exhaustive-deps -- timeline funcs are stable
   }, [initPlayback]);
 
-  // Fullscreen listener (HTML/CSS path; step 2.8 swaps in a Tauri fullscreen)
-  useEffect(() => {
-    const onFullscreenChange = () => setIsFullscreen(!!document.fullscreenElement);
-    document.addEventListener("fullscreenchange", onFullscreenChange);
-    return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
-  }, []);
+  // Note: ESC-to-exit-fullscreen via Tauri doesn't fire a JS event back, so
+  // isFullscreen can drift if the user uses a chrome-side gesture. Phase 4
+  // polish can add an explicit window-event listener if it matters.
 
   // ── Actions ──
   const togglePlay = useCallback(() => {
@@ -329,14 +326,15 @@ export function useNativePlayer(
     invoke("player_set_muted", { muted: next }).catch(() => {});
   }, []);
 
+  const isFullscreenRef = useRef(isFullscreen);
+  isFullscreenRef.current = isFullscreen;
   const toggleFullscreen = useCallback(() => {
-    // Step 2.8 will replace this with a Tauri command that toggles both
-    // windows together. CSS fullscreen is good enough as a placeholder.
-    if (document.fullscreenElement) {
-      document.exitFullscreen().catch(() => {});
-    } else {
-      document.documentElement.requestFullscreen().catch(() => {});
-    }
+    const next = !isFullscreenRef.current;
+    setIsFullscreen(next);
+    invoke("player_set_fullscreen", { fullscreen: next }).catch(() => {
+      // Roll back optimistic state on failure
+      setIsFullscreen(!next);
+    });
   }, []);
 
   const selectAudioTrack = useCallback((streamId: number) => {

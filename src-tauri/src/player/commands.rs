@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use super::PlayerState;
 
@@ -130,4 +130,16 @@ pub async fn player_set_af_chain(
 #[tauri::command]
 pub async fn player_unload(state: State<'_, PlayerState>) -> Result<(), String> {
     state.destroy()
+}
+
+/// Toggle the Tauri main window's fullscreen state. The native host window
+/// follows automatically because the on_window_event listener re-syncs
+/// geometry on every Resized event.
+#[tauri::command]
+pub async fn player_set_fullscreen(fullscreen: bool, app: AppHandle) -> Result<(), String> {
+    let main = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main webview window not found".to_string())?;
+    main.set_fullscreen(fullscreen)
+        .map_err(|e| format!("set_fullscreen failed: {}", e))
 }
