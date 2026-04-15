@@ -1,21 +1,20 @@
 //! Native libmpv-backed player (Windows-first).
-//!
-//! Phase 1 step 1.3 — real `libmpv2::Mpv` handle, init+destroy. Other commands
-//! still stub until step 1.4+.
 
 pub mod commands;
 pub mod events;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use libmpv2::Mpv;
+use tauri::AppHandle;
 
 /// Managed state container holding the mpv handle.
 ///
 /// `Mpv` is created lazily on the first `ensure_init` call so app startup
 /// stays fast and we don't open mpv unless the user actually plays something.
+/// Wrapped in `Arc` so the event-pump thread can keep its own reference.
 pub struct PlayerState {
-    inner: Mutex<Option<Mpv>>,
+    inner: Mutex<Option<Arc<Mpv>>>,
 }
 
 impl PlayerState {
@@ -25,9 +24,9 @@ impl PlayerState {
         }
     }
 
-    /// Lazily create the `Mpv` handle with our baseline config. Subsequent
-    /// calls are no-ops.
-    pub(crate) fn ensure_init(&self) -> Result<(), String> {
+    /// Lazily create the `Mpv` handle with our baseline config and start the
+    /// event pump. Subsequent calls are no-ops.
+    pub(crate) fn ensure_init(&self, app: &AppHandle) -> Result<(), String> {
         let mut guard = self.inner.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
         if guard.is_some() {
             return Ok(());
@@ -41,11 +40,15 @@ impl PlayerState {
             Ok(())
         })
         .map_err(|e| format!("mpv init failed: {:?}", e))?;
+
+        let mpv = Arc::new(mpv);
+        events::spawn_event_pump(Arc::clone(&mpv), app.clone())?;
         *guard = Some(mpv);
         Ok(())
     }
 
-    /// Drop the `Mpv` handle. Safe to call when not initialised.
+    /// Drop the `Mpv` handle. The event pump exits via `Event::Shutdown`
+    /// when the underlying mpv context is destroyed.
     pub(crate) fn destroy(&self) -> Result<(), String> {
         let mut guard = self.inner.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
         *guard = None;

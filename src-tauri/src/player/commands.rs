@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use super::PlayerState;
 
@@ -14,9 +14,10 @@ pub async fn player_load_url(
     url: String,
     headers: HashMap<String, String>,
     start_offset_ms: Option<u64>,
+    app: AppHandle,
     state: State<'_, PlayerState>,
 ) -> Result<(), String> {
-    state.ensure_init()?;
+    state.ensure_init(&app)?;
 
     // mpv's `http-header-fields` takes a comma-separated list of "Name: Value"
     // entries. Plex headers (X-Plex-Token, X-Plex-Client-Identifier, …) don't
