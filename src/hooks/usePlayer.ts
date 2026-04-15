@@ -1,8 +1,16 @@
 /**
- * Core playback hook — manages video element, hls.js, playback state,
- * stream tracks, and timeline reporting to Plex.
+ * Core playback hook. Dispatches to one of two backends per platform:
+ * - Windows (Tauri): `useNativePlayer` — libmpv via player://* events
+ * - everywhere else: HTML5 `<video>` + hls.js (the original implementation
+ *   below, renamed `useHtml5Player`)
  *
- * Composes sub-hooks for HLS management, timeline reporting, and stream selection.
+ * Both backends return the same `UsePlayerResult` so PlayerControls,
+ * watch-together hooks, and the post-play screen don't care which is active.
+ *
+ * The dispatch decision is a module-level constant set once at import time
+ * (so React always calls the same hook for any given component instance —
+ * the rules-of-hooks invariant holds even though the call site is a
+ * ternary).
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -11,6 +19,7 @@ import { usePreferences } from "./usePreferences";
 import { useHlsLoader } from "./player/useHlsLoader";
 import { useTimelineReporting } from "./player/useTimelineReporting";
 import { useStreamSelection } from "./player/useStreamSelection";
+import { useNativePlayer } from "./player/useNativePlayer";
 import { getItemMetadata } from "../services/plex-library";
 import { getLocalFilePath } from "../services/downloads";
 import { addPendingWatchSync } from "../services/storage";
@@ -32,6 +41,12 @@ import type {
   PlexChapter,
   PlexMarker,
 } from "../types/library";
+
+const IS_NATIVE_PLAYER =
+  typeof window !== "undefined" &&
+  "__TAURI_INTERNALS__" in window &&
+  typeof navigator !== "undefined" &&
+  navigator.userAgent.includes("Windows");
 
 export interface UsePlayerResult {
   // Refs
@@ -76,6 +91,14 @@ export interface UsePlayerResult {
 }
 
 export function usePlayer(ratingKey: string, offsetOverride?: number | null): UsePlayerResult {
+  // The branch is a module-level constant — React calls the same hook for
+  // any given component instance across renders, so rules-of-hooks holds.
+  return IS_NATIVE_PLAYER
+    ? useNativePlayer(ratingKey, offsetOverride)
+    : useHtml5Player(ratingKey, offsetOverride);
+}
+
+function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UsePlayerResult {
   const { server } = useAuth();
   const { preferences } = usePreferences();
   const prefsRef = useRef(preferences);
