@@ -132,14 +132,43 @@ pub async fn player_unload(state: State<'_, PlayerState>) -> Result<(), String> 
     state.destroy()
 }
 
-/// Toggle the Tauri main window's fullscreen state. The native host window
-/// follows automatically because the on_window_event listener re-syncs
-/// geometry on every Resized event.
+/// Toggle the Tauri main window's fullscreen state.
+///
+/// The on_window_event listener fires Resized many times during the
+/// animated transition, each triggering a SetWindowPos on the host that
+/// rebuilds mpv's D3D11 swapchain. Doing this rapidly crashes mpv. So we:
+/// 1. Set a transition flag so the listener skips sync_geometry,
+/// 2. Toggle Tauri fullscreen,
+/// 3. Wait for the transition to settle,
+/// 4. Clear the flag and do ONE explicit sync at the final geometry.
 #[tauri::command]
-pub async fn player_set_fullscreen(fullscreen: bool, app: AppHandle) -> Result<(), String> {
+pub async fn player_set_fullscreen(
+    fullscreen: bool,
+    app: AppHandle,
+    state: State<'_, PlayerState>,
+) -> Result<(), String> {
     let main = app
         .get_webview_window("main")
         .ok_or_else(|| "main webview window not found".to_string())?;
-    main.set_fullscreen(fullscreen)
-        .map_err(|e| format!("set_fullscreen failed: {}", e))
+
+    state.set_fullscreen_transition(true);
+    let fs_result = main
+        .set_fullscreen(fullscreen)
+        .map_err(|e| format!("set_fullscreen failed: {}", e));
+
+    // 300 ms covers Win11's animated fullscreen-on-monitor transition plus
+    // the Resized burst that follows. Tuned by observation; if the storm
+    // outlasts this window we'll see it in flake reports and bump.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    state.set_fullscreen_transition(false);
+
+    // One final explicit sync now that the window has settled at its new
+    // size. Without this, the host stays at the pre-fullscreen geometry.
+    #[cfg(target_os = "windows")]
+    if let (Ok(pos), Ok(size)) = (main.inner_position(), main.inner_size()) {
+        state.sync_geometry(pos.x, pos.y, size.width as i32, size.height as i32);
+    }
+
+    fs_result
 }
