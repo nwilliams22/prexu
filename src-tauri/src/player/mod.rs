@@ -8,9 +8,20 @@ pub mod host_window;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use libmpv2::Mpv;
 use tauri::{AppHandle, Manager};
+
+/// Minimum interval between consecutive sync_geometry calls. Drag-resize
+/// fires WM_SIZE at the OS event rate (~60 Hz). Each sync_geometry runs
+/// SetWindowPos which synchronously sends WM_WINDOWPOSCHANGING/CHANGED
+/// down the chain plus WM_SIZE to mpv's child window, where mpv rebuilds
+/// its D3D11 swapchain. At 60 Hz the Tauri main thread can't service the
+/// message queue between calls and the app hard-freezes (mpv's own
+/// threads keep playing audio/video, but UI input + paint stop).
+/// 30 Hz is smooth enough visually and leaves headroom.
+const GEOMETRY_SYNC_MIN_INTERVAL: Duration = Duration::from_millis(33);
 
 /// Managed state container holding the mpv handle + (on Windows) the native
 /// HWND that mpv renders into. Created lazily on the first `ensure_init`.
@@ -24,6 +35,10 @@ pub struct PlayerState {
     /// sync_geometry while this flag is set and do one explicit sync after
     /// the transition settles.
     fullscreen_transition: AtomicBool,
+    /// Last time sync_geometry actually ran. Leading-edge throttle — see
+    /// `GEOMETRY_SYNC_MIN_INTERVAL`. Mutex contention is negligible (only
+    /// the main thread reads/writes).
+    last_sync: Mutex<Instant>,
 }
 
 struct Inner {
@@ -41,6 +56,13 @@ impl PlayerState {
         Self {
             inner: Mutex::new(None),
             fullscreen_transition: AtomicBool::new(false),
+            // Initial value is `now` so the very first sync passes through
+            // immediately (Instant arithmetic is monotonic).
+            last_sync: Mutex::new(
+                Instant::now()
+                    .checked_sub(GEOMETRY_SYNC_MIN_INTERVAL)
+                    .unwrap_or_else(Instant::now),
+            ),
         }
     }
 
@@ -132,10 +154,28 @@ impl PlayerState {
     /// `fullscreen_transition` doc comment for the rationale). The Tauri
     /// command that drives fullscreen does one explicit sync after the
     /// transition completes.
+    ///
+    /// Leading-edge throttled to 30 Hz (see `GEOMETRY_SYNC_MIN_INTERVAL`)
+    /// so drag-resize doesn't saturate the main message pump. Trailing-edge
+    /// drift after mouse release is at most one throttle interval (~33 ms)
+    /// because the natural final Resized event arrives well after the last
+    /// throttled call.
     #[cfg(target_os = "windows")]
     pub(crate) fn sync_geometry(&self, x: i32, y: i32, width: i32, height: i32) {
         if self.fullscreen_transition.load(Ordering::Acquire) {
             return;
+        }
+        // Throttle check first so a flood of events doesn't even take the
+        // inner lock.
+        {
+            let now = Instant::now();
+            let Ok(mut last) = self.last_sync.lock() else {
+                return;
+            };
+            if now.duration_since(*last) < GEOMETRY_SYNC_MIN_INTERVAL {
+                return;
+            }
+            *last = now;
         }
         let Ok(guard) = self.inner.lock() else { return };
         if let Some(inner) = guard.as_ref() {
