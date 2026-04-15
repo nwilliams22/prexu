@@ -140,12 +140,32 @@ release-bundle time, AND copies it next to the built exe so
 `cargo run`/`tauri dev` find it via the application directory search
 path. CI runners must set `MPV_SOURCE` (release.yml change pending).
 
-### ⬜ Phase 2 — Two-window composition + swap `<video>` (Windows only)
-Tracked as epic `prexu-3r3` with steps 2.1–2.9. Target: HEVC Main10
-Direct Plays at native framerate on Windows. Approach: transparent Tauri
-main window over a sibling native HWND child window hosting mpv via
-`vo=gpu-next` + `--wid`, with a Rust window-group manager keeping them
-synchronised. macOS/Linux keep the HTML5 path until Phase 5 concludes.
+### 🟨 Phase 2 — Two-window composition + swap `<video>` (Windows only)
+Tracked as epic `prexu-3r3`. Steps 2.1–2.8 implemented (see commits
+`9e0a11f`, `354c6e4`, `aa2ca61`, `c2aedff`, `09d26a1`, `b22bae3`,
+`ce2b5c4`, `afcfbf0`). Step 2.9 is manual acceptance — see
+`docs/phase2-smoke-test.md`.
+
+Architecture as built:
+- `windows = 0.61` (pinned to Tauri's transitive version).
+- `HostWindow` in `src-tauri/src/player/host_window.rs` — sibling
+  top-level `WS_POPUP + WS_EX_NOACTIVATE`, registered class with
+  `BLACK_BRUSH` background. Z-order anchored behind Tauri main via
+  `SetWindowPos` in `create()`.
+- `PlayerState::ensure_init` creates the host first, hands its HWND to
+  mpv as `wid` inside `with_initializer` (must be set before
+  `mpv_initialize`), syncs initial geometry, then `set_visible(true)`.
+- `lib.rs` `setup` registers `on_window_event` on the main webview:
+  Resized/Moved → `sync_geometry`, ScaleFactorChanged →
+  `sync_geometry` with the event's new_inner_size,
+  CloseRequested/Destroyed → `destroy()`.
+- Tauri main window flipped `transparent: true`.
+- Frontend: `useNativePlayer` mirrors `useHtml5Player` shape;
+  `usePlayer` dispatches to native on Tauri Windows via a module-level
+  constant (rules-of-hooks holds because the branch is fixed at import
+  time).
+- Fullscreen via `player_set_fullscreen` command →
+  `webview_window.set_fullscreen()`.
 
 ### ⬜ Phase 3 — Feature parity (Windows)
 Tracked as epic `prexu-fmd` with steps 3.1–3.10. Restores audio/sub
