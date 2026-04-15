@@ -92,6 +92,19 @@ impl PlayerState {
         Ok(())
     }
 
+    /// Resize/move the host window to match the Tauri main window's content
+    /// area. No-op when the player hasn't been initialised yet — the
+    /// listener fires from app startup, before any playback.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn sync_geometry(&self, x: i32, y: i32, width: i32, height: i32) {
+        let Ok(guard) = self.inner.lock() else { return };
+        if let Some(inner) = guard.as_ref() {
+            if let Err(e) = inner.host.set_geometry(x, y, width, height) {
+                log::warn!("[player] sync_geometry failed: {}", e);
+            }
+        }
+    }
+
     pub(crate) fn with_mpv<R>(
         &self,
         f: impl FnOnce(&Mpv) -> Result<R, libmpv2::Error>,

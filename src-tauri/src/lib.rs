@@ -391,6 +391,54 @@ pub fn run() {
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 window.show().unwrap_or_default();
+
+                #[cfg(target_os = "windows")]
+                {
+                    let app_handle = app.handle().clone();
+                    let win_clone = window.clone();
+                    window.on_window_event(move |event| {
+                        use tauri::WindowEvent;
+                        let state = app_handle.state::<player::PlayerState>();
+                        match event {
+                            // Resized/Moved fire on drag, snap, restore, etc.
+                            // Always re-read both inner_position + inner_size
+                            // since Moved gives outer-position by default.
+                            WindowEvent::Resized(_) | WindowEvent::Moved(_) => {
+                                if let (Ok(pos), Ok(size)) =
+                                    (win_clone.inner_position(), win_clone.inner_size())
+                                {
+                                    state.sync_geometry(
+                                        pos.x,
+                                        pos.y,
+                                        size.width as i32,
+                                        size.height as i32,
+                                    );
+                                }
+                            }
+                            // Cross-monitor DPI change: tao gives us the new
+                            // physical size directly to dodge a stale read.
+                            WindowEvent::ScaleFactorChanged {
+                                new_inner_size, ..
+                            } => {
+                                if let Ok(pos) = win_clone.inner_position() {
+                                    state.sync_geometry(
+                                        pos.x,
+                                        pos.y,
+                                        new_inner_size.width as i32,
+                                        new_inner_size.height as i32,
+                                    );
+                                }
+                            }
+                            // Tear down host window + mpv before Tauri's main
+                            // window goes away so DestroyWindow runs cleanly.
+                            WindowEvent::CloseRequested { .. }
+                            | WindowEvent::Destroyed => {
+                                let _ = state.destroy();
+                            }
+                            _ => {}
+                        }
+                    });
+                }
             }
             Ok(())
         })

@@ -17,8 +17,8 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH, HBRUSH};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassExW, SetWindowPos, ShowWindow,
-    CS_HREDRAW, CS_VREDRAW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW, WNDCLASSEXW,
-    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_POPUP,
+    CS_HREDRAW, CS_VREDRAW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER,
+    SW_HIDE, SW_SHOW, WNDCLASSEXW, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_POPUP,
 };
 
 const CLASS_NAME: PCWSTR = w!("PrexuMpvHost");
@@ -116,12 +116,25 @@ impl HostWindow {
         (self.hwnd.0 as usize as u32) as i64
     }
 
-    /// Move + resize the host window in screen coordinates.
-    ///
-    /// Step 2.1/2.2 stub.
-    #[allow(unused_variables, dead_code)] // wired up in step 2.4
+    /// Move + resize the host window in screen pixels (client-area coords).
+    /// Skips the Win32 call when width or height is zero (e.g. minimized
+    /// Tauri main window) — last good geometry is preserved instead.
     pub fn set_geometry(&self, x: i32, y: i32, width: i32, height: i32) -> Result<(), String> {
-        Err("HostWindow::set_geometry not yet implemented (phase 2 step 2.4)".into())
+        if width <= 0 || height <= 0 {
+            return Ok(());
+        }
+        unsafe {
+            SetWindowPos(
+                self.hwnd,
+                None,
+                x,
+                y,
+                width,
+                height,
+                SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER,
+            )
+        }
+        .map_err(|e| format!("SetWindowPos failed: {:?}", e))
     }
 
     /// Show or hide the host window without destroying it.
