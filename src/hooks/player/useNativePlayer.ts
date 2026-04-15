@@ -254,15 +254,9 @@ export function useNativePlayer(
         }
       }
 
-      // Apply saved volume + mute before load so playback starts at the
-      // right level. mpv volume is 0..200 (we configured volume-max=200 in
-      // PlayerState::ensure_init); our `volume` is 0..2 in float.
-      console.log("[player] setting volume + mute…");
-      await invoke("player_set_volume", {
-        vol: Math.max(0, Math.min(200, Math.round(volumeRef.current * 100))),
-      });
-      await invoke("player_set_muted", { muted: isMutedRef.current });
-
+      // load_url runs ensure_init server-side which actually creates the
+      // mpv handle. Volume/mute commands assume an initialised handle, so
+      // they MUST come after load_url, not before.
       console.log("[player] loading URL:", url, "startOffsetMs:", viewOffset);
       await invoke("player_load_url", {
         url,
@@ -270,6 +264,14 @@ export function useNativePlayer(
         startOffsetMs: viewOffset,
       });
       console.log("[player] load_url command returned OK; waiting for ready event");
+
+      // Apply saved volume + mute now that mpv exists. mpv volume is 0..200
+      // (we configured volume-max=200 in PlayerState::ensure_init); our
+      // `volume` state is 0..2 in float.
+      await invoke("player_set_volume", {
+        vol: Math.max(0, Math.min(200, Math.round(volumeRef.current * 100))),
+      });
+      await invoke("player_set_muted", { muted: isMutedRef.current });
 
       timeline.startTimeline();
       // setIsLoading(false) happens when `player://ready` fires.
