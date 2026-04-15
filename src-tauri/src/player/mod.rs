@@ -54,7 +54,24 @@ impl PlayerState {
             let parent = main
                 .hwnd()
                 .map_err(|e| format!("Failed to get main HWND: {}", e))?;
-            host_window::HostWindow::create(parent)?
+            let host = host_window::HostWindow::create(parent)?;
+
+            // Do an initial geometry sync so the host window covers the
+            // current webview content area before becoming visible — avoids
+            // a flash at the default 1280x720 placeholder rect.
+            if let (Ok(pos), Ok(size)) = (main.inner_position(), main.inner_size()) {
+                let _ = host.set_geometry(
+                    pos.x,
+                    pos.y,
+                    size.width as i32,
+                    size.height as i32,
+                );
+            }
+            // Now make it visible — the on_window_event listener handles
+            // subsequent move/resize/DPI updates.
+            let _ = host.set_visible(true);
+
+            host
         };
 
         #[cfg(target_os = "windows")]
