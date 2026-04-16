@@ -343,11 +343,14 @@ export function useNativePlayer(
   isFullscreenRef.current = isFullscreen;
   const toggleFullscreen = useCallback(() => {
     const next = !isFullscreenRef.current;
+    console.log("[player] toggleFullscreen:", { current: isFullscreenRef.current, next });
     setIsFullscreen(next);
-    invoke("player_set_fullscreen", { fullscreen: next }).catch(() => {
-      // Roll back optimistic state on failure
-      setIsFullscreen(!next);
-    });
+    invoke("player_set_fullscreen", { fullscreen: next })
+      .then(() => console.log("[player] fullscreen command completed"))
+      .catch((err) => {
+        console.error("[player] fullscreen command failed:", err);
+        setIsFullscreen(!next);
+      });
   }, []);
 
   const selectAudioTrack = useCallback((streamId: number) => {
