@@ -15,30 +15,25 @@ use std::sync::Once;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH, HBRUSH};
-use windows::Win32::Foundation::LRESULT;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassExW, SetWindowPos, ShowWindow,
-    CS_HREDRAW, CS_VREDRAW, HTTRANSPARENT, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SW_HIDE, SW_SHOW, WM_NCHITTEST, WNDCLASSEXW, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
-    WS_EX_NOACTIVATE, WS_POPUP,
+    CS_HREDRAW, CS_VREDRAW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SW_HIDE, SW_SHOW, WNDCLASSEXW, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_POPUP,
 };
 
 const CLASS_NAME: PCWSTR = w!("PrexuMpvHost");
 static REGISTER_CLASS: Once = Once::new();
 
-/// WndProc — returns HTTRANSPARENT for mouse hit-testing so all mouse
-/// events pass through to the Tauri webview below. mpv renders via
-/// DirectX into a child window; this doesn't affect rendering, only
-/// Win32 input routing.
+/// Bare WndProc — mpv creates its own child inside this HWND when given
+/// `wid`, so the parent container only needs the default behaviour.
+/// Mouse events don't reach here because the host is z-ordered behind
+/// the Tauri main window (set_geometry re-anchors on every call).
 unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
     msg: u32,
     wp: windows::Win32::Foundation::WPARAM,
     lp: windows::Win32::Foundation::LPARAM,
 ) -> windows::Win32::Foundation::LRESULT {
-    if msg == WM_NCHITTEST {
-        return LRESULT(HTTRANSPARENT as isize);
-    }
     unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
 }
 
