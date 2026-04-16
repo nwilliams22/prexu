@@ -142,16 +142,27 @@ impl HostWindow {
     /// thread on a synchronous D3D11 swapchain rebuild.
     pub fn resize_children(&self, width: i32, height: i32) {
         unsafe {
-            if let Ok(child) = GetWindow(self.hwnd, GW_CHILD) {
-                let _ = SetWindowPos(
-                    child,
-                    None,
-                    0,
-                    0,
-                    width,
-                    height,
-                    SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS,
-                );
+            match GetWindow(self.hwnd, GW_CHILD) {
+                Ok(child) => {
+                    log::info!(
+                        "[player] resize_children: found child {:?}, resizing to {}x{}",
+                        child.0, width, height
+                    );
+                    let _ = SetWindowPos(
+                        child,
+                        None,
+                        0,
+                        0,
+                        width,
+                        height,
+                        SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS,
+                    );
+                }
+                Err(_) => {
+                    log::warn!(
+                        "[player] resize_children: no child window found — mpv may render directly into host HWND"
+                    );
+                }
             }
         }
     }

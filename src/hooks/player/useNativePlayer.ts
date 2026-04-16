@@ -299,6 +299,11 @@ export function useNativePlayer(
     return () => {
       timeline.stopTimeline();
       timeline.reportStopped();
+      // Exit fullscreen before unloading so the dashboard isn't stuck
+      // fullscreen after navigating away from the player.
+      if (isFullscreenRef.current) {
+        invoke("player_set_fullscreen", { fullscreen: false }).catch(() => {});
+      }
       invoke("player_unload").catch(() => {});
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- timeline funcs are stable
