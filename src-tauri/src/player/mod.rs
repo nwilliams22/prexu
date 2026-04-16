@@ -162,8 +162,15 @@ impl PlayerState {
     pub(crate) fn destroy(&self) -> Result<(), String> {
         let mut guard = self.inner.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
         if let Some(ref inner) = *guard {
-            log::info!("[player] destroy: sending quit to mpv");
-            let _ = inner.mpv.command("quit", &[]);
+            // Stop playback immediately, then quit. "stop" halts audio/video
+            // synchronously; "quit" fires Event::Shutdown so the event pump
+            // thread drops its Arc<Mpv> and the handle is fully destroyed.
+            log::info!("[player] destroy: stopping playback");
+            let _ = inner.mpv.command("stop", &[]);
+            match inner.mpv.command("quit", &[]) {
+                Ok(_) => log::info!("[player] destroy: quit sent OK"),
+                Err(e) => log::warn!("[player] destroy: quit failed: {:?}", e),
+            }
         }
         *guard = None;
         Ok(())
@@ -253,7 +260,9 @@ impl PlayerState {
             // parent resizes during suppressed fullscreen transitions.
             // SWP_ASYNCWINDOWPOS makes this non-blocking (posted to mpv's
             // thread instead of synchronous D3D11 swapchain rebuild).
+            eprintln!("[player] about to call resize_children({}x{})", width, height);
             inner.host.resize_children(width, height);
+            eprintln!("[player] resize_children returned");
         }
         // Update last_geometry AFTER the call so subsequent sync_geometry
         // events dedup against the authoritative post-transition values.

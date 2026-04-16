@@ -141,9 +141,11 @@ impl HostWindow {
     /// resize is posted to mpv's thread instead of blocking the main
     /// thread on a synchronous D3D11 swapchain rebuild.
     pub fn resize_children(&self, width: i32, height: i32) {
+        eprintln!("[player] resize_children: host={:?}, target={}x{}", self.hwnd.0, width, height);
         unsafe {
             match GetWindow(self.hwnd, GW_CHILD) {
                 Ok(child) => {
+                    eprintln!("[player] resize_children: FOUND child={:?}", child.0);
                     log::info!(
                         "[player] resize_children: found child {:?}, resizing to {}x{}",
                         child.0, width, height
@@ -158,7 +160,8 @@ impl HostWindow {
                         SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS,
                     );
                 }
-                Err(_) => {
+                Err(e) => {
+                    eprintln!("[player] resize_children: NO CHILD found (err={:?})", e);
                     log::warn!(
                         "[player] resize_children: no child window found — mpv may render directly into host HWND"
                     );
