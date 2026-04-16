@@ -15,19 +15,12 @@ use std::sync::Once;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH, HBRUSH};
-use windows::Win32::Foundation::LPARAM;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindow, PostMessageW, RegisterClassExW,
-    SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW, GW_CHILD, SET_WINDOW_POS_FLAGS,
-    SIZE_RESTORED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER,
-    SW_HIDE, SW_SHOW, WM_SIZE, WNDCLASSEXW, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassExW, SetWindowPos, ShowWindow,
+    CS_HREDRAW, CS_VREDRAW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE,
+    SWP_NOZORDER, SW_HIDE, SW_SHOW, WNDCLASSEXW, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
     WS_EX_NOACTIVATE, WS_POPUP,
 };
-
-/// SWP_ASYNCWINDOWPOS (0x4000) — if calling thread and owner thread have
-/// different input queues, Windows posts the request asynchronously. Avoids
-/// blocking the main thread when resizing mpv's child (owned by mpv's thread).
-const SWP_ASYNCWINDOWPOS: SET_WINDOW_POS_FLAGS = SET_WINDOW_POS_FLAGS(0x4000);
 
 const CLASS_NAME: PCWSTR = w!("PrexuMpvHost");
 static REGISTER_CLASS: Once = Once::new();
@@ -139,31 +132,6 @@ impl HostWindow {
             )
         }
         .map_err(|e| format!("SetWindowPos failed: {:?}", e))
-    }
-
-    /// Post a WM_SIZE message to the host window. This is fully
-    /// non-blocking — the message is queued and processed on the next
-    /// message pump cycle. mpv detects the size change through its
-    /// window subclass and rebuilds the D3D11 swapchain asynchronously.
-    ///
-    /// This replaces both the synchronous SetWindowPos approach (which
-    /// deadlocked the main thread inside run_on_main_thread closures)
-    /// and the resize_children approach (child window may not exist if
-    /// mpv renders directly into the host HWND).
-    pub fn post_resize(&self, width: i32, height: i32) {
-        let lparam = LPARAM(((height as isize) << 16) | (width as isize & 0xFFFF));
-        unsafe {
-            let _ = PostMessageW(
-                Some(self.hwnd),
-                WM_SIZE,
-                windows::Win32::Foundation::WPARAM(SIZE_RESTORED as usize),
-                lparam,
-            );
-        }
-        log::info!(
-            "[player] post_resize: posted WM_SIZE {}x{} to host {:?}",
-            width, height, self.hwnd.0
-        );
     }
 
     /// Show or hide the host window without destroying it.

@@ -242,46 +242,6 @@ impl PlayerState {
         }
     }
 
-    /// Force a geometry sync bypassing BOTH throttle AND dedup. Used for
-    /// the trailing-edge sync after fullscreen settles. No dedup because
-    /// sync_geometry may have already set last_geometry to the fullscreen
-    /// dimensions during the animation — if we dedup-skip, the host window
-    /// never gets the final authoritative SetWindowPos and mpv's child
-    /// stays at the pre-transition size.
-    #[cfg(target_os = "windows")]
-    pub(crate) fn force_sync_geometry(&self, x: i32, y: i32, width: i32, height: i32) {
-        log::debug!("[player] force_sync_geometry requested ({},{},{}x{})", x, y, width, height);
-        if let Ok(mut last) = self.last_sync.lock() {
-            *last = Instant::now();
-        }
-        if let Ok(mut pending) = self.pending_geometry.lock() {
-            *pending = None;
-        }
-        let Ok(guard) = self.inner.try_lock() else { return };
-        if let Some(inner) = guard.as_ref() {
-            log::info!(
-                "[player] force_sync_geometry to ({}, {}, {}x{})",
-                x,
-                y,
-                width,
-                height
-            );
-            // Use non-blocking post_resize instead of synchronous
-            // set_geometry. SetWindowPos inside run_on_main_thread
-            // deadlocks because it sends WM_SIZE synchronously on an
-            // already-occupied main thread. PostMessage(WM_SIZE) queues
-            // the resize for the next message pump cycle — mpv's window
-            // subclass picks it up and rebuilds its D3D11 swapchain
-            // without blocking.
-            inner.host.post_resize(width, height);
-        }
-        // Update last_geometry AFTER the call so subsequent sync_geometry
-        // events dedup against the authoritative post-transition values.
-        if let Ok(mut last_geom) = self.last_geometry.lock() {
-            *last_geom = Some((x, y, width, height));
-        }
-    }
-
     pub(crate) fn with_mpv<R>(
         &self,
         f: impl FnOnce(&Mpv) -> Result<R, libmpv2::Error>,
