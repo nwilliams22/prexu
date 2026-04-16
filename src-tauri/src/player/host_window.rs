@@ -27,9 +27,6 @@ static REGISTER_CLASS: Once = Once::new();
 
 /// Bare WndProc — mpv creates its own child inside this HWND when given
 /// `wid`, so the parent container only needs the default behaviour.
-/// Child resize is handled explicitly by `resize_children` after
-/// `set_geometry`, NOT via WM_SIZE (which causes feedback loops with
-/// mpv's window subclass).
 unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -50,9 +47,6 @@ fn ensure_class_registered() {
             hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
             ..Default::default()
         };
-        // Failure here is rare (only if class is somehow already registered
-        // with different attrs). The subsequent CreateWindowExW will surface
-        // any real problem.
         let _ = RegisterClassExW(&class);
     });
 }
@@ -86,7 +80,7 @@ impl HostWindow {
                 0,
                 1280,
                 720,
-                None, // top-level — z-order managed manually below
+                None,
                 None,
                 None,
                 None,
@@ -95,7 +89,7 @@ impl HostWindow {
         .map_err(|e| format!("CreateWindowExW failed: {:?}", e))?;
 
         // Place mpv host directly under the Tauri main window in z-order so
-        // the webview overlays it. Geometry sync arrives in step 2.4.
+        // the webview overlays it.
         unsafe {
             let _ = SetWindowPos(
                 hwnd,
@@ -111,17 +105,11 @@ impl HostWindow {
         Ok(Self { hwnd })
     }
 
-    /// Returns the raw HWND as an i64 for handing to mpv via
-    /// `mpv.set_property("wid", host.hwnd_as_i64())`.
-    ///
-    /// Per mpv's `--wid` docs the value is cast through `uint32_t` first to
-    /// avoid sign-extension when stored in an i64.
     pub fn hwnd_as_i64(&self) -> i64 {
         (self.hwnd.0 as usize as u32) as i64
     }
 
     /// Move + resize the host window in screen pixels (client-area coords).
-    /// Also resizes mpv's child window to fill the new client area.
     /// Skips the Win32 call when width or height is zero (e.g. minimized
     /// Tauri main window) — last good geometry is preserved instead.
     pub fn set_geometry(&self, x: i32, y: i32, width: i32, height: i32) -> Result<(), String> {
@@ -139,22 +127,15 @@ impl HostWindow {
                 SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER,
             )
         }
-        .map_err(|e| format!("SetWindowPos failed: {:?}", e))?;
-
-        // Resize mpv's child window to fill the new host dimensions.
-        // Done after SetWindowPos returns (not in WM_SIZE) to avoid
-        // feedback loops with mpv's window subclass.
-        self.resize_children(width, height);
-        Ok(())
+        .map_err(|e| format!("SetWindowPos failed: {:?}", e))
     }
 
-    /// Resize all child windows (mpv's render surface) to fill the host.
-    fn resize_children(&self, width: i32, height: i32) {
+    /// Explicitly resize mpv's child window to fill the host. Called only
+    /// after large geometry jumps (like fullscreen) where mpv's own resize
+    /// detection may miss the change.
+    pub fn resize_children(&self, width: i32, height: i32) {
         unsafe {
             if let Ok(child) = GetWindow(self.hwnd, GW_CHILD) {
-                // Use SetWindowPos with SWP_NOZORDER to avoid message
-                // cascades. No repaint flag — mpv manages its own
-                // D3D11 render schedule.
                 let _ = SetWindowPos(
                     child,
                     None,
@@ -169,12 +150,10 @@ impl HostWindow {
     }
 
     /// Show or hide the host window without destroying it.
-    #[allow(dead_code)] // wired up in step 2.7
+    #[allow(dead_code)]
     pub fn set_visible(&self, visible: bool) -> Result<(), String> {
         let cmd = if visible { SW_SHOW } else { SW_HIDE };
         unsafe {
-            // ShowWindow returns the previous visibility — non-zero = was
-            // visible. It doesn't fail in a way that matters here.
             let _ = ShowWindow(self.hwnd, cmd);
         }
         Ok(())

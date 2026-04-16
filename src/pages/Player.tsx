@@ -440,6 +440,10 @@ const styles: Record<string, React.CSSProperties> = {
     position: "absolute",
     inset: 0,
     zIndex: 1,
+    // Near-invisible background ensures the webview captures mouse events.
+    // Without this, mouse events fall through the transparent webview to the
+    // Win32 host window behind it, and cursor: "none" becomes permanent.
+    background: "rgba(0,0,0,0.01)",
   },
   centerOverlay: {
     position: "absolute",
