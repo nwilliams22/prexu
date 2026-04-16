@@ -32,39 +32,45 @@ function formatMessage(tag: string, message: string, data?: unknown): string {
   return parts.join(" ");
 }
 
+/** Fire a Tauri log call, swallowing errors when the IPC bridge is
+ *  unavailable (tests, browser-only mode). */
+async function tauriCall(fn: (log: NonNullable<typeof tauriLog>) => Promise<void>) {
+  try {
+    const log = await getTauriLog();
+    if (log) await fn(log);
+  } catch {
+    // Tauri IPC unavailable (test / browser-only) — console already has it.
+  }
+}
+
 export const logger = {
   async info(tag: string, message: string, data?: unknown) {
     const msg = formatMessage(tag, message, data);
     console.log(msg);
-    const log = await getTauriLog();
-    log?.info(msg);
+    await tauriCall((log) => log.info(msg));
   },
 
   async warn(tag: string, message: string, data?: unknown) {
     const msg = formatMessage(tag, message, data);
     console.warn(msg);
-    const log = await getTauriLog();
-    log?.warn(msg);
+    await tauriCall((log) => log.warn(msg));
   },
 
   async error(tag: string, message: string, data?: unknown) {
     const msg = formatMessage(tag, message, data);
     console.error(msg);
-    const log = await getTauriLog();
-    log?.error(msg);
+    await tauriCall((log) => log.error(msg));
   },
 
   async debug(tag: string, message: string, data?: unknown) {
     const msg = formatMessage(tag, message, data);
     console.debug(msg);
-    const log = await getTauriLog();
-    log?.debug(msg);
+    await tauriCall((log) => log.debug(msg));
   },
 
   async trace(tag: string, message: string, data?: unknown) {
     const msg = formatMessage(tag, message, data);
     console.debug(msg);
-    const log = await getTauriLog();
-    log?.trace(msg);
+    await tauriCall((log) => log.trace(msg));
   },
 };
