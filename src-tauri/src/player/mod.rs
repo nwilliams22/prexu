@@ -212,27 +212,19 @@ impl PlayerState {
         }
     }
 
-    /// Force a geometry sync bypassing the throttle. Used for the
-    /// trailing-edge sync after fullscreen settles. Still deduplicates
-    /// against last_geometry to avoid a redundant SetWindowPos when
-    /// sync_geometry already applied the same dimensions.
+    /// Force a geometry sync bypassing BOTH throttle AND dedup. Used for
+    /// the trailing-edge sync after fullscreen settles. No dedup because
+    /// sync_geometry may have already set last_geometry to the fullscreen
+    /// dimensions during the animation — if we dedup-skip, the host window
+    /// never gets the final authoritative SetWindowPos and mpv's child
+    /// stays at the pre-transition size.
     #[cfg(target_os = "windows")]
     pub(crate) fn force_sync_geometry(&self, x: i32, y: i32, width: i32, height: i32) {
         if let Ok(mut last) = self.last_sync.lock() {
             *last = Instant::now();
         }
-        // Also clear any pending geometry since we're about to apply
-        // the authoritative post-transition values.
         if let Ok(mut pending) = self.pending_geometry.lock() {
             *pending = None;
-        }
-        let new = (x, y, width, height);
-        if let Ok(mut last_geom) = self.last_geometry.lock() {
-            if *last_geom == Some(new) {
-                log::info!("[player] force_sync_geometry skipped (dedup)");
-                return;
-            }
-            *last_geom = Some(new);
         }
         let Ok(guard) = self.inner.try_lock() else { return };
         if let Some(inner) = guard.as_ref() {
@@ -246,6 +238,11 @@ impl PlayerState {
             if let Err(e) = inner.host.set_geometry(x, y, width, height) {
                 log::warn!("[player] force_sync_geometry failed: {}", e);
             }
+        }
+        // Update last_geometry AFTER the call so subsequent sync_geometry
+        // events dedup against the authoritative post-transition values.
+        if let Ok(mut last_geom) = self.last_geometry.lock() {
+            *last_geom = Some((x, y, width, height));
         }
     }
 
