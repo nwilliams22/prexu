@@ -16,36 +16,26 @@ use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH, HBRUSH};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindow, MoveWindow, RegisterClassExW,
-    SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW, GW_CHILD, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, WM_SIZE, WNDCLASSEXW,
-    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindow, RegisterClassExW, SetWindowPos,
+    ShowWindow, CS_HREDRAW, CS_VREDRAW, GW_CHILD, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER,
+    SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, WNDCLASSEXW, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+    WS_EX_NOACTIVATE, WS_POPUP,
 };
 
 const CLASS_NAME: PCWSTR = w!("PrexuMpvHost");
 static REGISTER_CLASS: Once = Once::new();
 
-/// WndProc — handles WM_SIZE to resize mpv's child window when the host
-/// is resized. mpv creates a child window inside this HWND via the `wid`
-/// property, but doesn't always detect parent resizes (especially large
-/// jumps like fullscreen transitions). Explicitly resizing the child
-/// ensures the video always fills the host.
+/// Bare WndProc — mpv creates its own child inside this HWND when given
+/// `wid`, so the parent container only needs the default behaviour.
+/// Child resize is handled explicitly by `resize_children` after
+/// `set_geometry`, NOT via WM_SIZE (which causes feedback loops with
+/// mpv's window subclass).
 unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
     msg: u32,
     wp: windows::Win32::Foundation::WPARAM,
     lp: windows::Win32::Foundation::LPARAM,
 ) -> windows::Win32::Foundation::LRESULT {
-    if msg == WM_SIZE {
-        let width = (lp.0 & 0xFFFF) as i32;
-        let height = ((lp.0 >> 16) & 0xFFFF) as i32;
-        // Resize mpv's child window to fill the new client area.
-        unsafe {
-            if let Ok(child) = GetWindow(hwnd, GW_CHILD) {
-                let _ = MoveWindow(child, 0, 0, width, height, false);
-            }
-        }
-    }
     unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
 }
 
@@ -131,6 +121,7 @@ impl HostWindow {
     }
 
     /// Move + resize the host window in screen pixels (client-area coords).
+    /// Also resizes mpv's child window to fill the new client area.
     /// Skips the Win32 call when width or height is zero (e.g. minimized
     /// Tauri main window) — last good geometry is preserved instead.
     pub fn set_geometry(&self, x: i32, y: i32, width: i32, height: i32) -> Result<(), String> {
@@ -148,7 +139,33 @@ impl HostWindow {
                 SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER,
             )
         }
-        .map_err(|e| format!("SetWindowPos failed: {:?}", e))
+        .map_err(|e| format!("SetWindowPos failed: {:?}", e))?;
+
+        // Resize mpv's child window to fill the new host dimensions.
+        // Done after SetWindowPos returns (not in WM_SIZE) to avoid
+        // feedback loops with mpv's window subclass.
+        self.resize_children(width, height);
+        Ok(())
+    }
+
+    /// Resize all child windows (mpv's render surface) to fill the host.
+    fn resize_children(&self, width: i32, height: i32) {
+        unsafe {
+            if let Ok(child) = GetWindow(self.hwnd, GW_CHILD) {
+                // Use SetWindowPos with SWP_NOZORDER to avoid message
+                // cascades. No repaint flag — mpv manages its own
+                // D3D11 render schedule.
+                let _ = SetWindowPos(
+                    child,
+                    None,
+                    0,
+                    0,
+                    width,
+                    height,
+                    SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER,
+                );
+            }
+        }
     }
 
     /// Show or hide the host window without destroying it.
