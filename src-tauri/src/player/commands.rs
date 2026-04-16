@@ -176,19 +176,39 @@ pub async fn player_set_fullscreen(
     log::debug!("[player:cmd] set_fullscreen: transition flag set, sleeping 350ms");
     tokio::time::sleep(std::time::Duration::from_millis(350)).await;
 
-    // Clear the transition flag. Once cleared, the next Resized event
-    // from the window event handler (lib.rs) will call sync_geometry
-    // which applies the correct fullscreen dimensions via SetWindowPos.
-    // This is the same codepath as drag resize — proven to work.
-    //
-    // Previously we tried calling force_sync_geometry inside
-    // run_on_main_thread, but SetWindowPos sends WM_SIZE synchronously
-    // which deadlocked the main thread.
+    // Clear the flag and explicitly sync geometry on the main thread.
+    // We cannot wait for a Resized event — after the 350ms transition,
+    // the window is already at final size and no more events fire.
     state.set_fullscreen_transition(false);
-    log::info!("[player] fullscreen transition flag cleared — next Resized event will sync geometry");
+    log::info!("[player:cmd] set_fullscreen: transition flag cleared, dispatching geometry sync");
 
-    // Bring the Tauri main window back to front after the transition.
-    let _ = main.set_focus();
+    #[cfg(target_os = "windows")]
+    {
+        let app_for_sync = app.clone();
+        let win_for_sync = main.clone();
+        if let Err(e) = app.run_on_main_thread(move || {
+            log::debug!("[player:cmd] set_fullscreen: main-thread closure entered");
+            let st = app_for_sync.state::<PlayerState>();
+            match (win_for_sync.inner_position(), win_for_sync.inner_size()) {
+                (Ok(pos), Ok(size)) => {
+                    let (x, y, w, h) = (pos.x, pos.y, size.width as i32, size.height as i32);
+                    log::info!("[player:cmd] set_fullscreen: syncing geometry ({},{},{}x{})", x, y, w, h);
+                    // Clear last_geometry so dedup doesn't skip this.
+                    if let Ok(mut lg) = st.last_geometry.lock() {
+                        *lg = None;
+                    }
+                    st.sync_geometry(x, y, w, h);
+                    log::debug!("[player:cmd] set_fullscreen: sync_geometry returned");
+                }
+                _ => log::warn!("[player:cmd] set_fullscreen: failed to read geometry"),
+            }
+            // Bring the Tauri main window back to front.
+            let _ = win_for_sync.set_focus();
+            log::debug!("[player:cmd] set_fullscreen: main-thread closure done");
+        }) {
+            log::warn!("[player:cmd] set_fullscreen: run_on_main_thread failed: {}", e);
+        }
+    }
 
     // Emit the authoritative fullscreen state back to the frontend so
     // React's isFullscreen stays in sync even when ESC or other OS gestures

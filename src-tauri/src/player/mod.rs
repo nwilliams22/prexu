@@ -43,7 +43,7 @@ pub struct PlayerState {
     /// (x, y, w, h) of the last sync we actually applied. Lets us skip the
     /// SetWindowPos call when called with identical args — common during
     /// drag where position changes but size stays put, or vice versa.
-    last_geometry: Mutex<Option<(i32, i32, i32, i32)>>,
+    pub(crate) last_geometry: Mutex<Option<(i32, i32, i32, i32)>>,
     /// Trailing-edge pending geometry. When a sync is throttled, the most
     /// recent requested geometry is stored here. The next event that passes
     /// the throttle check will apply it, ensuring the final drag position is
