@@ -17,7 +17,7 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH, HBRUSH};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassExW, SetWindowPos, ShowWindow,
-    CS_HREDRAW, CS_VREDRAW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    CS_HREDRAW, CS_VREDRAW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
     SW_HIDE, SW_SHOW, WNDCLASSEXW, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_POPUP,
 };
 
@@ -121,10 +121,10 @@ impl HostWindow {
     }
 
     /// Move + resize the host window in screen pixels (client-area coords).
-    /// Always re-anchors z-order behind the Tauri main window so the webview
-    /// overlay stays on top and receives mouse events.
-    /// Skips the Win32 call when width or height is zero (e.g. minimized
-    /// Tauri main window) — last good geometry is preserved instead.
+    /// Z-order is NOT touched here (SWP_NOZORDER) — use `reanchor_z_order`
+    /// after fullscreen transitions. Combining z-order changes with geometry
+    /// in a single SetWindowPos call silently fails when the main window is
+    /// in a different z-band (e.g. topmost during fullscreen).
     pub fn set_geometry(&self, x: i32, y: i32, width: i32, height: i32) -> Result<(), String> {
         if width <= 0 || height <= 0 {
             return Ok(());
@@ -132,15 +132,33 @@ impl HostWindow {
         unsafe {
             SetWindowPos(
                 self.hwnd,
-                Some(self.parent),
+                None,
                 x,
                 y,
                 width,
                 height,
-                SWP_NOACTIVATE,
+                SWP_NOACTIVATE | SWP_NOZORDER,
             )
         }
         .map_err(|e| format!("SetWindowPos failed: {:?}", e))
+    }
+
+    /// Re-anchor the host window directly behind the Tauri main window in
+    /// z-order. Call after fullscreen transitions when the main window's
+    /// z-band may have changed.
+    pub fn reanchor_z_order(&self) -> Result<(), String> {
+        unsafe {
+            SetWindowPos(
+                self.hwnd,
+                Some(self.parent),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )
+        }
+        .map_err(|e| format!("reanchor z-order failed: {:?}", e))
     }
 
     /// Show or hide the host window without destroying it.

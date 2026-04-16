@@ -163,14 +163,20 @@ pub async fn player_set_fullscreen(
     tokio::time::sleep(std::time::Duration::from_millis(350)).await;
     state.set_fullscreen_transition(false);
 
-    // Dispatch the trailing-edge sync to the main thread so SetWindowPos
-    // runs on the window's owning thread.
+    // Dispatch the trailing-edge sync + z-order re-anchor to the main
+    // thread so SetWindowPos runs on the window's owning thread.
+    // Z-order must be re-anchored separately from geometry because the
+    // main window may have changed z-bands during the fullscreen
+    // transition (topmost ↔ normal). Combining them in one SetWindowPos
+    // call silently fails.
     #[cfg(target_os = "windows")]
     {
         let app_for_main = app.clone();
         let win_for_main = main.clone();
         if let Err(e) = app.run_on_main_thread(move || {
             let st = app_for_main.state::<PlayerState>();
+            // Re-anchor z-order first so host sits behind main.
+            st.reanchor_z_order();
             match (win_for_main.inner_position(), win_for_main.inner_size()) {
                 (Ok(pos), Ok(size)) => {
                     st.force_sync_geometry(

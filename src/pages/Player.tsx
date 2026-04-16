@@ -280,7 +280,15 @@ function Player() {
       {/* Video element — only used on the HTML5 path. On native path
           videoRef is never populated, so we hide the element entirely so
           its default black box doesn't occlude the host window. */}
-      {!IS_NATIVE_PLAYER && (
+      {!IS_NATIVE_PLAYER ? (
+        /* Transparent click target for the native path — click to
+           play/pause, double-click to fullscreen, same as the HTML5
+           <video> element. */
+        <div
+          style={styles.nativeClickTarget}
+          onClick={handleVideoClick}
+        />
+      ) : (
         <video
           ref={player.videoRef}
           style={styles.video}
@@ -427,6 +435,11 @@ const styles: Record<string, React.CSSProperties> = {
     height: "100%",
     objectFit: "contain",
     outline: "none",
+  },
+  nativeClickTarget: {
+    position: "absolute",
+    inset: 0,
+    zIndex: 1,
   },
   centerOverlay: {
     position: "absolute",
