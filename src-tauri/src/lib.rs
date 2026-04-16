@@ -357,12 +357,21 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(
             tauri_plugin_log::Builder::default()
-                .level(log::LevelFilter::Info)
+                .level(if cfg!(debug_assertions) {
+                    log::LevelFilter::Debug
+                } else {
+                    log::LevelFilter::Info
+                })
+                .level_for("app_lib::player", if cfg!(debug_assertions) {
+                    log::LevelFilter::Trace
+                } else {
+                    log::LevelFilter::Debug
+                })
                 .targets([
                     Target::new(TargetKind::Stdout),
                     Target::new(TargetKind::LogDir { file_name: None }),
                 ])
-                .max_file_size(5_000_000)
+                .max_file_size(20_000_000)
                 .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
                 .build(),
         )
@@ -414,6 +423,7 @@ pub fn run() {
                                 if let (Ok(pos), Ok(size)) =
                                     (win_clone.inner_position(), win_clone.inner_size())
                                 {
+                                    log::trace!("[window] Resized/Moved to ({},{},{}x{})", pos.x, pos.y, size.width, size.height);
                                     state.sync_geometry(
                                         pos.x,
                                         pos.y,
@@ -427,6 +437,7 @@ pub fn run() {
                             WindowEvent::ScaleFactorChanged {
                                 new_inner_size, ..
                             } => {
+                                log::debug!("[window] ScaleFactorChanged {}x{}", new_inner_size.width, new_inner_size.height);
                                 if let Ok(pos) = win_clone.inner_position() {
                                     state.sync_geometry(
                                         pos.x,
@@ -440,6 +451,7 @@ pub fn run() {
                             // window goes away so DestroyWindow runs cleanly.
                             WindowEvent::CloseRequested { .. }
                             | WindowEvent::Destroyed => {
+                                log::info!("[window] CloseRequested/Destroyed — destroying player");
                                 let _ = state.destroy();
                             }
                             _ => {}

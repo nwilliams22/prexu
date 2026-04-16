@@ -60,4 +60,11 @@ export const logger = {
     const log = await getTauriLog();
     log?.debug(msg);
   },
+
+  async trace(tag: string, message: string, data?: unknown) {
+    const msg = formatMessage(tag, message, data);
+    console.debug(msg);
+    const log = await getTauriLog();
+    log?.trace(msg);
+  },
 };

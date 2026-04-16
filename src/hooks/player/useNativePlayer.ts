@@ -36,6 +36,7 @@ import type {
   PlexMarker,
 } from "../../types/library";
 import type { UsePlayerResult } from "../usePlayer";
+import { logger } from "../../services/logger";
 
 export function useNativePlayer(
   ratingKey: string,
@@ -107,16 +108,19 @@ export function useNativePlayer(
     let cancelled = false;
 
     (async () => {
+      logger.debug("player", "subscribing to native events");
       const subs = await Promise.all([
         listen<number>("player://time-pos", (e) => setCurrentTime(e.payload)),
         listen<number>("player://duration", (e) => setDuration(e.payload)),
         listen<boolean>("player://paused", (e) => setIsPlaying(!e.payload)),
         listen<boolean>("player://buffering", (e) => setIsBuffering(e.payload)),
         listen<null>("player://ready", () => {
+          logger.info("player", "received ready event");
           setIsLoading(false);
           setIsBuffering(false);
         }),
         listen<null>("player://eof", () => {
+          logger.info("player", "received eof event");
           setIsPlaying(false);
           if (isLocalPlaybackRef.current && timeline.ratingKeyRef.current) {
             addPendingWatchSync(timeline.ratingKeyRef.current);
@@ -132,10 +136,14 @@ export function useNativePlayer(
             );
           }
         }),
-        listen<string>("player://error", (e) =>
-          setPlaybackError(`Player error: ${e.payload}`),
-        ),
-        listen<boolean>("player://fullscreen", (e) => setIsFullscreen(e.payload)),
+        listen<string>("player://error", (e) => {
+          logger.error("player", "received error event", e.payload);
+          setPlaybackError(`Player error: ${e.payload}`);
+        }),
+        listen<boolean>("player://fullscreen", (e) => {
+          logger.debug("player", "received fullscreen event", e.payload);
+          setIsFullscreen(e.payload);
+        }),
       ]);
       if (cancelled) {
         for (const u of subs) u();
@@ -153,6 +161,7 @@ export function useNativePlayer(
 
   // ── Initialize playback ──
   const initPlayback = useCallback(async () => {
+    logger.info("player", "initPlayback", { ratingKey });
     if (!server || !ratingKey) {
       setIsLoading(false);
       setPlaybackError("No server or media selected");
@@ -258,13 +267,13 @@ export function useNativePlayer(
       // load_url runs ensure_init server-side which actually creates the
       // mpv handle. Volume/mute commands assume an initialised handle, so
       // they MUST come after load_url, not before.
-      console.log("[player] loading URL:", url, "startOffsetMs:", viewOffset);
+      logger.info("player", "loading URL", { url: url.substring(0, 80), startOffsetMs: viewOffset });
       await invoke("player_load_url", {
         url,
         headers: {} as Record<string, string>,
         startOffsetMs: viewOffset,
       });
-      console.log("[player] load_url command returned OK; waiting for ready event");
+      logger.info("player", "load_url returned OK, waiting for ready event");
 
       // Apply saved volume + mute now that mpv exists. mpv volume is 0..200
       // (we configured volume-max=200 in PlayerState::ensure_init); our
@@ -285,7 +294,7 @@ export function useNativePlayer(
           : typeof err === "string"
             ? err
             : JSON.stringify(err);
-      console.error("[player] init failed:", err);
+      logger.error("player", "init failed", msg);
       setPlaybackError(msg || "Failed to start playback");
       setIsLoading(false);
     }
@@ -297,6 +306,7 @@ export function useNativePlayer(
     directPlayFailedRef.current = false;
     initPlayback();
     return () => {
+      logger.info("player", "cleanup: stopping timeline, unloading");
       timeline.stopTimeline();
       timeline.reportStopped();
       // Exit fullscreen before unloading so the dashboard isn't stuck
@@ -315,16 +325,19 @@ export function useNativePlayer(
 
   // ── Actions ──
   const togglePlay = useCallback(() => {
+    logger.debug("player", isPlaying ? "pause" : "play");
     invoke(isPlaying ? "player_pause" : "player_play").catch(() => {});
   }, [isPlaying]);
 
   const seek = useCallback((time: number) => {
+    logger.debug("player", "seek", { seconds: time });
     invoke("player_seek", { seconds: time }).catch(() => {});
   }, []);
 
   const setVolume = useCallback(
     (vol: number) => {
       const clamped = Math.max(0, Math.min(2, vol));
+      logger.debug("player", "setVolume", { volume: clamped });
       setVolumeState(clamped);
       saveVolume(clamped);
       invoke("player_set_volume", {
@@ -348,12 +361,12 @@ export function useNativePlayer(
   isFullscreenRef.current = isFullscreen;
   const toggleFullscreen = useCallback(() => {
     const next = !isFullscreenRef.current;
-    console.log("[player] toggleFullscreen:", { current: isFullscreenRef.current, next });
+    logger.info("player", "toggleFullscreen", { current: isFullscreenRef.current, next });
     setIsFullscreen(next);
     invoke("player_set_fullscreen", { fullscreen: next })
-      .then(() => console.log("[player] fullscreen command completed"))
+      .then(() => logger.debug("player", "fullscreen command completed"))
       .catch((err) => {
-        console.error("[player] fullscreen command failed:", err);
+        logger.error("player", "fullscreen command failed", String(err));
         setIsFullscreen(!next);
       });
   }, []);

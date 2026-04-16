@@ -15,6 +15,15 @@ import {
   createPlexStream,
 } from "../__tests__/mocks/plex-data";
 
+// Mock Tauri log plugin so logger.trace doesn't hit real invoke
+vi.mock("@tauri-apps/plugin-log", () => ({
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  debug: vi.fn(),
+  trace: vi.fn(),
+}));
+
 // Mock dependencies for async functions
 vi.mock("./storage", () => ({
   getClientIdentifier: vi.fn().mockResolvedValue("test-client-id"),

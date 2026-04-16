@@ -157,6 +157,42 @@ If the task needs a skill you don't have, suggest or ask the user for this new s
 - Test files live alongside source files (`*.test.ts`, `*.test.tsx`).
 - jsdom v28+ requires a localStorage polyfill (see `src/__tests__/setup.ts`).
 
+## Logging Conventions
+
+All code must include logging. Code without logging is not complete.
+
+### Rust
+- Use `log` crate macros: `log::trace!`, `log::debug!`, `log::info!`, `log::warn!`, `log::error!`
+- Always prefix with a bracketed tag: `log::info!("[player] message")`
+- Tag format: `[module]` or `[module:submodule]` — e.g. `[player]`, `[player:cmd]`, `[player:events]`, `[player:host]`, `[downloads]`, `[Proxy]`
+- Every `#[tauri::command]` must log entry with key parameters at `info` (state-changing) or `debug` (queries)
+- All Win32 API calls (SetWindowPos, CreateWindowExW, PostMessage, etc.) must log at `debug` with HWND and dimensions
+- Errors must include the error value: `log::error!("[tag] operation failed: {:?}", e)`
+- Dev builds (`cargo tauri dev`) output debug+trace; release builds output info+above
+
+### TypeScript
+- Use the `logger` service from `src/services/logger.ts` — **never bare `console.log`**
+- API: `logger.info(tag, message, data?)`, `.warn(...)`, `.error(...)`, `.debug(...)`, `.trace(...)`
+- Tags must match Rust conventions: `"player"`, `"player:keys"`, `"timeline"`, `"api"`, `"playback"`, `"ws"`
+- Every `invoke()` call should log before it with the command name and key args
+- Sensitive data (tokens, full URLs with tokens) must be truncated: `url.substring(0, 80)`
+
+### Log Levels
+
+| Level | Use for | Examples |
+|-------|---------|---------|
+| error | Failures needing investigation | mpv init failed, API 500, unhandled exception |
+| warn  | Recoverable problems | mpv quit failed, 401 auth, sync_geometry failed |
+| info  | Significant state transitions | player init/destroy, fullscreen toggle, file loaded, download complete |
+| debug | Operational details | command args, geometry applied, volume changes, API calls |
+| trace | High-frequency noise | time-pos ticks, throttled geometry calls, timeline heartbeats |
+
+### Correlation
+- Tauri commands are the Rust/TS boundary. Log the command name on both sides:
+  - TS: `logger.info("player", "player_set_fullscreen", { fullscreen: true })`
+  - Rust: `log::info!("[player:cmd] set_fullscreen true")`
+- Both appear in the same log file via `tauri-plugin-log`, making cross-boundary tracing easy.
+
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker

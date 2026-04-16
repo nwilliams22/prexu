@@ -53,6 +53,8 @@ fn run_pump(mpv: Arc<Mpv>, app: AppHandle) {
         log::warn!("[player] observe buffering failed: {:?}", e);
     }
 
+    log::info!("[player:events] pump started, properties observed");
+
     // Keep the Arc alive for the lifetime of this thread so mpv outlives us.
     let _mpv_keepalive = mpv;
 
@@ -68,6 +70,7 @@ fn run_pump(mpv: Arc<Mpv>, app: AppHandle) {
                 }
             }
             Some(Err(e)) => {
+                log::warn!("[player:events] mpv error: {:?}", e);
                 let _ = app.emit("player://error", format!("{:?}", e));
             }
             None => {
@@ -81,11 +84,16 @@ fn run_pump(mpv: Arc<Mpv>, app: AppHandle) {
 /// Returns `true` when the loop should exit (shutdown).
 fn dispatch(app: &AppHandle, event: Event<'_>, last_time_pos: &mut Instant) -> bool {
     match event {
-        Event::Shutdown => return true,
+        Event::Shutdown => {
+            log::info!("[player:events] Shutdown — exiting pump");
+            return true;
+        }
         Event::FileLoaded => {
+            log::debug!("[player:events] FileLoaded → player://ready");
             let _ = app.emit("player://ready", ());
         }
         Event::EndFile(_reason) => {
+            log::debug!("[player:events] EndFile → player://eof");
             let _ = app.emit("player://eof", ());
         }
         Event::PropertyChange { change, reply_userdata, .. } => match (reply_userdata, change) {
@@ -93,16 +101,20 @@ fn dispatch(app: &AppHandle, event: Event<'_>, last_time_pos: &mut Instant) -> b
                 let now = Instant::now();
                 if now.duration_since(*last_time_pos) >= TIME_POS_THROTTLE {
                     *last_time_pos = now;
+                    log::trace!("[player:events] time-pos={:.1}", t);
                     let _ = app.emit("player://time-pos", t);
                 }
             }
             (REPLY_DURATION, PropertyData::Double(d)) => {
+                log::debug!("[player:events] duration={:.1}", d);
                 let _ = app.emit("player://duration", d);
             }
             (REPLY_PAUSE, PropertyData::Flag(p)) => {
+                log::debug!("[player:events] paused={}", p);
                 let _ = app.emit("player://paused", p);
             }
             (REPLY_BUFFERING, PropertyData::Flag(b)) => {
+                log::debug!("[player:events] buffering={}", b);
                 let _ = app.emit("player://buffering", b);
             }
             _ => {}

@@ -86,8 +86,10 @@ impl PlayerState {
     /// Lazily create the host window + `Mpv` handle with our baseline config
     /// and start the event pump. Subsequent calls are no-ops.
     pub(crate) fn ensure_init(&self, app: &AppHandle) -> Result<(), String> {
+        log::info!("[player] ensure_init called");
         let mut guard = self.inner.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
         if guard.is_some() {
+            log::debug!("[player] ensure_init: already initialized");
             return Ok(());
         }
 
@@ -104,6 +106,7 @@ impl PlayerState {
                 .hwnd()
                 .map_err(|e| format!("Failed to get main HWND: {}", e))?;
             let host = host_window::HostWindow::create(parent)?;
+            log::info!("[player:host] created, parent={:?}", parent.0);
 
             // Do an initial geometry sync so the host window covers the
             // current webview content area before becoming visible — avoids
@@ -115,10 +118,12 @@ impl PlayerState {
                     size.width as i32,
                     size.height as i32,
                 );
+                log::debug!("[player] initial geometry sync to ({},{},{}x{})", pos.x, pos.y, size.width, size.height);
             }
             // Now make it visible — the on_window_event listener handles
             // subsequent move/resize/DPI updates.
             let _ = host.set_visible(true);
+            log::debug!("[player:host] set visible");
 
             host
         };
@@ -137,9 +142,11 @@ impl PlayerState {
             Ok(())
         })
         .map_err(|e| format!("mpv init failed: {:?}", e))?;
+        log::info!("[player] mpv created with wid={}", wid);
 
         let mpv = Arc::new(mpv);
         events::spawn_event_pump(Arc::clone(&mpv), app.clone())?;
+        log::info!("[player] event pump spawned, init complete");
 
         *guard = Some(Inner {
             mpv,
@@ -186,7 +193,9 @@ impl PlayerState {
     /// passes the throttle check (trailing-edge guarantee).
     #[cfg(target_os = "windows")]
     pub(crate) fn sync_geometry(&self, x: i32, y: i32, width: i32, height: i32) {
+        log::trace!("[player] sync_geometry({},{},{}x{})", x, y, width, height);
         if self.fullscreen_transition.load(Ordering::Acquire) {
+            log::trace!("[player] sync_geometry suppressed — fullscreen transition");
             return;
         }
         {
@@ -199,6 +208,7 @@ impl PlayerState {
                 if let Ok(mut pending) = self.pending_geometry.lock() {
                     *pending = Some((x, y, width, height));
                 }
+                log::trace!("[player] sync_geometry throttled, pending stored");
                 return;
             }
             *last = now;
@@ -214,6 +224,7 @@ impl PlayerState {
         let new = (ax, ay, aw, ah);
         if let Ok(mut last_geom) = self.last_geometry.lock() {
             if *last_geom == Some(new) {
+                log::trace!("[player] sync_geometry dedup skip");
                 return;
             }
             *last_geom = Some(new);
@@ -224,6 +235,7 @@ impl PlayerState {
         // ongoing SetWindowPos will finish with the correct geometry.
         let Ok(guard) = self.inner.try_lock() else { return };
         if let Some(inner) = guard.as_ref() {
+            log::debug!("[player] sync_geometry applied ({},{},{}x{})", ax, ay, aw, ah);
             if let Err(e) = inner.host.set_geometry(ax, ay, aw, ah) {
                 log::warn!("[player] sync_geometry failed: {}", e);
             }
@@ -238,6 +250,7 @@ impl PlayerState {
     /// stays at the pre-transition size.
     #[cfg(target_os = "windows")]
     pub(crate) fn force_sync_geometry(&self, x: i32, y: i32, width: i32, height: i32) {
+        log::debug!("[player] force_sync_geometry requested ({},{},{}x{})", x, y, width, height);
         if let Ok(mut last) = self.last_sync.lock() {
             *last = Instant::now();
         }

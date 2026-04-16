@@ -17,7 +17,9 @@ pub async fn player_load_url(
     app: AppHandle,
     state: State<'_, PlayerState>,
 ) -> Result<(), String> {
+    log::info!("[player:cmd] load_url offset={}ms headers={}", start_offset_ms.unwrap_or(0), headers.len());
     state.ensure_init(&app)?;
+    log::debug!("[player:cmd] load_url: ensure_init OK, sending loadfile");
 
     // mpv's `http-header-fields` takes a comma-separated list of "Name: Value"
     // entries. Plex headers (X-Plex-Token, X-Plex-Client-Identifier, …) don't
@@ -43,11 +45,13 @@ pub async fn player_load_url(
 
 #[tauri::command]
 pub async fn player_play(state: State<'_, PlayerState>) -> Result<(), String> {
+    log::debug!("[player:cmd] play");
     state.with_mpv(|mpv| mpv.set_property("pause", false))
 }
 
 #[tauri::command]
 pub async fn player_pause(state: State<'_, PlayerState>) -> Result<(), String> {
+    log::debug!("[player:cmd] pause");
     state.with_mpv(|mpv| mpv.set_property("pause", true))
 }
 
@@ -56,6 +60,7 @@ pub async fn player_seek(
     seconds: f64,
     state: State<'_, PlayerState>,
 ) -> Result<(), String> {
+    log::debug!("[player:cmd] seek to {}s", seconds);
     state.with_mpv(|mpv| {
         let s = seconds.to_string();
         mpv.command("seek", &[s.as_str(), "absolute"])
@@ -67,6 +72,7 @@ pub async fn player_set_volume(
     vol: u16,
     state: State<'_, PlayerState>,
 ) -> Result<(), String> {
+    log::debug!("[player:cmd] set_volume {}", vol);
     state.with_mpv(|mpv| mpv.set_property("volume", vol as f64))
 }
 
@@ -75,6 +81,7 @@ pub async fn player_set_muted(
     muted: bool,
     state: State<'_, PlayerState>,
 ) -> Result<(), String> {
+    log::debug!("[player:cmd] set_muted {}", muted);
     state.with_mpv(|mpv| mpv.set_property("mute", muted))
 }
 
@@ -83,6 +90,7 @@ pub async fn player_set_audio_track(
     id: Option<i64>,
     state: State<'_, PlayerState>,
 ) -> Result<(), String> {
+    log::debug!("[player:cmd] set_audio_track {:?}", id);
     // mpv's `aid` accepts integer track ids OR the sentinel string "no".
     // libmpv2's set_property is monomorphic, so we branch at the call site.
     state.with_mpv(|mpv| match id {
@@ -96,6 +104,7 @@ pub async fn player_set_sub_track(
     id: Option<i64>,
     state: State<'_, PlayerState>,
 ) -> Result<(), String> {
+    log::debug!("[player:cmd] set_sub_track {:?}", id);
     state.with_mpv(|mpv| match id {
         Some(track_id) => mpv.set_property("sid", track_id),
         None => mpv.set_property("sid", "no"),
@@ -107,6 +116,7 @@ pub async fn player_set_audio_delay_ms(
     ms: i32,
     state: State<'_, PlayerState>,
 ) -> Result<(), String> {
+    log::debug!("[player:cmd] set_audio_delay {}ms", ms);
     // mpv's audio-delay is in seconds (f64), negatives allowed.
     let seconds = ms as f64 / 1000.0;
     state.with_mpv(|mpv| mpv.set_property("audio-delay", seconds))
@@ -118,6 +128,7 @@ pub async fn player_set_af_chain(
     preset: String,
     state: State<'_, PlayerState>,
 ) -> Result<(), String> {
+    log::debug!("[player:cmd] set_af_chain preset={}", preset);
     let chain = match preset.as_str() {
         "off" => "",
         "light" => "lavfi=[loudnorm=I=-16:TP=-1.5:LRA=11]",
@@ -129,6 +140,7 @@ pub async fn player_set_af_chain(
 
 #[tauri::command]
 pub async fn player_unload(state: State<'_, PlayerState>) -> Result<(), String> {
+    log::info!("[player:cmd] unload");
     state.destroy()
 }
 
@@ -149,6 +161,7 @@ pub async fn player_set_fullscreen(
     app: AppHandle,
     state: State<'_, PlayerState>,
 ) -> Result<(), String> {
+    log::info!("[player:cmd] set_fullscreen {}", fullscreen);
     let main = app
         .get_webview_window("main")
         .ok_or_else(|| "main webview window not found".to_string())?;
@@ -160,6 +173,7 @@ pub async fn player_set_fullscreen(
 
     // 350 ms covers Win11's animated fullscreen transition plus the
     // Resized burst that follows. Bumped from 300 after empirical hang.
+    log::debug!("[player:cmd] set_fullscreen: transition flag set, sleeping 350ms");
     tokio::time::sleep(std::time::Duration::from_millis(350)).await;
 
     // Clear the transition flag. Once cleared, the next Resized event
@@ -180,6 +194,7 @@ pub async fn player_set_fullscreen(
     // React's isFullscreen stays in sync even when ESC or other OS gestures
     // exit fullscreen without going through toggleFullscreen().
     let actual_fs = main.is_fullscreen().unwrap_or(fullscreen);
+    log::info!("[player:cmd] set_fullscreen: actual_fs={}, emitting", actual_fs);
     let _ = app.emit("player://fullscreen", actual_fs);
 
     fs_result

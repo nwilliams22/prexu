@@ -4,6 +4,7 @@
 
 import { useEffect } from "react";
 import type { NormalizationPreset } from "../../types/preferences";
+import { logger } from "../../services/logger";
 
 export interface KeyboardShortcutDeps {
   /** Toggle play/pause (sync-aware) */
@@ -57,6 +58,7 @@ export function usePlayerKeyboardShortcuts(deps: KeyboardShortcutDeps): void {
         return;
 
       deps.resetHideTimer();
+      logger.debug("player:keys", e.key);
 
       switch (e.key) {
         case " ":

@@ -95,6 +95,8 @@ impl HostWindow {
         }
         .map_err(|e| format!("CreateWindowExW failed: {:?}", e))?;
 
+        log::info!("[player:host] HostWindow::create HWND={:?}, parent={:?}", hwnd.0, parent.0);
+
         // Place mpv host directly under the Tauri main window in z-order so
         // the webview overlays it.
         unsafe {
@@ -121,8 +123,10 @@ impl HostWindow {
     /// Tauri main window) — last good geometry is preserved instead.
     pub fn set_geometry(&self, x: i32, y: i32, width: i32, height: i32) -> Result<(), String> {
         if width <= 0 || height <= 0 {
+            log::trace!("[player:host] set_geometry skipped — zero dim ({}x{})", width, height);
             return Ok(());
         }
+        log::debug!("[player:host] set_geometry({},{},{}x{}) HWND={:?}", x, y, width, height, self.hwnd.0);
         unsafe {
             SetWindowPos(
                 self.hwnd,
@@ -165,6 +169,7 @@ impl HostWindow {
     /// Show or hide the host window without destroying it.
     #[allow(dead_code)]
     pub fn set_visible(&self, visible: bool) -> Result<(), String> {
+        log::debug!("[player:host] set_visible({}) HWND={:?}", visible, self.hwnd.0);
         let cmd = if visible { SW_SHOW } else { SW_HIDE };
         unsafe {
             let _ = ShowWindow(self.hwnd, cmd);
@@ -175,6 +180,7 @@ impl HostWindow {
 
 impl Drop for HostWindow {
     fn drop(&mut self) {
+        log::info!("[player:host] Drop — DestroyWindow HWND={:?}", self.hwnd.0);
         unsafe {
             let _ = DestroyWindow(self.hwnd);
         }

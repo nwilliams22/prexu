@@ -7,6 +7,7 @@ import { getServerHeaders, timedFetch } from "./plex-api";
 import { getClientIdentifier } from "./storage";
 import { createTauriLoaderClass } from "./tauri-loader";
 import type { PlexMediaInfo, PlexMediaPart, PlexStream } from "../types/library";
+import { logger } from "./logger";
 
 /**
  * Build hls.js config with a custom fetch-based loader.
@@ -62,7 +63,9 @@ export function canDirectPlay(media: PlexMediaInfo): boolean {
     media.audioCodec.toLowerCase()
   );
 
-  return containerOk && videoOk && audioOk;
+  const result = containerOk && videoOk && audioOk;
+  logger.debug("playback", "canDirectPlay", { result });
+  return result;
 }
 
 // ── URL Construction ──
@@ -101,6 +104,7 @@ export async function buildTranscodeUrl(
     audioCodec?: string;
   }
 ): Promise<string> {
+  logger.info("playback", "buildTranscodeUrl");
   const clientId = await getClientIdentifier();
   const sessionId = crypto.randomUUID();
 
@@ -194,6 +198,7 @@ export async function reportTimeline(
   timeMs: number,
   durationMs: number
 ): Promise<void> {
+  logger.trace("playback", "reportTimeline", { state, timeMs: Math.round(timeMs) });
   const headers = await getServerHeaders(serverToken);
   const clientId = await getClientIdentifier();
 
