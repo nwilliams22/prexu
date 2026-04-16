@@ -246,10 +246,6 @@ impl PlayerState {
             if let Err(e) = inner.host.set_geometry(x, y, width, height) {
                 log::warn!("[player] force_sync_geometry failed: {}", e);
             }
-            // Explicitly resize mpv's child window. During large geometry
-            // jumps (fullscreen), mpv's own parent-resize detection can
-            // miss the change, leaving the video at the old size.
-            inner.host.resize_children(width, height);
         }
     }
 

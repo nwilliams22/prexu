@@ -444,6 +444,11 @@ const styles: Record<string, React.CSSProperties> = {
     position: "absolute",
     inset: 0,
     zIndex: 1,
+    // Minimum opacity for WebView2 hit-testing. Fully transparent areas
+    // pass mouse events to the Win32 window behind — this thin overlay
+    // is barely visible but ensures onMouseMove reaches React so controls
+    // auto-show and click-to-pause work.
+    background: "rgba(0,0,0,0.05)",
   },
   centerOverlay: {
     position: "absolute",
