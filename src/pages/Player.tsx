@@ -5,7 +5,6 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useParams, useNavigate, useSearchParams, Navigate } from "react-router-dom";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAuth } from "../hooks/useAuth";
 import { getImageUrl } from "../services/plex-library";
 import { usePlayer, IS_NATIVE_PLAYER } from "../hooks/usePlayer";
@@ -73,16 +72,10 @@ function Player() {
   // On the native player path, make body transparent while this route is
   // mounted so the underlying mpv host HWND shows through. Restore the
   // navy background on unmount so dashboard / library look right.
-  // Also tell Tauri to always capture cursor events — without this,
-  // WebView2 passes mouse events through transparent areas to the
-  // Win32 host window, making cursor: "none" permanent and preventing
-  // onMouseMove from firing to bring controls back.
   useEffect(() => {
     if (!IS_NATIVE_PLAYER) return;
     const prev = document.body.style.background;
     document.body.style.background = "transparent";
-    const win = getCurrentWindow();
-    win.setIgnoreCursorEvents(false).catch(() => {});
     return () => {
       document.body.style.background = prev;
     };
@@ -280,7 +273,11 @@ function Player() {
         // would occlude it. HTML5 path keeps black so the <video> letterbox
         // stays cinema-style.
         background: IS_NATIVE_PLAYER ? "transparent" : styles.container.background,
-        cursor: controlsVisible ? "default" : "none",
+        // On native path, never hide the cursor — WebView2 passes mouse
+        // events through transparent areas, so cursor: none + transparent
+        // webview = permanently lost cursor (onMouseMove can't fire to
+        // bring controls back). HTML5 path hides cursor normally.
+        cursor: controlsVisible || IS_NATIVE_PLAYER ? "default" : "none",
       }}
       onMouseMove={handleMouseMove}
     >
