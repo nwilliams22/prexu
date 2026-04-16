@@ -249,19 +249,6 @@ impl PlayerState {
         }
     }
 
-    /// Re-anchor the host window behind the Tauri main window in z-order.
-    /// Called after fullscreen transitions when the main window's z-band
-    /// may have changed.
-    #[cfg(target_os = "windows")]
-    pub(crate) fn reanchor_z_order(&self) {
-        let Ok(guard) = self.inner.try_lock() else { return };
-        if let Some(inner) = guard.as_ref() {
-            if let Err(e) = inner.host.reanchor_z_order() {
-                log::warn!("[player] reanchor_z_order failed: {}", e);
-            }
-        }
-    }
-
     pub(crate) fn with_mpv<R>(
         &self,
         f: impl FnOnce(&Mpv) -> Result<R, libmpv2::Error>,

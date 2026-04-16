@@ -162,24 +162,22 @@ pub async fn player_set_fullscreen(
     // Resized burst that follows. Bumped from 300 after empirical hang.
     tokio::time::sleep(std::time::Duration::from_millis(350)).await;
 
-    // CRITICAL: clear flag, reanchor z-order, and sync geometry in ONE
-    // atomic main-thread dispatch. If the flag is cleared BEFORE the
-    // dispatch, queued Resized events fire sync_geometry which then
-    // races with force_sync_geometry — the double SetWindowPos storm
-    // crashes mpv's D3D11 swapchain rebuild.
+    // Sync geometry in ONE atomic main-thread dispatch. The transition
+    // flag stays set until the sync completes — this prevents queued
+    // Resized events from racing with force_sync_geometry (double
+    // SetWindowPos storms crash mpv's D3D11 swapchain rebuild).
     #[cfg(target_os = "windows")]
     {
         let app_for_main = app.clone();
         let win_for_main = main.clone();
         if let Err(e) = app.run_on_main_thread(move || {
             let st = app_for_main.state::<PlayerState>();
-            // Re-anchor z-order first (host behind main).
-            st.reanchor_z_order();
-            // Sync geometry THEN clear the flag. While the flag is set,
-            // window events skip sync_geometry entirely, so this single
-            // SetWindowPos is the only one mpv sees.
             match (win_for_main.inner_position(), win_for_main.inner_size()) {
                 (Ok(pos), Ok(size)) => {
+                    log::info!(
+                        "[player] post-FS sync: ({}, {}, {}x{})",
+                        pos.x, pos.y, size.width, size.height
+                    );
                     st.force_sync_geometry(
                         pos.x,
                         pos.y,
@@ -195,17 +193,15 @@ pub async fn player_set_fullscreen(
                     );
                 }
             }
-            // NOW clear the flag — subsequent Resized events will see the
-            // correct geometry in last_geometry and dedup-skip.
+            // Clear the flag AFTER sync — subsequent Resized events will
+            // see the correct geometry in last_geometry and dedup-skip.
             st.set_fullscreen_transition(false);
         }) {
             log::warn!("[player] run_on_main_thread for FS sync failed: {}", e);
-            // Fallback: clear the flag even if dispatch failed.
             state.set_fullscreen_transition(false);
         }
     }
 
-    // Non-Windows: just clear the flag directly.
     #[cfg(not(target_os = "windows"))]
     state.set_fullscreen_transition(false);
 
