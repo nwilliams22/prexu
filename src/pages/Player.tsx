@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useParams, useNavigate, useSearchParams, Navigate } from "react-router-dom";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAuth } from "../hooks/useAuth";
 import { getImageUrl } from "../services/plex-library";
 import { usePlayer, IS_NATIVE_PLAYER } from "../hooks/usePlayer";
@@ -72,10 +73,16 @@ function Player() {
   // On the native player path, make body transparent while this route is
   // mounted so the underlying mpv host HWND shows through. Restore the
   // navy background on unmount so dashboard / library look right.
+  // Also tell Tauri to always capture cursor events — without this,
+  // WebView2 passes mouse events through transparent areas to the
+  // Win32 host window, making cursor: "none" permanent and preventing
+  // onMouseMove from firing to bring controls back.
   useEffect(() => {
     if (!IS_NATIVE_PLAYER) return;
     const prev = document.body.style.background;
     document.body.style.background = "transparent";
+    const win = getCurrentWindow();
+    win.setIgnoreCursorEvents(false).catch(() => {});
     return () => {
       document.body.style.background = prev;
     };
@@ -440,10 +447,6 @@ const styles: Record<string, React.CSSProperties> = {
     position: "absolute",
     inset: 0,
     zIndex: 1,
-    // Near-invisible background ensures the webview captures mouse events.
-    // Without this, mouse events fall through the transparent webview to the
-    // Win32 host window behind it, and cursor: "none" becomes permanent.
-    background: "rgba(0,0,0,0.01)",
   },
   centerOverlay: {
     position: "absolute",
