@@ -200,7 +200,11 @@ impl PlayerState {
             }
             *last_geom = Some(new);
         }
-        let Ok(guard) = self.inner.lock() else { return };
+        // try_lock guards against re-entrancy: SetWindowPos fires WM_SIZE
+        // synchronously on this thread, which re-enters sync_geometry via
+        // the window-event handler. If inner is already held, skip — the
+        // ongoing SetWindowPos will finish with the correct geometry.
+        let Ok(guard) = self.inner.try_lock() else { return };
         if let Some(inner) = guard.as_ref() {
             if let Err(e) = inner.host.set_geometry(ax, ay, aw, ah) {
                 log::warn!("[player] sync_geometry failed: {}", e);
@@ -208,17 +212,29 @@ impl PlayerState {
         }
     }
 
-    /// Force a geometry sync bypassing the throttle but NOT the transition
-    /// flag. Used for the trailing-edge sync after fullscreen settles.
+    /// Force a geometry sync bypassing the throttle. Used for the
+    /// trailing-edge sync after fullscreen settles. Still deduplicates
+    /// against last_geometry to avoid a redundant SetWindowPos when
+    /// sync_geometry already applied the same dimensions.
     #[cfg(target_os = "windows")]
     pub(crate) fn force_sync_geometry(&self, x: i32, y: i32, width: i32, height: i32) {
         if let Ok(mut last) = self.last_sync.lock() {
             *last = Instant::now();
         }
-        if let Ok(mut last_geom) = self.last_geometry.lock() {
-            *last_geom = Some((x, y, width, height));
+        // Also clear any pending geometry since we're about to apply
+        // the authoritative post-transition values.
+        if let Ok(mut pending) = self.pending_geometry.lock() {
+            *pending = None;
         }
-        let Ok(guard) = self.inner.lock() else { return };
+        let new = (x, y, width, height);
+        if let Ok(mut last_geom) = self.last_geometry.lock() {
+            if *last_geom == Some(new) {
+                log::info!("[player] force_sync_geometry skipped (dedup)");
+                return;
+            }
+            *last_geom = Some(new);
+        }
+        let Ok(guard) = self.inner.try_lock() else { return };
         if let Some(inner) = guard.as_ref() {
             log::info!(
                 "[player] force_sync_geometry to ({}, {}, {}x{})",
@@ -238,7 +254,7 @@ impl PlayerState {
     /// may have changed.
     #[cfg(target_os = "windows")]
     pub(crate) fn reanchor_z_order(&self) {
-        let Ok(guard) = self.inner.lock() else { return };
+        let Ok(guard) = self.inner.try_lock() else { return };
         if let Some(inner) = guard.as_ref() {
             if let Err(e) = inner.host.reanchor_z_order() {
                 log::warn!("[player] reanchor_z_order failed: {}", e);

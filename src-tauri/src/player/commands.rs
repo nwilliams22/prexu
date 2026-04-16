@@ -161,22 +161,23 @@ pub async fn player_set_fullscreen(
     // 350 ms covers Win11's animated fullscreen transition plus the
     // Resized burst that follows. Bumped from 300 after empirical hang.
     tokio::time::sleep(std::time::Duration::from_millis(350)).await;
-    state.set_fullscreen_transition(false);
 
-    // Dispatch the trailing-edge sync + z-order re-anchor to the main
-    // thread so SetWindowPos runs on the window's owning thread.
-    // Z-order must be re-anchored separately from geometry because the
-    // main window may have changed z-bands during the fullscreen
-    // transition (topmost ↔ normal). Combining them in one SetWindowPos
-    // call silently fails.
+    // CRITICAL: clear flag, reanchor z-order, and sync geometry in ONE
+    // atomic main-thread dispatch. If the flag is cleared BEFORE the
+    // dispatch, queued Resized events fire sync_geometry which then
+    // races with force_sync_geometry — the double SetWindowPos storm
+    // crashes mpv's D3D11 swapchain rebuild.
     #[cfg(target_os = "windows")]
     {
         let app_for_main = app.clone();
         let win_for_main = main.clone();
         if let Err(e) = app.run_on_main_thread(move || {
             let st = app_for_main.state::<PlayerState>();
-            // Re-anchor z-order first so host sits behind main.
+            // Re-anchor z-order first (host behind main).
             st.reanchor_z_order();
+            // Sync geometry THEN clear the flag. While the flag is set,
+            // window events skip sync_geometry entirely, so this single
+            // SetWindowPos is the only one mpv sees.
             match (win_for_main.inner_position(), win_for_main.inner_size()) {
                 (Ok(pos), Ok(size)) => {
                     st.force_sync_geometry(
@@ -194,10 +195,19 @@ pub async fn player_set_fullscreen(
                     );
                 }
             }
+            // NOW clear the flag — subsequent Resized events will see the
+            // correct geometry in last_geometry and dedup-skip.
+            st.set_fullscreen_transition(false);
         }) {
             log::warn!("[player] run_on_main_thread for FS sync failed: {}", e);
+            // Fallback: clear the flag even if dispatch failed.
+            state.set_fullscreen_transition(false);
         }
     }
+
+    // Non-Windows: just clear the flag directly.
+    #[cfg(not(target_os = "windows"))]
+    state.set_fullscreen_transition(false);
 
     // Emit the authoritative fullscreen state back to the frontend so
     // React's isFullscreen stays in sync even when ESC or other OS gestures
