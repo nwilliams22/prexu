@@ -152,8 +152,19 @@ impl PlayerState {
     /// Drop the `Mpv` handle (and host window on Windows). The event pump
     /// exits via `Event::Shutdown` when the underlying mpv context is
     /// destroyed.
+    /// Stop playback and destroy the mpv handle + host window.
+    ///
+    /// Sends `quit` to mpv BEFORE dropping the Inner so the event pump
+    /// thread receives `Event::Shutdown`, breaks its loop, and drops its
+    /// `Arc<Mpv>`. Without this, the event pump's Arc keeps mpv alive
+    /// indefinitely — audio continues playing and the next `ensure_init`
+    /// conflicts with the zombie instance.
     pub(crate) fn destroy(&self) -> Result<(), String> {
         let mut guard = self.inner.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
+        if let Some(ref inner) = *guard {
+            log::info!("[player] destroy: sending quit to mpv");
+            let _ = inner.mpv.command("quit", &[]);
+        }
         *guard = None;
         Ok(())
     }
