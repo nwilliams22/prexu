@@ -196,6 +196,12 @@ pub async fn player_set_fullscreen(
             // Clear the flag AFTER sync — subsequent Resized events will
             // see the correct geometry in last_geometry and dedup-skip.
             st.set_fullscreen_transition(false);
+
+            // Bring the Tauri main window back to front. The fullscreen
+            // transition + host resize can shuffle z-order, putting the
+            // host (now fullscreen-sized) in front of the webview, which
+            // blocks all mouse events.
+            let _ = win_for_main.set_focus();
         }) {
             log::warn!("[player] run_on_main_thread for FS sync failed: {}", e);
             state.set_fullscreen_transition(false);
