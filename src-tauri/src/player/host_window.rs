@@ -42,7 +42,7 @@ unsafe extern "system" fn wnd_proc(
         // Resize mpv's child window to fill the new client area.
         unsafe {
             if let Ok(child) = GetWindow(hwnd, GW_CHILD) {
-                let _ = MoveWindow(child, 0, 0, width, height, true);
+                let _ = MoveWindow(child, 0, 0, width, height, false);
             }
         }
     }
