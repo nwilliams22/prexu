@@ -15,11 +15,13 @@ use std::sync::Once;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH, HBRUSH};
+use windows::Win32::Foundation::LPARAM;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindow, RegisterClassExW, SetWindowPos,
-    ShowWindow, CS_HREDRAW, CS_VREDRAW, GW_CHILD, SET_WINDOW_POS_FLAGS, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, WNDCLASSEXW,
-    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindow, PostMessageW, RegisterClassExW,
+    SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW, GW_CHILD, SET_WINDOW_POS_FLAGS,
+    SIZE_RESTORED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER,
+    SW_HIDE, SW_SHOW, WM_SIZE, WNDCLASSEXW, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+    WS_EX_NOACTIVATE, WS_POPUP,
 };
 
 /// SWP_ASYNCWINDOWPOS (0x4000) — if calling thread and owner thread have
@@ -135,39 +137,29 @@ impl HostWindow {
         .map_err(|e| format!("SetWindowPos failed: {:?}", e))
     }
 
-    /// Explicitly resize mpv's child window to fill the host. Called only
-    /// after large geometry jumps (like fullscreen) where mpv's own resize
-    /// detection may miss the change. Uses SWP_ASYNCWINDOWPOS so the
-    /// resize is posted to mpv's thread instead of blocking the main
-    /// thread on a synchronous D3D11 swapchain rebuild.
-    pub fn resize_children(&self, width: i32, height: i32) {
-        eprintln!("[player] resize_children: host={:?}, target={}x{}", self.hwnd.0, width, height);
+    /// Post a WM_SIZE message to the host window. This is fully
+    /// non-blocking — the message is queued and processed on the next
+    /// message pump cycle. mpv detects the size change through its
+    /// window subclass and rebuilds the D3D11 swapchain asynchronously.
+    ///
+    /// This replaces both the synchronous SetWindowPos approach (which
+    /// deadlocked the main thread inside run_on_main_thread closures)
+    /// and the resize_children approach (child window may not exist if
+    /// mpv renders directly into the host HWND).
+    pub fn post_resize(&self, width: i32, height: i32) {
+        let lparam = LPARAM(((height as isize) << 16) | (width as isize & 0xFFFF));
         unsafe {
-            match GetWindow(self.hwnd, GW_CHILD) {
-                Ok(child) => {
-                    eprintln!("[player] resize_children: FOUND child={:?}", child.0);
-                    log::info!(
-                        "[player] resize_children: found child {:?}, resizing to {}x{}",
-                        child.0, width, height
-                    );
-                    let _ = SetWindowPos(
-                        child,
-                        None,
-                        0,
-                        0,
-                        width,
-                        height,
-                        SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS,
-                    );
-                }
-                Err(e) => {
-                    eprintln!("[player] resize_children: NO CHILD found (err={:?})", e);
-                    log::warn!(
-                        "[player] resize_children: no child window found — mpv may render directly into host HWND"
-                    );
-                }
-            }
+            let _ = PostMessageW(
+                Some(self.hwnd),
+                WM_SIZE,
+                windows::Win32::Foundation::WPARAM(SIZE_RESTORED as usize),
+                lparam,
+            );
         }
+        log::info!(
+            "[player] post_resize: posted WM_SIZE {}x{} to host {:?}",
+            width, height, self.hwnd.0
+        );
     }
 
     /// Show or hide the host window without destroying it.

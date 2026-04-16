@@ -253,16 +253,14 @@ impl PlayerState {
                 width,
                 height
             );
-            if let Err(e) = inner.host.set_geometry(x, y, width, height) {
-                log::warn!("[player] force_sync_geometry failed: {}", e);
-            }
-            // Explicitly resize mpv's child window. mpv doesn't auto-detect
-            // parent resizes during suppressed fullscreen transitions.
-            // SWP_ASYNCWINDOWPOS makes this non-blocking (posted to mpv's
-            // thread instead of synchronous D3D11 swapchain rebuild).
-            eprintln!("[player] about to call resize_children({}x{})", width, height);
-            inner.host.resize_children(width, height);
-            eprintln!("[player] resize_children returned");
+            // Use non-blocking post_resize instead of synchronous
+            // set_geometry. SetWindowPos inside run_on_main_thread
+            // deadlocks because it sends WM_SIZE synchronously on an
+            // already-occupied main thread. PostMessage(WM_SIZE) queues
+            // the resize for the next message pump cycle — mpv's window
+            // subclass picks it up and rebuilds its D3D11 swapchain
+            // without blocking.
+            inner.host.post_resize(width, height);
         }
         // Update last_geometry AFTER the call so subsequent sync_geometry
         // events dedup against the authoritative post-transition values.
