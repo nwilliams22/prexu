@@ -15,23 +15,30 @@ use std::sync::Once;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH, HBRUSH};
+use windows::Win32::Foundation::LRESULT;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassExW, SetWindowPos, ShowWindow,
-    CS_HREDRAW, CS_VREDRAW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER,
-    SW_HIDE, SW_SHOW, WNDCLASSEXW, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_POPUP,
+    CS_HREDRAW, CS_VREDRAW, HTTRANSPARENT, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SW_HIDE, SW_SHOW, WM_NCHITTEST, WNDCLASSEXW, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+    WS_EX_NOACTIVATE, WS_POPUP,
 };
 
 const CLASS_NAME: PCWSTR = w!("PrexuMpvHost");
 static REGISTER_CLASS: Once = Once::new();
 
-/// Bare WndProc — mpv creates its own child inside this HWND when given
-/// `wid`, so the parent container only needs the default behaviour.
+/// WndProc — returns HTTRANSPARENT for mouse hit-testing so all mouse
+/// events pass through to the Tauri webview below. mpv renders via
+/// DirectX into a child window; this doesn't affect rendering, only
+/// Win32 input routing.
 unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
     msg: u32,
     wp: windows::Win32::Foundation::WPARAM,
     lp: windows::Win32::Foundation::LPARAM,
 ) -> windows::Win32::Foundation::LRESULT {
+    if msg == WM_NCHITTEST {
+        return LRESULT(HTTRANSPARENT as isize);
+    }
     unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
 }
 
@@ -62,6 +69,8 @@ fn ensure_class_registered() {
 /// PlayerState design enforces.
 pub struct HostWindow {
     hwnd: HWND,
+    /// Tauri main window HWND — used to re-anchor z-order (host behind main).
+    parent: HWND,
 }
 
 unsafe impl Send for HostWindow {}
@@ -104,7 +113,7 @@ impl HostWindow {
             );
         }
 
-        Ok(Self { hwnd })
+        Ok(Self { hwnd, parent })
     }
 
     /// Returns the raw HWND as an i64 for handing to mpv via
@@ -117,6 +126,8 @@ impl HostWindow {
     }
 
     /// Move + resize the host window in screen pixels (client-area coords).
+    /// Always re-anchors z-order behind the Tauri main window so the webview
+    /// overlay stays on top and receives mouse events.
     /// Skips the Win32 call when width or height is zero (e.g. minimized
     /// Tauri main window) — last good geometry is preserved instead.
     pub fn set_geometry(&self, x: i32, y: i32, width: i32, height: i32) -> Result<(), String> {
@@ -126,12 +137,12 @@ impl HostWindow {
         unsafe {
             SetWindowPos(
                 self.hwnd,
-                None,
+                Some(self.parent),
                 x,
                 y,
                 width,
                 height,
-                SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER,
+                SWP_NOACTIVATE,
             )
         }
         .map_err(|e| format!("SetWindowPos failed: {:?}", e))

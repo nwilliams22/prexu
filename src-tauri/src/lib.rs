@@ -406,9 +406,11 @@ pub fn run() {
                             // ~60 Hz and the inner_position/inner_size
                             // queries below are not free.
                             WindowEvent::Resized(_) | WindowEvent::Moved(_) => {
-                                if !state.should_sync_geometry_now() {
-                                    return;
-                                }
+                                // Always read geometry and pass to sync_geometry
+                                // which handles throttling + trailing-edge pending
+                                // internally. The old pre-check skipped the
+                                // inner_position/inner_size queries when throttled,
+                                // but that prevented trailing-edge storage.
                                 if let (Ok(pos), Ok(size)) =
                                     (win_clone.inner_position(), win_clone.inner_size())
                                 {

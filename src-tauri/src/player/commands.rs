@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use super::PlayerState;
 
@@ -192,6 +192,12 @@ pub async fn player_set_fullscreen(
             log::warn!("[player] run_on_main_thread for FS sync failed: {}", e);
         }
     }
+
+    // Emit the authoritative fullscreen state back to the frontend so
+    // React's isFullscreen stays in sync even when ESC or other OS gestures
+    // exit fullscreen without going through toggleFullscreen().
+    let actual_fs = main.is_fullscreen().unwrap_or(fullscreen);
+    let _ = app.emit("player://fullscreen", actual_fs);
 
     fs_result
 }

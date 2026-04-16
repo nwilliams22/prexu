@@ -20,8 +20,9 @@ use tauri::{AppHandle, Manager};
 /// its D3D11 swapchain. At 60 Hz the Tauri main thread can't service the
 /// message queue between calls and the app hard-freezes (mpv's own
 /// threads keep playing audio/video, but UI input + paint stop).
-/// 30 Hz is smooth enough visually and leaves headroom.
-const GEOMETRY_SYNC_MIN_INTERVAL: Duration = Duration::from_millis(33);
+/// 20 Hz is smooth enough visually and gives mpv 50 ms to settle between
+/// swapchain rebuilds (empirically safe on Win11 with gpu-next + D3D11).
+const GEOMETRY_SYNC_MIN_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Managed state container holding the mpv handle + (on Windows) the native
 /// HWND that mpv renders into. Created lazily on the first `ensure_init`.
@@ -43,6 +44,11 @@ pub struct PlayerState {
     /// SetWindowPos call when called with identical args — common during
     /// drag where position changes but size stays put, or vice versa.
     last_geometry: Mutex<Option<(i32, i32, i32, i32)>>,
+    /// Trailing-edge pending geometry. When a sync is throttled, the most
+    /// recent requested geometry is stored here. The next event that passes
+    /// the throttle check will apply it, ensuring the final drag position is
+    /// never lost.
+    pending_geometry: Mutex<Option<(i32, i32, i32, i32)>>,
 }
 
 struct Inner {
@@ -68,26 +74,13 @@ impl PlayerState {
                     .unwrap_or_else(Instant::now),
             ),
             last_geometry: Mutex::new(None),
+            pending_geometry: Mutex::new(None),
         }
     }
 
     pub(crate) fn set_fullscreen_transition(&self, in_progress: bool) {
         self.fullscreen_transition
             .store(in_progress, Ordering::Release);
-    }
-
-    /// Cheap pre-check the on_window_event listener can use to skip the
-    /// `inner_position` + `inner_size` Tauri queries when we're going to
-    /// throttle the actual work anyway. Returns true if a sync would
-    /// proceed right now.
-    pub(crate) fn should_sync_geometry_now(&self) -> bool {
-        if self.fullscreen_transition.load(Ordering::Acquire) {
-            return false;
-        }
-        let Ok(last) = self.last_sync.lock() else {
-            return false;
-        };
-        Instant::now().duration_since(*last) >= GEOMETRY_SYNC_MIN_INTERVAL
     }
 
     /// Lazily create the host window + `Mpv` handle with our baseline config
@@ -170,8 +163,9 @@ impl PlayerState {
     /// listener fires from app startup, before any playback.
     ///
     /// Skipped while a fullscreen transition is in progress and
-    /// throttled to ~30 Hz on the regular path. Skips the SetWindowPos
-    /// call entirely when called with the same geometry as last time.
+    /// throttled to ~20 Hz on the regular path. When throttled, the
+    /// geometry is stored as pending and applied on the next event that
+    /// passes the throttle check (trailing-edge guarantee).
     #[cfg(target_os = "windows")]
     pub(crate) fn sync_geometry(&self, x: i32, y: i32, width: i32, height: i32) {
         if self.fullscreen_transition.load(Ordering::Acquire) {
@@ -183,13 +177,23 @@ impl PlayerState {
                 return;
             };
             if now.duration_since(*last) < GEOMETRY_SYNC_MIN_INTERVAL {
+                // Throttled — store as pending so trailing edge is never lost.
+                if let Ok(mut pending) = self.pending_geometry.lock() {
+                    *pending = Some((x, y, width, height));
+                }
                 return;
             }
             *last = now;
         }
-        // Skip if geometry hasn't changed since last apply — avoids
-        // repeated SetWindowPos calls when only one of pos/size moved.
-        let new = (x, y, width, height);
+        // Take pending geometry if one was stored (trailing-edge), or use
+        // the current args (leading-edge).
+        let (ax, ay, aw, ah) = if let Ok(mut pending) = self.pending_geometry.lock() {
+            pending.take().unwrap_or((x, y, width, height))
+        } else {
+            (x, y, width, height)
+        };
+        // Skip if geometry hasn't changed since last apply.
+        let new = (ax, ay, aw, ah);
         if let Ok(mut last_geom) = self.last_geometry.lock() {
             if *last_geom == Some(new) {
                 return;
@@ -198,7 +202,7 @@ impl PlayerState {
         }
         let Ok(guard) = self.inner.lock() else { return };
         if let Some(inner) = guard.as_ref() {
-            if let Err(e) = inner.host.set_geometry(x, y, width, height) {
+            if let Err(e) = inner.host.set_geometry(ax, ay, aw, ah) {
                 log::warn!("[player] sync_geometry failed: {}", e);
             }
         }

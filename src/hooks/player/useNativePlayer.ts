@@ -135,6 +135,7 @@ export function useNativePlayer(
         listen<string>("player://error", (e) =>
           setPlaybackError(`Player error: ${e.payload}`),
         ),
+        listen<boolean>("player://fullscreen", (e) => setIsFullscreen(e.payload)),
       ]);
       if (cancelled) {
         for (const u of subs) u();
