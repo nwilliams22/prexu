@@ -154,6 +154,14 @@ impl PlayerState {
                     }
                     let _ = host.set_visible(true);
                     log::debug!("[player:host] set visible");
+                    // Re-anchor z-order below main. SW_SHOWNA shouldn't
+                    // raise it, but this is belt-and-suspenders to ensure
+                    // the host never covers the WebView.
+                    if let Err(e) = host.anchor_below(parent) {
+                        log::warn!("[player:host] anchor_below failed: {}", e);
+                    } else {
+                        log::debug!("[player:host] anchored below parent");
+                    }
                     Ok(host)
                 })();
                 let _ = tx.send(result);

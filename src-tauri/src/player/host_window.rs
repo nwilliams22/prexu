@@ -18,7 +18,7 @@ use windows::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH, HBRUSH};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassExW, SetWindowPos, ShowWindow,
     CS_HREDRAW, CS_VREDRAW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE,
-    SWP_NOZORDER, SW_HIDE, SW_SHOW, WNDCLASSEXW, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+    SWP_NOZORDER, SW_HIDE, SW_SHOWNA, WNDCLASSEXW, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
     WS_EX_NOACTIVATE, WS_POPUP,
 };
 
@@ -111,6 +111,25 @@ impl HostWindow {
         (self.hwnd.0 as usize as u32) as i64
     }
 
+    /// Re-anchor z-order so this window sits directly behind `parent`.
+    /// Called after `set_visible` to guarantee the host stays below the
+    /// Tauri main window even if `ShowWindow` perturbed z-order despite
+    /// `WS_EX_NOACTIVATE` / `SW_SHOWNA`.
+    pub fn anchor_below(&self, parent: HWND) -> Result<(), String> {
+        unsafe {
+            SetWindowPos(
+                self.hwnd,
+                Some(parent),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )
+        }
+        .map_err(|e| format!("anchor_below SetWindowPos failed: {:?}", e))
+    }
+
     /// Move + resize the host window in screen pixels (client-area coords).
     /// Skips the Win32 call when width or height is zero (e.g. minimized
     /// Tauri main window) — last good geometry is preserved instead.
@@ -135,10 +154,19 @@ impl HostWindow {
     }
 
     /// Show or hide the host window without destroying it.
+    ///
+    /// Uses `SW_SHOWNA` ("Show Without Activation") rather than `SW_SHOW`.
+    /// `SW_SHOW` activates the window programmatically, which can bring it
+    /// to the top of the z-order and steal input focus even from a window
+    /// created with `WS_EX_NOACTIVATE` — that ex-style only blocks *user*
+    /// activation (clicks), not programmatic. When this call runs on a
+    /// thread that pumps Win32 messages (our main thread after moving host
+    /// ownership there), `SW_SHOW` would cover the WebView and capture
+    /// keyboard focus, leading to a black screen and unresponsive app.
     #[allow(dead_code)]
     pub fn set_visible(&self, visible: bool) -> Result<(), String> {
         log::debug!("[player:host] set_visible({}) HWND={:?}", visible, self.hwnd.0);
-        let cmd = if visible { SW_SHOW } else { SW_HIDE };
+        let cmd = if visible { SW_SHOWNA } else { SW_HIDE };
         unsafe {
             let _ = ShowWindow(self.hwnd, cmd);
         }
