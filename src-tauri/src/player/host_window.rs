@@ -16,61 +16,23 @@ use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH, HBRUSH};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindow, RegisterClassExW, SetWindowPos,
-    ShowWindow, CS_HREDRAW, CS_VREDRAW, GW_CHILD, SET_WINDOW_POS_FLAGS, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, WM_SIZE,
-    WNDCLASSEXW, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassExW, SetWindowPos, ShowWindow,
+    CS_HREDRAW, CS_VREDRAW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE,
+    SWP_NOZORDER, SW_HIDE, SW_SHOW, WNDCLASSEXW, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+    WS_EX_NOACTIVATE, WS_POPUP,
 };
-
-/// SWP_ASYNCWINDOWPOS (0x4000). When the calling thread and the target
-/// window's thread have different input queues, this flag posts the
-/// request to the target thread's queue instead of SendMessage'ing
-/// synchronously. Critical for resizing mpv's child HWND from our host
-/// WndProc — the synchronous path blocked the main thread during mpv's
-/// D3D11 swapchain rebuild (see commit 30a4949). The windows crate
-/// doesn't export this constant; it's a standard SetWindowPos flag.
-const SWP_ASYNCWINDOWPOS: SET_WINDOW_POS_FLAGS = SET_WINDOW_POS_FLAGS(0x4000);
 
 const CLASS_NAME: PCWSTR = w!("PrexuMpvHost");
 static REGISTER_CLASS: Once = Once::new();
 
-/// WndProc — forwards WM_SIZE to mpv's child HWND so its D3D11 swapchain
-/// rebuilds at the new dimensions. mpv creates a child window inside this
-/// HWND via the `wid` property, but Win32 child windows do not auto-resize
-/// when the parent resizes — the parent must explicitly move them.
-/// Without this, entering fullscreen grows the host to 3840x2160 but the
-/// video stays at the pre-fullscreen size (confirmed visually + in logs).
-///
-/// Uses SWP_ASYNCWINDOWPOS so the resize is posted to mpv's thread queue
-/// rather than SendMessage'd synchronously — the synchronous path caused
-/// the main thread to block while mpv rebuilt its swapchain (commit
-/// 30a4949 ripped out the earlier attempt for exactly this reason).
+/// Bare WndProc — mpv creates its own child inside this HWND when given
+/// `wid`, so the parent container only needs the default behaviour.
 unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
     msg: u32,
     wp: windows::Win32::Foundation::WPARAM,
     lp: windows::Win32::Foundation::LPARAM,
 ) -> windows::Win32::Foundation::LRESULT {
-    if msg == WM_SIZE {
-        // LPARAM packs (height << 16) | width. Widths/heights up to 65535 px.
-        let width = (lp.0 & 0xFFFF) as i32;
-        let height = ((lp.0 >> 16) & 0xFFFF) as i32;
-        if width > 0 && height > 0 {
-            unsafe {
-                if let Ok(child) = GetWindow(hwnd, GW_CHILD) {
-                    let _ = SetWindowPos(
-                        child,
-                        None,
-                        0,
-                        0,
-                        width,
-                        height,
-                        SWP_ASYNCWINDOWPOS | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER,
-                    );
-                }
-            }
-        }
-    }
     unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
 }
 
