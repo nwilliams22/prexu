@@ -190,10 +190,9 @@ impl PlayerState {
     ///    `mpv_terminate_destroy` synchronously (libmpv2 Drop impl).
     /// 5. `HostWindow` drops last, now that nothing is rendering into it.
     pub(crate) fn destroy(&self) -> Result<(), String> {
-        // Take Inner out up front. We must NOT hold the Mutex across the
-        // thread join — that would deadlock anyone else waiting on it, and
-        // a fresh `ensure_init` while destroy is in flight is allowed (it
-        // just builds a new Inner into the now-empty slot).
+        let t0 = Instant::now();
+        log::info!("[player] destroy: entered");
+
         let inner = self
             .inner
             .lock()
@@ -204,24 +203,66 @@ impl PlayerState {
             log::debug!("[player] destroy: nothing to destroy");
             return Ok(());
         };
+        log::info!("[player] destroy: Inner taken, Arc strong_count={}", Arc::strong_count(&inner.mpv));
 
-        log::info!("[player] destroy: stopping playback");
-        let _ = inner.mpv.command("stop", &[]);
+        // Belt-and-suspenders: silence audio immediately, don't wait for
+        // stop/quit to propagate through mpv's internals.
+        match inner.mpv.set_property("mute", true) {
+            Ok(_) => log::info!("[player] destroy: mute=true set"),
+            Err(e) => log::warn!("[player] destroy: mute set failed: {:?}", e),
+        }
+        match inner.mpv.set_property("pause", true) {
+            Ok(_) => log::info!("[player] destroy: pause=true set"),
+            Err(e) => log::warn!("[player] destroy: pause set failed: {:?}", e),
+        }
+
+        log::info!("[player] destroy: sending stop command");
+        match inner.mpv.command("stop", &[]) {
+            Ok(_) => log::info!("[player] destroy: stop sent OK"),
+            Err(e) => log::warn!("[player] destroy: stop failed: {:?}", e),
+        }
+        log::info!("[player] destroy: sending quit command");
         match inner.mpv.command("quit", &[]) {
             Ok(_) => log::info!("[player] destroy: quit sent OK"),
             Err(e) => log::warn!("[player] destroy: quit failed: {:?}", e),
         }
 
+        // Bounded join: if the pump doesn't exit within 2s, give up and
+        // let it leak — we'd rather have a zombie thread than a 20 s audio
+        // bleed. The pump holds an Arc<Mpv>, so if we detach, mpv lives
+        // until the pump's `wait_event` eventually times out and notices
+        // the context is gone. In practice, terminate_destroy below will
+        // be delayed, but the mute+pause+stop above should already have
+        // silenced audio synchronously.
         if let Some(handle) = inner.event_pump.take() {
-            match handle.join() {
-                Ok(()) => log::info!("[player] destroy: event pump joined"),
-                Err(_) => log::warn!("[player] destroy: event pump panicked"),
+            log::info!("[player] destroy: joining event pump (timeout 2s)");
+            let start = Instant::now();
+            let (tx, rx) = std::sync::mpsc::channel::<()>();
+            let join_thread = std::thread::spawn(move || {
+                let _ = handle.join();
+                let _ = tx.send(());
+            });
+            match rx.recv_timeout(Duration::from_secs(2)) {
+                Ok(_) => log::info!(
+                    "[player] destroy: event pump joined in {}ms",
+                    start.elapsed().as_millis()
+                ),
+                Err(_) => log::warn!(
+                    "[player] destroy: event pump did NOT exit within 2s — detaching; current Arc strong_count={}",
+                    Arc::strong_count(&inner.mpv)
+                ),
             }
+            // Detach the joiner thread so we don't block on it further.
+            drop(join_thread);
         }
 
-        // `inner` drops here: Arc<Mpv> refcount goes 1→0 →
-        // mpv_terminate_destroy (sync); then HostWindow::drop →
-        // DestroyWindow on an HWND mpv is no longer touching.
+        log::info!(
+            "[player] destroy: dropping Inner (Arc strong_count={}, elapsed {}ms)",
+            Arc::strong_count(&inner.mpv),
+            t0.elapsed().as_millis()
+        );
+        // `inner` drops at end of scope. If we still hold the last Arc,
+        // mpv_terminate_destroy runs synchronously here.
         Ok(())
     }
 

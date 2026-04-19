@@ -64,11 +64,14 @@ fn run_pump(mpv: Arc<Mpv>, app: AppHandle) {
         .checked_sub(TIME_POS_THROTTLE)
         .unwrap_or_else(Instant::now);
 
+    let mut loop_iterations: u64 = 0;
     loop {
+        loop_iterations += 1;
         match ev_ctx.wait_event(1.0) {
             Some(Ok(event)) => {
                 if dispatch(&app, event, &mut last_time_pos) {
-                    break; // Shutdown
+                    log::info!("[player:events] Shutdown received at iter #{}", loop_iterations);
+                    break;
                 }
             }
             Some(Err(e)) => {
@@ -76,11 +79,19 @@ fn run_pump(mpv: Arc<Mpv>, app: AppHandle) {
                 let _ = app.emit("player://error", format!("{:?}", e));
             }
             None => {
-                // Timeout — loop. Lets us re-check whether mpv is still alive
-                // even when no events fire.
+                // Timeout — log at info level occasionally so we can see
+                // whether the pump is stuck on wait_event after a quit
+                // should have fired Shutdown.
+                if loop_iterations % 3 == 0 {
+                    log::debug!(
+                        "[player:events] wait_event timeout (iter #{})",
+                        loop_iterations
+                    );
+                }
             }
         }
     }
+    log::info!("[player:events] pump exiting after {} iterations", loop_iterations);
 }
 
 /// Returns `true` when the loop should exit (shutdown).
