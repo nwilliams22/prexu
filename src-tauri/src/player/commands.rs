@@ -166,6 +166,22 @@ pub async fn player_set_fullscreen(
         .get_webview_window("main")
         .ok_or_else(|| "main webview window not found".to_string())?;
 
+    // Fast path: no mpv means nothing to sync. Used on Player unmount
+    // after player_unload has torn down mpv — we just need the main
+    // window out of fullscreen so the dashboard isn't stuck in it.
+    // Skips the 350 ms transition wait and the geometry-sync closure
+    // (both only exist to prevent mpv's D3D11 vo from crashing during
+    // the resize storm; irrelevant when there's no mpv).
+    if !state.is_initialised() {
+        log::debug!("[player:cmd] set_fullscreen: no mpv, fast path");
+        let fs_result = main
+            .set_fullscreen(fullscreen)
+            .map_err(|e| format!("set_fullscreen failed: {}", e));
+        let actual_fs = main.is_fullscreen().unwrap_or(fullscreen);
+        let _ = app.emit("player://fullscreen", actual_fs);
+        return fs_result;
+    }
+
     state.set_fullscreen_transition(true);
     let fs_result = main
         .set_fullscreen(fullscreen)
