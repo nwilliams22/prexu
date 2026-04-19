@@ -90,16 +90,6 @@ impl PlayerState {
             .store(in_progress, Ordering::Release);
     }
 
-    /// True when `ensure_init` has run and `destroy` has not. Used by
-    /// `player_set_fullscreen` to skip all mpv-aware work when there's no
-    /// mpv to sync — e.g. during unmount cleanup after `player_unload`.
-    pub(crate) fn is_initialised(&self) -> bool {
-        self.inner
-            .lock()
-            .map(|g| g.is_some())
-            .unwrap_or(false)
-    }
-
     /// Lazily create the host window + `Mpv` handle with our baseline config
     /// and start the event pump. Subsequent calls are no-ops.
     pub(crate) fn ensure_init(&self, app: &AppHandle) -> Result<(), String> {

@@ -309,30 +309,12 @@ export function useNativePlayer(
       logger.info("player", "cleanup: stopping timeline, unloading");
       timeline.stopTimeline();
       timeline.reportStopped();
-      // Order: unload THEN fullscreen-exit. player_unload synchronously
-      // terminates mpv (see destroy() in player/mod.rs), so by the time
-      // it resolves, player_set_fullscreen hits its fast path (no mpv =>
-      // no transition wait, no geometry sync). Running them in parallel
-      // would let the slow mpv-aware fullscreen path race with mpv
-      // teardown. Errors were previously swallowed silently; if unload
-      // fails now we want it in the log because audio may keep playing.
-      const wasFullscreen = isFullscreenRef.current;
-      invoke("player_unload")
-        .catch((err) =>
-          logger.error("player", "player_unload failed", String(err)),
-        )
-        .finally(() => {
-          if (wasFullscreen) {
-            invoke("player_set_fullscreen", { fullscreen: false }).catch(
-              (err) =>
-                logger.error(
-                  "player",
-                  "player_set_fullscreen(false) cleanup failed",
-                  String(err),
-                ),
-            );
-          }
-        });
+      // Exit fullscreen before unloading so the dashboard isn't stuck
+      // fullscreen after navigating away from the player.
+      if (isFullscreenRef.current) {
+        invoke("player_set_fullscreen", { fullscreen: false }).catch(() => {});
+      }
+      invoke("player_unload").catch(() => {});
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- timeline funcs are stable
   }, [initPlayback]);
