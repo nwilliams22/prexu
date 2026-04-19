@@ -139,9 +139,12 @@ pub async fn player_set_af_chain(
 }
 
 #[tauri::command]
-pub async fn player_unload(state: State<'_, PlayerState>) -> Result<(), String> {
+pub async fn player_unload(
+    app: AppHandle,
+    state: State<'_, PlayerState>,
+) -> Result<(), String> {
     log::info!("[player:cmd] unload");
-    state.destroy()
+    state.destroy(&app)
 }
 
 /// Toggle the Tauri main window's fullscreen state.

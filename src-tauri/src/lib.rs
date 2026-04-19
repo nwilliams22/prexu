@@ -452,7 +452,7 @@ pub fn run() {
                             WindowEvent::CloseRequested { .. }
                             | WindowEvent::Destroyed => {
                                 log::info!("[window] CloseRequested/Destroyed — destroying player");
-                                let _ = state.destroy();
+                                let _ = state.destroy(&app_handle);
                             }
                             _ => {}
                         }
