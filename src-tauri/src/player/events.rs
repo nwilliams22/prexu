@@ -26,13 +26,11 @@ const REPLY_BUFFERING: u64 = 4;
 
 const TIME_POS_THROTTLE: Duration = Duration::from_millis(250); // 4 Hz
 
-pub(crate) fn spawn_event_pump(
-    mpv: Arc<Mpv>,
-    app: AppHandle,
-) -> Result<thread::JoinHandle<()>, String> {
+pub(crate) fn spawn_event_pump(mpv: Arc<Mpv>, app: AppHandle) -> Result<(), String> {
     thread::Builder::new()
         .name("mpv-event-pump".into())
         .spawn(move || run_pump(mpv, app))
+        .map(|_| ())
         .map_err(|e| format!("Failed to spawn event thread: {}", e))
 }
 

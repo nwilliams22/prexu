@@ -8,7 +8,6 @@ pub mod host_window;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use libmpv2::Mpv;
@@ -54,12 +53,6 @@ pub struct PlayerState {
 
 struct Inner {
     mpv: Arc<Mpv>,
-    /// Event pump JoinHandle. `destroy()` joins this before dropping the
-    /// rest of Inner so mpv's final Arc (held by the pump) is released
-    /// synchronously — `mpv_terminate_destroy` then runs while we still
-    /// own the HWND, avoiding the race where DestroyWindow ran before
-    /// mpv's render thread stopped using it.
-    event_pump: Option<JoinHandle<()>>,
     /// Kept alive for the lifetime of the Mpv handle. Dropping it after Mpv
     /// is destroyed lets DestroyWindow run cleanly without mpv still
     /// rendering into the surface.
@@ -152,66 +145,41 @@ impl PlayerState {
         log::info!("[player] mpv created with wid={}", wid);
 
         let mpv = Arc::new(mpv);
-        let event_pump = events::spawn_event_pump(Arc::clone(&mpv), app.clone())?;
+        events::spawn_event_pump(Arc::clone(&mpv), app.clone())?;
         log::info!("[player] event pump spawned, init complete");
 
         *guard = Some(Inner {
             mpv,
-            event_pump: Some(event_pump),
             #[cfg(target_os = "windows")]
             host,
         });
         Ok(())
     }
 
-    /// Synchronously stop playback and destroy the mpv handle + host window.
+    /// Drop the `Mpv` handle (and host window on Windows). The event pump
+    /// exits via `Event::Shutdown` when the underlying mpv context is
+    /// destroyed.
+    /// Stop playback and destroy the mpv handle + host window.
     ///
-    /// The key invariant: when this function returns, mpv is fully terminated
-    /// (audio silenced, render threads exited) AND the host HWND is destroyed.
-    /// Callers — notably `player_unload` from the Tauri frontend — rely on
-    /// this so audio doesn't keep bleeding through after navigation.
-    ///
-    /// Steps:
-    /// 1. Take `Inner` out of the Mutex so we control drop order.
-    /// 2. Send `stop` (halt playback) then `quit` (fire Shutdown) to mpv.
-    /// 3. Join the event-pump thread. It observes Shutdown, breaks its loop,
-    ///    and drops its `Arc<Mpv>`.
-    /// 4. Our `Arc<Mpv>` drops at end of scope with refcount 1→0, which runs
-    ///    `mpv_terminate_destroy` synchronously (libmpv2 Drop impl).
-    /// 5. `HostWindow` drops last, now that nothing is rendering into it.
+    /// Sends `quit` to mpv BEFORE dropping the Inner so the event pump
+    /// thread receives `Event::Shutdown`, breaks its loop, and drops its
+    /// `Arc<Mpv>`. Without this, the event pump's Arc keeps mpv alive
+    /// indefinitely — audio continues playing and the next `ensure_init`
+    /// conflicts with the zombie instance.
     pub(crate) fn destroy(&self) -> Result<(), String> {
-        // Take Inner out up front. We must NOT hold the Mutex across the
-        // thread join — that would deadlock anyone else waiting on it, and
-        // a fresh `ensure_init` while destroy is in flight is allowed (it
-        // just builds a new Inner into the now-empty slot).
-        let inner = self
-            .inner
-            .lock()
-            .map_err(|e| format!("Lock poisoned: {}", e))?
-            .take();
-
-        let Some(mut inner) = inner else {
-            log::debug!("[player] destroy: nothing to destroy");
-            return Ok(());
-        };
-
-        log::info!("[player] destroy: stopping playback");
-        let _ = inner.mpv.command("stop", &[]);
-        match inner.mpv.command("quit", &[]) {
-            Ok(_) => log::info!("[player] destroy: quit sent OK"),
-            Err(e) => log::warn!("[player] destroy: quit failed: {:?}", e),
-        }
-
-        if let Some(handle) = inner.event_pump.take() {
-            match handle.join() {
-                Ok(()) => log::info!("[player] destroy: event pump joined"),
-                Err(_) => log::warn!("[player] destroy: event pump panicked"),
+        let mut guard = self.inner.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
+        if let Some(ref inner) = *guard {
+            // Stop playback immediately, then quit. "stop" halts audio/video
+            // synchronously; "quit" fires Event::Shutdown so the event pump
+            // thread drops its Arc<Mpv> and the handle is fully destroyed.
+            log::info!("[player] destroy: stopping playback");
+            let _ = inner.mpv.command("stop", &[]);
+            match inner.mpv.command("quit", &[]) {
+                Ok(_) => log::info!("[player] destroy: quit sent OK"),
+                Err(e) => log::warn!("[player] destroy: quit failed: {:?}", e),
             }
         }
-
-        // `inner` drops here: Arc<Mpv> refcount goes 1→0 →
-        // mpv_terminate_destroy (sync); then HostWindow::drop →
-        // DestroyWindow on an HWND mpv is no longer touching.
+        *guard = None;
         Ok(())
     }
 
