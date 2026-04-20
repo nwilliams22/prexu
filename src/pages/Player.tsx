@@ -236,16 +236,20 @@ function Player() {
   const playerIsFullscreenRef = useRef(player.isFullscreen);
   playerIsFullscreenRef.current = player.isFullscreen;
 
-  // Keyboard shortcuts
-  // Exit fullscreen BEFORE navigating on the native path. If we let the
-  // unmount cleanup fire player_set_fullscreen after navigate(-1), the
-  // Tauri main window resizes from fullscreen to windowed AFTER Player
-  // has unmounted — during the gap before Dashboard's first render, the
-  // user sees Player's overlay floating in the small pre-fullscreen
-  // window. Awaiting the fullscreen exit keeps Player mounted during
-  // the resize so the controls naturally reflow, then navigate cleanly
-  // unmounts. Adds ~350 ms to back-from-fullscreen but eliminates the
-  // stale-overlay glitch.
+  // When navigating away, we render a black full-screen overlay so the
+  // user sees solid black during the gap between Player's unmount and
+  // Dashboard's first paint. Without this, React keeps the last Player
+  // frame visible until Dashboard renders, leaving the overlay's back
+  // button / title / controls lingering briefly over whatever's under
+  // the shrunken window.
+  const [isNavigatingAway, setIsNavigatingAway] = useState(false);
+
+  // Keyboard shortcuts / back button
+  // Order: exit fullscreen (so window resize happens while mounted) →
+  // flip to black overlay → give React one frame to commit the overlay →
+  // navigate(-1). The committed black overlay is the LAST thing painted
+  // before unmount, so the webview stays black during the Dashboard
+  // mount gap.
   const handleBack = useCallback(async () => {
     if (IS_NATIVE_PLAYER && playerIsFullscreenRef.current) {
       try {
@@ -255,6 +259,13 @@ function Player() {
         // cleanup path's fullscreen-exit safety net will catch up.
       }
     }
+    setIsNavigatingAway(true);
+    // Two rAFs: first commits the state change, second fires after the
+    // browser has painted the black overlay. Navigating before the paint
+    // defeats the purpose.
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
     navigate(-1);
   }, [navigate]);
 
@@ -288,6 +299,22 @@ function Player() {
   // Auth guards — placed after all hooks to respect React rules of hooks
   if (!isAuthenticated) return <Navigate to="/login" replace />;
   if (!serverSelected) return <Navigate to="/servers" replace />;
+
+  // Transition overlay: paints solid black over the whole viewport so
+  // the user doesn't see stale player UI during the unmount→dashboard
+  // mount gap after clicking back.
+  if (isNavigatingAway) {
+    return (
+      <div
+        style={{
+          position: "fixed",
+          inset: 0,
+          background: "#000",
+          zIndex: 99999,
+        }}
+      />
+    );
+  }
 
   return (
     <div
