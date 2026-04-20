@@ -16,7 +16,7 @@ export function getDefaultPreferences(): Preferences {
       defaultSubtitles: "auto",
       subtitleSize: 100,
       audioBoost: 100,
-      directPlayPreference: "never",
+      directPlayPreference: "auto",
       volumeBoost: 1.0,
       normalizationPreset: "off",
       audioOffsetMs: 0,
