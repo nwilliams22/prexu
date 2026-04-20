@@ -19,7 +19,6 @@ import { getItemMetadata } from "../../services/plex-library";
 import { getLocalFilePath } from "../../services/downloads";
 import { addPendingWatchSync } from "../../services/storage";
 import {
-  canDirectPlay,
   buildDirectPlayUrl,
   buildTranscodeUrl,
   categorizeStreams,
@@ -233,8 +232,16 @@ export function useNativePlayer(
           : (playableItem.viewOffset ?? 0);
 
       // Pick a source URL. Local downloads first, then direct play / transcode.
-      // Step 3.7 will relax the direct-play decision since libmpv decodes
-      // everything natively.
+      //
+      // libmpv decodes every common codec/container natively, so the
+      // HTML5-centric canDirectPlay() whitelist would force transcodes
+      // for files mpv plays fine (e.g. HEVC in MKV). Plex transcode
+      // cold-start adds 15-20 s to first-play latency on a warm server,
+      // which is unacceptable. On native we Direct Play by default in
+      // auto/always modes; users who need bandwidth-capped streams can
+      // pick directPlayPreference="never". On Direct Play failure, we
+      // fall back to transcode via directPlayFailedRef (set by the mpv
+      // error path + retry).
       let url: string;
       isLocalPlaybackRef.current = false;
       const localPath = await getLocalFilePath(ratingKey).catch(() => null);
@@ -244,14 +251,15 @@ export function useNativePlayer(
       } else {
         const shouldDirectPlay =
           !directPlayFailedRef.current &&
-          (pb.directPlayPreference === "always" ||
-            (pb.directPlayPreference === "auto" &&
-              (pb.quality === "original" || canDirectPlay(media))));
-        const forceTranscode =
-          pb.directPlayPreference === "never" || directPlayFailedRef.current;
+          pb.directPlayPreference !== "never";
 
-        if (shouldDirectPlay && !forceTranscode && canDirectPlay(media)) {
+        if (shouldDirectPlay) {
           url = buildDirectPlayUrl(server.uri, server.accessToken, part.key);
+          logger.debug("player", "URL chosen: direct play", {
+            container: part.container,
+            videoCodec: media.videoCodec,
+            audioCodec: media.audioCodec,
+          });
         } else {
           url = await buildTranscodeUrl(server.uri, server.accessToken, ratingKey, {
             audioStreamId: defaultAudio?.id,
@@ -260,6 +268,10 @@ export function useNativePlayer(
             subtitleSize: pb.subtitleSize,
             audioBoost: pb.audioBoost,
             audioCodec: defaultAudio?.codec ?? media.audioCodec,
+          });
+          logger.debug("player", "URL chosen: transcode", {
+            reason: directPlayFailedRef.current ? "previous direct-play failure" : "user preference=never",
+            quality: pb.quality,
           });
         }
       }
