@@ -245,18 +245,25 @@ function Player() {
   const playerIsFullscreenRef = useRef(player.isFullscreen);
   playerIsFullscreenRef.current = player.isFullscreen;
 
-  // Keyboard shortcuts / back button
-  // Exit fullscreen first so the Tauri window resize happens while
-  // Player is still mounted (smooth reflow), then navigate. The
-  // body-background restore is handled synchronously by the
-  // useLayoutEffect cleanup above — no need to mutate it here.
+  // Keyboard shortcuts / back button.
+  //
+  // Paint body opaque BEFORE navigate. The useLayoutEffect cleanup below
+  // SHOULD run sync before paint, but in practice WebView2 with
+  // transparent:true can still composite one frame where body=transparent
+  // during the Player→Dashboard swap, leaking whatever OS window is behind
+  // Prexu (Discord). Doing it here runs while Player is still mounted —
+  // the Player container is fixed+transparent so mpv is still visible
+  // to the user, but the next post-unmount paint has body already navy.
+  // Belt-and-suspenders: cleanup still runs, idempotent second write.
   const handleBack = useCallback(async () => {
-    if (IS_NATIVE_PLAYER && playerIsFullscreenRef.current) {
-      try {
-        await invoke("player_set_fullscreen", { fullscreen: false });
-      } catch {
-        // Swallow — worst case we fall through and navigate anyway; the
-        // cleanup path's fullscreen-exit safety net will catch up.
+    if (IS_NATIVE_PLAYER) {
+      document.body.style.background = "#1a1a2e";
+      if (playerIsFullscreenRef.current) {
+        try {
+          await invoke("player_set_fullscreen", { fullscreen: false });
+        } catch {
+          // Swallow — cleanup path's fullscreen-exit safety net catches up.
+        }
       }
     }
     navigate(-1);
