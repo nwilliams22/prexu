@@ -237,11 +237,18 @@ function Player() {
   playerIsFullscreenRef.current = player.isFullscreen;
 
   // Keyboard shortcuts / back button
-  // Exit fullscreen BEFORE navigating so the Tauri window reflows while
-  // Player is still mounted (controls resize smoothly), then navigate.
-  // Dashboard's own skeleton loaders cover the unmount→mount gap, so no
-  // black transition overlay is needed — user goes Player → Dashboard
-  // skeletons immediately.
+  // Exit fullscreen first (window reflows while Player is still
+  // mounted), then restore body background synchronously, THEN navigate.
+  //
+  // The body-bg restore has to happen before navigate, not in the
+  // useEffect cleanup below. Cleanup is a passive effect that React
+  // runs AFTER the browser has painted the post-unmount frame — so the
+  // first frame after Player unmounts still has `body.style.background
+  // = "transparent"`, which makes the Tauri window transparent and
+  // exposes whatever window is behind Prexu (e.g. Discord). Setting
+  // body bg here undoes the transparency before the paint, so the
+  // webview paints the navy CSS fallback (--bg-primary) during the
+  // unmount→Dashboard-mount gap instead of nothing.
   const handleBack = useCallback(async () => {
     if (IS_NATIVE_PLAYER && playerIsFullscreenRef.current) {
       try {
@@ -250,6 +257,10 @@ function Player() {
         // Swallow — worst case we fall through and navigate anyway; the
         // cleanup path's fullscreen-exit safety net will catch up.
       }
+    }
+    if (IS_NATIVE_PLAYER) {
+      // Clear the inline style so the CSS body rule (navy) takes over.
+      document.body.style.background = "";
     }
     navigate(-1);
   }, [navigate]);
