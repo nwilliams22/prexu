@@ -190,6 +190,163 @@ Windows runner, generate `mpv.lib`, export `MPV_SOURCE`, and ship
 `libmpv-2.dll` inside the NSIS installer. Includes code-signing impact
 assessment for the third-party DLL.
 
+## Architecture notes & hard-won lessons
+
+These are the non-obvious constraints learned the hard way during
+debugging sessions (notably 2026-04-19/20). If you change the native
+player's Win32 integration or React lifecycle around it, read this
+section first — several of these are deadlock traps or invisibility
+bugs that take hours to diagnose from symptoms alone.
+
+### Win32 thread affinity and Tauri async commands
+
+**Claim:** The `HostWindow` HWND MUST be created on — and owned by —
+Tauri's main thread. Do not create it on a tokio worker.
+
+**Why:** Win32 windows are thread-affine. Their WndProc runs on the
+thread that called `CreateWindow`, and `SetWindowPos` from another
+thread does a cross-thread `SendMessage` that waits for the owner
+thread to pump messages. Tauri's main thread pumps Win32 messages;
+tokio worker threads (which run `#[tauri::command] async fn`) do not.
+
+If the host is owned by a tokio worker, the main thread's
+`on_window_event(Resized)` → `sync_geometry` → `SetWindowPos` blocks
+indefinitely inside `SendMessage`. During normal drag-resize this
+sometimes self-heals because tokio workers get woken up by other
+activity, but the fullscreen command's `run_on_main_thread` closure
+is a hard deadlock: main thread calls the closure → closure calls
+`SetWindowPos` on the tokio-worker-owned host → waits forever.
+
+When this happened, IPC stopped processing entirely: a subsequent
+back-click's `player_unload` command queued on the webview side and
+never reached the backend, while mpv kept playing on its own threads.
+Visible symptom: Windows IDC_APPSTARTING cursor ("loading ring"), app
+won't accept focus, ~20+ seconds of audio after navigation.
+
+**Implementation:** `ensure_init` dispatches `HostWindow::create` +
+`set_geometry` + `set_visible` to the main thread via
+`app.run_on_main_thread(...)` with a one-shot channel; the tokio
+worker blocks on `rx.recv()` until main completes. `destroy()` takes
+`&AppHandle` and dispatches `drop(host)` to the main thread
+(fire-and-forget — by that point `mpv_terminate_destroy` has already
+halted rendering, so an async `DestroyWindow` is safe).
+
+### `SW_SHOWNA`, not `SW_SHOW`, for host `ShowWindow`
+
+`SW_SHOW` programmatically activates the window (foreground, input
+focus), which `WS_EX_NOACTIVATE` does NOT block — that ex-style only
+suppresses *user* activation (clicks). When the host was owned by a
+tokio worker, `SW_SHOW`'s activation was silently inert because the
+worker didn't pump messages. The moment the host moved to the main
+thread (which does pump), `SW_SHOW` started actually raising the
+host above the WebView and capturing keyboard focus.
+
+Symptom: black screen (BLACK_BRUSH host covering WebView), Esc did
+nothing (went to host's DefWindowProcW, not React). Use `SW_SHOWNA`.
+Follow with `HostWindow::anchor_below(parent)` as belt-and-suspenders
+to re-anchor z-order.
+
+### Event pump drop order — join before dropping `Inner`
+
+`Mpv::drop` in libmpv2 calls `mpv_terminate_destroy` synchronously —
+but that's only triggered when the LAST `Arc<Mpv>` drops. The event
+pump holds one clone. Prior to the fix, `destroy()` just cleared
+`Mutex<Option<Inner>>`, which:
+
+1. Dropped our Arc → refcount 2→1 (pump still has one), mpv stays alive
+2. Dropped `HostWindow` → `DestroyWindow` on an HWND mpv was still rendering into → race
+3. Eventually pump processed `Shutdown`, dropped its Arc, mpv terminated — but way too late
+
+Audio kept bleeding for whatever it took the pump's `wait_event(1.0)`
+to loop around and see `Shutdown`. Visible symptom: 20+ seconds of
+audio after the user clicked back.
+
+**Fix:** `destroy()` takes `Inner` out of the Mutex, sends `stop`
+then `quit` to mpv, then `join()`s the event pump thread (bounded to
+2 s via a secondary mpsc hop). When the pump exits it drops its Arc,
+leaving exactly one Arc in our local `inner`. The function-end drop
+of `inner` then runs `mpv_terminate_destroy` synchronously, silencing
+audio. `HostWindow` drops last (now safely async to main thread).
+
+Belt-and-suspenders: `destroy()` also sets `mute=true`, `pause=true`
+BEFORE sending `stop`/`quit`, so even if the Arc math somehow doesn't
+reach zero synchronously, audio is silent.
+
+### Fullscreen geometry sync timing
+
+The fullscreen animation on Windows 11 fires `WindowEvent::Resized`
+rapidly (~10+ events in 300 ms). Each triggers
+`sync_geometry` → `SetWindowPos` on the host → mpv gpu-next rebuilds
+its D3D11 swapchain. ≥10 rebuilds in 300 ms reliably crashed mpv's
+render thread.
+
+Solution: `PlayerState.fullscreen_transition: AtomicBool` is set
+before `main.set_fullscreen()` and held for 350 ms afterwards. The
+normal `on_window_event → sync_geometry` path checks the flag and
+skips while it's set. The explicit catch-up sync happens via
+`apply_host_geometry` (bypasses the flag) dispatched to the main
+thread *immediately* after `main.set_fullscreen()` — so the video
+reaches final dimensions within a frame of the overlay, not 350 ms
+later. The 350 ms sleep only keeps the flag set during the animation
+burst; nothing user-visible waits on it.
+
+### Transparent Tauri window + DOM body background
+
+`tauri.conf.json` has `"transparent": true`. That means any frame the
+WebView paints with an inline `body { background: transparent }` AND
+an empty DOM lets the OS show windows BEHIND Prexu through the frame.
+
+Player needs body transparent to let the mpv host HWND show through
+the WebView. But the moment Player unmounts, there's a gap before
+Dashboard paints — during that gap, body stays transparent and the
+webview has no content → user sees Discord (or whatever's behind).
+
+**MUST use `useLayoutEffect`, not `useEffect`**, for the body-bg
+swap: `useEffect` cleanup is a passive effect that fires AFTER the
+browser paints the post-unmount frame; `useLayoutEffect` cleanup
+fires synchronously during commit, so the first post-unmount paint
+already has body opaque (`#1a1a2e` — match the CSS fallback
+explicitly rather than restoring a captured empty string, which can
+drift if anything else mutated body mid-lifetime).
+
+### Back-navigation-from-fullscreen ordering
+
+`handleBack` must `await invoke("player_set_fullscreen", { fullscreen:
+false })` BEFORE `navigate(-1)` when in fullscreen. If you just
+`navigate(-1)` and rely on the unmount cleanup to exit fullscreen,
+the Tauri window resizes from fullscreen to pre-fullscreen AFTER
+Player has already unmounted, and Dashboard renders into the small
+pre-fullscreen window briefly — user sees stale overlay or
+transparent-window flashes depending on timing.
+
+### Do not resize mpv's child HWND from the host WndProc
+
+An earlier attempt (reverted) handled `WM_SIZE` in the host's WndProc
+and called `SetWindowPos` on `GW_CHILD` (mpv's child window) to force
+a swapchain rebuild at the new size. Two problems:
+
+1. Synchronous `SetWindowPos` blocked the main thread while mpv
+   rebuilt its swapchain (main-thread freeze, Windows busy cursor).
+2. `SWP_ASYNCWINDOWPOS` variants still interacted badly with mpv's
+   vo thread — different hangs, different symptoms.
+
+If you re-attempt mpv D3D11 resize-on-fullscreen (the remaining
+prexu-dsh bug), do it via an mpv property/command on a background
+thread, not via direct Win32 calls from our WndProc.
+
+### The hard-earned checklist when changing Player <-> Tauri code
+
+- Is any Win32 API called from `#[tauri::command] async fn` via
+  `ensure_init`? If so: dispatch to main via `run_on_main_thread`.
+- Is any effect mutating `document.body` / `document.documentElement`?
+  If the Tauri window is transparent, it MUST be `useLayoutEffect`.
+- Is any JS navigation path unmounting Player while fullscreen is
+  still Tauri-window-level active? If so: await the fullscreen exit
+  before calling `navigate`.
+- Is an Arc shared with a background thread? Check its drop order
+  against any synchronous cleanup (e.g. `DestroyWindow`) that needs
+  the thing the Arc guards to already be gone.
+
 ## Resume instructions
 
 When picking this back up:
