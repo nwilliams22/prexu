@@ -3,7 +3,7 @@
  * Sits outside the AppLayout (no header/sidebar).
  */
 
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from "react";
 import { useParams, useNavigate, useSearchParams, Navigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useAuth } from "../hooks/useAuth";
@@ -71,14 +71,23 @@ function Player() {
   }, [subtitleCss]);
 
   // On the native player path, make body transparent while this route is
-  // mounted so the underlying mpv host HWND shows through. Restore the
-  // navy background on unmount so dashboard / library look right.
-  useEffect(() => {
+  // mounted so the underlying mpv host HWND shows through. MUST be
+  // useLayoutEffect rather than useEffect: the Tauri window has
+  // `transparent: true`, so any frame where body is transparent AND the
+  // DOM is empty (e.g. between Player unmount and Dashboard first paint)
+  // shows whatever OS window is behind Prexu (Discord etc.) through the
+  // window. useLayoutEffect's cleanup fires synchronously BEFORE the
+  // browser paints the post-unmount frame, so the first such paint
+  // already has body painted navy (--bg-primary) rather than
+  // transparent. Restores to an explicit hex (matches the CSS fallback)
+  // instead of the empty-string captured value so we can't accidentally
+  // leave body set to an earlier "transparent" if anything else mutated
+  // it in between.
+  useLayoutEffect(() => {
     if (!IS_NATIVE_PLAYER) return;
-    const prev = document.body.style.background;
     document.body.style.background = "transparent";
     return () => {
-      document.body.style.background = prev;
+      document.body.style.background = "#1a1a2e";
     };
   }, []);
 
@@ -237,18 +246,10 @@ function Player() {
   playerIsFullscreenRef.current = player.isFullscreen;
 
   // Keyboard shortcuts / back button
-  // Exit fullscreen first (window reflows while Player is still
-  // mounted), then restore body background synchronously, THEN navigate.
-  //
-  // The body-bg restore has to happen before navigate, not in the
-  // useEffect cleanup below. Cleanup is a passive effect that React
-  // runs AFTER the browser has painted the post-unmount frame — so the
-  // first frame after Player unmounts still has `body.style.background
-  // = "transparent"`, which makes the Tauri window transparent and
-  // exposes whatever window is behind Prexu (e.g. Discord). Setting
-  // body bg here undoes the transparency before the paint, so the
-  // webview paints the navy CSS fallback (--bg-primary) during the
-  // unmount→Dashboard-mount gap instead of nothing.
+  // Exit fullscreen first so the Tauri window resize happens while
+  // Player is still mounted (smooth reflow), then navigate. The
+  // body-background restore is handled synchronously by the
+  // useLayoutEffect cleanup above — no need to mutate it here.
   const handleBack = useCallback(async () => {
     if (IS_NATIVE_PLAYER && playerIsFullscreenRef.current) {
       try {
@@ -257,10 +258,6 @@ function Player() {
         // Swallow — worst case we fall through and navigate anyway; the
         // cleanup path's fullscreen-exit safety net will catch up.
       }
-    }
-    if (IS_NATIVE_PLAYER) {
-      // Clear the inline style so the CSS body rule (navy) takes over.
-      document.body.style.background = "";
     }
     navigate(-1);
   }, [navigate]);
