@@ -190,44 +190,45 @@ pub async fn player_set_fullscreen(
         .set_fullscreen(fullscreen)
         .map_err(|e| format!("set_fullscreen failed: {}", e));
 
-    // 350 ms covers Win11's animated fullscreen transition plus the
-    // Resized burst that follows. Bumped from 300 after empirical hang.
-    log::debug!("[player:cmd] set_fullscreen: transition flag set, sleeping 350ms");
-    tokio::time::sleep(std::time::Duration::from_millis(350)).await;
-
-    // Clear the flag and explicitly sync geometry on the main thread.
-    // We cannot wait for a Resized event — after the 350ms transition,
-    // the window is already at final size and no more events fire.
-    state.set_fullscreen_transition(false);
-    log::info!("[player:cmd] set_fullscreen: transition flag cleared, dispatching geometry sync");
-
+    // Dispatch the host geometry sync IMMEDIATELY on the main thread
+    // (before the transition sleep) so the video catches up with the
+    // overlay within a frame rather than lagging by the full 350 ms.
+    // We use `apply_host_geometry` which bypasses the transition flag —
+    // the flag stays set to suppress the Resized storm that fires during
+    // Win11's animation (each Resized would otherwise trigger a D3D11
+    // swapchain rebuild; 10+ in 300 ms reliably crashed mpv gpu-next,
+    // per the comment on GEOMETRY_SYNC_MIN_INTERVAL). Fire-and-forget:
+    // the main thread runs this on its next loop iteration.
     #[cfg(target_os = "windows")]
     {
         let app_for_sync = app.clone();
         let win_for_sync = main.clone();
         if let Err(e) = app.run_on_main_thread(move || {
-            log::debug!("[player:cmd] set_fullscreen: main-thread closure entered");
+            log::debug!("[player:cmd] set_fullscreen: early sync closure entered");
             let st = app_for_sync.state::<PlayerState>();
             match (win_for_sync.inner_position(), win_for_sync.inner_size()) {
                 (Ok(pos), Ok(size)) => {
                     let (x, y, w, h) = (pos.x, pos.y, size.width as i32, size.height as i32);
-                    log::info!("[player:cmd] set_fullscreen: syncing geometry ({},{},{}x{})", x, y, w, h);
-                    // Clear last_geometry so dedup doesn't skip this.
-                    if let Ok(mut lg) = st.last_geometry.lock() {
-                        *lg = None;
-                    }
-                    st.sync_geometry(x, y, w, h);
-                    log::debug!("[player:cmd] set_fullscreen: sync_geometry returned");
+                    log::info!("[player:cmd] set_fullscreen: early sync geometry ({},{},{}x{})", x, y, w, h);
+                    st.apply_host_geometry(x, y, w, h);
                 }
                 _ => log::warn!("[player:cmd] set_fullscreen: failed to read geometry"),
             }
-            // Bring the Tauri main window back to front.
             let _ = win_for_sync.set_focus();
-            log::debug!("[player:cmd] set_fullscreen: main-thread closure done");
+            log::debug!("[player:cmd] set_fullscreen: early sync closure done");
         }) {
-            log::warn!("[player:cmd] set_fullscreen: run_on_main_thread failed: {}", e);
+            log::warn!("[player:cmd] set_fullscreen: early sync dispatch failed: {}", e);
         }
     }
+
+    // Keep the transition flag set during Win11's animation to suppress
+    // the Resized event burst. Clear afterwards so normal drag-resize
+    // syncs work again. Still 350 ms — our video is no longer waiting on
+    // this.
+    log::debug!("[player:cmd] set_fullscreen: sleeping 350ms with flag set");
+    tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+    state.set_fullscreen_transition(false);
+    log::info!("[player:cmd] set_fullscreen: transition flag cleared");
 
     // Emit the authoritative fullscreen state back to the frontend so
     // React's isFullscreen stays in sync even when ESC or other OS gestures

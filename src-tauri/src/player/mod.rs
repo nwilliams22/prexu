@@ -379,6 +379,36 @@ impl PlayerState {
             .ok_or_else(|| "mpv not initialised".to_string())?;
         f(&inner.mpv).map_err(|e| format!("mpv error: {:?}", e))
     }
+
+    /// Apply host geometry directly, bypassing the fullscreen-transition
+    /// suppression flag and the throttle. Used from inside the fullscreen
+    /// command's main-thread closure to resize the host *immediately* after
+    /// Tauri toggles fullscreen, so the video catches up with the overlay
+    /// within a frame instead of waiting the full 350 ms transition delay.
+    /// The throttle and flag still apply to the normal on_window_event
+    /// path — this is a one-off forced apply.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn apply_host_geometry(&self, x: i32, y: i32, width: i32, height: i32) {
+        let Ok(guard) = self.inner.lock() else {
+            return;
+        };
+        if let Some(inner) = guard.as_ref() {
+            if let Some(host) = inner.host.as_ref() {
+                log::debug!(
+                    "[player] apply_host_geometry force ({},{},{}x{})",
+                    x, y, width, height
+                );
+                // Update last_geometry so the throttled sync_geometry doesn't
+                // re-apply the same value right after this.
+                if let Ok(mut lg) = self.last_geometry.lock() {
+                    *lg = Some((x, y, width, height));
+                }
+                if let Err(e) = host.set_geometry(x, y, width, height) {
+                    log::warn!("[player] apply_host_geometry failed: {}", e);
+                }
+            }
+        }
+    }
 }
 
 impl Default for PlayerState {

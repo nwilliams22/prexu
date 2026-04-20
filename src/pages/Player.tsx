@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useParams, useNavigate, useSearchParams, Navigate } from "react-router-dom";
+import { invoke } from "@tauri-apps/api/core";
 import { useAuth } from "../hooks/useAuth";
 import { getImageUrl } from "../services/plex-library";
 import { usePlayer, IS_NATIVE_PLAYER } from "../hooks/usePlayer";
@@ -230,8 +231,32 @@ function Player() {
   const [showShortcuts, setShowShortcuts] = useState(false);
   const toggleShortcuts = useCallback(() => setShowShortcuts((v) => !v), []);
 
+  // Keep a ref to isFullscreen so handleBack (useCallback with stable
+  // deps) always reads the latest value at click time.
+  const playerIsFullscreenRef = useRef(player.isFullscreen);
+  playerIsFullscreenRef.current = player.isFullscreen;
+
   // Keyboard shortcuts
-  const handleBack = useCallback(() => navigate(-1), [navigate]);
+  // Exit fullscreen BEFORE navigating on the native path. If we let the
+  // unmount cleanup fire player_set_fullscreen after navigate(-1), the
+  // Tauri main window resizes from fullscreen to windowed AFTER Player
+  // has unmounted — during the gap before Dashboard's first render, the
+  // user sees Player's overlay floating in the small pre-fullscreen
+  // window. Awaiting the fullscreen exit keeps Player mounted during
+  // the resize so the controls naturally reflow, then navigate cleanly
+  // unmounts. Adds ~350 ms to back-from-fullscreen but eliminates the
+  // stale-overlay glitch.
+  const handleBack = useCallback(async () => {
+    if (IS_NATIVE_PLAYER && playerIsFullscreenRef.current) {
+      try {
+        await invoke("player_set_fullscreen", { fullscreen: false });
+      } catch {
+        // Swallow — worst case we fall through and navigate anyway; the
+        // cleanup path's fullscreen-exit safety net will catch up.
+      }
+    }
+    navigate(-1);
+  }, [navigate]);
 
   usePlayerKeyboardShortcuts({
     togglePlay,
