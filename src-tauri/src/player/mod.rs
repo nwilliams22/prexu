@@ -182,6 +182,12 @@ impl PlayerState {
             init.set_property("keep-open", "always")?;
             init.set_property("force-window", "no")?;
             init.set_property("volume-max", 200_i64)?;
+            // Disable mpv's built-in OSD — we render our own UI in React.
+            // Default osd-level=1 + osd-bar=yes draws a horizontal progress
+            // bar in the middle of the video on every seek, which shows
+            // through the transparent webview alongside our custom seek bar.
+            init.set_property("osd-level", 0_i64)?;
+            init.set_property("osd-bar", "no")?;
             Ok(())
         })
         .map_err(|e| format!("mpv init failed: {:?}", e))?;
