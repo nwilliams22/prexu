@@ -9,6 +9,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { getLibrarySections, getRecentlyAddedBySection, getOnDeck } from "./services/plex-library";
 import { groupRecentlyAdded } from "./utils/groupRecentlyAdded";
 import { cacheSet } from "./services/api-cache";
+import { logger } from "./services/logger";
 
 // Lazy-loaded page components
 const Login = lazy(() => import("./pages/Login"));
@@ -70,37 +71,84 @@ function AppRoutes() {
       return;
     }
 
-    // Authenticated with server — prefetch library sections + dashboard data,
-    // then dismiss splash. This ensures the dashboard renders fully on first paint.
+    // Authenticated with server — prefetch library sections + dashboard data
+    // independently. Dismiss the splash as soon as a "quorum" of dashboard
+    // sections has settled (≥2 of 3 movies/shows/deck) so a single slow
+    // section doesn't strand the user on the splash for 30+ seconds.
+    let cancelled = false;
+    const QUORUM = 2;
+    const HARD_CAP_MS = 20000;
+    let settledCount = 0;
+
+    const dismissIfQuorum = () => {
+      if (cancelled) return;
+      if (settledCount >= QUORUM) setAppReady(true);
+    };
+
+    const trackSettled = (label: string) => () => {
+      if (cancelled) return;
+      settledCount++;
+      logger.debug("splash", `section settled: ${label}`, {
+        settled: settledCount,
+        of: 3,
+      });
+      dismissIfQuorum();
+    };
+
+    // Hard cap: dismiss splash after HARD_CAP_MS no matter what so the user
+    // is not stranded on the splash if every fetch hangs.
+    const hardCapTimer = setTimeout(() => {
+      if (cancelled) return;
+      logger.warn("splash", "hard cap reached, dismissing", { capMs: HARD_CAP_MS });
+      setAppReady(true);
+    }, HARD_CAP_MS);
+
     getLibrarySections(server.uri, server.accessToken)
-      .then(async (sections) => {
-        // Cache sections for useLibrary
+      .then((sections) => {
+        if (cancelled) return;
         cacheSet(`library-sections:${server.uri}`, sections, 30 * 60 * 1000, true);
 
-        // Prefetch dashboard data so it's cached when useDashboard mounts
-        try {
-          const movieSections = sections.filter((s) => s.type === "movie");
-          const tvSections = sections.filter((s) => s.type === "show");
-          const [movieItems, tvItems, deckItems] = await Promise.all([
-            getRecentlyAddedBySection(server.uri, server.accessToken, movieSections, 30),
-            getRecentlyAddedBySection(server.uri, server.accessToken, tvSections, 30),
-            getOnDeck(server.uri, server.accessToken),
-          ]);
+        const movieSections = sections.filter((s) => s.type === "movie");
+        const tvSections = sections.filter((s) => s.type === "show");
+        const uri = server.uri;
+        const token = server.accessToken;
 
-          const movies = movieItems.sort((a, b) => b.addedAt - a.addedAt);
-          const shows = groupRecentlyAdded(tvItems.sort((a, b) => b.addedAt - a.addedAt));
-          const dashKey = `dashboard:${server.uri}`;
-          cacheSet(dashKey, { recentMovies: movies, recentShows: shows, onDeck: deckItems }, 60 * 60 * 1000);
-        } catch {
-          // Non-critical — dashboard will fetch on mount
-        }
+        // Independent fetches — each writes its own per-section cache and
+        // counts toward the quorum on settle (resolve OR reject).
+        getRecentlyAddedBySection(uri, token, movieSections, 30)
+          .then((items) => {
+            if (cancelled) return;
+            const sorted = items.sort((a, b) => b.addedAt - a.addedAt);
+            cacheSet(`dashboard:${uri}:movies`, sorted, 60 * 60 * 1000);
+          })
+          .finally(trackSettled("movies"));
 
-        setAppReady(true);
+        getRecentlyAddedBySection(uri, token, tvSections, 30)
+          .then((items) => {
+            if (cancelled) return;
+            const grouped = groupRecentlyAdded(
+              items.sort((a, b) => b.addedAt - a.addedAt),
+            );
+            cacheSet(`dashboard:${uri}:shows`, grouped, 60 * 60 * 1000);
+          })
+          .finally(trackSettled("shows"));
+
+        getOnDeck(uri, token)
+          .then((items) => {
+            if (cancelled) return;
+            cacheSet(`dashboard:${uri}:deck`, items, 60 * 60 * 1000);
+          })
+          .finally(trackSettled("deck"));
       })
       .catch(() => {
-        // Show app even on error — sidebar will retry
-        setAppReady(true);
+        // Sections failed entirely — dismiss splash, dashboard will retry
+        if (!cancelled) setAppReady(true);
       });
+
+    return () => {
+      cancelled = true;
+      clearTimeout(hardCapTimer);
+    };
   }, [isLoading, isAuthenticated, serverSelected, server]);
 
   return (

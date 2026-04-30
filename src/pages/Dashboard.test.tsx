@@ -141,6 +141,9 @@ function renderDashboard() {
   );
 }
 
+type LoadingMap = { movies: boolean; shows: boolean; deck: boolean };
+type ErrorMap = { movies: string | null; shows: string | null; deck: string | null };
+
 const makeDashboardData = (
   overrides: Partial<{
     recentMovies: Array<{
@@ -165,16 +168,16 @@ const makeDashboardData = (
       thumb: string;
       type: string;
     }>;
-    isLoading: boolean;
-    error: string | null;
-    refresh: () => void;
+    loading: LoadingMap;
+    errors: ErrorMap;
+    refresh: (section?: string) => void;
   }>
 ) => ({
   recentMovies: [],
   recentShows: [],
   onDeck: [],
-  isLoading: false,
-  error: null,
+  loading: { movies: false, shows: false, deck: false } as LoadingMap,
+  errors: { movies: null, shows: null, deck: null } as ErrorMap,
   refresh: vi.fn(),
   ...overrides,
 });
@@ -185,8 +188,12 @@ describe("Dashboard", () => {
     mockUsePreferences.mockReturnValue(defaultPrefs());
   });
 
-  it("renders loading skeletons when loading", () => {
-    mockUseDashboard.mockReturnValue(makeDashboardData({ isLoading: true }));
+  it("renders loading skeletons when all sections are loading", () => {
+    mockUseDashboard.mockReturnValue(
+      makeDashboardData({
+        loading: { movies: true, shows: true, deck: true },
+      }),
+    );
     renderDashboard();
     const skeletons = screen.getAllByTestId("skeleton-card");
     expect(skeletons.length).toBeGreaterThan(0);
@@ -244,13 +251,33 @@ describe("Dashboard", () => {
     expect(screen.getByText("Stranger Things")).toBeInTheDocument();
   });
 
-  it("shows error state on error", () => {
+  it("shows inline section error with Retry when one section errors", () => {
+    const refresh = vi.fn();
     mockUseDashboard.mockReturnValue(
-      makeDashboardData({ error: "Failed to load dashboard" })
+      makeDashboardData({
+        errors: { movies: null, shows: null, deck: "Continue Watching timed out" },
+        refresh,
+      }),
     );
     renderDashboard();
-    expect(screen.getByTestId("error-state")).toBeInTheDocument();
-    expect(screen.getByText("Failed to load dashboard")).toBeInTheDocument();
+    expect(screen.getByText("Continue Watching timed out")).toBeInTheDocument();
+    const retryButton = screen.getByRole("button", { name: /retry/i });
+    retryButton.click();
+    expect(refresh).toHaveBeenCalledWith("deck");
+  });
+
+  it("renders other sections normally when one section errors", () => {
+    mockUseDashboard.mockReturnValue(
+      makeDashboardData({
+        recentMovies: [
+          { ratingKey: "1", title: "Inception", thumb: "/t1", type: "movie" },
+        ],
+        errors: { movies: null, shows: null, deck: "Deck timed out" },
+      }),
+    );
+    renderDashboard();
+    expect(screen.getByText("Inception")).toBeInTheDocument();
+    expect(screen.getByText("Deck timed out")).toBeInTheDocument();
   });
 
   it("shows empty state when no content", () => {

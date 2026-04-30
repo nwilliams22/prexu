@@ -24,7 +24,6 @@ import PosterCard from "../components/PosterCard";
 import SkeletonCard from "../components/SkeletonCard";
 import EpisodeExpander from "../components/EpisodeExpander";
 import EmptyState from "../components/EmptyState";
-import ErrorState from "../components/ErrorState";
 import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
 import { usePosterSize } from "../hooks/usePosterSize";
 import {
@@ -48,6 +47,54 @@ function getItemMediaBadges(item: PlexMediaItem): MediaBadge[] | undefined {
   const { videoStream, audioStream } = extractStreamsForBadges(media);
   const badges = getMediaBadges(media, videoStream, audioStream);
   return badges.length > 0 ? badges : undefined;
+}
+
+/** Inline error state for a single dashboard section. */
+function SectionError({
+  title,
+  message,
+  onRetry,
+}: {
+  title: string;
+  message: string;
+  onRetry: () => void;
+}) {
+  return (
+    <section style={{ marginBottom: "1.75rem" }}>
+      <h3 style={{ fontSize: "1.15rem", fontWeight: 600, marginBottom: "0.75rem" }}>
+        {title}
+      </h3>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "0.75rem",
+          padding: "0.75rem 1rem",
+          borderRadius: "0.5rem",
+          background: "var(--bg-secondary)",
+          border: "1px solid var(--border)",
+        }}
+      >
+        <span style={{ fontSize: "0.85rem", color: "var(--text-secondary)", flex: 1 }}>
+          {message}
+        </span>
+        <button
+          onClick={onRetry}
+          style={{
+            padding: "0.35rem 0.75rem",
+            borderRadius: "0.35rem",
+            border: "1px solid var(--border)",
+            background: "var(--bg-primary)",
+            color: "var(--text-primary)",
+            cursor: "pointer",
+            fontSize: "0.8rem",
+          }}
+        >
+          Retry
+        </button>
+      </div>
+    </section>
+  );
 }
 
 /** Pure helper — season label prefix for a grouped show (e.g. "Season 3 · ") */
@@ -95,7 +142,7 @@ function Dashboard() {
   const mobile = isMobile(bp);
   const { filterByRating } = useParentalControls();
   const dashData = useDashboard();
-  const { isLoading, error, refresh } = dashData;
+  const { loading, errors, refresh } = dashData;
 
   // Apply parental controls to dashboard data
   const onDeck = useMemo(
@@ -294,14 +341,7 @@ function Dashboard() {
     ];
   };
 
-  if (error) {
-    return (
-      <div style={styles.container}>
-        <ErrorState message={error} onRetry={refresh} />
-      </div>
-    );
-  }
-
+  const anyLoading = loading.movies || loading.shows || loading.deck;
   const hasContent =
     (sections.continueWatching && onDeck.length > 0) ||
     (sections.recentMovies && recentMovies.length > 0) ||
@@ -341,105 +381,128 @@ function Dashboard() {
         </div>
       )}
 
-      {/* Hero slideshow */}
-      {!isLoading && heroSlides.length > 0 && (
+      {/* Hero slideshow — render as soon as we have any slides */}
+      {heroSlides.length > 0 && (
         <HeroSlideshow slides={heroSlides} onDismiss={handleDismissRecommendation} onPlay={handleHeroPlay} />
       )}
 
       {/* Continue Watching */}
-      {sections.continueWatching && (isLoading ? (
-        <section style={styles.section}>
-          <h3 style={styles.sectionTitle}>Continue Watching</h3>
-          <div style={styles.skeletonRow}>
-            {Array.from({ length: 8 }).map((_, i) => (
-              <SkeletonCard key={i} index={i} />
-            ))}
-          </div>
-        </section>
-      ) : (
-        onDeck.length > 0 && (
-          <HorizontalRow title="Continue Watching">
-            {onDeck.map((item) => {
-              const isEpisode = item.type === "episode";
-              const ep = isEpisode ? (item as PlexEpisode) : null;
-              return (
+      {sections.continueWatching && (
+        loading.deck && onDeck.length === 0 ? (
+          <section style={styles.section}>
+            <h3 style={styles.sectionTitle}>Continue Watching</h3>
+            <div style={styles.skeletonRow}>
+              {Array.from({ length: 8 }).map((_, i) => (
+                <SkeletonCard key={i} index={i} />
+              ))}
+            </div>
+          </section>
+        ) : errors.deck && onDeck.length === 0 ? (
+          <SectionError
+            title="Continue Watching"
+            message={errors.deck}
+            onRetry={() => refresh("deck")}
+          />
+        ) : (
+          onDeck.length > 0 && (
+            <HorizontalRow title="Continue Watching">
+              {onDeck.map((item) => {
+                const isEpisode = item.type === "episode";
+                const ep = isEpisode ? (item as PlexEpisode) : null;
+                return (
+                  <PosterCard
+                    key={item.ratingKey}
+                    ratingKey={item.ratingKey}
+                    imageUrl={posterUrl(
+                      ep?.grandparentThumb || item.thumb
+                    )}
+                    placeholderUrl={posterPlaceholder(ep?.grandparentThumb || item.thumb)}
+                    srcSet={posterSrcSet(ep?.grandparentThumb || item.thumb)}
+                    title={ep?.grandparentTitle || item.title}
+                    subtitle={
+                      ep
+                        ? `S${String(ep.parentIndex).padStart(2, "0")}E${String(ep.index).padStart(2, "0")} · ${ep.title}`
+                        : getSubtitle(item)
+                    }
+                    progress={getProgress(item)}
+                    width={posterWidth}
+                    onClick={() => navigate(`/item/${item.ratingKey}`)}
+                    onPlay={getPlayHandler(item)}
+                    mediaBadges={getItemMediaBadges(item)}
+                    showMoreButton
+                    onContextMenu={(e) => openContextMenu(e, item, onDeckExtras(item))}
+                    onMoreClick={(e) => openContextMenu(e, item, onDeckExtras(item))}
+                  />
+                );
+              })}
+            </HorizontalRow>
+          )
+        )
+      )}
+
+      {/* Recently Added in Movies */}
+      {sections.recentMovies && (
+        loading.movies && recentMovies.length === 0 ? (
+          <section style={styles.section}>
+            <h3 style={styles.sectionTitle}>Recently Added in Movies</h3>
+            <div style={styles.skeletonRow}>
+              {Array.from({ length: 8 }).map((_, i) => (
+                <SkeletonCard key={i} index={i} />
+              ))}
+            </div>
+          </section>
+        ) : errors.movies && recentMovies.length === 0 ? (
+          <SectionError
+            title="Recently Added in Movies"
+            message={errors.movies}
+            onRetry={() => refresh("movies")}
+          />
+        ) : (
+          recentMovies.length > 0 && (
+            <HorizontalRow title="Recently Added in Movies">
+              {recentMovies.map((item) => (
                 <PosterCard
                   key={item.ratingKey}
                   ratingKey={item.ratingKey}
-                  imageUrl={posterUrl(
-                    ep?.grandparentThumb || item.thumb
-                  )}
-                  placeholderUrl={posterPlaceholder(ep?.grandparentThumb || item.thumb)}
-                  srcSet={posterSrcSet(ep?.grandparentThumb || item.thumb)}
-                  title={ep?.grandparentTitle || item.title}
-                  subtitle={
-                    ep
-                      ? `S${String(ep.parentIndex).padStart(2, "0")}E${String(ep.index).padStart(2, "0")} · ${ep.title}`
-                      : getSubtitle(item)
-                  }
-                  progress={getProgress(item)}
+                  imageUrl={posterUrl(item.thumb)}
+                  placeholderUrl={posterPlaceholder(item.thumb)}
+                  srcSet={posterSrcSet(item.thumb)}
+                  title={item.title}
+                  subtitle={getSubtitle(item)}
                   width={posterWidth}
+                  watched={isWatched(item)}
                   onClick={() => navigate(`/item/${item.ratingKey}`)}
                   onPlay={getPlayHandler(item)}
                   mediaBadges={getItemMediaBadges(item)}
                   showMoreButton
-                  onContextMenu={(e) => openContextMenu(e, item, onDeckExtras(item))}
-                  onMoreClick={(e) => openContextMenu(e, item, onDeckExtras(item))}
+                  onContextMenu={(e) => openContextMenu(e, item)}
+                  onMoreClick={(e) => openContextMenu(e, item)}
                 />
-              );
-            })}
-          </HorizontalRow>
+              ))}
+            </HorizontalRow>
+          )
         )
-      ))}
-
-      {/* Recently Added in Movies */}
-      {sections.recentMovies && (isLoading ? (
-        <section style={styles.section}>
-          <h3 style={styles.sectionTitle}>Recently Added in Movies</h3>
-          <div style={styles.skeletonRow}>
-            {Array.from({ length: 8 }).map((_, i) => (
-              <SkeletonCard key={i} index={i} />
-            ))}
-          </div>
-        </section>
-      ) : (
-        recentMovies.length > 0 && (
-          <HorizontalRow title="Recently Added in Movies">
-            {recentMovies.map((item) => (
-              <PosterCard
-                key={item.ratingKey}
-                ratingKey={item.ratingKey}
-                imageUrl={posterUrl(item.thumb)}
-                placeholderUrl={posterPlaceholder(item.thumb)}
-                srcSet={posterSrcSet(item.thumb)}
-                title={item.title}
-                subtitle={getSubtitle(item)}
-                width={posterWidth}
-                watched={isWatched(item)}
-                onClick={() => navigate(`/item/${item.ratingKey}`)}
-                onPlay={getPlayHandler(item)}
-                mediaBadges={getItemMediaBadges(item)}
-                showMoreButton
-                onContextMenu={(e) => openContextMenu(e, item)}
-                onMoreClick={(e) => openContextMenu(e, item)}
-              />
-            ))}
-          </HorizontalRow>
-        )
-      ))}
+      )}
 
       {/* Recently Added in TV Shows */}
-      {sections.recentShows && (isLoading ? (
-        <section style={styles.section}>
-          <h3 style={styles.sectionTitle}>Recently Added in TV Shows</h3>
-          <div style={styles.skeletonRow}>
-            {Array.from({ length: 8 }).map((_, i) => (
-              <SkeletonCard key={i} index={i} />
-            ))}
-          </div>
-        </section>
-      ) : (
-        recentShows.length > 0 && (
+      {sections.recentShows && (
+        loading.shows && recentShows.length === 0 ? (
+          <section style={styles.section}>
+            <h3 style={styles.sectionTitle}>Recently Added in TV Shows</h3>
+            <div style={styles.skeletonRow}>
+              {Array.from({ length: 8 }).map((_, i) => (
+                <SkeletonCard key={i} index={i} />
+              ))}
+            </div>
+          </section>
+        ) : errors.shows && recentShows.length === 0 ? (
+          <SectionError
+            title="Recently Added in TV Shows"
+            message={errors.shows}
+            onRetry={() => refresh("shows")}
+          />
+        ) : (
+          recentShows.length > 0 && (
           <HorizontalRow title="Recently Added in TV Shows">
             {recentShows.map((group) => {
               const isShowGroup = group.kind === "show-group";
@@ -493,8 +556,9 @@ function Dashboard() {
               );
             })}
           </HorizontalRow>
+          )
         )
-      ))}
+      )}
 
       {/* Episode expansion panel */}
       {expandedGroup && server && (
@@ -516,8 +580,8 @@ function Dashboard() {
         />
       )}
 
-      {/* Empty state */}
-      {!isLoading && !hasContent && (
+      {/* Empty state — only show after all sections have settled */}
+      {!anyLoading && !hasContent && (
         <EmptyState
           icon={
             <svg width={48} height={48} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
