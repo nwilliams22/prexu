@@ -1,4 +1,4 @@
-import { validateToken, getPlexUser, getHomeUsers, switchHomeUser } from "./plex-api";
+import { validateToken, getPlexUser, getHomeUsers, switchHomeUser, timedFetch, isTimeoutError } from "./plex-api";
 
 // Mock storage module
 vi.mock("./storage", () => ({
@@ -231,6 +231,91 @@ describe("plex-api", () => {
 
       const token = await switchHomeUser("admin-token", 42);
       expect(token).toBe("legacy-token");
+    });
+  });
+
+  // ── timedFetch ──
+  // Uses real timers with short timeouts (10ms) — fake timers don't play
+  // nicely with AbortSignal abort events resolving via microtasks.
+
+  describe("timedFetch", () => {
+    /** Mock fetch that hangs until the signal aborts, then rejects with reason. */
+    function abortableHang() {
+      return (_url: string, opts: { signal: AbortSignal }) =>
+        new Promise<Response>((_resolve, reject) => {
+          opts.signal.addEventListener("abort", () => {
+            reject(opts.signal.reason ?? new Error("aborted"));
+          });
+        });
+    }
+
+    it("rejects with TimeoutError carrying url + elapsed when timeout fires", async () => {
+      mockFetch.mockImplementation(abortableHang());
+
+      const url = `https://example.test/slow-${Date.now()}-${Math.random()}`;
+      let caught: unknown;
+      try {
+        await timedFetch(url, { timeoutMs: 10, retries: 0 });
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(isTimeoutError(caught)).toBe(true);
+      expect((caught as DOMException).message).toContain("Request timed out");
+      expect((caught as DOMException).message).toContain(url);
+    });
+
+    it("retries once on timeout when retries > 0", async () => {
+      let calls = 0;
+      mockFetch.mockImplementation((_url: string, opts: { signal: AbortSignal }) => {
+        calls++;
+        if (calls === 1) {
+          return new Promise((_resolve, reject) => {
+            opts.signal.addEventListener("abort", () =>
+              reject(opts.signal.reason ?? new Error("aborted")),
+            );
+          });
+        }
+        return Promise.resolve(jsonResponse({ ok: true }));
+      });
+
+      const url = `https://example.test/retry-success-${Date.now()}-${Math.random()}`;
+      const response = await timedFetch(url, { timeoutMs: 10, retries: 1 });
+
+      expect(response.ok).toBe(true);
+      expect(calls).toBe(2);
+    });
+
+    it("does not retry when retries=0", async () => {
+      let calls = 0;
+      mockFetch.mockImplementation((_url: string, opts: { signal: AbortSignal }) => {
+        calls++;
+        return new Promise((_resolve, reject) => {
+          opts.signal.addEventListener("abort", () =>
+            reject(opts.signal.reason ?? new Error("aborted")),
+          );
+        });
+      });
+
+      const url = `https://example.test/no-retry-${Date.now()}-${Math.random()}`;
+      await expect(
+        timedFetch(url, { timeoutMs: 10, retries: 0 }),
+      ).rejects.toThrow(/Request timed out/);
+      expect(calls).toBe(1);
+    });
+
+    it("does not retry on non-timeout errors", async () => {
+      let calls = 0;
+      mockFetch.mockImplementation(() => {
+        calls++;
+        return Promise.reject(new Error("Network error"));
+      });
+
+      const url = `https://example.test/network-fail-${Date.now()}-${Math.random()}`;
+      await expect(
+        timedFetch(url, { retries: 1 }),
+      ).rejects.toThrow("Network error");
+      expect(calls).toBe(1);
     });
   });
 });

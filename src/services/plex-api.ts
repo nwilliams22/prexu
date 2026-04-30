@@ -15,22 +15,33 @@ import {
 const PLEX_TV_API = "https://clients.plex.tv/api/v2";
 const APP_NAME = "Prexu";
 const CONNECTIVITY_TIMEOUT_MS = 5000;
-const REQUEST_TIMEOUT_MS = 15000;
+const REQUEST_TIMEOUT_MS = 30000;
+const RETRY_ON_TIMEOUT = 1;
 
 // ── Request deduplication ──
 // For identical GET requests that are already in-flight, return the existing promise.
 const inflightRequests = new Map<string, Promise<Response>>();
 
+/** True if the error is a TimeoutError thrown by our timedFetch abort. */
+export function isTimeoutError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === "TimeoutError";
+}
+
 /**
- * Fetch with automatic timeout. Wraps the native fetch with an AbortController.
+ * Fetch with automatic timeout and one retry on timeout.
  * GET requests are deduplicated: if an identical URL is already in-flight,
  * the existing promise is returned instead of firing a duplicate request.
+ *
+ * On timeout, aborts with a `TimeoutError` DOMException carrying the URL and
+ * elapsed ms so callers see "Request timed out after Xms: <url>" instead of
+ * the cryptic default "signal is aborted without reason".
  */
 export async function timedFetch(
   url: string,
-  init?: RequestInit & { timeoutMs?: number },
+  init?: RequestInit & { timeoutMs?: number; retries?: number },
 ): Promise<Response> {
   const timeout = init?.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  const retries = init?.retries ?? RETRY_ON_TIMEOUT;
   const method = (init?.method ?? "GET").toUpperCase();
 
   // Dedup GET requests
@@ -38,25 +49,92 @@ export async function timedFetch(
     return inflightRequests.get(url)!.then((r) => r.clone());
   }
 
+  const promise = fetchWithRetry(url, init, timeout, retries, method);
+
+  if (method === "GET") {
+    inflightRequests.set(url, promise);
+    // Detach cleanup as a side-effect; swallow rejection on this chain only
+    // (the original `promise` is still returned to the caller, so the real
+    // rejection is observed there).
+    promise
+      .finally(() => inflightRequests.delete(url))
+      .catch(() => {});
+  }
+
+  return promise;
+}
+
+async function fetchWithRetry(
+  url: string,
+  init: (RequestInit & { timeoutMs?: number; retries?: number }) | undefined,
+  timeout: number,
+  retries: number,
+  method: string,
+): Promise<Response> {
+  let attempt = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    try {
+      return await fetchOnce(url, init, timeout);
+    } catch (err) {
+      if (isTimeoutError(err) && attempt < retries) {
+        attempt++;
+        logger.warn(
+          "api",
+          `timedFetch retry ${attempt}/${retries} after timeout`,
+          { url: url.substring(0, 120), method, timeoutMs: timeout },
+        );
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+async function fetchOnce(
+  url: string,
+  init: (RequestInit & { timeoutMs?: number; retries?: number }) | undefined,
+  timeout: number,
+): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
+  const start = Date.now();
+
+  const timer = setTimeout(() => {
+    const elapsed = Date.now() - start;
+    controller.abort(
+      new DOMException(
+        `Request timed out after ${elapsed}ms: ${url}`,
+        "TimeoutError",
+      ),
+    );
+  }, timeout);
 
   // Merge any existing signal (unlikely but safe)
   const signal = init?.signal
     ? AbortSignal.any([init.signal, controller.signal])
     : controller.signal;
 
-  const promise = fetch(url, { ...init, signal, timeoutMs: undefined } as RequestInit)
-    .finally(() => {
-      clearTimeout(timer);
-      if (method === "GET") inflightRequests.delete(url);
-    });
-
-  if (method === "GET") {
-    inflightRequests.set(url, promise);
+  try {
+    return await fetch(url, {
+      ...init,
+      signal,
+      timeoutMs: undefined,
+      retries: undefined,
+    } as RequestInit);
+  } catch (err) {
+    // If WebView2/older runtimes throw a generic AbortError when our
+    // controller aborted, surface our explicit reason instead.
+    if (
+      controller.signal.aborted &&
+      controller.signal.reason instanceof DOMException &&
+      controller.signal.reason.name === "TimeoutError"
+    ) {
+      throw controller.signal.reason;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-
-  return promise;
 }
 
 // ── Auth invalidation event bus ──
