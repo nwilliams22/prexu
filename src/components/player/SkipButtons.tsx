@@ -124,16 +124,6 @@ function SkipButtons({
         </div>
       )}
 
-      {/* Stop — leaves the player route entirely. Leftmost so it's far
-          from accidental taps near play/pause. Standard square icon. */}
-      {onStop && (
-        <button onClick={onStop} style={btnStyle} aria-label="Stop" title="Stop">
-          <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="currentColor">
-            <rect x={5} y={5} width={14} height={14} rx={1} />
-          </svg>
-        </button>
-      )}
-
       {/* Previous episode */}
       {onPrevEpisode && (
         <button onClick={onPrevEpisode} style={btnStyle} aria-label="Previous episode">
@@ -171,6 +161,16 @@ function SkipButtons({
           <text x="12" y="14.5" textAnchor="middle" fontSize="7" fontWeight="700" fill="currentColor" stroke="none">10</text>
         </svg>
       </button>
+
+      {/* Stop — leaves the player route entirely. Sits immediately left of
+          Play/Pause to match the classic transport layout (⏹ ⏯). */}
+      {onStop && (
+        <button onClick={onStop} style={btnStyle} aria-label="Stop" title="Stop">
+          <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="currentColor">
+            <rect x={5} y={5} width={14} height={14} rx={1} />
+          </svg>
+        </button>
+      )}
 
       {/* Play / Pause */}
       <button onClick={player.togglePlay} style={btnStyle} aria-label={player.isPlaying ? "Pause" : "Play"}>
