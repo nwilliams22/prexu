@@ -393,6 +393,7 @@ pub fn run() {
             player::commands::player_set_muted,
             player::commands::player_set_audio_track,
             player::commands::player_set_sub_track,
+            player::commands::player_load_external_sub,
             player::commands::player_set_audio_delay_ms,
             player::commands::player_set_af_chain,
             player::commands::player_apply_sub_style,

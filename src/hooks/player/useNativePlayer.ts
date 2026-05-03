@@ -307,7 +307,9 @@ export function useNativePlayer(
       // default which is usually fine, but the user's preferredAudioLanguage
       // may have chosen a different track that we need to apply explicitly.
       // Subtitle off vs. default also needs an explicit set_sub_track since
-      // mpv's default would otherwise show the first sub track.
+      // mpv's default would otherwise show the first sub track. External subs
+      // (Plex sidecar .srt, recognised by the `key` field) need sub-add
+      // instead — mpv only sees embedded tracks in a direct-played file.
       if (defaultAudio) {
         const aidIdx = categorized.audio.findIndex((s) => s.id === defaultAudio.id);
         if (aidIdx >= 0) {
@@ -317,11 +319,19 @@ export function useNativePlayer(
         }
       }
       if (defaultSub) {
-        const sidIdx = categorized.subtitles.findIndex((s) => s.id === defaultSub!.id);
-        if (sidIdx >= 0) {
-          await invoke("player_set_sub_track", { id: sidIdx + 1 }).catch((err) =>
-            logger.warn("player", "initial player_set_sub_track failed", String(err)),
+        if (defaultSub.key) {
+          const subUrl = `${server.uri}${defaultSub.key}?X-Plex-Token=${server.accessToken}`;
+          await invoke("player_load_external_sub", { url: subUrl }).catch((err) =>
+            logger.warn("player", "initial player_load_external_sub failed", String(err)),
           );
+        } else {
+          const embedded = categorized.subtitles.filter((s) => !s.key);
+          const sidIdx = embedded.findIndex((s) => s.id === defaultSub!.id);
+          if (sidIdx >= 0) {
+            await invoke("player_set_sub_track", { id: sidIdx + 1 }).catch((err) =>
+              logger.warn("player", "initial player_set_sub_track failed", String(err)),
+            );
+          }
         }
       } else {
         await invoke("player_set_sub_track", { id: null }).catch((err) =>
@@ -451,18 +461,43 @@ export function useNativePlayer(
     );
   }, []);
 
+  // Subtitle selection has two paths:
+  // - Embedded sub (no `key` field): resolve sid by position among embedded
+  //   tracks, dispatch player_set_sub_track. Externals are filtered out of
+  //   the count so embedded indices match what mpv actually sees in the file.
+  // - External sub (sidecar .srt etc., has `key`): build the Plex sub URL
+  //   with the access token and dispatch player_load_external_sub which
+  //   calls mpv sub-add. mpv appends a fresh sid for the loaded file and
+  //   selects it; existing embedded sids stay stable.
   const selectSubtitleTrack = useCallback((streamId: number | null) => {
     setSelectedSubtitleId(streamId);
-    let sid: number | null = null;
-    if (streamId !== null) {
-      const idx = subtitleTracksRef.current.findIndex((s) => s.id === streamId);
-      sid = idx >= 0 ? idx + 1 : null;
+    if (streamId === null) {
+      logger.debug("player", "selectSubtitleTrack", { plexId: null });
+      invoke("player_set_sub_track", { id: null }).catch((err) =>
+        logger.error("player", "player_set_sub_track(off) failed", String(err)),
+      );
+      return;
     }
-    logger.debug("player", "selectSubtitleTrack", { plexId: streamId, mpvSid: sid });
+    const sub = subtitleTracksRef.current.find((s) => s.id === streamId);
+    if (sub?.key) {
+      const url = `${server!.uri}${sub.key}?X-Plex-Token=${server!.accessToken}`;
+      logger.debug("player", "selectSubtitleTrack external", {
+        plexId: streamId,
+        url: url.substring(0, 80),
+      });
+      invoke("player_load_external_sub", { url }).catch((err) =>
+        logger.error("player", "player_load_external_sub failed", String(err)),
+      );
+      return;
+    }
+    const embedded = subtitleTracksRef.current.filter((s) => !s.key);
+    const idx = embedded.findIndex((s) => s.id === streamId);
+    const sid = idx >= 0 ? idx + 1 : null;
+    logger.debug("player", "selectSubtitleTrack embedded", { plexId: streamId, mpvSid: sid });
     invoke("player_set_sub_track", { id: sid }).catch((err) =>
       logger.error("player", "player_set_sub_track failed", String(err)),
     );
-  }, []);
+  }, [server]);
 
   const retry = useCallback(() => {
     directPlayFailedRef.current = false;

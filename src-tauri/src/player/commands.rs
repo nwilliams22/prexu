@@ -111,6 +111,21 @@ pub async fn player_set_sub_track(
     })
 }
 
+/// Add an external subtitle file/URL (e.g. a Plex sidecar .srt) and select it.
+/// mpv assigns the new track a fresh sid appended to the track list, leaving
+/// existing embedded sid values stable. Pass the fully-qualified URL including
+/// any auth tokens; mpv's HTTP fetch uses the same `http-header-fields` setup
+/// as the main load.
+#[tauri::command]
+pub async fn player_load_external_sub(
+    url: String,
+    state: State<'_, PlayerState>,
+) -> Result<(), String> {
+    let preview = &url[..url.len().min(80)];
+    log::info!("[player:cmd] load_external_sub url={}", preview);
+    state.with_mpv(|mpv| mpv.command("sub-add", &[url.as_str(), "select"]))
+}
+
 #[tauri::command]
 pub async fn player_set_audio_delay_ms(
     ms: i32,
