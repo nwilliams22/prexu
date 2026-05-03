@@ -145,30 +145,42 @@ function useSegments(
     return cacheRef.current.result;
   }
 
-  let result: SegmentRange[];
+  // Combine markers + chapters per type. Plex's intro/credits Markers are
+  // authoritative (server-side detection, often Plex Pass-only). For any
+  // type the markers don't cover, fall back to chapter tags so an episode
+  // that only got an intro marker (a common Plex data quirk) still shows
+  // a Skip Credits / Next Episode button when the file has chapter tags
+  // like "End Credits" / "Outro".
+  const fromMarkers: SegmentRange[] = markers.map((m) => ({
+    type: m.type,
+    startMs: m.startTimeOffset,
+    endMs: m.endTimeOffset,
+  }));
+  const haveIntroMarker = fromMarkers.some((s) => s.type === "intro");
+  const haveCreditsMarker = fromMarkers.some((s) => s.type === "credits");
 
-  if (markers.length > 0) {
-    // Use Plex markers (authoritative)
-    result = markers.map((m) => ({
-      type: m.type,
-      startMs: m.startTimeOffset,
-      endMs: m.endTimeOffset,
-    }));
-  } else {
-    // Fallback: scan chapter tags for "intro" / "credits"
-    result = chapters
-      .filter((ch) => {
-        const tag = ch.tag.toLowerCase();
-        return tag.includes("intro") || tag.includes("credits");
-      })
-      .map((ch) => ({
-        type: ch.tag.toLowerCase().includes("intro")
-          ? ("intro" as const)
-          : ("credits" as const),
+  const fromChapters: SegmentRange[] = chapters
+    .map((ch) => {
+      const tag = ch.tag.toLowerCase();
+      const isIntro = tag.includes("intro") || tag.includes("opening");
+      const isCredits =
+        tag.includes("credits") ||
+        tag.includes("outro") ||
+        tag.includes("ending");
+      if (!isIntro && !isCredits) return null;
+      return {
+        type: isIntro ? ("intro" as const) : ("credits" as const),
         startMs: ch.startTimeOffset,
         endMs: ch.endTimeOffset,
-      }));
-  }
+      };
+    })
+    .filter((s): s is SegmentRange =>
+      s != null &&
+      ((s.type === "intro" && !haveIntroMarker) ||
+        (s.type === "credits" && !haveCreditsMarker)),
+    );
+
+  const result = [...fromMarkers, ...fromChapters];
 
   cacheRef.current = { markers, chapters, result };
   return result;
