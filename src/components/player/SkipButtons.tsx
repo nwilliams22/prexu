@@ -17,6 +17,8 @@ interface SkipButtonsProps {
   onActivity?: () => void;
   onNextEpisode?: () => void;
   onPrevEpisode?: () => void;
+  /** Stop playback and leave the player route — leftmost transport button. */
+  onStop?: () => void;
   mobile: boolean;
   iconSmall: number;
   iconLarge: number;
@@ -29,6 +31,7 @@ function SkipButtons({
   onActivity,
   onNextEpisode,
   onPrevEpisode,
+  onStop,
   mobile,
   iconSmall,
   iconLarge,
@@ -119,6 +122,16 @@ function SkipButtons({
             {skipIndicator}
           </span>
         </div>
+      )}
+
+      {/* Stop — leaves the player route entirely. Leftmost so it's far
+          from accidental taps near play/pause. Standard square icon. */}
+      {onStop && (
+        <button onClick={onStop} style={btnStyle} aria-label="Stop" title="Stop">
+          <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="currentColor">
+            <rect x={5} y={5} width={14} height={14} rx={1} />
+          </svg>
+        </button>
       )}
 
       {/* Previous episode */}

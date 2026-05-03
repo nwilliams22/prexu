@@ -14,12 +14,11 @@ import ControlsBottomBar from "./player/ControlsBottomBar";
 
 interface PlayerControlsProps {
   player: UsePlayerResult;
-  /** Leave the player route entirely (X icon, top-right). */
+  /** Leave the player route entirely. Wired to the bottom-bar Stop button
+   *  (square icon) and the ESC keyboard shortcut. */
   onExit: () => void;
-  /**
-   * Navigate to the previous queue item / Plex episode (chevron-left, top-left).
-   * Omit when no previous item exists; the button is hidden.
-   */
+  /** Navigate to the previous queue item / Plex episode (chevron-left,
+   *  top-left). Omit when no previous item exists; the button is hidden. */
   onPrevious?: () => void;
   visible: boolean;
   syncIndicator?: React.ReactNode;
@@ -109,30 +108,6 @@ function PlayerControls({ player, onExit, onPrevious, visible, syncIndicator, ch
             {player.subtitle}
           </span>
         </div>
-        {/* Exit button — always present so the user has an unambiguous way
-            to leave the player. ESC also fires onExit via the keyboard
-            shortcut hook. */}
-        <button
-          onClick={onExit}
-          style={styles.exitButton}
-          aria-label="Exit"
-          title="Exit"
-        >
-          <svg
-            aria-hidden="true"
-            width={22}
-            height={22}
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={2}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <line x1={18} y1={6} x2={6} y2={18} />
-            <line x1={6} y1={6} x2={18} y2={18} />
-          </svg>
-        </button>
       </div>
 
       {/* Bottom controls (seek bar + transport + utility buttons + menus) */}
@@ -147,6 +122,7 @@ function PlayerControls({ player, onExit, onPrevious, visible, syncIndicator, ch
         onActivity={onActivity}
         onNextEpisode={onNextEpisode}
         onPrevEpisode={onPrevEpisode}
+        onStop={onExit}
         audioEnhancements={audioEnhancements}
         onAudioEnhancementChange={onAudioEnhancementChange}
         isPiPActive={isPiPActive}
@@ -195,14 +171,6 @@ const styles: Record<string, React.CSSProperties> = {
     height: "30px",
     display: "inline-block",
     flexShrink: 0,
-  },
-  exitButton: {
-    background: "transparent",
-    color: "#fff",
-    padding: "0.25rem",
-    display: "flex",
-    alignItems: "center",
-    marginLeft: "auto",
   },
   titleArea: {
     display: "flex",

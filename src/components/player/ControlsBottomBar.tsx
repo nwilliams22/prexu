@@ -26,6 +26,8 @@ interface ControlsBottomBarProps {
   onActivity?: () => void;
   onNextEpisode?: () => void;
   onPrevEpisode?: () => void;
+  /** Stop button (leftmost transport) — leaves the player route. */
+  onStop?: () => void;
   audioEnhancements?: AudioEnhancementsResult;
   onAudioEnhancementChange?: (changes: {
     volumeBoost?: number;
@@ -57,6 +59,7 @@ function ControlsBottomBar({
   onActivity,
   onNextEpisode,
   onPrevEpisode,
+  onStop,
   audioEnhancements,
   onAudioEnhancementChange,
   isPiPActive,
@@ -109,6 +112,7 @@ function ControlsBottomBar({
               onActivity={onActivity}
               onNextEpisode={onNextEpisode}
               onPrevEpisode={onPrevEpisode}
+              onStop={onStop}
               mobile={mobile}
               iconSmall={iconSmall}
               iconLarge={iconLarge}
