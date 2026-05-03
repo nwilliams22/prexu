@@ -325,12 +325,20 @@ function Player() {
   // Skip intro/credits segments. ratingKey passed as the reset trigger so
   // dismissals + last-active state clear cleanly on every episode change
   // (Player.tsx stays mounted across same-route param navigations).
+  // duration + hasNextItem fuel the synthetic "Next Episode" prompt for
+  // the last 90 seconds when Plex didn't provide a credits marker — common
+  // for episodes whose server-side detection only caught the intro.
+  const hasNextItem =
+    queue.currentIndex + 1 < queue.items.length ||
+    episodeNav.handleNextEpisode != null;
   const { activeSegment, dismissSegment } = useSkipSegments(
     player.markers,
     player.chapters,
     player.currentTime,
     { intro: pb.skipIntroEnabled, credits: pb.skipCreditsEnabled },
     ratingKey,
+    player.duration,
+    hasNextItem,
   );
 
   const handleSkipSegment = useCallback(() => {

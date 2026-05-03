@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import type { PlexMarker, PlexChapter } from "../../types/library";
 import { logger } from "../../services/logger";
 
@@ -17,6 +17,12 @@ interface SegmentRange {
   startMs: number;
   endMs: number;
 }
+
+/** How far before EOF to surface a synthetic "Next Episode" prompt when
+ *  Plex didn't provide a credits marker. 90s lines up with the typical
+ *  outro length on TV anime / dramas; bigger values risk showing the
+ *  Next Episode prompt over actual story content. */
+const SYNTH_CREDITS_WINDOW_MS = 90_000;
 
 /**
  * Detect whether playback is currently within an intro or credits segment.
@@ -38,13 +44,48 @@ export function useSkipSegments(
    *  Player component stays mounted (React Router behaviour for same-route
    *  param changes). */
   resetKey?: string,
+  /** Total file duration in seconds. Used together with `hasNextEpisode`
+   *  to synthesize a "Next Episode" credits-equivalent segment for the
+   *  final SYNTH_CREDITS_WINDOW seconds when Plex provided no credits
+   *  marker AND no credits-tagged chapter — common for episodes that the
+   *  server's intro/credits detection partially missed. */
+  duration: number = 0,
+  /** True if a next queue item / episode-nav target exists. Required to
+   *  enable the synthetic-credits fallback (the synthetic segment only
+   *  ever surfaces as "Next Episode" — never as Skip Credits — because
+   *  without a real credits marker we don't know where the credits
+   *  actually start, only where the file ends). */
+  hasNextEpisode: boolean = false,
 ): SkipSegmentsResult {
   const [activeSegment, setActiveSegment] = useState<ActiveSegment | null>(null);
   const prevActiveRef = useRef<string | null>(null);
   const dismissedRef = useRef<Set<string>>(new Set());
 
-  // Build segment list from markers (preferred) or chapters (fallback)
-  const segments = useSegments(markers, chapters);
+  // Build segment list from markers (preferred) or chapters (fallback).
+  // Then synthesize a "Next Episode" credits-equivalent for the last
+  // SYNTH_CREDITS_WINDOW_MS of the file IF: (a) we know the duration,
+  // (b) there's a next episode to advance to, and (c) no real credits
+  // segment already exists for this episode. The synthetic segment is
+  // tagged with startMs = -1 in dismissedRef so users can dismiss it
+  // independently of any actual credits marker that might appear later.
+  const baseSegments = useSegments(markers, chapters);
+  const segments = useMemo(() => {
+    const haveCredits = baseSegments.some((s) => s.type === "credits");
+    const durationMs = duration * 1000;
+    const canSynth =
+      hasNextEpisode &&
+      !haveCredits &&
+      durationMs > SYNTH_CREDITS_WINDOW_MS;
+    if (!canSynth) return baseSegments;
+    return [
+      ...baseSegments,
+      {
+        type: "credits" as const,
+        startMs: durationMs - SYNTH_CREDITS_WINDOW_MS,
+        endMs: durationMs,
+      },
+    ];
+  }, [baseSegments, duration, hasNextEpisode]);
 
   // Reset all per-episode state when the resetKey (ratingKey) changes.
   // Earlier this keyed on `[markers, chapters]` reference identity which was
