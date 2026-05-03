@@ -25,6 +25,7 @@ const REPLY_DURATION: u64 = 2;
 const REPLY_PAUSE: u64 = 3;
 const REPLY_BUFFERING: u64 = 4;
 const REPLY_BUFFERED: u64 = 5;
+const REPLY_EOF_REACHED: u64 = 6;
 
 const TIME_POS_THROTTLE: Duration = Duration::from_millis(250); // 4 Hz
 // `demuxer-cache-time` updates often during streaming; throttle to keep the
@@ -64,6 +65,14 @@ fn run_pump(mpv: Arc<Mpv>, app: AppHandle) {
     // the SeekBar buffered overlay code doesn't need to change shape.
     if let Err(e) = ev_ctx.observe_property("demuxer-cache-time", Format::Double, REPLY_BUFFERED) {
         log::warn!("[player] observe demuxer-cache-time failed: {:?}", e);
+    }
+    // `eof-reached` is the canonical end-of-file signal. With keep-open=always
+    // mpv pauses at EOF instead of unloading the file, and in our config it
+    // does NOT reliably fire the EndFile event for natural EOF (only for
+    // explicit stop/quit). Observing this property gives us a deterministic
+    // edge to drive PostPlay / queue advancement off.
+    if let Err(e) = ev_ctx.observe_property("eof-reached", Format::Flag, REPLY_EOF_REACHED) {
+        log::warn!("[player] observe eof-reached failed: {:?}", e);
     }
 
     log::info!("[player:events] pump started, properties observed");
@@ -125,22 +134,15 @@ fn dispatch(
             let _ = app.emit("player://ready", ());
         }
         Event::EndFile(reason) => {
-            // mpv_end_file_reason: 0=EOF (natural end), 2=STOP, 3=QUIT,
-            // 4=ERROR, 5=REDIRECT. Only the natural EOF should reach the
-            // frontend as player://eof — STOP and QUIT fire whenever we
-            // tear down mpv via player_unload (e.g. on episode-change
-            // navigation), and React was misinterpreting those as natural
-            // end-of-playback events, triggering PostPlay for the wrong
-            // queue position while the just-loaded next episode played
-            // underneath the overlay.
-            const REASON_EOF: u32 = 0;
+            // EndFile is diagnostic-only. With keep-open=always mpv often
+            // does NOT fire EndFile for natural EOF in our config (verified
+            // empirically on Windows 11 + libmpv v0.41) — instead it just
+            // pauses and flips the eof-reached property. We drive the
+            // player://eof signal off that property (REPLY_EOF_REACHED)
+            // which is fully deterministic. EndFile reason values: 0=EOF,
+            // 2=STOP, 3=QUIT, 4=ERROR, 5=REDIRECT.
             let r: u32 = reason as u32;
-            if r == REASON_EOF {
-                log::debug!("[player:events] EndFile(EOF) → player://eof");
-                let _ = app.emit("player://eof", ());
-            } else {
-                log::debug!("[player:events] EndFile(reason={}) — suppressed", r);
-            }
+            log::debug!("[player:events] EndFile(reason={}) — diagnostic only", r);
         }
         Event::PropertyChange { change, reply_userdata, .. } => match (reply_userdata, change) {
             (REPLY_TIME_POS, PropertyData::Double(t)) => {
@@ -169,6 +171,19 @@ fn dispatch(
                     *last_buffered = now;
                     log::trace!("[player:events] buffered={:.1}", b);
                     let _ = app.emit("player://buffered", b);
+                }
+            }
+            (REPLY_EOF_REACHED, PropertyData::Flag(reached)) => {
+                // Treat the false→true edge as the natural end-of-file signal
+                // (PostPlay overlay, timeline 'stopped' report, etc.). Observe
+                // emits both edges; we only forward the true edge. mpv resets
+                // eof-reached to false on a successful seek-back or new file
+                // load, so the next playback can fire it again.
+                if reached {
+                    log::debug!("[player:events] eof-reached=true → player://eof");
+                    let _ = app.emit("player://eof", ());
+                } else {
+                    log::trace!("[player:events] eof-reached=false");
                 }
             }
             _ => {}
