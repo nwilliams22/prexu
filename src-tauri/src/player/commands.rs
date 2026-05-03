@@ -122,6 +122,49 @@ pub async fn player_set_audio_delay_ms(
     state.with_mpv(|mpv| mpv.set_property("audio-delay", seconds))
 }
 
+/// libass subtitle style applied to text-format subs (SRT, VTT, ASS without
+/// embedded styling). Mirrors the React `SubtitleStylePreferences` shape so
+/// the same persisted prefs drive both libass on native and ::cue CSS on
+/// HTML5. Sizes are mapped: `size` is a percentage (100 = mpv default 55pt),
+/// `outline_width` is in pixels, `background_opacity` is 0..1 and combines
+/// with `background_color` into mpv's `#RRGGBBAA` form.
+#[derive(serde::Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SubStyle {
+    pub size: f64,
+    pub font_family: String,
+    pub text_color: String,
+    pub background_color: String,
+    pub background_opacity: f64,
+    pub outline_color: String,
+    pub outline_width: f64,
+    pub shadow_enabled: bool,
+}
+
+#[tauri::command]
+pub async fn player_apply_sub_style(
+    style: SubStyle,
+    state: State<'_, PlayerState>,
+) -> Result<(), String> {
+    log::info!("[player:cmd] apply_sub_style {:?}", style);
+    let bg_alpha = (style.background_opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let bg_with_alpha = format!("{}{:02X}", style.background_color, bg_alpha);
+    // mpv default sub-font-size is 55. Scale linearly with the user's
+    // percentage so 100% matches mpv's out-of-the-box appearance.
+    let font_size = 55.0_f64 * (style.size / 100.0);
+    let shadow_offset = if style.shadow_enabled { 2.0 } else { 0.0 };
+    state.with_mpv(|mpv| {
+        mpv.set_property("sub-font", style.font_family.as_str())?;
+        mpv.set_property("sub-font-size", font_size)?;
+        mpv.set_property("sub-color", style.text_color.as_str())?;
+        mpv.set_property("sub-border-color", style.outline_color.as_str())?;
+        mpv.set_property("sub-border-size", style.outline_width)?;
+        mpv.set_property("sub-back-color", bg_with_alpha.as_str())?;
+        mpv.set_property("sub-shadow-offset", shadow_offset)?;
+        Ok(())
+    })
+}
+
 /// Audio filter-chain preset. Valid values: `"off"`, `"light"`, `"night"`.
 #[tauri::command]
 pub async fn player_set_af_chain(

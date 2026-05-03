@@ -6,6 +6,7 @@
 //! - `player://duration`   f64 seconds
 //! - `player://paused`     bool
 //! - `player://buffering`  bool
+//! - `player://buffered`   f64 absolute seconds the demuxer has cached up to
 //! - `player://eof`        () fired on end-of-file
 //! - `player://error`      String error message
 //! - `player://ready`      () fired once the file is loaded
@@ -23,8 +24,12 @@ const REPLY_TIME_POS: u64 = 1;
 const REPLY_DURATION: u64 = 2;
 const REPLY_PAUSE: u64 = 3;
 const REPLY_BUFFERING: u64 = 4;
+const REPLY_BUFFERED: u64 = 5;
 
 const TIME_POS_THROTTLE: Duration = Duration::from_millis(250); // 4 Hz
+// `demuxer-cache-time` updates often during streaming; throttle to keep the
+// SeekBar buffered indicator smooth without flooding the IPC channel.
+const BUFFERED_THROTTLE: Duration = Duration::from_millis(500); // 2 Hz
 
 pub(crate) fn spawn_event_pump(
     mpv: Arc<Mpv>,
@@ -54,6 +59,12 @@ fn run_pump(mpv: Arc<Mpv>, app: AppHandle) {
     if let Err(e) = ev_ctx.observe_property("paused-for-cache", Format::Flag, REPLY_BUFFERING) {
         log::warn!("[player] observe buffering failed: {:?}", e);
     }
+    // `demuxer-cache-time` is the absolute video time up to which the demuxer
+    // has cached data. Matches HTML5 `video.buffered.end(...)` semantics so
+    // the SeekBar buffered overlay code doesn't need to change shape.
+    if let Err(e) = ev_ctx.observe_property("demuxer-cache-time", Format::Double, REPLY_BUFFERED) {
+        log::warn!("[player] observe demuxer-cache-time failed: {:?}", e);
+    }
 
     log::info!("[player:events] pump started, properties observed");
 
@@ -63,13 +74,16 @@ fn run_pump(mpv: Arc<Mpv>, app: AppHandle) {
     let mut last_time_pos = Instant::now()
         .checked_sub(TIME_POS_THROTTLE)
         .unwrap_or_else(Instant::now);
+    let mut last_buffered = Instant::now()
+        .checked_sub(BUFFERED_THROTTLE)
+        .unwrap_or_else(Instant::now);
 
     let mut loop_iterations: u64 = 0;
     loop {
         loop_iterations += 1;
         match ev_ctx.wait_event(1.0) {
             Some(Ok(event)) => {
-                if dispatch(&app, event, &mut last_time_pos) {
+                if dispatch(&app, event, &mut last_time_pos, &mut last_buffered) {
                     log::info!("[player:events] Shutdown received at iter #{}", loop_iterations);
                     break;
                 }
@@ -95,7 +109,12 @@ fn run_pump(mpv: Arc<Mpv>, app: AppHandle) {
 }
 
 /// Returns `true` when the loop should exit (shutdown).
-fn dispatch(app: &AppHandle, event: Event<'_>, last_time_pos: &mut Instant) -> bool {
+fn dispatch(
+    app: &AppHandle,
+    event: Event<'_>,
+    last_time_pos: &mut Instant,
+    last_buffered: &mut Instant,
+) -> bool {
     match event {
         Event::Shutdown => {
             log::info!("[player:events] Shutdown — exiting pump");
@@ -129,6 +148,14 @@ fn dispatch(app: &AppHandle, event: Event<'_>, last_time_pos: &mut Instant) -> b
             (REPLY_BUFFERING, PropertyData::Flag(b)) => {
                 log::debug!("[player:events] buffering={}", b);
                 let _ = app.emit("player://buffering", b);
+            }
+            (REPLY_BUFFERED, PropertyData::Double(b)) => {
+                let now = Instant::now();
+                if now.duration_since(*last_buffered) >= BUFFERED_THROTTLE {
+                    *last_buffered = now;
+                    log::trace!("[player:events] buffered={:.1}", b);
+                    let _ = app.emit("player://buffered", b);
+                }
             }
             _ => {}
         },

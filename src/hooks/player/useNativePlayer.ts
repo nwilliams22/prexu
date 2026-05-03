@@ -63,7 +63,7 @@ export function useNativePlayer(
   const [isBuffering, setIsBuffering] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [buffered, _setBuffered] = useState(0); // populated in step 3.10
+  const [buffered, setBuffered] = useState(0);
   const [volume, setVolumeState] = useState(getSavedVolume);
   const [isMuted, setIsMuted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -79,6 +79,13 @@ export function useNativePlayer(
   const [subtitleTracks, setSubtitleTracks] = useState<PlexStream[]>([]);
   const [selectedAudioId, setSelectedAudioId] = useState<number | null>(null);
   const [selectedSubtitleId, setSelectedSubtitleId] = useState<number | null>(null);
+  // Refs mirror the latest values so action callbacks can map a Plex stream
+  // ID to the correct mpv track index without re-binding when the lists
+  // change.
+  const audioTracksRef = useRef<PlexStream[]>([]);
+  audioTracksRef.current = audioTracks;
+  const subtitleTracksRef = useRef<PlexStream[]>([]);
+  subtitleTracksRef.current = subtitleTracks;
 
   // Refs that don't trigger re-init
   const directPlayFailedRef = useRef(false);
@@ -113,6 +120,7 @@ export function useNativePlayer(
         listen<number>("player://duration", (e) => setDuration(e.payload)),
         listen<boolean>("player://paused", (e) => setIsPlaying(!e.payload)),
         listen<boolean>("player://buffering", (e) => setIsBuffering(e.payload)),
+        listen<number>("player://buffered", (e) => setBuffered(e.payload)),
         listen<null>("player://ready", () => {
           logger.info("player", "received ready event");
           setIsLoading(false);
@@ -295,6 +303,32 @@ export function useNativePlayer(
       });
       await invoke("player_set_muted", { muted: isMutedRef.current });
 
+      // Apply default audio and subtitle track selection. mpv picks aid=1 by
+      // default which is usually fine, but the user's preferredAudioLanguage
+      // may have chosen a different track that we need to apply explicitly.
+      // Subtitle off vs. default also needs an explicit set_sub_track since
+      // mpv's default would otherwise show the first sub track.
+      if (defaultAudio) {
+        const aidIdx = categorized.audio.findIndex((s) => s.id === defaultAudio.id);
+        if (aidIdx >= 0) {
+          await invoke("player_set_audio_track", { id: aidIdx + 1 }).catch((err) =>
+            logger.warn("player", "initial player_set_audio_track failed", String(err)),
+          );
+        }
+      }
+      if (defaultSub) {
+        const sidIdx = categorized.subtitles.findIndex((s) => s.id === defaultSub!.id);
+        if (sidIdx >= 0) {
+          await invoke("player_set_sub_track", { id: sidIdx + 1 }).catch((err) =>
+            logger.warn("player", "initial player_set_sub_track failed", String(err)),
+          );
+        }
+      } else {
+        await invoke("player_set_sub_track", { id: null }).catch((err) =>
+          logger.warn("player", "initial player_set_sub_track(off) failed", String(err)),
+        );
+      }
+
       timeline.startTimeline();
       // setIsLoading(false) happens when `player://ready` fires.
     } catch (err) {
@@ -401,14 +435,33 @@ export function useNativePlayer(
       });
   }, []);
 
+  // Plex stream IDs are global Library IDs (e.g. 234567); mpv's aid/sid
+  // expects 1-indexed positions in the file's track list. categorizeStreams
+  // preserves the file order, so audioTracks[i] corresponds to mpv aid=i+1
+  // (and same for subtitles). Map at the boundary; mpv defaults to no-op
+  // if the index is out of range, so an unmapped stream silently falls back
+  // to whatever was playing.
   const selectAudioTrack = useCallback((streamId: number) => {
     setSelectedAudioId(streamId);
-    invoke("player_set_audio_track", { id: streamId }).catch(() => {});
+    const idx = audioTracksRef.current.findIndex((s) => s.id === streamId);
+    const aid = idx >= 0 ? idx + 1 : null;
+    logger.debug("player", "selectAudioTrack", { plexId: streamId, mpvAid: aid });
+    invoke("player_set_audio_track", { id: aid }).catch((err) =>
+      logger.error("player", "player_set_audio_track failed", String(err)),
+    );
   }, []);
 
   const selectSubtitleTrack = useCallback((streamId: number | null) => {
     setSelectedSubtitleId(streamId);
-    invoke("player_set_sub_track", { id: streamId }).catch(() => {});
+    let sid: number | null = null;
+    if (streamId !== null) {
+      const idx = subtitleTracksRef.current.findIndex((s) => s.id === streamId);
+      sid = idx >= 0 ? idx + 1 : null;
+    }
+    logger.debug("player", "selectSubtitleTrack", { plexId: streamId, mpvSid: sid });
+    invoke("player_set_sub_track", { id: sid }).catch((err) =>
+      logger.error("player", "player_set_sub_track failed", String(err)),
+    );
   }, []);
 
   const retry = useCallback(() => {
