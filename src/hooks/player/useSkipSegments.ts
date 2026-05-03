@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import type { PlexMarker, PlexChapter } from "../../types/library";
+import { logger } from "../../services/logger";
 
 export interface ActiveSegment {
   type: "intro" | "credits";
@@ -30,7 +31,13 @@ export function useSkipSegments(
   markers: PlexMarker[],
   chapters: PlexChapter[],
   currentTime: number,
-  enabled: { intro: boolean; credits: boolean }
+  enabled: { intro: boolean; credits: boolean },
+  /** Reset trigger — pass the current ratingKey so per-episode state
+   *  (dismissals, last-active segment) clears on every navigation. Without
+   *  this the hook can carry a stale prevActiveRef across episodes when the
+   *  Player component stays mounted (React Router behaviour for same-route
+   *  param changes). */
+  resetKey?: string,
 ): SkipSegmentsResult {
   const [activeSegment, setActiveSegment] = useState<ActiveSegment | null>(null);
   const prevActiveRef = useRef<string | null>(null);
@@ -39,18 +46,21 @@ export function useSkipSegments(
   // Build segment list from markers (preferred) or chapters (fallback)
   const segments = useSegments(markers, chapters);
 
-  // Reset dismissals when the underlying markers/chapters change. Player.tsx
-  // stays mounted across React Router navigations, so without this useRef
-  // the dismissed set persists for the whole session — combined with the
-  // pre-fix length-keyed segment cache, that meant a single dismiss in Ep1
-  // hid the segment indicator for every subsequent episode that happened to
-  // have the same marker count. Resetting on reference change is sufficient
-  // because the parent passes a fresh array per metadata fetch.
+  // Reset all per-episode state when the resetKey (ratingKey) changes.
+  // Earlier this keyed on `[markers, chapters]` reference identity which was
+  // theoretically correct but fragile against any caching layer that returned
+  // identical references across episodes. The ratingKey is unambiguous —
+  // every navigation between episodes guarantees a new value.
   useEffect(() => {
+    logger.debug("player:skip", "reset (resetKey changed)", {
+      resetKey,
+      segmentsCount: segments.length,
+    });
     dismissedRef.current = new Set();
     prevActiveRef.current = null;
     setActiveSegment(null);
-  }, [markers, chapters]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- segments intentionally excluded; we only want to reset on episode change
+  }, [resetKey]);
 
   // Check if currentTime falls within any segment
   const currentMs = currentTime * 1000;
@@ -79,6 +89,12 @@ export function useSkipSegments(
     : null;
 
   if (matchKey !== prevActiveRef.current) {
+    logger.debug("player:skip", "active segment transition", {
+      from: prevActiveRef.current,
+      to: matchKey,
+      currentMs,
+      segmentsKnown: segments.length,
+    });
     prevActiveRef.current = matchKey;
     // Use queueMicrotask to avoid setState during render
     queueMicrotask(() => setActiveSegment(matchedSegment));

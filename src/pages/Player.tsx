@@ -322,12 +322,15 @@ function Player() {
     return nextIdx < items.length ? items[nextIdx] : null;
   }, [queue]);
 
-  // Skip intro/credits segments
+  // Skip intro/credits segments. ratingKey passed as the reset trigger so
+  // dismissals + last-active state clear cleanly on every episode change
+  // (Player.tsx stays mounted across same-route param navigations).
   const { activeSegment, dismissSegment } = useSkipSegments(
     player.markers,
     player.chapters,
     player.currentTime,
     { intro: pb.skipIntroEnabled, credits: pb.skipCreditsEnabled },
+    ratingKey,
   );
 
   const handleSkipSegment = useCallback(() => {
