@@ -32,6 +32,7 @@ import PostPlayScreen from "../components/player/PostPlayScreen";
 import KeyboardShortcutsOverlay from "../components/player/KeyboardShortcutsOverlay";
 import type { NormalizationPreset } from "../types/preferences";
 import { buildSubtitleCss } from "../utils/subtitle-css";
+import { logger } from "../services/logger";
 
 function Player() {
   const { ratingKey } = useParams<{ ratingKey: string }>();
@@ -54,9 +55,10 @@ function Player() {
   const { preferences, updatePreferences } = usePreferences();
   const pb = preferences.playback;
 
-  // Subtitle styling via ::cue CSS
+  // Subtitle styling via ::cue CSS (HTML5 path only — native uses libass).
   const subtitleCss = useMemo(() => buildSubtitleCss(pb.subtitleStyle), [pb.subtitleStyle]);
   useEffect(() => {
+    if (IS_NATIVE_PLAYER) return;
     const id = "prexu-subtitle-style";
     let styleEl = document.getElementById(id) as HTMLStyleElement | null;
     if (!styleEl) {
@@ -69,6 +71,29 @@ function Player() {
       styleEl?.remove();
     };
   }, [subtitleCss]);
+
+  // Apply libass subtitle style on the native path. Re-fires on every
+  // pb.subtitleStyle / pb.subtitleSize change AND once mpv signals ready
+  // (player.isLoading false). The ready-trigger covers the initial load
+  // case where ensure_init creates mpv after this effect first runs.
+  useEffect(() => {
+    if (!IS_NATIVE_PLAYER) return;
+    if (player.isLoading) return;
+    const style = {
+      size: pb.subtitleSize,
+      fontFamily: pb.subtitleStyle.fontFamily,
+      textColor: pb.subtitleStyle.textColor,
+      backgroundColor: pb.subtitleStyle.backgroundColor,
+      backgroundOpacity: pb.subtitleStyle.backgroundOpacity,
+      outlineColor: pb.subtitleStyle.outlineColor,
+      outlineWidth: pb.subtitleStyle.outlineWidth,
+      shadowEnabled: pb.subtitleStyle.shadowEnabled,
+    };
+    logger.info("player", "player_apply_sub_style", style);
+    invoke("player_apply_sub_style", { style }).catch((err) =>
+      logger.error("player", "player_apply_sub_style failed", String(err)),
+    );
+  }, [player.isLoading, pb.subtitleSize, pb.subtitleStyle]);
 
   // On the native player path, make body transparent while this route is
   // mounted so the underlying mpv host HWND shows through. MUST be
@@ -110,14 +135,50 @@ function Player() {
       }
       if (changes.normalizationPreset !== undefined) {
         audioEnhancements.setNormalizationPreset(changes.normalizationPreset);
+        if (IS_NATIVE_PLAYER) {
+          logger.info("player", "player_set_af_chain", { preset: changes.normalizationPreset });
+          invoke("player_set_af_chain", { preset: changes.normalizationPreset }).catch(
+            (err) => logger.error("player", "player_set_af_chain failed", String(err)),
+          );
+        }
       }
       if (changes.audioOffsetMs !== undefined) {
         audioEnhancements.setAudioOffsetMs(changes.audioOffsetMs);
+        if (IS_NATIVE_PLAYER) {
+          logger.info("player", "player_set_audio_delay_ms", { ms: changes.audioOffsetMs });
+          invoke("player_set_audio_delay_ms", { ms: changes.audioOffsetMs }).catch(
+            (err) => logger.error("player", "player_set_audio_delay_ms failed", String(err)),
+          );
+        }
       }
       updatePreferences({ playback: changes });
     },
     [audioEnhancements, updatePreferences],
   );
+
+  // Apply persisted audio enhancements once mpv is ready on the native path.
+  // Web Audio path (HTML5) handles initial values via useAudioEnhancements
+  // constructor args; native path needs explicit invokes after mpv exists.
+  const initialAfAppliedRef = useRef(false);
+  useEffect(() => {
+    if (!IS_NATIVE_PLAYER) return;
+    if (player.isLoading) {
+      initialAfAppliedRef.current = false;
+      return;
+    }
+    if (initialAfAppliedRef.current) return;
+    initialAfAppliedRef.current = true;
+    logger.info("player", "applying initial audio enhancements", {
+      preset: pb.normalizationPreset,
+      audioOffsetMs: pb.audioOffsetMs,
+    });
+    invoke("player_set_af_chain", { preset: pb.normalizationPreset }).catch(
+      (err) => logger.error("player", "initial player_set_af_chain failed", String(err)),
+    );
+    invoke("player_set_audio_delay_ms", { ms: pb.audioOffsetMs }).catch(
+      (err) => logger.error("player", "initial player_set_audio_delay_ms failed", String(err)),
+    );
+  }, [player.isLoading, pb.normalizationPreset, pb.audioOffsetMs]);
 
   // Sync main volume's above-1.0 boost to the audio graph's GainNode
   useEffect(() => {
@@ -180,14 +241,30 @@ function Player() {
   const postPlayShownRef = useRef(false);
 
   useEffect(() => {
-    const video = player.videoRef.current;
-    if (!video) return;
     const handleEnded = () => {
       if (remainingCount > 0 && !wt.isInSession && !postPlayShownRef.current) {
         postPlayShownRef.current = true;
         setShowPostPlay(true);
       }
     };
+    if (IS_NATIVE_PLAYER) {
+      // Native path: HTMLVideoElement is null, subscribe to mpv's EndFile via
+      // the Tauri bridge instead. Same trigger condition as the HTML5 path.
+      let unlisten: (() => void) | null = null;
+      let cancelled = false;
+      (async () => {
+        const { listen } = await import("@tauri-apps/api/event");
+        const off = await listen("player://eof", handleEnded);
+        if (cancelled) off();
+        else unlisten = off;
+      })();
+      return () => {
+        cancelled = true;
+        unlisten?.();
+      };
+    }
+    const video = player.videoRef.current;
+    if (!video) return;
     video.addEventListener("ended", handleEnded);
     return () => video.removeEventListener("ended", handleEnded);
   }, [player.videoRef, remainingCount, wt.isInSession]);
