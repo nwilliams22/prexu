@@ -77,9 +77,6 @@ fn run_pump(mpv: Arc<Mpv>, app: AppHandle) {
 
     log::info!("[player:events] pump started, properties observed");
 
-    // Keep the Arc alive for the lifetime of this thread so mpv outlives us.
-    let _mpv_keepalive = mpv;
-
     let mut last_time_pos = Instant::now()
         .checked_sub(TIME_POS_THROTTLE)
         .unwrap_or_else(Instant::now);
@@ -92,7 +89,7 @@ fn run_pump(mpv: Arc<Mpv>, app: AppHandle) {
         loop_iterations += 1;
         match ev_ctx.wait_event(1.0) {
             Some(Ok(event)) => {
-                if dispatch(&app, event, &mut last_time_pos, &mut last_buffered) {
+                if dispatch(&app, &mpv, event, &mut last_time_pos, &mut last_buffered) {
                     log::info!("[player:events] Shutdown received at iter #{}", loop_iterations);
                     break;
                 }
@@ -120,6 +117,7 @@ fn run_pump(mpv: Arc<Mpv>, app: AppHandle) {
 /// Returns `true` when the loop should exit (shutdown).
 fn dispatch(
     app: &AppHandle,
+    mpv: &Mpv,
     event: Event<'_>,
     last_time_pos: &mut Instant,
     last_buffered: &mut Instant,
@@ -130,6 +128,17 @@ fn dispatch(
             return true;
         }
         Event::FileLoaded => {
+            // Capture decoder + codec/pixel-format snapshot for diagnostics.
+            // hwdec-current is the active hwdec backend ("d3d11va", "dxva2-copy",
+            // or "no") — the explicit acceptance evidence for prexu-2zo.3 and
+            // the load-bearing signal when triaging slow-decode reports.
+            let hwdec = mpv.get_property::<String>("hwdec-current")
+                .unwrap_or_else(|_| "<unavailable>".into());
+            log::info!("[player:events] hwdec-current={} (file-loaded)", hwdec);
+            if let Ok(codec) = mpv.get_property::<String>("video-codec") {
+                let pixfmt = mpv.get_property::<String>("video-format").unwrap_or_default();
+                log::debug!("[player:events] video-codec={} video-format={}", codec, pixfmt);
+            }
             log::debug!("[player:events] FileLoaded → player://ready");
             let _ = app.emit("player://ready", ());
         }
