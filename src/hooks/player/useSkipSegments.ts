@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import type { PlexMarker, PlexChapter } from "../../types/library";
 
 export interface ActiveSegment {
@@ -38,6 +38,19 @@ export function useSkipSegments(
 
   // Build segment list from markers (preferred) or chapters (fallback)
   const segments = useSegments(markers, chapters);
+
+  // Reset dismissals when the underlying markers/chapters change. Player.tsx
+  // stays mounted across React Router navigations, so without this useRef
+  // the dismissed set persists for the whole session — combined with the
+  // pre-fix length-keyed segment cache, that meant a single dismiss in Ep1
+  // hid the segment indicator for every subsequent episode that happened to
+  // have the same marker count. Resetting on reference change is sufficient
+  // because the parent passes a fresh array per metadata fetch.
+  useEffect(() => {
+    dismissedRef.current = new Set();
+    prevActiveRef.current = null;
+    setActiveSegment(null);
+  }, [markers, chapters]);
 
   // Check if currentTime falls within any segment
   const currentMs = currentTime * 1000;
@@ -97,15 +110,21 @@ function useSegments(
   markers: PlexMarker[],
   chapters: PlexChapter[]
 ): SegmentRange[] {
+  // Cache by reference identity, not length. Most TV episodes have 2 markers
+  // (intro + credits), so a length-only cache returned the prior episode's
+  // segments — including their startMs values — when navigating to a new
+  // episode of the same shape. Plex returns fresh arrays per metadata fetch
+  // so === changes between episodes; within an episode the parent passes the
+  // same reference per render so === holds and the cache hit stays cheap.
   const cacheRef = useRef<{
-    markersLen: number;
-    chaptersLen: number;
+    markers: PlexMarker[] | null;
+    chapters: PlexChapter[] | null;
     result: SegmentRange[];
-  }>({ markersLen: -1, chaptersLen: -1, result: [] });
+  }>({ markers: null, chapters: null, result: [] });
 
   if (
-    cacheRef.current.markersLen === markers.length &&
-    cacheRef.current.chaptersLen === chapters.length
+    cacheRef.current.markers === markers &&
+    cacheRef.current.chapters === chapters
   ) {
     return cacheRef.current.result;
   }
@@ -135,6 +154,6 @@ function useSegments(
       }));
   }
 
-  cacheRef.current = { markersLen: markers.length, chaptersLen: chapters.length, result };
+  cacheRef.current = { markers, chapters, result };
   return result;
 }
