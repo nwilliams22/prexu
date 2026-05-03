@@ -13,6 +13,7 @@ import { useWatchTogether } from "../hooks/useWatchTogether";
 import { useAudioEnhancements } from "../hooks/useAudioEnhancements";
 import { usePreferences } from "../hooks/usePreferences";
 import { useSkipSegments } from "../hooks/player/useSkipSegments";
+import { useShowCreditsLength } from "../hooks/player/useShowCreditsLength";
 import { usePlayerControlsVisibility } from "../hooks/player/usePlayerControlsVisibility";
 import { useVideoClickHandling } from "../hooks/player/useVideoClickHandling";
 import { useEpisodeNavigation } from "../hooks/player/useEpisodeNavigation";
@@ -326,11 +327,18 @@ function Player() {
   // dismissals + last-active state clear cleanly on every episode change
   // (Player.tsx stays mounted across same-route param navigations).
   // duration + hasNextItem fuel the synthetic "Next Episode" prompt for
-  // the last 90 seconds when Plex didn't provide a credits marker — common
-  // for episodes whose server-side detection only caught the intro.
+  // episodes Plex didn't provide a credits marker for. The estimated
+  // credits-window length comes from useShowCreditsLength which medians
+  // sibling episodes' credits markers — usually a tighter fit than the
+  // hard-coded 90s default. Falls back to 90s when fewer than 3 siblings
+  // have markers (i.e. the parent season is too sparse to be useful).
   const hasNextItem =
     queue.currentIndex + 1 < queue.items.length ||
     episodeNav.handleNextEpisode != null;
+  const estimatedCreditsLengthMs = useShowCreditsLength(
+    server,
+    player.itemType === "episode" ? player.parentRatingKey : undefined,
+  );
   const { activeSegment, dismissSegment } = useSkipSegments(
     player.markers,
     player.chapters,
@@ -339,6 +347,7 @@ function Player() {
     ratingKey,
     player.duration,
     hasNextItem,
+    estimatedCreditsLengthMs,
   );
 
   const handleSkipSegment = useCallback(() => {

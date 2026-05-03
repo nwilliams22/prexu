@@ -73,6 +73,7 @@ export function useNativePlayer(
   const [chapters, setChapters] = useState<PlexChapter[]>([]);
   const [markers, setMarkers] = useState<PlexMarker[]>([]);
   const [itemType, setItemType] = useState("");
+  const [parentRatingKey, setParentRatingKey] = useState("");
 
   // Streams
   const [audioTracks, setAudioTracks] = useState<PlexStream[]>([]);
@@ -209,6 +210,11 @@ export function useNativePlayer(
       setChapters(part.Chapter ?? []);
       setMarkers(playableItem.Marker ?? []);
       setItemType(item.type);
+      setParentRatingKey(
+        item.type === "episode"
+          ? (playableItem as PlexEpisode).parentRatingKey ?? ""
+          : "",
+      );
 
       const categorized = categorizeStreams(part);
       setAudioTracks(categorized.audio);
@@ -513,6 +519,7 @@ export function useNativePlayer(
       chapters,
       markers,
       itemType,
+      parentRatingKey,
       isLoading,
       isPlaying,
       isBuffering,
@@ -542,6 +549,7 @@ export function useNativePlayer(
       chapters,
       markers,
       itemType,
+      parentRatingKey,
       isLoading,
       isPlaying,
       isBuffering,

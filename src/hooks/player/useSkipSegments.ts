@@ -18,11 +18,13 @@ interface SegmentRange {
   endMs: number;
 }
 
-/** How far before EOF to surface a synthetic "Next Episode" prompt when
- *  Plex didn't provide a credits marker. 90s lines up with the typical
- *  outro length on TV anime / dramas; bigger values risk showing the
- *  Next Episode prompt over actual story content. */
-const SYNTH_CREDITS_WINDOW_MS = 90_000;
+/** Default fallback for the synthetic "Next Episode" prompt when Plex
+ *  didn't provide a credits marker AND we couldn't estimate the show's
+ *  typical credits length from sibling episodes. 90s lines up with the
+ *  typical outro length on TV anime / dramas; bigger values risk showing
+ *  the prompt over actual story content. Overridden by the
+ *  `synthCreditsWindowMs` arg when callers can pass a per-show estimate. */
+const DEFAULT_SYNTH_CREDITS_WINDOW_MS = 90_000;
 
 /**
  * Detect whether playback is currently within an intro or credits segment.
@@ -56,6 +58,11 @@ export function useSkipSegments(
    *  without a real credits marker we don't know where the credits
    *  actually start, only where the file ends). */
   hasNextEpisode: boolean = false,
+  /** Per-show estimated credits-window length in ms (median of sibling
+   *  episodes that DO have credits markers). Overrides
+   *  DEFAULT_SYNTH_CREDITS_WINDOW_MS for the synthetic segment when
+   *  provided — usually a more accurate fit than the 90s blanket default. */
+  synthCreditsWindowMs?: number | null,
 ): SkipSegmentsResult {
   const [activeSegment, setActiveSegment] = useState<ActiveSegment | null>(null);
   const prevActiveRef = useRef<string | null>(null);
@@ -72,20 +79,22 @@ export function useSkipSegments(
   const segments = useMemo(() => {
     const haveCredits = baseSegments.some((s) => s.type === "credits");
     const durationMs = duration * 1000;
+    const windowMs =
+      synthCreditsWindowMs && synthCreditsWindowMs > 0
+        ? synthCreditsWindowMs
+        : DEFAULT_SYNTH_CREDITS_WINDOW_MS;
     const canSynth =
-      hasNextEpisode &&
-      !haveCredits &&
-      durationMs > SYNTH_CREDITS_WINDOW_MS;
+      hasNextEpisode && !haveCredits && durationMs > windowMs;
     if (!canSynth) return baseSegments;
     return [
       ...baseSegments,
       {
         type: "credits" as const,
-        startMs: durationMs - SYNTH_CREDITS_WINDOW_MS,
+        startMs: durationMs - windowMs,
         endMs: durationMs,
       },
     ];
-  }, [baseSegments, duration, hasNextEpisode]);
+  }, [baseSegments, duration, hasNextEpisode, synthCreditsWindowMs]);
 
   // Reset all per-episode state when the resetKey (ratingKey) changes.
   // Earlier this keyed on `[markers, chapters]` reference identity which was

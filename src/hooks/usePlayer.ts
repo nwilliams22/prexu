@@ -72,6 +72,10 @@ export interface UsePlayerResult {
   chapters: PlexChapter[];
   markers: PlexMarker[];
   itemType: string;
+  /** For episodes: the season's ratingKey, used by useShowCreditsLength to
+   *  fetch sibling episodes for the credits-length median estimate. Empty
+   *  string for movies / non-episode media. */
+  parentRatingKey: string;
 
   // Stream info
   audioTracks: PlexStream[];
@@ -129,6 +133,7 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
   const [chapters, setChapters] = useState<PlexChapter[]>([]);
   const [markers, setMarkers] = useState<PlexMarker[]>([]);
   const [itemType, setItemType] = useState("");
+  const [parentRatingKey, setParentRatingKey] = useState("");
 
   // Stream selection sub-hook
   const streams = useStreamSelection(
@@ -205,6 +210,11 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
       setChapters(part.Chapter ?? []);
       setMarkers(playableItem.Marker ?? []);
       setItemType(item.type);
+      setParentRatingKey(
+        item.type === "episode"
+          ? (playableItem as PlexEpisode).parentRatingKey ?? ""
+          : "",
+      );
 
       // Categorize and set default streams
       const categorized = categorizeStreams(part);
@@ -527,6 +537,7 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
     chapters,
     markers,
     itemType,
+    parentRatingKey,
     isLoading,
     isPlaying,
     isBuffering,
