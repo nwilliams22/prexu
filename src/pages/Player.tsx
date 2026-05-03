@@ -348,22 +348,21 @@ function Player() {
   const [showShortcuts, setShowShortcuts] = useState(false);
   const toggleShortcuts = useCallback(() => setShowShortcuts((v) => !v), []);
 
-  // Keep a ref to isFullscreen so handleBack (useCallback with stable
+  // Keep a ref to isFullscreen so handleExit (useCallback with stable
   // deps) always reads the latest value at click time.
   const playerIsFullscreenRef = useRef(player.isFullscreen);
   playerIsFullscreenRef.current = player.isFullscreen;
 
-  // Keyboard shortcuts / back button.
-  //
-  // Paint body opaque BEFORE navigate. The useLayoutEffect cleanup below
-  // SHOULD run sync before paint, but in practice WebView2 with
-  // transparent:true can still composite one frame where body=transparent
-  // during the Player→Dashboard swap, leaking whatever OS window is behind
-  // Prexu (Discord). Doing it here runs while Player is still mounted —
-  // the Player container is fixed+transparent so mpv is still visible
-  // to the user, but the next post-unmount paint has body already navy.
-  // Belt-and-suspenders: cleanup still runs, idempotent second write.
-  const handleBack = useCallback(async () => {
+  // Pre-navigation cleanup shared by Exit and Previous: paint body opaque
+  // BEFORE navigate. The useLayoutEffect cleanup further up SHOULD run sync
+  // before paint, but in practice WebView2 with transparent:true can still
+  // composite one frame where body=transparent during the Player→next-route
+  // swap, leaking whatever OS window is behind Prexu (Discord). Doing it
+  // here runs while Player is still mounted — the Player container is
+  // fixed+transparent so mpv is still visible to the user, but the next
+  // post-unmount paint has body already navy. Belt-and-suspenders: cleanup
+  // still runs, idempotent second write.
+  const prepareNavAway = useCallback(async () => {
     if (IS_NATIVE_PLAYER) {
       document.body.style.background = "#1a1a2e";
       if (playerIsFullscreenRef.current) {
@@ -374,8 +373,34 @@ function Player() {
         }
       }
     }
-    navigate(-1);
-  }, [navigate]);
+  }, []);
+
+  // Exit = leave the player route entirely. Used by the X button in the
+  // player toolbar AND by ESC keypress. Restores the route the user was on
+  // before they pressed Play (typically an item detail page or library) by
+  // reading the pointer App.tsx writes to sessionStorage on every non-/play
+  // location change. navigate(-1) was wrong because auto-advancing through
+  // multiple episodes piled /play/* entries onto history, trapping the user.
+  const handleExit = useCallback(async () => {
+    await prepareNavAway();
+    const target = sessionStorage.getItem("prexu.lastNonPlayerRoute") || "/";
+    navigate(target);
+  }, [prepareNavAway, navigate]);
+
+  // Previous = go to the prior episode/queue item. Mirrors handleNextEpisode
+  // shape: queue first, then Plex episode-nav fallback. Same nav-cleanup as
+  // exit so the body-paint flicker doesn't happen on inter-episode jumps.
+  const handlePreviousFromTopBar = useCallback(async () => {
+    await prepareNavAway();
+    handlePrevEpisode();
+  }, [prepareNavAway, handlePrevEpisode]);
+
+  // Whether the top-left "Previous" button should appear. True if the queue
+  // has an item before the current index, or Plex's adjacent-episode API
+  // returned a previous episode. Hidden otherwise (first episode of season,
+  // single movie, etc.) — Exit is always available.
+  const hasPrevious =
+    queue.currentIndex > 0 || episodeNav.handlePrevEpisode != null;
 
   usePlayerKeyboardShortcuts({
     togglePlay,
@@ -387,7 +412,7 @@ function Player() {
     toggleFullscreen: player.toggleFullscreen,
     toggleMute: player.toggleMute,
     isFullscreen: player.isFullscreen,
-    onBack: handleBack,
+    onBack: handleExit,
     resetHideTimer,
     chapters: player.chapters,
     volumeBoost: audioEnhancements.volumeBoost,
@@ -449,7 +474,7 @@ function Player() {
       {player.isLoading && (
         <div style={styles.centerOverlay}>
           <button
-            onClick={handleBack}
+            onClick={handleExit}
             style={styles.loadingBackButton}
             aria-label="Go back"
           >
@@ -473,7 +498,7 @@ function Player() {
         <ErrorOverlay
           error={player.playbackError}
           onRetry={player.retry}
-          onBack={handleBack}
+          onBack={handleExit}
         />
       )}
 
@@ -518,7 +543,8 @@ function Player() {
       {!player.isLoading && !player.playbackError && (
         <PlayerControls
           player={player}
-          onBack={handleBack}
+          onExit={handleExit}
+          onPrevious={hasPrevious ? handlePreviousFromTopBar : undefined}
           visible={controlsVisible}
           chapters={player.chapters}
           onSeek={seek}

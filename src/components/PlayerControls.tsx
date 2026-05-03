@@ -14,7 +14,13 @@ import ControlsBottomBar from "./player/ControlsBottomBar";
 
 interface PlayerControlsProps {
   player: UsePlayerResult;
-  onBack: () => void;
+  /** Leave the player route entirely (X icon, top-right). */
+  onExit: () => void;
+  /**
+   * Navigate to the previous queue item / Plex episode (chevron-left, top-left).
+   * Omit when no previous item exists; the button is hidden.
+   */
+  onPrevious?: () => void;
   visible: boolean;
   syncIndicator?: React.ReactNode;
   chapters?: PlexChapter[];
@@ -43,7 +49,7 @@ interface PlayerControlsProps {
   onSubtitleDownloaded?: () => void;
 }
 
-function PlayerControls({ player, onBack, visible, syncIndicator, chapters, onSeek, onActivity, onNextEpisode, onPrevEpisode, audioEnhancements, onAudioEnhancementChange, isPiPActive, isPiPSupported, onTogglePiP, queueCount, onToggleQueue, serverUri, serverToken, ratingKey, onSubtitleDownloaded }: PlayerControlsProps) {
+function PlayerControls({ player, onExit, onPrevious, visible, syncIndicator, chapters, onSeek, onActivity, onNextEpisode, onPrevEpisode, audioEnhancements, onAudioEnhancementChange, isPiPActive, isPiPSupported, onTogglePiP, queueCount, onToggleQueue, serverUri, serverToken, ratingKey, onSubtitleDownloaded }: PlayerControlsProps) {
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
 
@@ -70,19 +76,31 @@ function PlayerControls({ player, onBack, visible, syncIndicator, chapters, onSe
         ...styles.topBar,
         pointerEvents: visible ? "auto" : "none",
       }}>
-        <button onClick={onBack} style={styles.backButton} aria-label="Back">
-          <svg
-            aria-hidden="true"
-            width={24}
-            height={24}
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={2}
+        {/* Previous button — only shown when there's actually a previous
+            item to go to (queue or episode-nav). Otherwise the title sits
+            flush with the layout grid where the button would be. */}
+        {onPrevious ? (
+          <button
+            onClick={onPrevious}
+            style={styles.backButton}
+            aria-label="Previous"
+            title="Previous"
           >
-            <polyline points="15 18 9 12 15 6" />
-          </svg>
-        </button>
+            <svg
+              aria-hidden="true"
+              width={24}
+              height={24}
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <polyline points="15 18 9 12 15 6" />
+            </svg>
+          </button>
+        ) : (
+          <span style={styles.backButtonPlaceholder} aria-hidden="true" />
+        )}
         <div style={styles.titleArea}>
           <span style={styles.titleText}>{player.title}</span>
           <span style={styles.subtitleText}>
@@ -91,6 +109,30 @@ function PlayerControls({ player, onBack, visible, syncIndicator, chapters, onSe
             {player.subtitle}
           </span>
         </div>
+        {/* Exit button — always present so the user has an unambiguous way
+            to leave the player. ESC also fires onExit via the keyboard
+            shortcut hook. */}
+        <button
+          onClick={onExit}
+          style={styles.exitButton}
+          aria-label="Exit"
+          title="Exit"
+        >
+          <svg
+            aria-hidden="true"
+            width={22}
+            height={22}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <line x1={18} y1={6} x2={6} y2={18} />
+            <line x1={6} y1={6} x2={18} y2={18} />
+          </svg>
+        </button>
       </div>
 
       {/* Bottom controls (seek bar + transport + utility buttons + menus) */}
@@ -146,11 +188,28 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
   },
+  // Reserves the same horizontal slot as backButton so the title doesn't jump
+  // when the Previous button toggles in/out across episodes.
+  backButtonPlaceholder: {
+    width: "30px",
+    height: "30px",
+    display: "inline-block",
+    flexShrink: 0,
+  },
+  exitButton: {
+    background: "transparent",
+    color: "#fff",
+    padding: "0.25rem",
+    display: "flex",
+    alignItems: "center",
+    marginLeft: "auto",
+  },
   titleArea: {
     display: "flex",
     flexDirection: "column",
     gap: "0.15rem",
     overflow: "hidden",
+    flex: 1,
   },
   titleText: {
     fontSize: "1rem",

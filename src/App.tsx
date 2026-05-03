@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState, useEffect } from "react";
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import AppLayout from "./components/AppLayout";
 import SplashScreen from "./components/SplashScreen";
 import { useAutoUpdate } from "./hooks/useAutoUpdate";
@@ -54,10 +54,31 @@ function ServerRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+/** sessionStorage key holding the last route the user was on before
+ *  entering /play/*. The Player's Exit button reads this to restore the
+ *  user's pre-playback context (typically an item-detail page) instead of
+ *  walking back through every auto-advanced episode in history. */
+export const LAST_NON_PLAYER_ROUTE_KEY = "prexu.lastNonPlayerRoute";
+
 function AppRoutes() {
   const { isLoading, isAuthenticated, serverSelected, server } = useAuth();
   const { installing: updaterInstalling, downloadProgress: updaterProgress } = useAutoUpdate();
   const [appReady, setAppReady] = useState(false);
+  const location = useLocation();
+
+  // Track the most recent non-player route so the Exit button in Player
+  // can restore the user's pre-playback context. Auto-advancing through
+  // multiple episodes piles /play/* entries onto history, which used to
+  // trap the user on Back; persisting a single "where were you before
+  // playback" pointer in sessionStorage sidesteps that entirely.
+  useEffect(() => {
+    if (!location.pathname.startsWith("/play/")) {
+      sessionStorage.setItem(
+        LAST_NON_PLAYER_ROUTE_KEY,
+        location.pathname + location.search,
+      );
+    }
+  }, [location.pathname, location.search]);
 
   // Wait for auth AND initial data before dismissing the splash screen.
   // When authenticated with a server, prefetch library sections so the
