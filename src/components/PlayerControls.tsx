@@ -3,6 +3,7 @@
  * fullscreen, and track selection buttons.
  */
 
+import { useState } from "react";
 import type { UsePlayerResult } from "../hooks/usePlayer";
 import type { AudioEnhancementsResult } from "../hooks/useAudioEnhancements";
 import type { NormalizationPreset } from "../types/preferences";
@@ -51,6 +52,7 @@ interface PlayerControlsProps {
 function PlayerControls({ player, onExit, onPrevious, visible, syncIndicator, chapters, onSeek, onActivity, onNextEpisode, onPrevEpisode, audioEnhancements, onAudioEnhancementChange, isPiPActive, isPiPSupported, onTogglePiP, queueCount, onToggleQueue, serverUri, serverToken, ratingKey, onSubtitleDownloaded }: PlayerControlsProps) {
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
+  const [previousHovered, setPreviousHovered] = useState(false);
 
   // Use WT-aware seek when provided, otherwise fall back to player.seek
   const seekFn = onSeek ?? player.seek;
@@ -76,14 +78,19 @@ function PlayerControls({ player, onExit, onPrevious, visible, syncIndicator, ch
         pointerEvents: visible ? "auto" : "none",
       }}>
         {/* Previous button — only shown when there's actually a previous
-            item to go to (queue or episode-nav). Otherwise the title sits
-            flush with the layout grid where the button would be. */}
+            item to go to (queue or episode-nav). The button expands inline
+            on hover to reveal a "Previous" label rather than relying on a
+            browser tooltip; the label has its own opacity/max-width
+            transitions so the chevron stays put while the text slides in. */}
         {onPrevious ? (
           <button
             onClick={onPrevious}
             style={styles.backButton}
             aria-label="Previous"
-            title="Previous"
+            onMouseEnter={() => setPreviousHovered(true)}
+            onMouseLeave={() => setPreviousHovered(false)}
+            onFocus={() => setPreviousHovered(true)}
+            onBlur={() => setPreviousHovered(false)}
           >
             <svg
               aria-hidden="true"
@@ -96,6 +103,15 @@ function PlayerControls({ player, onExit, onPrevious, visible, syncIndicator, ch
             >
               <polyline points="15 18 9 12 15 6" />
             </svg>
+            <span
+              style={{
+                ...styles.backButtonLabel,
+                ...(previousHovered ? styles.backButtonLabelOpen : {}),
+              }}
+              aria-hidden="true"
+            >
+              Previous
+            </span>
           </button>
         ) : (
           <span style={styles.backButtonPlaceholder} aria-hidden="true" />
@@ -160,9 +176,32 @@ const styles: Record<string, React.CSSProperties> = {
   backButton: {
     background: "transparent",
     color: "#fff",
-    padding: "0.25rem",
+    padding: "0.25rem 0.5rem",
     display: "flex",
     alignItems: "center",
+    gap: "0.25rem",
+    borderRadius: "6px",
+    cursor: "pointer",
+  },
+  // Inline expanding label. Closed state: collapsed width with hidden text;
+  // hovered state: max-width animates open and the text fades in. Using
+  // max-width (not width) lets us transition between collapsed-to-content
+  // without measuring; padding/margin transitions keep the layout smooth.
+  backButtonLabel: {
+    fontSize: "0.85rem",
+    fontWeight: 500,
+    color: "#fff",
+    overflow: "hidden",
+    whiteSpace: "nowrap",
+    maxWidth: 0,
+    opacity: 0,
+    marginLeft: 0,
+    transition: "max-width 0.18s ease, opacity 0.15s ease, margin-left 0.18s ease",
+  },
+  backButtonLabelOpen: {
+    maxWidth: "100px",
+    opacity: 1,
+    marginLeft: "0.15rem",
   },
   // Reserves the same horizontal slot as backButton so the title doesn't jump
   // when the Previous button toggles in/out across episodes.
