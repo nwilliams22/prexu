@@ -8,6 +8,15 @@ on:
 permissions:
   contents: write
 
+# Windows libmpv dev archive URL. Use the **baseline** (non-v3) build — the
+# AVX2 v3 build fails LoadLibrary with ERROR_NOACCESS on Windows 11 (see
+# docs/native-player-status.md). Recommended: vendor the .7z under this repo's
+# Releases (e.g. tag `libmpv-vendor-<date>`) to avoid SourceForge churn.
+# Override per-run via the `LIBMPV_URL` repository variable; falls back to the
+# value below. Cache invalidates automatically when this URL changes.
+env:
+  LIBMPV_URL: ${{ vars.LIBMPV_URL || 'https://github.com/nwilliams22/prexu/releases/download/libmpv-vendor/mpv-dev-x86_64-baseline.7z' }}
+
 jobs:
   build:
     strategy:
@@ -43,6 +52,71 @@ jobs:
             librsvg2-dev \
             patchelf \
             libssl-dev
+
+      # ── Windows: libmpv dev files ───────────────────────────────────────
+      # The libmpv2 crate's `build_libmpv` feature on Windows expects a layout
+      # of `MPV_SOURCE/64/{libmpv-2.dll, mpv.lib}`. shinchiro's archive ships
+      # only the DLL + GNU import lib (libmpv.dll.a); we generate the MSVC-
+      # format mpv.lib from the DLL exports using dumpbin + lib.
+      - name: Cache libmpv (Windows)
+        if: runner.os == 'Windows'
+        id: cache-libmpv
+        uses: actions/cache@v4
+        with:
+          path: C:\libmpv
+          key: libmpv-${{ hashFiles('.github/workflows/release.yml') }}-${{ env.LIBMPV_URL }}
+
+      - name: Setup MSVC dev environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install libmpv (Windows)
+        if: runner.os == 'Windows' && steps.cache-libmpv.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path C:\libmpv\64 | Out-Null
+          Write-Host "Downloading libmpv from $env:LIBMPV_URL"
+          Invoke-WebRequest -Uri $env:LIBMPV_URL -OutFile mpv-dev.7z -UseBasicParsing
+          Write-Host "Extracting to C:\libmpv\64"
+          7z x mpv-dev.7z -oC:\libmpv\64 -y | Out-Null
+          if (-not (Test-Path C:\libmpv\64\libmpv-2.dll)) {
+              throw "libmpv-2.dll not found after extraction — archive layout may have changed"
+          }
+          Write-Host "Generating mpv.lib from libmpv-2.dll exports"
+          Push-Location C:\libmpv\64
+          # Parse dumpbin /EXPORTS output: lines with `<ord> <hint> <RVA> <name>`
+          # are exports. Filter to mpv_* symbols and emit a .def file that lib.exe
+          # can turn into an MSVC-format import library.
+          $exports = & dumpbin /EXPORTS libmpv-2.dll
+          $symbols = $exports `
+              | ForEach-Object {
+                  if ($_ -match '^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(\S+)') {
+                      $matches[1]
+                  }
+              } `
+              | Where-Object { $_ -like 'mpv_*' }
+          if ($symbols.Count -eq 0) {
+              throw "No mpv_* exports found in libmpv-2.dll — dumpbin output format may have changed"
+          }
+          Write-Host "Found $($symbols.Count) mpv_* exports"
+          $defLines = @("LIBRARY libmpv-2", "EXPORTS") + $symbols
+          Set-Content -Path mpv.def -Value $defLines -Encoding ASCII
+          & lib /def:mpv.def /out:mpv.lib /machine:x64
+          if (-not (Test-Path mpv.lib)) {
+              throw "lib.exe failed to produce mpv.lib"
+          }
+          Pop-Location
+          Write-Host "libmpv install complete"
+
+      - name: Export MPV_SOURCE (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Add-Content -Path $env:GITHUB_ENV -Value "MPV_SOURCE=C:\libmpv"
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\libmpv\64"
 
       - name: Setup Node
         uses: actions/setup-node@v5
