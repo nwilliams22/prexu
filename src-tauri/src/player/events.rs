@@ -124,9 +124,23 @@ fn dispatch(
             log::debug!("[player:events] FileLoaded → player://ready");
             let _ = app.emit("player://ready", ());
         }
-        Event::EndFile(_reason) => {
-            log::debug!("[player:events] EndFile → player://eof");
-            let _ = app.emit("player://eof", ());
+        Event::EndFile(reason) => {
+            // mpv_end_file_reason: 0=EOF (natural end), 2=STOP, 3=QUIT,
+            // 4=ERROR, 5=REDIRECT. Only the natural EOF should reach the
+            // frontend as player://eof — STOP and QUIT fire whenever we
+            // tear down mpv via player_unload (e.g. on episode-change
+            // navigation), and React was misinterpreting those as natural
+            // end-of-playback events, triggering PostPlay for the wrong
+            // queue position while the just-loaded next episode played
+            // underneath the overlay.
+            const REASON_EOF: u32 = 0;
+            let r: u32 = reason as u32;
+            if r == REASON_EOF {
+                log::debug!("[player:events] EndFile(EOF) → player://eof");
+                let _ = app.emit("player://eof", ());
+            } else {
+                log::debug!("[player:events] EndFile(reason={}) — suppressed", r);
+            }
         }
         Event::PropertyChange { change, reply_userdata, .. } => match (reply_userdata, change) {
             (REPLY_TIME_POS, PropertyData::Double(t)) => {

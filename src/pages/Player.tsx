@@ -240,10 +240,28 @@ function Player() {
   const [showPostPlay, setShowPostPlay] = useState(false);
   const postPlayShownRef = useRef(false);
 
+  // videoRef is stable across renders; capture in a ref so handleEnded
+  // doesn't need to re-bind when player.videoRef identity changes.
+  const playerVideoRefRef = useRef(player.videoRef);
+  playerVideoRefRef.current = player.videoRef;
+
   useEffect(() => {
     const handleEnded = () => {
       if (remainingCount > 0 && !wt.isInSession && !postPlayShownRef.current) {
         postPlayShownRef.current = true;
+        // Pause the underlying player synchronously with showing the overlay.
+        // Two reasons: (a) on native, mpv with keep-open=always usually stops
+        // at EOF but the rare path where it doesn't (or where some other code
+        // re-issues loadfile) leaks audio/video under the overlay; (b) on
+        // HTML5, browsers may fire `ended` then auto-restart on certain
+        // codecs. Idempotent — pausing an already-paused player is a no-op.
+        if (IS_NATIVE_PLAYER) {
+          invoke("player_pause").catch((err) =>
+            logger.warn("player", "PostPlay pause failed", String(err)),
+          );
+        } else {
+          playerVideoRefRef.current.current?.pause();
+        }
         setShowPostPlay(true);
       }
     };
@@ -280,8 +298,21 @@ function Player() {
     handleNextEpisode();
   }, [handleNextEpisode]);
 
+  // Stop = close overlay AND ensure playback stays halted. Without the
+  // explicit pause, anything that resumed playback under the overlay (queued
+  // autoplay racing the click, a stray play event, etc.) keeps running after
+  // the overlay closes. Resetting postPlayShownRef lets a subsequent EOF
+  // re-trigger PostPlay if the user navigates back and lets it end again.
   const handlePostPlayStop = useCallback(() => {
     setShowPostPlay(false);
+    postPlayShownRef.current = false;
+    if (IS_NATIVE_PLAYER) {
+      invoke("player_pause").catch((err) =>
+        logger.warn("player", "PostPlay stop pause failed", String(err)),
+      );
+    } else {
+      playerVideoRefRef.current.current?.pause();
+    }
   }, []);
 
   // Get the next queue item for the post-play screen
