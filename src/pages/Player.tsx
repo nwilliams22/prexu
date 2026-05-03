@@ -298,21 +298,21 @@ function Player() {
     handleNextEpisode();
   }, [handleNextEpisode]);
 
-  // Stop = close overlay AND ensure playback stays halted. Without the
-  // explicit pause, anything that resumed playback under the overlay (queued
-  // autoplay racing the click, a stray play event, etc.) keeps running after
-  // the overlay closes. Resetting postPlayShownRef lets a subsequent EOF
-  // re-trigger PostPlay if the user navigates back and lets it end again.
+  // Stop on PostPlay = the user's intent is "I'm done watching" — leave the
+  // player route entirely (same as the bottom-bar Stop button + ESC). Just
+  // hiding the overlay would leave the user staring at a paused black frame
+  // since the underlying mpv is at EOF; that's what looked like a "page
+  // reload" to the user (the URL didn't change, they just went from overlay
+  // to player chrome). Reset postPlayShownRef so a fresh navigation back
+  // into this episode can re-trigger PostPlay later. handleExit is declared
+  // further down (after a couple of other callbacks it depends on); going
+  // through a ref avoids the forward-reference and keeps both useCallbacks
+  // dependency-list clean.
+  const handleExitRef = useRef<() => void>(() => {});
   const handlePostPlayStop = useCallback(() => {
     setShowPostPlay(false);
     postPlayShownRef.current = false;
-    if (IS_NATIVE_PLAYER) {
-      invoke("player_pause").catch((err) =>
-        logger.warn("player", "PostPlay stop pause failed", String(err)),
-      );
-    } else {
-      playerVideoRefRef.current.current?.pause();
-    }
+    handleExitRef.current();
   }, []);
 
   // Get the next queue item for the post-play screen
@@ -389,6 +389,9 @@ function Player() {
     const target = sessionStorage.getItem("prexu.lastNonPlayerRoute") || "/";
     navigate(target);
   }, [prepareNavAway, navigate]);
+  // Keep the ref pointed at the latest handleExit so handlePostPlayStop
+  // (declared earlier) always invokes the current closure.
+  handleExitRef.current = handleExit;
 
   // Previous = go to the prior episode/queue item. Mirrors handleNextEpisode
   // shape: queue first, then Plex episode-nav fallback. Same nav-cleanup as
