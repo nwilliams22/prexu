@@ -150,6 +150,7 @@ jobs:
         with:
           keep_latest: 3
           delete_tags: true
-          delete_tag_pattern: "v"
+          # Strict semver vN.N.N only — must NOT match the libmpv-vendor archive tag
+          delete_tag_pattern: '^v\d+\.\d+\.\d+$'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
