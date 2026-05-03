@@ -411,12 +411,24 @@ function Player() {
   handleExitRef.current = handleExit;
 
   // Previous = go to the prior episode/queue item. Mirrors handleNextEpisode
-  // shape: queue first, then Plex episode-nav fallback. Same nav-cleanup as
-  // exit so the body-paint flicker doesn't happen on inter-episode jumps.
+  // shape: queue first, then Plex episode-nav fallback. We deliberately do
+  // NOT paint body opaque here even though prepareNavAway would: Player
+  // stays mounted across same-route param changes (RR v7 behaviour for
+  // /play/:ratingKey → /play/:otherKey), so the useLayoutEffect that
+  // paints body transparent doesn't re-run. Painting it opaque on the way
+  // out without the cleanup ever firing leaves the user staring at a navy
+  // background while mpv plays invisibly underneath. Fullscreen exit is
+  // still safe to do here — that's a one-shot Win32 call, not a paint.
   const handlePreviousFromTopBar = useCallback(async () => {
-    await prepareNavAway();
+    if (IS_NATIVE_PLAYER && playerIsFullscreenRef.current) {
+      try {
+        await invoke("player_set_fullscreen", { fullscreen: false });
+      } catch {
+        // Cleanup path catches up.
+      }
+    }
     handlePrevEpisode();
-  }, [prepareNavAway, handlePrevEpisode]);
+  }, [handlePrevEpisode]);
 
   // Whether the top-left "Previous" button should appear. True if the queue
   // has an item before the current index, or Plex's adjacent-episode API

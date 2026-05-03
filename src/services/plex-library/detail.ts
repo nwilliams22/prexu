@@ -38,23 +38,3 @@ export async function getItemChildren<T extends PlexMediaItem>(
   );
   return data.MediaContainer.Metadata ?? [];
 }
-
-/**
- * Same shape as getItemChildren, but explicitly requests intro/credits
- * Marker[] arrays. Used by useShowCreditsLength to estimate the typical
- * credits-window length for episodes whose own marker data is missing.
- * The base getItemChildren omits markers to keep the dashboard-style
- * children fetches lightweight.
- */
-export async function getItemChildrenWithMarkers<T extends PlexMediaItem>(
-  serverUri: string,
-  serverToken: string,
-  ratingKey: string
-): Promise<T[]> {
-  const data = await fetchJson<PlexMediaContainer<T>>(
-    serverUri,
-    serverToken,
-    `/library/metadata/${ratingKey}/children?includeMarkers=1`
-  );
-  return data.MediaContainer.Metadata ?? [];
-}

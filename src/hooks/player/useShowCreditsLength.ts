@@ -14,7 +14,10 @@
  */
 
 import { useEffect, useState } from "react";
-import { getItemChildrenWithMarkers } from "../../services/plex-library";
+import {
+  getItemChildren,
+  getItemMetadata,
+} from "../../services/plex-library";
 import type { PlexEpisode } from "../../types/library";
 import { logger } from "../../services/logger";
 
@@ -24,6 +27,14 @@ const CACHE_KEY_PREFIX = "prexu.creditsLen.";
  *  we trust the median. Below this we return null and the caller falls
  *  back to its hard-coded default window. */
 const MIN_SAMPLES = 3;
+/** Cap on per-episode metadata fetches per season-load. The parent's
+ *  /children endpoint doesn't include Marker[] arrays even with
+ *  ?includeMarkers=1 (verified empirically), so we have to fetch each
+ *  episode individually via getItemMetadata which DOES return markers.
+ *  Sampling instead of fetching all 13/24/N episodes keeps the cost
+ *  bounded; the median is robust enough that a sample of 6 lines up
+ *  with the population median in the common case. */
+const MAX_SAMPLE_FETCHES = 6;
 
 interface CacheEntry {
   median: number;
@@ -118,19 +129,49 @@ export function useShowCreditsLength(
     let cancelled = false;
     (async () => {
       try {
-        const episodes = await getItemChildrenWithMarkers<PlexEpisode>(
+        // Step 1: get the season's episode list (no markers — Plex's
+        // children endpoint doesn't surface them even with includeMarkers=1,
+        // verified empirically against a 25-ep season that returned 0 marker
+        // arrays from the children call despite the same episodes having
+        // markers when fetched individually).
+        const stub = await getItemChildren<PlexEpisode>(
           server.uri,
           server.accessToken,
           parentRatingKey,
         );
         if (cancelled) return;
+        if (stub.length === 0) return;
+
+        // Step 2: sample up to MAX_SAMPLE_FETCHES episodes evenly spaced
+        // across the season and fetch each individually — getItemMetadata
+        // DOES include Marker[] when includeMarkers=1 (its existing default).
+        // Even sampling avoids bias from a season that opens or closes with
+        // unusual episodes (recap, special, etc.).
+        const stride = Math.max(1, Math.floor(stub.length / MAX_SAMPLE_FETCHES));
+        const sampleKeys: string[] = [];
+        for (let i = 0; i < stub.length && sampleKeys.length < MAX_SAMPLE_FETCHES; i += stride) {
+          sampleKeys.push(stub[i].ratingKey);
+        }
+
+        const settled = await Promise.allSettled(
+          sampleKeys.map((rk) =>
+            getItemMetadata<PlexEpisode>(server.uri, server.accessToken, rk),
+          ),
+        );
+        if (cancelled) return;
+
+        const episodes: PlexEpisode[] = settled
+          .filter((r): r is PromiseFulfilledResult<PlexEpisode> => r.status === "fulfilled")
+          .map((r) => r.value);
+
         const median = estimateCreditsLengthMs(episodes);
         const sampleCount = episodes.filter(
           (e) => e.Marker?.some((m) => m.type === "credits"),
         ).length;
         logger.info("player:creditsLen", "computed median", {
           parentRatingKey,
-          totalEpisodes: episodes.length,
+          totalEpisodes: stub.length,
+          sampledEpisodes: episodes.length,
           sampleCount,
           medianMs: median,
         });
