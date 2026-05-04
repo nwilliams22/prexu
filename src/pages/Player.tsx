@@ -450,6 +450,21 @@ function Player() {
   // there's no need to reset.
   const [isExiting, setIsExiting] = useState(false);
 
+  // Cold-start affordance — first play after install can take ~30s before
+  // first frame (libmpv-2.dll page-in, AV first-execution scan, hwdec
+  // probing). Spinner alone leaves the user wondering if the app is hung.
+  // After 1.5s of isLoading we surface explanatory text. Warm second-plays
+  // resolve in <1s so the message never appears in normal use.
+  const [showLoadingMsg, setShowLoadingMsg] = useState(false);
+  useEffect(() => {
+    if (!player.isLoading) {
+      setShowLoadingMsg(false);
+      return;
+    }
+    const id = window.setTimeout(() => setShowLoadingMsg(true), 1500);
+    return () => window.clearTimeout(id);
+  }, [player.isLoading]);
+
   // Pre-navigation cleanup shared by Exit and Previous: paint body opaque
   // BEFORE navigate. The useLayoutEffect cleanup further up SHOULD run sync
   // before paint, but in practice WebView2 with transparent:true can still
@@ -607,7 +622,17 @@ function Player() {
               <polyline points="15 18 9 12 15 6" />
             </svg>
           </button>
-          <div className="loading-spinner" />
+          <div style={styles.loadingStack}>
+            <div className="loading-spinner" />
+            {showLoadingMsg && (
+              <div style={styles.loadingMessage}>
+                <div style={styles.loadingTitle}>Preparing playback…</div>
+                <div style={styles.loadingHint}>
+                  First play after install can take a moment.
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -777,6 +802,28 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "center",
     background: "rgba(0,0,0,0.3)",
     zIndex: 5,
+  },
+  loadingStack: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: "1.25rem",
+  },
+  loadingMessage: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: "0.35rem",
+    color: "rgba(255,255,255,0.85)",
+    animation: "fadeIn 0.4s ease-out",
+  },
+  loadingTitle: {
+    fontSize: "1rem",
+    fontWeight: 600,
+  },
+  loadingHint: {
+    fontSize: "0.85rem",
+    color: "rgba(255,255,255,0.55)",
   },
   loadingBackButton: {
     position: "absolute",
