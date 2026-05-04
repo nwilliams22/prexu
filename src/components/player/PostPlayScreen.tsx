@@ -7,6 +7,10 @@ interface PostPlayScreenProps {
   onStop: () => void;
   posterUrl: (path: string) => string;
   countdownSeconds?: number;
+  /** Persisted preference: when true, countdown auto-fires onPlayNext. */
+  autoPlayEnabled: boolean;
+  /** Persist a change to the auto-play toggle (writes to user prefs). */
+  onAutoPlayChange: (enabled: boolean) => void;
 }
 
 /**
@@ -20,9 +24,10 @@ export default function PostPlayScreen({
   onStop,
   posterUrl,
   countdownSeconds = 10,
+  autoPlayEnabled,
+  onAutoPlayChange,
 }: PostPlayScreenProps) {
   const [countdown, setCountdown] = useState(countdownSeconds);
-  const [autoPlayEnabled, setAutoPlayEnabled] = useState(true);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -49,14 +54,12 @@ export default function PostPlayScreen({
   }, [countdown, autoPlayEnabled, onPlayNext]);
 
   const handleToggleAutoPlay = useCallback(() => {
-    setAutoPlayEnabled((prev) => {
-      if (prev && intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
-      return !prev;
-    });
-  }, []);
+    if (autoPlayEnabled && intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+    onAutoPlayChange(!autoPlayEnabled);
+  }, [autoPlayEnabled, onAutoPlayChange]);
 
   // Keyboard: Enter to play now, Escape to stop
   useEffect(() => {

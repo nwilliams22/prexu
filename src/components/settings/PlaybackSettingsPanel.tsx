@@ -73,6 +73,21 @@ export function PlaybackSettingsPanel({ playback: pb, updatePlayback }: Playback
       </div>
 
       <div style={styles.field}>
+        <label style={styles.label}>Auto-play Next Episode</label>
+        <p style={styles.hint}>
+          When an episode ends, automatically start the next one after a short countdown.
+        </p>
+        <label style={styles.checkboxLabel}>
+          <input
+            type="checkbox"
+            checked={pb.autoPlayEnabled}
+            onChange={(e) => updatePlayback({ autoPlayEnabled: e.target.checked })}
+          />
+          Enable auto-play
+        </label>
+      </div>
+
+      <div style={styles.field}>
         <label style={styles.label}>Preferred Audio Language</label>
         <select
           value={pb.preferredAudioLanguage}

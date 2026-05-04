@@ -22,6 +22,7 @@ export function getDefaultPreferences(): Preferences {
       audioOffsetMs: 0,
       skipIntroEnabled: true,
       skipCreditsEnabled: true,
+      autoPlayEnabled: true,
       subtitleStyle: {
         fontFamily: "sans-serif",
         textColor: "#FFFFFF",

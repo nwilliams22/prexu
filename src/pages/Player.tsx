@@ -710,6 +710,10 @@ function Player() {
           onPlayNext={handlePostPlayNext}
           onStop={handlePostPlayStop}
           posterUrl={(path) => getImageUrl(server.uri, server.accessToken, path, 320, 220)}
+          autoPlayEnabled={pb.autoPlayEnabled}
+          onAutoPlayChange={(enabled) =>
+            updatePreferences({ playback: { autoPlayEnabled: enabled } })
+          }
         />
       )}
 
