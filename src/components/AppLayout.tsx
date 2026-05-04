@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Outlet, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
+import { usePlayerSession } from "../contexts/PlayerContext";
 import { usePreferences } from "../hooks/usePreferences";
 import { useThemeEffect } from "../hooks/useTheme";
 import { useWatchSync } from "../hooks/useWatchSync";
@@ -21,6 +22,7 @@ import BottomNav from "./BottomNav";
 function AppLayout() {
   const auth = useAuth();
   const { isAuthenticated, serverSelected } = auth;
+  const playerSession = usePlayerSession();
   const { preferences } = usePreferences();
   useThemeEffect(preferences.appearance.theme);
   useWatchSync(auth.server ?? null);
@@ -89,8 +91,23 @@ function AppLayout() {
   if (!isAuthenticated) return <Navigate to="/login" replace />;
   if (!serverSelected) return <Navigate to="/servers" replace />;
 
+  // When a player session is active, hide the entire app shell so mpv's
+  // HostWindow (a Win32 window sitting behind the WebView2) is unobscured.
+  // The shell stays mounted (display:none preserves React state, scroll
+  // position, queries) — Stop just flips display back, no remount.
+  // Without this the WebView2 paints AppLayout's opaque header/sidebar/main
+  // OVER the HostWindow, leaving the video invisible (the post-prexu-kfa
+  // refactor exposed this — the route model unmounted AppLayout entirely
+  // while in /play/*, so it was never an issue before).
+  const playerActive = playerSession.session != null;
+
   return (
-    <div style={styles.container}>
+    <div
+      style={{
+        ...styles.container,
+        display: playerActive ? "none" : styles.container.display,
+      }}
+    >
       {/* Header */}
       <header style={styles.header}>
         {/* Left: logo/hamburger area — matches sidebar width below */}
