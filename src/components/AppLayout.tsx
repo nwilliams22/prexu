@@ -93,19 +93,24 @@ function AppLayout() {
 
   // When a player session is active, hide the entire app shell so mpv's
   // HostWindow (a Win32 window sitting behind the WebView2) is unobscured.
-  // The shell stays mounted (display:none preserves React state, scroll
-  // position, queries) — Stop just flips display back, no remount.
-  // Without this the WebView2 paints AppLayout's opaque header/sidebar/main
-  // OVER the HostWindow, leaving the video invisible (the post-prexu-kfa
-  // refactor exposed this — the route model unmounted AppLayout entirely
-  // while in /play/*, so it was never an issue before).
+  // visibility:hidden (NOT display:none) — boxes still take layout space
+  // so children retain their measured dimensions. Without this,
+  // VirtualizedLibraryGrid's clientWidth was zero while hidden, the
+  // ResizeObserver didn't reliably re-fire on the visibility flip, and
+  // the grid stayed pinned at its default 4-column layout after Stop.
+  // pointerEvents:none lets clicks pass through to PlayerOverlay below.
+  // Without ANY of this the WebView2 paints AppLayout's opaque header/
+  // sidebar/main OVER the HostWindow, leaving the video invisible (the
+  // route model unmounted AppLayout entirely while in /play/*, so this
+  // was never an issue before prexu-kfa).
   const playerActive = playerSession.session != null;
 
   return (
     <div
       style={{
         ...styles.container,
-        display: playerActive ? "none" : styles.container.display,
+        visibility: playerActive ? "hidden" : "visible",
+        pointerEvents: playerActive ? "none" : "auto",
       }}
     >
       {/* Header */}
