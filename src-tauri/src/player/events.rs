@@ -85,11 +85,21 @@ fn run_pump(mpv: Arc<Mpv>, app: AppHandle) {
         .unwrap_or_else(Instant::now);
 
     let mut loop_iterations: u64 = 0;
+    // Reset on each FileLoaded; logged once per file on the first
+    // PlaybackRestart so we don't spam on every seek.
+    let mut hwdec_logged = false;
     loop {
         loop_iterations += 1;
         match ev_ctx.wait_event(1.0) {
             Some(Ok(event)) => {
-                if dispatch(&app, &mpv, event, &mut last_time_pos, &mut last_buffered) {
+                if dispatch(
+                    &app,
+                    &mpv,
+                    event,
+                    &mut last_time_pos,
+                    &mut last_buffered,
+                    &mut hwdec_logged,
+                ) {
                     log::info!("[player:events] Shutdown received at iter #{}", loop_iterations);
                     break;
                 }
@@ -121,6 +131,7 @@ fn dispatch(
     event: Event<'_>,
     last_time_pos: &mut Instant,
     last_buffered: &mut Instant,
+    hwdec_logged: &mut bool,
 ) -> bool {
     match event {
         Event::Shutdown => {
@@ -128,19 +139,30 @@ fn dispatch(
             return true;
         }
         Event::FileLoaded => {
-            // Capture decoder + codec/pixel-format snapshot for diagnostics.
-            // hwdec-current is the active hwdec backend ("d3d11va", "dxva2-copy",
-            // or "no") — the explicit acceptance evidence for prexu-2zo.3 and
-            // the load-bearing signal when triaging slow-decode reports.
-            let hwdec = mpv.get_property::<String>("hwdec-current")
-                .unwrap_or_else(|_| "<unavailable>".into());
-            log::info!("[player:events] hwdec-current={} (file-loaded)", hwdec);
+            // video-codec / video-format are populated from the demuxer at
+            // FileLoaded, so they're safe to read here. hwdec-current is NOT
+            // — the decoder hasn't initialised yet and the property reports
+            // PROPERTY_UNAVAILABLE. We log it on the first PlaybackRestart
+            // (below) instead, which fires after the decoder is up.
             if let Ok(codec) = mpv.get_property::<String>("video-codec") {
                 let pixfmt = mpv.get_property::<String>("video-format").unwrap_or_default();
                 log::debug!("[player:events] video-codec={} video-format={}", codec, pixfmt);
             }
+            *hwdec_logged = false;
             log::debug!("[player:events] FileLoaded → player://ready");
             let _ = app.emit("player://ready", ());
+        }
+        Event::PlaybackRestart => {
+            // Fires after seeks AND after the decoder finishes its initial
+            // setup on a new file. By this point hwdec-current reports the
+            // selected backend ("d3d11va", "dxva2-copy", "no", etc.). Log
+            // once per file so seeks don't spam.
+            if !*hwdec_logged {
+                let hwdec = mpv.get_property::<String>("hwdec-current")
+                    .unwrap_or_else(|_| "<unavailable>".into());
+                log::info!("[player:events] hwdec-current={} (playback-restart)", hwdec);
+                *hwdec_logged = true;
+            }
         }
         Event::EndFile(reason) => {
             // EndFile is diagnostic-only. With keep-open=always mpv often
