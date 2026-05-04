@@ -403,6 +403,19 @@ function Player() {
   // multiple episodes piled /play/* entries onto history, trapping the user.
   const handleExit = useCallback(async () => {
     await prepareNavAway();
+    // Tear down mpv synchronously BEFORE navigating away. The useEffect
+    // cleanup that runs post-unmount fires player_unload fire-and-forget,
+    // which races mpv terminate against React's next paint and leaks
+    // ~2-3s of buffered audio while the dashboard is already showing.
+    // Awaiting here pushes the route change until destroy() returns; the
+    // cleanup then no-ops via "destroy: nothing to destroy".
+    if (IS_NATIVE_PLAYER) {
+      try {
+        await invoke("player_unload");
+      } catch (err) {
+        logger.warn("player", "handleExit player_unload failed", String(err));
+      }
+    }
     const target = sessionStorage.getItem("prexu.lastNonPlayerRoute") || "/";
     navigate(target);
   }, [prepareNavAway, navigate]);
