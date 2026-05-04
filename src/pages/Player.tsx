@@ -347,19 +347,26 @@ function Player() {
     return () => window.clearTimeout(id);
   }, [autoExitRemaining]);
 
-  // Cancel the auto-exit on any user input. mousemove/keydown/mousedown all
-  // qualify per the spec — any signal that the user is still engaged.
+  // Cancel the auto-exit on a deliberate user input — keydown or mousedown
+  // only. We deliberately do NOT listen for mousemove: when mpv pauses at
+  // EOF the player keeps the cursor + controls visible, so any incidental
+  // mouse motion would instantly cancel the countdown before the user can
+  // even read the overlay. A 300ms grace period also absorbs the click
+  // that triggered the seek (Skip Credits) so it can't double-count as
+  // cancellation.
   useEffect(() => {
     if (autoExitRemaining == null) return;
+    let armed = false;
+    const armTimer = window.setTimeout(() => { armed = true; }, 300);
     const cancel = () => {
+      if (!armed) return;
       logger.info("player", "auto-exit cancelled by user input");
       setAutoExitRemaining(null);
     };
-    window.addEventListener("mousemove", cancel);
     window.addEventListener("keydown", cancel);
     window.addEventListener("mousedown", cancel);
     return () => {
-      window.removeEventListener("mousemove", cancel);
+      window.clearTimeout(armTimer);
       window.removeEventListener("keydown", cancel);
       window.removeEventListener("mousedown", cancel);
     };
@@ -420,10 +427,20 @@ function Player() {
   );
 
   const handleSkipSegment = useCallback(() => {
-    if (activeSegment) {
-      seek(activeSegment.endTime);
+    if (!activeSegment) return;
+    seek(activeSegment.endTime);
+    // Skip Credits with no continuation lands on a paused-at-EOF black
+    // frame. mpv's eof-reached property is supposed to fire player://eof
+    // and trigger our auto-exit, but the seek-past-end path proved
+    // unreliable in practice (movie test, 2026-05-03). Trigger auto-exit
+    // explicitly here so the user always has a clean exit path. Idempotent
+    // — the EOF handler also calls setAutoExitRemaining for the natural
+    // play-to-end case, and the countdown effect tolerates re-arming.
+    if (activeSegment.type === "credits" && !hasNextItem && !wt.isInSession) {
+      logger.info("player", "Skip Credits with no continuation — scheduling auto-exit");
+      setAutoExitRemaining(AUTO_EXIT_SECONDS);
     }
-  }, [activeSegment, seek]);
+  }, [activeSegment, seek, hasNextItem, wt.isInSession]);
 
   // Next episode detection for Watch Together host
   const nextEp = useNextEpisodeDetection(
@@ -750,12 +767,13 @@ function Player() {
         />
       )}
 
-      {/* Auto-exit countdown — shown only when EOF fired with no
-          continuation. Any user input cancels (see effect above). */}
+      {/* Auto-exit countdown — shown when EOF fired (or Skip Credits
+          landed at end) with no continuation. Click or press any key to
+          cancel (mousemove deliberately excluded — see effect above). */}
       {autoExitRemaining != null && (
         <div style={styles.autoExitOverlay}>
           <p style={styles.autoExitText}>
-            Returning in {autoExitRemaining}s — any key to cancel
+            Returning in {autoExitRemaining}s — click or press any key to cancel
           </p>
         </div>
       )}
