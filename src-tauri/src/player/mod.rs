@@ -215,12 +215,22 @@ impl PlayerState {
     ///
     /// Steps:
     /// 1. Take `Inner` out of the Mutex so we control drop order.
-    /// 2. Send `stop` (halt playback) then `quit` (fire Shutdown) to mpv.
-    /// 3. Join the event-pump thread. It observes Shutdown, breaks its loop,
-    ///    and drops its `Arc<Mpv>`.
-    /// 4. Our `Arc<Mpv>` drops at end of scope with refcount 1→0, which runs
-    ///    `mpv_terminate_destroy` synchronously (libmpv2 Drop impl).
-    /// 5. `HostWindow` drops last, now that nothing is rendering into it.
+    /// 2. SYNCHRONOUSLY silence the player: mute, pause, queue stop+quit.
+    ///    These are instant; mute is the audio-cut guarantee that lets the
+    ///    caller (TS handleExit) navigate away without an audio bleed.
+    /// 3. SPAWN a background thread that joins the event pump (which can
+    ///    take up to ~1s to break out of its `wait_event(1.0)` loop after
+    ///    Shutdown), dispatches HostWindow drop to the main thread, and
+    ///    drops Inner — releasing the final Arc<Mpv> and triggering
+    ///    `mpv_terminate_destroy` from the background.
+    /// 4. Return immediately so the caller's await resolves in <50ms.
+    ///
+    /// Rationale: previously this function joined the pump synchronously
+    /// with a 2s timeout. The TS handleExit awaits this command, so when
+    /// the timeout was hit (often, in practice) the user saw the player
+    /// chrome / exit-fade for the full 2s before the dashboard rendered.
+    /// Audio is already silenced by the synchronous mute, so the slow
+    /// teardown can run in the background without user-visible cost.
     pub(crate) fn destroy(&self, app: &AppHandle) -> Result<(), String> {
         let t0 = Instant::now();
         log::info!("[player] destroy: entered");
@@ -237,8 +247,10 @@ impl PlayerState {
         };
         log::info!("[player] destroy: Inner taken, Arc strong_count={}", Arc::strong_count(&inner.mpv));
 
-        // Belt-and-suspenders: silence audio immediately, don't wait for
-        // stop/quit to propagate through mpv's internals.
+        // SYNCHRONOUS silence — mute first so audio cuts immediately, then
+        // pause + queue stop/quit. Mute is the only piece the caller has
+        // to wait for; everything else propagates through mpv's internals
+        // on its own time.
         match inner.mpv.set_property("mute", true) {
             Ok(_) => log::info!("[player] destroy: mute=true set"),
             Err(e) => log::warn!("[player] destroy: mute set failed: {:?}", e),
@@ -247,70 +259,55 @@ impl PlayerState {
             Ok(_) => log::info!("[player] destroy: pause=true set"),
             Err(e) => log::warn!("[player] destroy: pause set failed: {:?}", e),
         }
-
         log::info!("[player] destroy: sending stop command");
-        match inner.mpv.command("stop", &[]) {
-            Ok(_) => log::info!("[player] destroy: stop sent OK"),
-            Err(e) => log::warn!("[player] destroy: stop failed: {:?}", e),
+        if let Err(e) = inner.mpv.command("stop", &[]) {
+            log::warn!("[player] destroy: stop failed: {:?}", e);
         }
         log::info!("[player] destroy: sending quit command");
-        match inner.mpv.command("quit", &[]) {
-            Ok(_) => log::info!("[player] destroy: quit sent OK"),
-            Err(e) => log::warn!("[player] destroy: quit failed: {:?}", e),
+        if let Err(e) = inner.mpv.command("quit", &[]) {
+            log::warn!("[player] destroy: quit failed: {:?}", e);
         }
 
-        // Bounded join: if the pump doesn't exit within 2s, give up and
-        // let it leak — we'd rather have a zombie thread than a 20 s audio
-        // bleed. The pump holds an Arc<Mpv>, so if we detach, mpv lives
-        // until the pump's `wait_event` eventually times out and notices
-        // the context is gone. In practice, terminate_destroy below will
-        // be delayed, but the mute+pause+stop above should already have
-        // silenced audio synchronously.
-        if let Some(handle) = inner.event_pump.take() {
-            log::info!("[player] destroy: joining event pump (timeout 2s)");
-            let start = Instant::now();
-            let (tx, rx) = std::sync::mpsc::channel::<()>();
-            let join_thread = std::thread::spawn(move || {
+        // ASYNCHRONOUS teardown — pump join + host drop + final Arc release
+        // all happen on a background thread. Inner is moved in; HostWindow
+        // is `unsafe impl Send` (host_window.rs) and we re-dispatch its
+        // drop back to the main thread via run_on_main_thread.
+        let app = app.clone();
+        std::thread::spawn(move || {
+            if let Some(handle) = inner.event_pump.take() {
+                log::info!("[player] destroy:bg joining event pump (unbounded)");
+                let start = Instant::now();
                 let _ = handle.join();
-                let _ = tx.send(());
-            });
-            match rx.recv_timeout(Duration::from_secs(2)) {
-                Ok(_) => log::info!(
-                    "[player] destroy: event pump joined in {}ms",
+                log::info!(
+                    "[player] destroy:bg event pump joined in {}ms",
                     start.elapsed().as_millis()
-                ),
-                Err(_) => log::warn!(
-                    "[player] destroy: event pump did NOT exit within 2s — detaching; current Arc strong_count={}",
-                    Arc::strong_count(&inner.mpv)
-                ),
+                );
             }
-            // Detach the joiner thread so we don't block on it further.
-            drop(join_thread);
-        }
-
-        // Dispatch HostWindow drop to the main thread since that's where
-        // it was created. Fire-and-forget — by the time this closure runs,
-        // mpv_terminate_destroy has already halted rendering (below, when
-        // `inner` drops the last Arc<Mpv>), so DestroyWindow on the HWND is
-        // safe even if the drop happens asynchronously.
-        #[cfg(target_os = "windows")]
-        if let Some(host) = inner.host.take() {
-            log::info!("[player] destroy: dispatching host drop to main thread");
-            if let Err(e) = app.run_on_main_thread(move || {
-                drop(host);
-                log::info!("[player:host] dropped on main thread");
-            }) {
-                log::warn!("[player] destroy: run_on_main_thread for host drop failed: {:?} (host leaked)", e);
+            #[cfg(target_os = "windows")]
+            if let Some(host) = inner.host.take() {
+                log::info!("[player] destroy:bg dispatching host drop to main thread");
+                if let Err(e) = app.run_on_main_thread(move || {
+                    drop(host);
+                    log::info!("[player:host] dropped on main thread");
+                }) {
+                    log::warn!(
+                        "[player] destroy:bg run_on_main_thread for host drop failed: {:?} (host leaked)",
+                        e
+                    );
+                }
             }
-        }
+            log::info!(
+                "[player] destroy:bg dropping Inner (Arc strong_count={})",
+                Arc::strong_count(&inner.mpv)
+            );
+            // `inner` drops at end of closure. If pump released its Arc,
+            // this is the last ref → mpv_terminate_destroy runs here.
+        });
 
         log::info!(
-            "[player] destroy: dropping Inner (Arc strong_count={}, elapsed {}ms)",
-            Arc::strong_count(&inner.mpv),
+            "[player] destroy: returning in {}ms (teardown spawned)",
             t0.elapsed().as_millis()
         );
-        // `inner` drops at end of scope. If we still hold the last Arc,
-        // mpv_terminate_destroy runs synchronously here.
         Ok(())
     }
 
