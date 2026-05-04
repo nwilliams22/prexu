@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Outlet, Navigate, useNavigate } from "react-router-dom";
+import { Outlet, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { usePreferences } from "../hooks/usePreferences";
 import { useThemeEffect } from "../hooks/useTheme";
@@ -52,6 +52,28 @@ function AppLayout() {
 
   useFocusTrap(sidebarOverlayRef, sidebarOpen && tabletOrBelow);
   useRouteAnnouncer();
+
+  // Route-transition spinner — covers the gap between AppLayout/route mount
+  // and the destination page's first paint. Most visible when navigating
+  // FROM the player route, because AppLayout itself is freshly mounting
+  // (Player is rendered outside AppLayout). Without this overlay the user
+  // sees ~1s of static navy bg before the destination page renders content,
+  // which feels broken (prexu-zq4). The 600ms ceiling is empirical: covers
+  // the dev-mode gap observed in user testing while staying short enough
+  // that snappy transitions don't visibly linger.
+  const location = useLocation();
+  const lastPathRef = useRef(location.pathname);
+  const [showTransitionSpinner, setShowTransitionSpinner] = useState(true);
+  useEffect(() => {
+    // Either the AppLayout just mounted (initial true) or pathname changed
+    // — either way, hide after the gap window closes.
+    if (location.pathname !== lastPathRef.current) {
+      lastPathRef.current = location.pathname;
+      setShowTransitionSpinner(true);
+    }
+    const id = window.setTimeout(() => setShowTransitionSpinner(false), 600);
+    return () => window.clearTimeout(id);
+  }, [location.pathname]);
 
   // Close sidebar overlay on Escape
   useEffect(() => {
@@ -165,6 +187,11 @@ function AppLayout() {
               <Outlet />
             </ErrorBoundary>
           </div>
+          {showTransitionSpinner && (
+            <div style={styles.transitionSpinner} aria-hidden>
+              <div className="loading-spinner" />
+            </div>
+          )}
         </main>
       </div>
 
@@ -244,6 +271,18 @@ const styles: Record<string, React.CSSProperties> = {
     // steady state — but it lets us decouple Player.tsx's body-bg dance
     // from what the user sees during route transitions.
     background: "var(--bg-primary)",
+    // Required for the absolutely-positioned transition spinner overlay.
+    position: "relative",
+  },
+  transitionSpinner: {
+    position: "absolute",
+    inset: 0,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    background: "var(--bg-primary)",
+    zIndex: 5,
+    pointerEvents: "none",
   },
   pageTransition: {
     animation: "pageEnter 0.2s ease-out",
