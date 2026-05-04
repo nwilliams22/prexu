@@ -57,6 +57,12 @@ interface PlayerContextValue {
    * the host can advance episodes within a shared session.
    */
   replaceRatingKey: (ratingKey: string) => void;
+  /**
+   * Apply a partial update to the active session — used by Watch Together
+   * paths that need to clear the WT bundle without changing the
+   * ratingKey (e.g. host clicks "Leave Session"). No-op if no session.
+   */
+  updateSession: (changes: Partial<PlayerSession>) => void;
 }
 
 const PlayerContext = createContext<PlayerContextValue | null>(null);
@@ -80,9 +86,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setSession((prev) => (prev ? { ...prev, ratingKey, offset: undefined } : prev));
   }, []);
 
+  const updateSession = useCallback((changes: Partial<PlayerSession>) => {
+    setSession((prev) => (prev ? { ...prev, ...changes } : prev));
+  }, []);
+
   const value = useMemo<PlayerContextValue>(
-    () => ({ session, play, stop, replaceRatingKey }),
-    [session, play, stop, replaceRatingKey],
+    () => ({ session, play, stop, replaceRatingKey, updateSession }),
+    [session, play, stop, replaceRatingKey, updateSession],
   );
 
   return <PlayerContext.Provider value={value}>{children}</PlayerContext.Provider>;

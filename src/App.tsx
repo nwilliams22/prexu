@@ -1,11 +1,12 @@
 import { lazy, Suspense, useState, useEffect } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import AppLayout from "./components/AppLayout";
+import PlayerOverlay from "./components/PlayerOverlay";
+import PlayBridge from "./components/PlayBridge";
 import SplashScreen from "./components/SplashScreen";
 import { useAutoUpdate } from "./hooks/useAutoUpdate";
 import { useAuth, useAuthState, AuthProvider } from "./hooks/useAuth";
 import AppProviders from "./contexts/AppProviders";
-import ErrorBoundary from "./components/ErrorBoundary";
 import { getLibrarySections, getRecentlyAddedBySection, getOnDeck } from "./services/plex-library";
 import { groupRecentlyAdded } from "./utils/groupRecentlyAdded";
 import { cacheSet } from "./services/api-cache";
@@ -25,7 +26,6 @@ const CollectionDetail = lazy(() => import("./pages/CollectionDetail"));
 const PlaylistsBrowser = lazy(() => import("./pages/PlaylistsBrowser"));
 const PlaylistDetail = lazy(() => import("./pages/PlaylistDetail"));
 const Requests = lazy(() => import("./pages/Requests"));
-const Player = lazy(() => import("./pages/Player"));
 const ActorDetail = lazy(() => import("./pages/ActorDetail"));
 const DiscoverDetail = lazy(() => import("./pages/DiscoverDetail"));
 const Downloads = lazy(() => import("./pages/Downloads"));
@@ -197,14 +197,15 @@ function AppRoutes() {
           }
         />
 
-        {/* Player route — no sidebar/header */}
-        <Route path="/play/:ratingKey" element={<ErrorBoundary><Player /></ErrorBoundary>} />
-
         {/* Authenticated app shell with sidebar */}
         <Route element={<AppLayout />}>
           <Route index element={<Dashboard />} />
           <Route path="/library/:sectionId" element={<LibraryView />} />
           <Route path="/item/:ratingKey" element={<ItemDetail />} />
+          {/* Bridge for legacy /play/:ratingKey URLs (Watch Together
+              invite links, external deep-links). Hands off to the
+              PlayerContext + replaces history with the prior route. */}
+          <Route path="/play/:ratingKey" element={<PlayBridge />} />
           <Route path="/history" element={<WatchHistory />} />
           <Route path="/collections" element={<CollectionsBrowser />} />
           <Route path="/collection/:collectionKey" element={<CollectionDetail />} />
@@ -222,6 +223,11 @@ function AppRoutes() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>}
       </Suspense>
+      {/* Player overlay sits at top level, outside the route tree. When
+          PlayerContext has an active session it renders Player.tsx as a
+          full-viewport fixed overlay; the underlying route stays mounted
+          underneath. Stop click → context.stop() → instant reveal. */}
+      <PlayerOverlay />
     </>
   );
 }

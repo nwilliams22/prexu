@@ -1,12 +1,17 @@
 /**
- * Full-page video player route.
- * Sits outside the AppLayout (no header/sidebar).
+ * Full-page video player overlay.
+ *
+ * Mounted by PlayerOverlay (App.tsx) when PlayerContext has an active
+ * session — never rendered as a route directly. Position-fixed full
+ * viewport, so it visually replaces whatever's underneath while open
+ * and instantly reveals it on stop.
  */
 
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from "react";
-import { useParams, useNavigate, useSearchParams, Navigate } from "react-router-dom";
+import { Navigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useAuth } from "../hooks/useAuth";
+import { usePlayerSession, type PlayerWatchTogether } from "../contexts/PlayerContext";
 import { getImageUrl } from "../services/plex-library";
 import { usePlayer, IS_NATIVE_PLAYER } from "../hooks/usePlayer";
 import { useWatchTogether } from "../hooks/useWatchTogether";
@@ -35,23 +40,29 @@ import type { NormalizationPreset } from "../types/preferences";
 import { buildSubtitleCss } from "../utils/subtitle-css";
 import { logger } from "../services/logger";
 
-function Player() {
-  const { ratingKey } = useParams<{ ratingKey: string }>();
-  const [searchParams] = useSearchParams();
+interface PlayerProps {
+  ratingKey: string;
+  /** ?offset=N override — null means use saved viewOffset. */
+  offset: number | null;
+  /** Watch Together session info — undefined for solo playback. */
+  watchTogether?: PlayerWatchTogether;
+}
+
+function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   const { isAuthenticated, serverSelected, server } = useAuth();
-  const navigate = useNavigate();
+  const playerSession = usePlayerSession();
 
-  // Offset override — ?offset=0 means "play from beginning"
-  const offsetParam = searchParams.get("offset");
-  const offsetOverride = offsetParam != null ? Number(offsetParam) : null;
+  const player = usePlayer(ratingKey, offset);
 
-  const player = usePlayer(ratingKey ?? "", offsetOverride);
-
-  // Watch Together session from URL query params
-  const sessionId = searchParams.get("session");
-  const isHost = searchParams.get("host") === "true";
-  const relayUrl = searchParams.get("relay");
-  const wt = useWatchTogether(player, sessionId, isHost, relayUrl);
+  // Watch Together — derive props from the session bundle (was previously
+  // pulled from URL query params). useWatchTogether tolerates null inputs
+  // for solo playback.
+  const wt = useWatchTogether(
+    player,
+    watchTogether?.sessionId ?? null,
+    watchTogether?.isHost ?? false,
+    watchTogether?.relayUrl ?? null,
+  );
 
   const { preferences, updatePreferences } = usePreferences();
   const pb = preferences.playback;
@@ -222,20 +233,22 @@ function Player() {
   const handleNextEpisode = useCallback(() => {
     const next = playNext();
     if (next) {
-      navigate(`/play/${next.ratingKey}`);
+      // Mutate ratingKey in place — usePlayer's ratingKey effect re-inits
+      // playback. AppLayout + the page underneath stay mounted.
+      playerSession.replaceRatingKey(next.ratingKey);
     } else if (episodeNav.handleNextEpisode) {
       episodeNav.handleNextEpisode();
     }
-  }, [playNext, episodeNav.handleNextEpisode, navigate]);
+  }, [playNext, episodeNav.handleNextEpisode, playerSession]);
 
   const handlePrevEpisode = useCallback(() => {
     const prev = playPrev();
     if (prev) {
-      navigate(`/play/${prev.ratingKey}`);
+      playerSession.replaceRatingKey(prev.ratingKey);
     } else if (episodeNav.handlePrevEpisode) {
       episodeNav.handlePrevEpisode();
     }
-  }, [playPrev, episodeNav.handlePrevEpisode, navigate]);
+  }, [playPrev, episodeNav.handlePrevEpisode, playerSession]);
 
   // "Logical next" — current item is an episode AND a successor exists via
   // queue or Plex episode-nav. Used by:
@@ -427,15 +440,15 @@ function Player() {
     return () => window.clearTimeout(id);
   }, [player.isLoading]);
 
-  // Pre-navigation cleanup shared by Exit and Previous: paint body opaque
-  // BEFORE navigate. The useLayoutEffect cleanup further up SHOULD run sync
-  // before paint, but in practice WebView2 with transparent:true can still
-  // composite one frame where body=transparent during the Player→next-route
-  // swap, leaking whatever OS window is behind Prexu (Discord). Doing it
-  // here runs while Player is still mounted — the Player container is
-  // fixed+transparent so mpv is still visible to the user, but the next
-  // post-unmount paint has body already navy. Belt-and-suspenders: cleanup
-  // still runs, idempotent second write.
+  // Pre-exit cleanup: paint body opaque + drop fullscreen before tearing
+  // mpv down. The useLayoutEffect cleanup further up SHOULD run sync
+  // before paint, but in practice WebView2 with transparent:true can
+  // still composite one frame where body=transparent during the
+  // Player→underneath swap, leaking whatever OS window is behind Prexu
+  // (Discord). Doing it here runs while Player is still mounted — the
+  // Player container is fixed+transparent so mpv is still visible to
+  // the user, but the next post-unmount paint has body already navy.
+  // Belt-and-suspenders: cleanup still runs, idempotent second write.
   const prepareNavAway = useCallback(async () => {
     if (IS_NATIVE_PLAYER) {
       document.body.style.background = "#1a1a2e";
@@ -449,21 +462,15 @@ function Player() {
     }
   }, []);
 
-  // Exit = leave the player route entirely. Used by the X button in the
-  // player toolbar AND by ESC keypress. Restores the route the user was on
-  // before they pressed Play (typically an item detail page or library) by
-  // reading the pointer App.tsx writes to sessionStorage on every non-/play
-  // location change. navigate(-1) was wrong because auto-advancing through
-  // multiple episodes piled /play/* entries onto history, trapping the user.
+  // Exit = close the player overlay. The page underneath stays mounted
+  // (AppLayout never unmounted), so the user is back where they launched
+  // from instantly — no route navigation, no remount, no spinner.
+  // Audio is silenced synchronously by the awaited player_unload (the
+  // pump-join + final mpv terminate happen in the background — see
+  // src-tauri/src/player/mod.rs destroy()).
   const handleExit = useCallback(async () => {
     logger.info("player", "handleExit start");
     await prepareNavAway();
-    // Tear down mpv synchronously BEFORE navigating away. The useEffect
-    // cleanup that runs post-unmount fires player_unload fire-and-forget,
-    // which races mpv terminate against React's next paint and leaks
-    // ~2-3s of buffered audio while the dashboard is already showing.
-    // Awaiting here pushes the route change until destroy() returns; the
-    // cleanup then no-ops via "destroy: nothing to destroy".
     if (IS_NATIVE_PLAYER) {
       try {
         await invoke("player_unload");
@@ -471,9 +478,8 @@ function Player() {
         logger.warn("player", "handleExit player_unload failed", String(err));
       }
     }
-    const target = sessionStorage.getItem("prexu.lastNonPlayerRoute") || "/";
-    navigate(target);
-  }, [prepareNavAway, navigate]);
+    playerSession.stop();
+  }, [prepareNavAway, playerSession]);
   // Keep the ref pointed at the latest handleExit so handlePostPlayStop,
   // handleSkipSegment, and the EOF effect (all declared earlier) always
   // invoke the current closure.
@@ -482,12 +488,12 @@ function Player() {
   // Previous = go to the prior episode/queue item. Mirrors handleNextEpisode
   // shape: queue first, then Plex episode-nav fallback. We deliberately do
   // NOT paint body opaque here even though prepareNavAway would: Player
-  // stays mounted across same-route param changes (RR v7 behaviour for
-  // /play/:ratingKey → /play/:otherKey), so the useLayoutEffect that
-  // paints body transparent doesn't re-run. Painting it opaque on the way
-  // out without the cleanup ever firing leaves the user staring at a navy
-  // background while mpv plays invisibly underneath. Fullscreen exit is
-  // still safe to do here — that's a one-shot Win32 call, not a paint.
+  // stays mounted across ratingKey swaps (the new context.replaceRatingKey
+  // mutates the session in place so the overlay doesn't unmount), so the
+  // useLayoutEffect that paints body transparent doesn't re-run. Painting
+  // it opaque on the way out without the cleanup ever firing leaves the
+  // user staring at a navy background while mpv plays invisibly underneath.
+  // Fullscreen exit is still safe — that's a one-shot Win32 call, not a paint.
   const handlePreviousFromTopBar = useCallback(async () => {
     if (IS_NATIVE_PLAYER && playerIsFullscreenRef.current) {
       try {
