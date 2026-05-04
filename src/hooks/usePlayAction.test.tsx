@@ -4,13 +4,16 @@ import { MemoryRouter } from "react-router-dom";
 import { usePlayAction } from "./usePlayAction";
 import type { PlexMediaItem } from "../types/library";
 
-const mockNavigate = vi.fn();
-vi.mock("react-router-dom", async () => {
-  const actual = await vi.importActual<typeof import("react-router-dom")>(
-    "react-router-dom",
-  );
-  return { ...actual, useNavigate: () => mockNavigate };
-});
+const mockPlay = vi.fn();
+vi.mock("../contexts/PlayerContext", () => ({
+  usePlayerSession: () => ({
+    session: null,
+    play: mockPlay,
+    stop: vi.fn(),
+    replaceRatingKey: vi.fn(),
+    updateSession: vi.fn(),
+  }),
+}));
 
 vi.mock("./useAuth", () => ({
   useAuth: () => ({
@@ -64,7 +67,7 @@ describe("usePlayAction", () => {
 
     // No network call should have happened
     expect(mockGetItemMetadata).not.toHaveBeenCalled();
-    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(mockPlay).not.toHaveBeenCalled();
     // Popover content should now be present
     expect(result.current.playOverlay).not.toBeNull();
   });
@@ -79,7 +82,7 @@ describe("usePlayAction", () => {
     });
 
     await waitFor(() => {
-      expect(mockNavigate).toHaveBeenCalledWith("/play/1");
+      expect(mockPlay).toHaveBeenCalledWith("1");
     });
   });
 
@@ -117,7 +120,7 @@ describe("usePlayAction", () => {
     });
 
     await waitFor(() => {
-      expect(mockNavigate).toHaveBeenCalledWith("/play/1");
+      expect(mockPlay).toHaveBeenCalledWith("1");
     });
   });
 

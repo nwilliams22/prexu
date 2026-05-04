@@ -56,6 +56,16 @@ vi.mock("../hooks/usePlayAction", () => ({
   }),
 }));
 
+vi.mock("../contexts/PlayerContext", () => ({
+  usePlayerSession: () => ({
+    session: null,
+    play: vi.fn(),
+    stop: vi.fn(),
+    replaceRatingKey: vi.fn(),
+    updateSession: vi.fn(),
+  }),
+}));
+
 vi.mock("../hooks/useBreakpoint", () => ({
   useBreakpoint: () => "desktop",
   isMobile: () => false,

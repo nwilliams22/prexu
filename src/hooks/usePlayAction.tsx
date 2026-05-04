@@ -14,8 +14,8 @@
  */
 
 import { useState, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
 import { useAuth } from "./useAuth";
+import { usePlayerSession } from "../contexts/PlayerContext";
 import { getItemMetadata } from "../services/plex-library";
 import ResumePopover from "../components/ResumePopover";
 import type { PlexMediaItem } from "../types/library";
@@ -44,7 +44,7 @@ interface UsePlayActionResult {
 const PLAYABLE_TYPES = new Set(["movie", "episode"]);
 
 export function usePlayAction(): UsePlayActionResult {
-  const navigate = useNavigate();
+  const { play } = usePlayerSession();
   const { server } = useAuth();
   const [prompt, setPrompt] = useState<PromptState | null>(null);
 
@@ -56,7 +56,7 @@ export function usePlayAction(): UsePlayActionResult {
         e.stopPropagation();
 
         if (!server) {
-          navigate(`/play/${item.ratingKey}`);
+          play(item.ratingKey);
           return;
         }
 
@@ -108,18 +108,18 @@ export function usePlayAction(): UsePlayActionResult {
             });
 
             if (viewOffset === 0) {
-              navigate(`/play/${item.ratingKey}`);
+              play(item.ratingKey);
             }
           })
           .catch(() => {
             setPrompt((prev) =>
               prev?.ratingKey === item.ratingKey ? null : prev,
             );
-            navigate(`/play/${item.ratingKey}`);
+            play(item.ratingKey);
           });
       };
     },
-    [navigate, server],
+    [play, server],
   );
 
   let playOverlay: React.ReactNode = null;
@@ -129,11 +129,11 @@ export function usePlayAction(): UsePlayActionResult {
         viewOffset={prompt.viewOffset}
         anchorPosition={prompt.position}
         onResume={() => {
-          navigate(`/play/${prompt.ratingKey}`);
+          play(prompt.ratingKey);
           setPrompt(null);
         }}
         onPlayFromBeginning={() => {
-          navigate(`/play/${prompt.ratingKey}?offset=0`);
+          play(prompt.ratingKey, { offset: 0 });
           setPrompt(null);
         }}
         onClose={() => setPrompt(null)}

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
+import { usePlayerSession } from "../contexts/PlayerContext";
 import { useAuth } from "../hooks/useAuth";
 import { usePreferences } from "../hooks/usePreferences";
 import { useParentalControls } from "../hooks/useParentalControls";
@@ -160,6 +161,7 @@ function Dashboard() {
   const { posterWidth } = usePosterSize();
   const sections = preferences.appearance.dashboardSections;
   const navigate = useNavigate();
+  const { play } = usePlayerSession();
   const [expandedGroupKey, setExpandedGroupKey] = useState<string | null>(null);
   const [expanderClosing, setExpanderClosing] = useState(false);
   const { openContextMenu, overlays: menuOverlays } = useMediaContextMenu({
@@ -183,13 +185,13 @@ function Dashboard() {
         if (handler) {
           handler(e);
         } else {
-          navigate(`/play/${ratingKey}`);
+          play(ratingKey);
         }
       } else {
-        navigate(`/play/${ratingKey}`);
+        play(ratingKey);
       }
     },
-    [heroItemMap, getPlayHandler, navigate],
+    [heroItemMap, getPlayHandler, play],
   );
 
   // Dismissed recommendations
@@ -574,7 +576,7 @@ function Dashboard() {
               setExpanderClosing(false);
             }, 250);
           }}
-          onPlayEpisode={(ratingKey) => navigate(`/play/${ratingKey}`)}
+          onPlayEpisode={(ratingKey) => play(ratingKey)}
           onViewShow={(groupKey) => navigate(`/item/${groupKey}`)}
           onViewEpisode={(ratingKey) => navigate(`/item/${ratingKey}`)}
         />

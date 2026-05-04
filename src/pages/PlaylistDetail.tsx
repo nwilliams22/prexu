@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
+import { usePlayerSession } from "../contexts/PlayerContext";
 import { useAuth } from "../hooks/useAuth";
 import {
   getPlaylistItems,
@@ -46,6 +47,7 @@ function PlaylistDetail() {
   const { playlistKey } = useParams<{ playlistKey: string }>();
   const { server } = useAuth();
   const navigate = useNavigate();
+  const { play } = usePlayerSession();
   useScrollRestoration();
   const { setQueue } = useQueue();
 
@@ -152,15 +154,15 @@ function PlaylistDetail() {
     const queueItems = buildQueueFromItems(items);
     if (queueItems.length === 0) return;
     setQueue(queueItems, 0);
-    navigate(`/play/${queueItems[0].ratingKey}`);
-  }, [items, setQueue, navigate]);
+    play(queueItems[0].ratingKey);
+  }, [items, setQueue, play]);
 
   const handleShuffle = useCallback(() => {
     const queueItems = shuffleArray(buildQueueFromItems(items));
     if (queueItems.length === 0) return;
     setQueue(queueItems, 0, true);
-    navigate(`/play/${queueItems[0].ratingKey}`);
-  }, [items, setQueue, navigate]);
+    play(queueItems[0].ratingKey);
+  }, [items, setQueue, play]);
 
   // ── Edit ──
 

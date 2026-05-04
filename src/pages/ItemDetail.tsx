@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { usePlayerSession } from "../contexts/PlayerContext";
 import { useAuth } from "../hooks/useAuth";
 import { useParentalControls } from "../hooks/useParentalControls";
 import { useToast } from "../hooks/useToast";
@@ -31,6 +32,7 @@ function ItemDetail() {
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
   const navigate = useNavigate();
+  const { play } = usePlayerSession();
   const isAdmin = activeUser?.isAdmin ?? false;
   const { isItemAllowed, restrictionsEnabled } = useParentalControls();
   const { toast } = useToast();
@@ -151,7 +153,7 @@ function ItemDetail() {
               subtitle={(extra as { subtype?: string }).subtype || "Extra"}
               width={360}
               aspectRatio={0.56}
-              onClick={() => navigate(`/play/${extra.ratingKey}`)}
+              onClick={() => play(extra.ratingKey)}
             />
           ))}
         </HorizontalRow>

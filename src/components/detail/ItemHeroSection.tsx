@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useBreakpoint, isMobile } from "../../hooks/useBreakpoint";
+import { usePlayerSession } from "../../contexts/PlayerContext";
 import WatchTogetherButton from "../WatchTogetherButton";
 import WatchedToggleButton from "../WatchedToggleButton";
 import DownloadButton from "./DownloadButton";
@@ -60,6 +61,7 @@ export default function ItemHeroSection({
   serverToken,
 }: ItemHeroSectionProps) {
   const navigate = useNavigate();
+  const { play } = usePlayerSession();
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
   const [showSubtitleSearch, setShowSubtitleSearch] = useState(false);
@@ -191,13 +193,13 @@ export default function ItemHeroSection({
               {movie.viewOffset && movie.viewOffset > 0 ? (
                 <>
                   <button
-                    onClick={() => navigate(`/play/${movie.ratingKey}`)}
+                    onClick={() => play(movie.ratingKey)}
                     style={styles.playButton}
                   >
                     &#9654; Resume from {formatResumeTime(movie.viewOffset)}
                   </button>
                   <button
-                    onClick={() => navigate(`/play/${movie.ratingKey}?offset=0`)}
+                    onClick={() => play(movie.ratingKey, { offset: 0 })}
                     style={styles.secondaryButton}
                   >
                     Play from Beginning
@@ -205,7 +207,7 @@ export default function ItemHeroSection({
                 </>
               ) : (
                 <button
-                  onClick={() => navigate(`/play/${movie.ratingKey}`)}
+                  onClick={() => play(movie.ratingKey)}
                   style={styles.playButton}
                 >
                   &#9654; Play
@@ -605,13 +607,13 @@ export default function ItemHeroSection({
               {ep.viewOffset && ep.viewOffset > 0 ? (
                 <>
                   <button
-                    onClick={() => navigate(`/play/${ep.ratingKey}`)}
+                    onClick={() => play(ep.ratingKey)}
                     style={styles.playButton}
                   >
                     &#9654; Resume from {formatResumeTime(ep.viewOffset)}
                   </button>
                   <button
-                    onClick={() => navigate(`/play/${ep.ratingKey}?offset=0`)}
+                    onClick={() => play(ep.ratingKey, { offset: 0 })}
                     style={styles.secondaryButton}
                   >
                     Play from Beginning
@@ -619,7 +621,7 @@ export default function ItemHeroSection({
                 </>
               ) : (
                 <button
-                  onClick={() => navigate(`/play/${ep.ratingKey}`)}
+                  onClick={() => play(ep.ratingKey)}
                   style={styles.playButton}
                 >
                   &#9654; Play

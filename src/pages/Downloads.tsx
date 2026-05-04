@@ -1,6 +1,7 @@
 import { useAuth } from "../hooks/useAuth";
 import { useDownloads } from "../hooks/useDownloads";
 import { useNavigate } from "react-router-dom";
+import { usePlayerSession } from "../contexts/PlayerContext";
 import { getImageUrl } from "../services/plex-library";
 import EmptyState from "../components/EmptyState";
 import type { DownloadItem } from "../types/downloads";
@@ -19,6 +20,7 @@ function DownloadItemRow({ item, serverUri, serverToken }: {
 }) {
   const { cancelDownload, deleteDownload, retryDownload } = useDownloads();
   const navigate = useNavigate();
+  const { play } = usePlayerSession();
   const progress = item.fileSize > 0 ? item.bytesDownloaded / item.fileSize : 0;
   const thumbUrl = getImageUrl(serverUri, serverToken, item.thumb, 80, 120);
 
@@ -74,7 +76,7 @@ function DownloadItemRow({ item, serverUri, serverToken }: {
         )}
         {item.status === "complete" && (
           <button
-            onClick={() => navigate(`/play/${item.ratingKey}`)}
+            onClick={() => play(item.ratingKey)}
             style={styles.playBtn}
             title="Play"
           >
