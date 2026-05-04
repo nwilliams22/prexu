@@ -31,11 +31,18 @@ export function usePlayerControlsVisibility(
     resetHideTimer();
   }, [resetHideTimer]);
 
-  // Always show controls when paused
+  // React to play/pause transitions:
+  // - paused: show controls and stop the hide countdown
+  // - playing (including unpause without mouse movement): show controls and
+  //   start a fresh 3s countdown so the user doesn't have to wiggle the mouse
   useEffect(() => {
-    if (!isPlaying) {
-      setControlsVisible(true);
-      if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    setControlsVisible(true);
+    if (isPlaying) {
+      hideTimerRef.current = setTimeout(
+        () => setControlsVisible(false),
+        CONTROLS_HIDE_MS,
+      );
     }
   }, [isPlaying]);
 

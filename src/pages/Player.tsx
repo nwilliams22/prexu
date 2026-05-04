@@ -477,11 +477,7 @@ function Player() {
         // would occlude it. HTML5 path keeps black so the <video> letterbox
         // stays cinema-style.
         background: IS_NATIVE_PLAYER ? "transparent" : styles.container.background,
-        // On native path, never hide the cursor — WebView2 passes mouse
-        // events through transparent areas, so cursor: none + transparent
-        // webview = permanently lost cursor (onMouseMove can't fire to
-        // bring controls back). HTML5 path hides cursor normally.
-        cursor: controlsVisible || IS_NATIVE_PLAYER ? "default" : "none",
+        cursor: controlsVisible ? "default" : "none",
       }}
       onMouseMove={handleMouseMove}
     >
