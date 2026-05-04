@@ -254,13 +254,11 @@ function Player() {
   const [showPostPlay, setShowPostPlay] = useState(false);
   const postPlayShownRef = useRef(false);
 
-  // Auto-exit countdown — when EOF fires with no continuation (movie ends,
-  // last episode of series, or Skip Credits seek-to-duration on a final
-  // episode), the user is otherwise stuck on a blank player with only the
-  // toolbar. After AUTO_EXIT_SECONDS we invoke handleExit; any input
-  // cancels.
-  const AUTO_EXIT_SECONDS = 5;
-  const [autoExitRemaining, setAutoExitRemaining] = useState<number | null>(null);
+  // Forwarded handleExit — declared further down. handleEnded (inside the
+  // EOF effect) and handleSkipSegment both call this on the no-continuation
+  // path so we exit the player immediately rather than stranding the user
+  // on a paused-at-EOF black frame.
+  const handleExitRef = useRef<() => void>(() => {});
 
   // videoRef is stable across renders; capture in a ref so handleEnded
   // doesn't need to re-bind when player.videoRef identity changes.
@@ -292,11 +290,12 @@ function Player() {
         return;
       }
       // No continuation path: not in WT (host drives flow there) and either
-      // a movie or a final episode. Start the auto-exit countdown so the
-      // user isn't stranded on a black screen with only the toolbar.
+      // a movie or a final episode. Exit the player immediately — the
+      // user has no next item and nothing to interact with on a paused-
+      // at-EOF black frame.
       if (!hasNextItem && !wt.isInSession) {
-        logger.info("player", "EOF with no continuation — scheduling auto-exit");
-        setAutoExitRemaining(AUTO_EXIT_SECONDS);
+        logger.info("player", "EOF with no continuation — exiting player");
+        handleExitRef.current();
       }
     };
     if (IS_NATIVE_PLAYER) {
@@ -325,52 +324,7 @@ function Player() {
   useEffect(() => {
     postPlayShownRef.current = false;
     setShowPostPlay(false);
-    setAutoExitRemaining(null);
   }, [ratingKey]);
-
-  // Auto-exit countdown tick + fire. Uses 1s setTimeouts rather than a
-  // setInterval so the countdown reads cleanly and we don't rely on
-  // wall-clock drift correction. handleExit dependency is stable; declared
-  // further down so we forward-reference via a ref.
-  const handleExitRef2 = useRef<() => void>(() => {});
-  useEffect(() => {
-    if (autoExitRemaining == null) return;
-    if (autoExitRemaining <= 0) {
-      logger.info("player", "auto-exit countdown reached zero — exiting");
-      setAutoExitRemaining(null);
-      handleExitRef2.current();
-      return;
-    }
-    const id = window.setTimeout(() => {
-      setAutoExitRemaining((prev) => (prev != null ? prev - 1 : null));
-    }, 1000);
-    return () => window.clearTimeout(id);
-  }, [autoExitRemaining]);
-
-  // Cancel the auto-exit on a deliberate user input — keydown or mousedown
-  // only. We deliberately do NOT listen for mousemove: when mpv pauses at
-  // EOF the player keeps the cursor + controls visible, so any incidental
-  // mouse motion would instantly cancel the countdown before the user can
-  // even read the overlay. A 300ms grace period also absorbs the click
-  // that triggered the seek (Skip Credits) so it can't double-count as
-  // cancellation.
-  useEffect(() => {
-    if (autoExitRemaining == null) return;
-    let armed = false;
-    const armTimer = window.setTimeout(() => { armed = true; }, 300);
-    const cancel = () => {
-      if (!armed) return;
-      logger.info("player", "auto-exit cancelled by user input");
-      setAutoExitRemaining(null);
-    };
-    window.addEventListener("keydown", cancel);
-    window.addEventListener("mousedown", cancel);
-    return () => {
-      window.clearTimeout(armTimer);
-      window.removeEventListener("keydown", cancel);
-      window.removeEventListener("mousedown", cancel);
-    };
-  }, [autoExitRemaining]);
 
   const handlePostPlayNext = useCallback(() => {
     setShowPostPlay(false);
@@ -385,9 +339,8 @@ function Player() {
   // to player chrome). Reset postPlayShownRef so a fresh navigation back
   // into this episode can re-trigger PostPlay later. handleExit is declared
   // further down (after a couple of other callbacks it depends on); going
-  // through a ref avoids the forward-reference and keeps both useCallbacks
-  // dependency-list clean.
-  const handleExitRef = useRef<() => void>(() => {});
+  // through handleExitRef (declared above) avoids the forward-reference and
+  // keeps the useCallback dep list clean.
   const handlePostPlayStop = useCallback(() => {
     setShowPostPlay(false);
     postPlayShownRef.current = false;
@@ -428,18 +381,17 @@ function Player() {
 
   const handleSkipSegment = useCallback(() => {
     if (!activeSegment) return;
-    seek(activeSegment.endTime);
-    // Skip Credits with no continuation lands on a paused-at-EOF black
-    // frame. mpv's eof-reached property is supposed to fire player://eof
-    // and trigger our auto-exit, but the seek-past-end path proved
-    // unreliable in practice (movie test, 2026-05-03). Trigger auto-exit
-    // explicitly here so the user always has a clean exit path. Idempotent
-    // — the EOF handler also calls setAutoExitRemaining for the natural
-    // play-to-end case, and the countdown effect tolerates re-arming.
+    // Skip Credits with no continuation = "I'm done watching". Exit the
+    // player immediately rather than seeking to a paused-at-EOF black
+    // frame. mpv's eof-reached property is unreliable on the seek-past-
+    // end path anyway (movie test, 2026-05-03), so we don't even rely on
+    // the EOF event firing — go straight to handleExit.
     if (activeSegment.type === "credits" && !hasNextItem && !wt.isInSession) {
-      logger.info("player", "Skip Credits with no continuation — scheduling auto-exit");
-      setAutoExitRemaining(AUTO_EXIT_SECONDS);
+      logger.info("player", "Skip Credits with no continuation — exiting player");
+      handleExitRef.current();
+      return;
     }
+    seek(activeSegment.endTime);
   }, [activeSegment, seek, hasNextItem, wt.isInSession]);
 
   // Next episode detection for Watch Together host
@@ -530,11 +482,10 @@ function Player() {
     const target = sessionStorage.getItem("prexu.lastNonPlayerRoute") || "/";
     navigate(target);
   }, [prepareNavAway, navigate]);
-  // Keep the ref pointed at the latest handleExit so handlePostPlayStop
-  // and the auto-exit countdown effect (both declared earlier) always
+  // Keep the ref pointed at the latest handleExit so handlePostPlayStop,
+  // handleSkipSegment, and the EOF effect (all declared earlier) always
   // invoke the current closure.
   handleExitRef.current = handleExit;
-  handleExitRef2.current = handleExit;
 
   // Previous = go to the prior episode/queue item. Mirrors handleNextEpisode
   // shape: queue first, then Plex episode-nav fallback. We deliberately do
@@ -767,17 +718,6 @@ function Player() {
         />
       )}
 
-      {/* Auto-exit countdown — shown when EOF fired (or Skip Credits
-          landed at end) with no continuation. Click or press any key to
-          cancel (mousemove deliberately excluded — see effect above). */}
-      {autoExitRemaining != null && (
-        <div style={styles.autoExitOverlay}>
-          <p style={styles.autoExitText}>
-            Returning in {autoExitRemaining}s — click or press any key to cancel
-          </p>
-        </div>
-      )}
-
       {/* Exit fade — opaque navy above all chrome while we await
           player_unload, so the user doesn't see controls hovering over a
           dead video region for the duration of the destroy. */}
@@ -875,24 +815,6 @@ const styles: Record<string, React.CSSProperties> = {
     background: "#1a1a2e",
     zIndex: 1000,
     pointerEvents: "none",
-  },
-  autoExitOverlay: {
-    position: "absolute",
-    bottom: "8rem",
-    left: 0,
-    right: 0,
-    display: "flex",
-    justifyContent: "center",
-    zIndex: 50,
-    pointerEvents: "none",
-  },
-  autoExitText: {
-    background: "rgba(0,0,0,0.75)",
-    color: "#fff",
-    padding: "0.75rem 1.5rem",
-    borderRadius: "0.5rem",
-    fontSize: "0.95rem",
-    margin: 0,
   },
 };
 
