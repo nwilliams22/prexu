@@ -388,6 +388,14 @@ function Player() {
   const playerIsFullscreenRef = useRef(player.isFullscreen);
   playerIsFullscreenRef.current = player.isFullscreen;
 
+  // While true, render an opaque navy fill above all player chrome so the
+  // user sees a clean cut to background during the awaited player_unload
+  // (~50-100ms). Without this, controls + transport bar stay visible against
+  // an empty video region after mpv has been terminated. Set true at the
+  // top of handleExit; component unmounts immediately after navigate so
+  // there's no need to reset.
+  const [isExiting, setIsExiting] = useState(false);
+
   // Pre-navigation cleanup shared by Exit and Previous: paint body opaque
   // BEFORE navigate. The useLayoutEffect cleanup further up SHOULD run sync
   // before paint, but in practice WebView2 with transparent:true can still
@@ -417,6 +425,8 @@ function Player() {
   // location change. navigate(-1) was wrong because auto-advancing through
   // multiple episodes piled /play/* entries onto history, trapping the user.
   const handleExit = useCallback(async () => {
+    logger.info("player", "handleExit start");
+    setIsExiting(true);
     await prepareNavAway();
     // Tear down mpv synchronously BEFORE navigating away. The useEffect
     // cleanup that runs post-unmount fires player_unload fire-and-forget,
@@ -654,6 +664,11 @@ function Player() {
           posterUrl={(path) => getImageUrl(server.uri, server.accessToken, path, 100, 68)}
         />
       )}
+
+      {/* Exit fade — opaque navy above all chrome while we await
+          player_unload, so the user doesn't see controls hovering over a
+          dead video region for the duration of the destroy. */}
+      {isExiting && <div style={styles.exitOverlay} />}
     </div>
   );
 }
@@ -717,6 +732,13 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "center",
     background: "rgba(0,0,0,0.3)",
     zIndex: 5,
+    pointerEvents: "none",
+  },
+  exitOverlay: {
+    position: "absolute",
+    inset: 0,
+    background: "#1a1a2e",
+    zIndex: 1000,
     pointerEvents: "none",
   },
 };
