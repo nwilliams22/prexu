@@ -237,7 +237,20 @@ function Player() {
     }
   }, [playPrev, episodeNav.handlePrevEpisode, navigate]);
 
-  // Post-play screen — show when playback ends and queue has next item
+  // "Logical next" — current item is an episode AND a successor exists via
+  // queue or Plex episode-nav. Used by:
+  //   - PostPlayScreen trigger (only auto-prompt for episodes with a real
+  //     next; movies and final-episodes-with-empty-queue should NOT)
+  //   - SkipSegmentButton's "Next Episode" vs "Skip Credits" label
+  //   - useSkipSegments synthetic-credits gate (see hasNextEpisode arg)
+  // Movies always evaluate false here, so a stale TV item in the persisted
+  // queue can't hijack movie playback at the credits point.
+  const hasNextItem =
+    player.itemType === "episode" &&
+    (queue.currentIndex + 1 < queue.items.length ||
+      episodeNav.handleNextEpisode != null);
+
+  // Post-play screen — show when playback ends and there's a logical next
   const [showPostPlay, setShowPostPlay] = useState(false);
   const postPlayShownRef = useRef(false);
 
@@ -248,7 +261,11 @@ function Player() {
 
   useEffect(() => {
     const handleEnded = () => {
-      if (remainingCount > 0 && !wt.isInSession && !postPlayShownRef.current) {
+      // hasNextItem (itemType==="episode" AND queue/episode-nav has next)
+      // is the correct gate: a movie ending should NOT pop PostPlay even if
+      // the queue has stale items. Same root issue as SkipSegmentButton's
+      // "Next Episode" gate — both feed off the same notion of "logical next".
+      if (hasNextItem && !wt.isInSession && !postPlayShownRef.current) {
         postPlayShownRef.current = true;
         // Pause the underlying player synchronously with showing the overlay.
         // Two reasons: (a) on native, mpv with keep-open=always usually stops
@@ -286,7 +303,7 @@ function Player() {
     if (!video) return;
     video.addEventListener("ended", handleEnded);
     return () => video.removeEventListener("ended", handleEnded);
-  }, [player.videoRef, remainingCount, wt.isInSession]);
+  }, [player.videoRef, hasNextItem, wt.isInSession]);
 
   // Reset post-play state when ratingKey changes
   useEffect(() => {
@@ -332,9 +349,7 @@ function Player() {
   // sibling episodes' credits markers — usually a tighter fit than the
   // hard-coded 90s default. Falls back to 90s when fewer than 3 siblings
   // have markers (i.e. the parent season is too sparse to be useful).
-  const hasNextItem =
-    queue.currentIndex + 1 < queue.items.length ||
-    episodeNav.handleNextEpisode != null;
+  // hasNextItem is declared earlier — see comment near PostPlayScreen.
   const estimatedCreditsLengthMs = useShowCreditsLength(
     server,
     player.itemType === "episode" ? player.parentRatingKey : undefined,
@@ -546,13 +561,18 @@ function Player() {
         />
       )}
 
-      {/* Skip intro/credits button */}
+      {/* Skip intro/credits button. hasNextEpisode gates the "Next Episode"
+          label — must reflect a *logical* next (not just the existence of
+          handleNextEpisode, which is always defined). hasNextItem already
+          encodes the rule: itemType==="episode" AND (queue has next OR Plex
+          episode-nav has next). For movies and last-episodes-with-empty-
+          queue this drops the button to "Skip Credits" instead. */}
       {activeSegment && !player.isLoading && !player.playbackError && (
         <SkipSegmentButton
           segment={activeSegment}
           onSkip={handleSkipSegment}
           onDismiss={dismissSegment}
-          hasNextEpisode={!!handleNextEpisode}
+          hasNextEpisode={hasNextItem}
           onNextEpisode={handleNextEpisode}
         />
       )}
