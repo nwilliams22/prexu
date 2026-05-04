@@ -254,6 +254,14 @@ function Player() {
   const [showPostPlay, setShowPostPlay] = useState(false);
   const postPlayShownRef = useRef(false);
 
+  // Auto-exit countdown — when EOF fires with no continuation (movie ends,
+  // last episode of series, or Skip Credits seek-to-duration on a final
+  // episode), the user is otherwise stuck on a blank player with only the
+  // toolbar. After AUTO_EXIT_SECONDS we invoke handleExit; any input
+  // cancels.
+  const AUTO_EXIT_SECONDS = 5;
+  const [autoExitRemaining, setAutoExitRemaining] = useState<number | null>(null);
+
   // videoRef is stable across renders; capture in a ref so handleEnded
   // doesn't need to re-bind when player.videoRef identity changes.
   const playerVideoRefRef = useRef(player.videoRef);
@@ -281,6 +289,14 @@ function Player() {
           playerVideoRefRef.current.current?.pause();
         }
         setShowPostPlay(true);
+        return;
+      }
+      // No continuation path: not in WT (host drives flow there) and either
+      // a movie or a final episode. Start the auto-exit countdown so the
+      // user isn't stranded on a black screen with only the toolbar.
+      if (!hasNextItem && !wt.isInSession) {
+        logger.info("player", "EOF with no continuation — scheduling auto-exit");
+        setAutoExitRemaining(AUTO_EXIT_SECONDS);
       }
     };
     if (IS_NATIVE_PLAYER) {
@@ -309,7 +325,45 @@ function Player() {
   useEffect(() => {
     postPlayShownRef.current = false;
     setShowPostPlay(false);
+    setAutoExitRemaining(null);
   }, [ratingKey]);
+
+  // Auto-exit countdown tick + fire. Uses 1s setTimeouts rather than a
+  // setInterval so the countdown reads cleanly and we don't rely on
+  // wall-clock drift correction. handleExit dependency is stable; declared
+  // further down so we forward-reference via a ref.
+  const handleExitRef2 = useRef<() => void>(() => {});
+  useEffect(() => {
+    if (autoExitRemaining == null) return;
+    if (autoExitRemaining <= 0) {
+      logger.info("player", "auto-exit countdown reached zero — exiting");
+      setAutoExitRemaining(null);
+      handleExitRef2.current();
+      return;
+    }
+    const id = window.setTimeout(() => {
+      setAutoExitRemaining((prev) => (prev != null ? prev - 1 : null));
+    }, 1000);
+    return () => window.clearTimeout(id);
+  }, [autoExitRemaining]);
+
+  // Cancel the auto-exit on any user input. mousemove/keydown/mousedown all
+  // qualify per the spec — any signal that the user is still engaged.
+  useEffect(() => {
+    if (autoExitRemaining == null) return;
+    const cancel = () => {
+      logger.info("player", "auto-exit cancelled by user input");
+      setAutoExitRemaining(null);
+    };
+    window.addEventListener("mousemove", cancel);
+    window.addEventListener("keydown", cancel);
+    window.addEventListener("mousedown", cancel);
+    return () => {
+      window.removeEventListener("mousemove", cancel);
+      window.removeEventListener("keydown", cancel);
+      window.removeEventListener("mousedown", cancel);
+    };
+  }, [autoExitRemaining]);
 
   const handlePostPlayNext = useCallback(() => {
     setShowPostPlay(false);
@@ -445,8 +499,10 @@ function Player() {
     navigate(target);
   }, [prepareNavAway, navigate]);
   // Keep the ref pointed at the latest handleExit so handlePostPlayStop
-  // (declared earlier) always invokes the current closure.
+  // and the auto-exit countdown effect (both declared earlier) always
+  // invoke the current closure.
   handleExitRef.current = handleExit;
+  handleExitRef2.current = handleExit;
 
   // Previous = go to the prior episode/queue item. Mirrors handleNextEpisode
   // shape: queue first, then Plex episode-nav fallback. We deliberately do
@@ -665,6 +721,16 @@ function Player() {
         />
       )}
 
+      {/* Auto-exit countdown — shown only when EOF fired with no
+          continuation. Any user input cancels (see effect above). */}
+      {autoExitRemaining != null && (
+        <div style={styles.autoExitOverlay}>
+          <p style={styles.autoExitText}>
+            Returning in {autoExitRemaining}s — any key to cancel
+          </p>
+        </div>
+      )}
+
       {/* Exit fade — opaque navy above all chrome while we await
           player_unload, so the user doesn't see controls hovering over a
           dead video region for the duration of the destroy. */}
@@ -740,6 +806,24 @@ const styles: Record<string, React.CSSProperties> = {
     background: "#1a1a2e",
     zIndex: 1000,
     pointerEvents: "none",
+  },
+  autoExitOverlay: {
+    position: "absolute",
+    bottom: "8rem",
+    left: 0,
+    right: 0,
+    display: "flex",
+    justifyContent: "center",
+    zIndex: 50,
+    pointerEvents: "none",
+  },
+  autoExitText: {
+    background: "rgba(0,0,0,0.75)",
+    color: "#fff",
+    padding: "0.75rem 1.5rem",
+    borderRadius: "0.5rem",
+    fontSize: "0.95rem",
+    margin: 0,
   },
 };
 
