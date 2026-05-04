@@ -238,6 +238,12 @@ const styles: Record<string, React.CSSProperties> = {
     overflowX: "hidden",
     display: "flex",
     flexDirection: "column",
+    // Owns the background for the route content area so the post-Player-
+    // unmount transition doesn't show body navy through a transparent
+    // Outlet (prexu-zq4). Same colour as body bg, so no visual change in
+    // steady state — but it lets us decouple Player.tsx's body-bg dance
+    // from what the user sees during route transitions.
+    background: "var(--bg-primary)",
   },
   pageTransition: {
     animation: "pageEnter 0.2s ease-out",
