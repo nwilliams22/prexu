@@ -162,16 +162,39 @@ function VirtualizedLibraryGrid<T>({
         if (index < 0) return;
         if (virtualize) {
           const rowIndex = Math.floor(index / Math.max(1, cols));
-          virtualizerRef.current.scrollToIndex(rowIndex, {
-            align: "center",
-            behavior: "smooth",
+          // First pass uses estimated row heights for any unmeasured rows
+          // between the current scroll position and the target. For an
+          // alphabet jump that may cover hundreds of unmeasured rows, even a
+          // small per-row estimate error compounds (e.g. 10 px × 200 rows =
+          // 2000 px short). Once the target window renders, those rows get
+          // measured by the virtualizer's measureElement callback; we
+          // re-issue the scroll on the next frame so the corrected offset
+          // is applied. A second RAF tick guards against multi-row libraries
+          // where the second pass still has unmeasured neighbours.
+          // `align: "start"` puts the target row at the TOP of the viewport
+          // (behaviour the user expects for an alphabet jump). `behavior:
+          // "auto"` (instant) avoids smooth-scroll animation latency that
+          // would otherwise mask the second-pass correction.
+          const v = virtualizerRef.current;
+          v.scrollToIndex(rowIndex, { align: "start", behavior: "auto" });
+          requestAnimationFrame(() => {
+            virtualizerRef.current.scrollToIndex(rowIndex, {
+              align: "start",
+              behavior: "auto",
+            });
+            requestAnimationFrame(() => {
+              virtualizerRef.current.scrollToIndex(rowIndex, {
+                align: "start",
+                behavior: "auto",
+              });
+            });
           });
           return;
         }
         const target = parentRef.current?.querySelector<HTMLElement>(
           `[data-grid-index="${index}"]`,
         );
-        target?.scrollIntoView({ behavior: "smooth", block: "center" });
+        target?.scrollIntoView({ behavior: "auto", block: "start" });
       },
     }),
     [virtualize, cols],
