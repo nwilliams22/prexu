@@ -535,6 +535,17 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   // src-tauri/src/player/mod.rs destroy()).
   const handleExit = useCallback(async () => {
     logger.info("player", "handleExit start");
+    // If we're in mini-player mode, exit it FIRST so the main window is
+    // restored to its pre-mini outer geometry and always-on-top is cleared
+    // before we unload the player. Without this the app stays at the
+    // 480x270 mini size after the player closes (prexu-ltu follow-up).
+    if (IS_NATIVE_PLAYER && mini.isMini) {
+      try {
+        mini.toggleMini();
+      } catch (err) {
+        logger.warn("player", "handleExit exit-mini failed", String(err));
+      }
+    }
     await prepareNavAway();
     if (IS_NATIVE_PLAYER) {
       try {
@@ -544,7 +555,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
       }
     }
     playerSession.stop();
-  }, [prepareNavAway, playerSession]);
+  }, [prepareNavAway, playerSession, mini]);
   // Keep the ref pointed at the latest handleExit so handlePostPlayStop,
   // handleSkipSegment, and the EOF effect (all declared earlier) always
   // invoke the current closure.
