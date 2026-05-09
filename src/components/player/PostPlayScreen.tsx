@@ -60,6 +60,8 @@ interface PostPlayScreenProps {
   directors?: string[];
   /** Top cast names — rendered as a "Starring X, Y, Z" line when present. */
   cast?: string[];
+  /** Upcoming queue items shown below the main row as a "Coming up" preview. */
+  upNext?: QueueItem[];
 }
 
 /**
@@ -136,6 +138,7 @@ export default function PostPlayScreen({
   watched,
   directors,
   cast,
+  upNext,
 }: PostPlayScreenProps) {
   const [countdown, setCountdown] = useState(countdownSeconds);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -298,6 +301,39 @@ export default function PostPlayScreen({
           </div>
         </div>
 
+        {/* Coming up — small horizontal strip of the next 2-4 queue items
+            after `nextItem`. Helps fill the larger overlay area without
+            making the screen feel sparse. */}
+        {upNext && upNext.length > 0 && (
+          <div style={styles.upNextSection}>
+            <div style={styles.upNextLabel}>COMING UP</div>
+            <div style={styles.upNextRow}>
+              {upNext.map((item) => {
+                const itemBadge =
+                  item.type === "episode"
+                    ? parseSeasonEpisodeBadge(item.subtitle)
+                    : null;
+                return (
+                  <div key={item.ratingKey} style={styles.upNextCard}>
+                    <img
+                      src={posterUrl(item.thumb)}
+                      alt=""
+                      style={styles.upNextThumb}
+                      loading="lazy"
+                    />
+                    <div style={styles.upNextInfo}>
+                      {itemBadge && (
+                        <span style={styles.upNextBadge}>{itemBadge}</span>
+                      )}
+                      <span style={styles.upNextTitle}>{item.title}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Countdown progress bar — full-width, more visible than the old 48x48 ring */}
         {autoPlayEnabled && (
           <div style={styles.countdownSection} aria-live="polite">
@@ -358,16 +394,12 @@ export default function PostPlayScreen({
 
 const styles: Record<string, React.CSSProperties> = {
   container: {
-    // Anchored to the top half of the player surface — leaves the bottom
-    // half showing the player chrome (seek bar, transport controls) so the
-    // user can still scrub if they want, while the upper region holds the
-    // richer Playing Next card. Background is opaque Prexu navy so the
-    // paused video frame underneath doesn't bleed through.
+    // Full-screen overlay in opaque Prexu navy. The paused video frame
+    // underneath is fully covered so the user sees a clean transition
+    // card. Player chrome (seek bar, transport controls) remains visible
+    // above this layer's z-index so scrubbing past EOF still works.
     position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    height: "50vh",
+    inset: 0,
     background: "var(--bg-primary)",
     zIndex: 30,
     display: "flex",
@@ -505,6 +537,58 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
     color: "var(--text-primary)",
     opacity: 0.7,
+  },
+  upNextSection: {
+    marginTop: "1.25rem",
+  },
+  upNextLabel: {
+    fontSize: "0.75rem",
+    fontWeight: 700,
+    color: "var(--text-secondary)",
+    letterSpacing: "0.1em",
+    marginBottom: "0.6rem",
+  },
+  upNextRow: {
+    display: "flex",
+    gap: "0.85rem",
+    overflow: "hidden",
+  },
+  upNextCard: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "0.4rem",
+    flex: "0 0 200px",
+    minWidth: 0,
+  },
+  upNextThumb: {
+    width: "200px",
+    height: "112px",
+    borderRadius: "6px",
+    objectFit: "cover",
+    background: "var(--bg-card)",
+  },
+  upNextInfo: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "0.25rem",
+    minWidth: 0,
+  },
+  upNextBadge: {
+    alignSelf: "flex-start",
+    background: "rgba(229, 160, 13, 0.15)",
+    color: "var(--accent)",
+    fontSize: "0.65rem",
+    fontWeight: 700,
+    padding: "0.1rem 0.4rem",
+    borderRadius: "3px",
+    letterSpacing: "0.04em",
+  },
+  upNextTitle: {
+    fontSize: "0.85rem",
+    color: "var(--text-primary)",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
   },
   countdownSection: {
     marginTop: "1.5rem",

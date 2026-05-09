@@ -807,6 +807,13 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
               ? postPlayDetail.Role?.map((r) => r.tag).slice(0, 3)
               : undefined
           }
+          upNext={(() => {
+            // Items AFTER the next one (currentIndex + 2 onward, capped at
+            // 4) — the next one itself is already the hero card.
+            const start = queue.currentIndex + 2;
+            const slice = queue.items.slice(start, start + 4);
+            return slice.length > 0 ? slice : undefined;
+          })()}
         />
       )}
 
