@@ -88,6 +88,11 @@ fn run_pump(mpv: Arc<Mpv>, app: AppHandle) {
     // Reset on each FileLoaded; logged once per file on the first
     // PlaybackRestart so we don't spam on every seek.
     let mut hwdec_logged = false;
+    // prexu-ps1: log the FIRST duration property arrival at info level so
+    // cold-start traces show when the demuxer first parsed the stream
+    // headers (a load-bearing checkpoint between loadfile and FileLoaded).
+    // Subsequent duration changes (rare on VOD) drop back to debug.
+    let mut duration_logged = false;
     loop {
         loop_iterations += 1;
         match ev_ctx.wait_event(1.0) {
@@ -99,6 +104,7 @@ fn run_pump(mpv: Arc<Mpv>, app: AppHandle) {
                     &mut last_time_pos,
                     &mut last_buffered,
                     &mut hwdec_logged,
+                    &mut duration_logged,
                 ) {
                     log::info!("[player:events] Shutdown received at iter #{}", loop_iterations);
                     break;
@@ -132,6 +138,7 @@ fn dispatch(
     last_time_pos: &mut Instant,
     last_buffered: &mut Instant,
     hwdec_logged: &mut bool,
+    duration_logged: &mut bool,
 ) -> bool {
     match event {
         Event::Shutdown => {
@@ -149,7 +156,12 @@ fn dispatch(
                 log::debug!("[player:events] video-codec={} video-format={}", codec, pixfmt);
             }
             *hwdec_logged = false;
-            log::debug!("[player:events] FileLoaded → player://ready");
+            *duration_logged = false;
+            // prexu-ps1: bumped from debug to info — FileLoaded is the
+            // load-bearing checkpoint for cold-start latency attribution
+            // and "file loaded" is explicitly an info-level state per
+            // CLAUDE.md logging conventions.
+            log::info!("[player:events] FileLoaded → player://ready");
             let _ = app.emit("player://ready", ());
         }
         Event::PlaybackRestart => {
@@ -185,7 +197,15 @@ fn dispatch(
                 }
             }
             (REPLY_DURATION, PropertyData::Double(d)) => {
-                log::debug!("[player:events] duration={:.1}", d);
+                if !*duration_logged && d > 0.0 {
+                    // prexu-ps1: first non-zero duration = demuxer parsed
+                    // the stream headers. Useful for attributing the gap
+                    // between loadfile and FileLoaded.
+                    log::info!("[player:events] first duration={:.1} (stream opened)", d);
+                    *duration_logged = true;
+                } else {
+                    log::debug!("[player:events] duration={:.1}", d);
+                }
                 let _ = app.emit("player://duration", d);
             }
             (REPLY_PAUSE, PropertyData::Flag(p)) => {

@@ -183,6 +183,15 @@ impl PlayerState {
         #[cfg(target_os = "windows")]
         let wid = host.hwnd_as_i64();
 
+        // prexu-ps1: marker for cold-start latency attribution. The gap
+        // between this log and the first "FileLoaded" event below covers
+        // (a) mpv handle construction, (b) demuxer opening the network
+        // stream (cold plex.direct connect), and (c) hardware decoder
+        // probing. Compare this timestamp with the next FileLoaded /
+        // PlaybackRestart entries to see where the 12s cold-start window
+        // lives.
+        log::info!("[player:init] starting mpv init (hwdec=auto-safe)");
+
         let mpv = Mpv::with_initializer(|init| {
             #[cfg(target_os = "windows")]
             init.set_property("wid", wid)?;
