@@ -457,6 +457,18 @@ pub async fn player_enter_mini(
         state.apply_host_geometry(pos.x, pos.y, size.width as i32, size.height as i32);
     }
 
+    // Mark the mpv host window topmost too. Tauri's set_always_on_top on
+    // the main window only flips that flag for the WebView's HWND — the
+    // host is a sibling top-level so it stays in the regular z-order,
+    // letting other apps render between the always-on-top WebView and
+    // the video underneath. Anchor below main inside the topmost group
+    // so the WebView still overlays the video region.
+    if let Ok(parent) = main.hwnd() {
+        state.apply_host_topmost(true, Some(parent));
+    } else {
+        state.apply_host_topmost(true, None);
+    }
+
     // Persist the chosen corner + size for next session. A failure here is
     // not fatal — the user can re-enter mini and we'll save again.
     match app.store(MINI_STORE_PATH) {
@@ -498,6 +510,10 @@ pub async fn player_exit_mini(
 
     main.set_always_on_top(false)
         .map_err(|e| format!("set_always_on_top(false) failed: {}", e))?;
+
+    // Clear topmost on the mpv host window too — pairs with the
+    // apply_host_topmost(true) on enter (prexu-mw5).
+    state.apply_host_topmost(false, None);
 
     let stash = state
         .pre_mini_geometry

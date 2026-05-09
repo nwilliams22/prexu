@@ -436,6 +436,42 @@ impl PlayerState {
             }
         }
     }
+
+    /// Toggle the mpv host window's topmost flag. Used by mini-player
+    /// enter/exit so the video itself floats above other apps the same way
+    /// the WebView overlay does — without this the host stays in the
+    /// regular z-order and other windows can render between the always-
+    /// on-top WebView and the video. Anchors below `parent` after the
+    /// topmost flip when entering so the WebView still sits visually on
+    /// top of the video within the topmost group.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn apply_host_topmost(
+        &self,
+        topmost: bool,
+        parent: Option<windows::Win32::Foundation::HWND>,
+    ) {
+        let Ok(guard) = self.inner.lock() else {
+            return;
+        };
+        if let Some(inner) = guard.as_ref() {
+            if let Some(host) = inner.host.as_ref() {
+                log::info!("[player] apply_host_topmost({})", topmost);
+                if let Err(e) = host.set_topmost(topmost) {
+                    log::warn!("[player] apply_host_topmost failed: {}", e);
+                }
+                if topmost {
+                    if let Some(p) = parent {
+                        if let Err(e) = host.anchor_below(p) {
+                            log::warn!(
+                                "[player] apply_host_topmost: anchor_below failed: {}",
+                                e
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl Default for PlayerState {

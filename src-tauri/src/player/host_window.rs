@@ -17,9 +17,9 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH, HBRUSH};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassExW, SetWindowPos, ShowWindow,
-    CS_HREDRAW, CS_VREDRAW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE,
-    SWP_NOZORDER, SW_HIDE, SW_SHOWNA, WNDCLASSEXW, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
-    WS_EX_NOACTIVATE, WS_POPUP,
+    CS_HREDRAW, CS_VREDRAW, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNA, WNDCLASSEXW, WS_CLIPCHILDREN,
+    WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_POPUP,
 };
 
 const CLASS_NAME: PCWSTR = w!("PrexuMpvHost");
@@ -151,6 +151,35 @@ impl HostWindow {
             )
         }
         .map_err(|e| format!("SetWindowPos failed: {:?}", e))
+    }
+
+    /// Toggle this window's WS_EX_TOPMOST flag via SetWindowPos.
+    ///
+    /// The host is a sibling top-level window of the Tauri main window, so
+    /// `WebviewWindow::set_always_on_top(true)` on main does NOT make the host
+    /// topmost — without this, mini-player mode shows the WebView overlay
+    /// floating above other apps while the actual video sits underneath them.
+    /// After flipping topmost on, callers should re-anchor the host below
+    /// the main window in z-order so the WebView still overlays the video
+    /// region.
+    pub fn set_topmost(&self, topmost: bool) -> Result<(), String> {
+        let after = if topmost { HWND_TOPMOST } else { HWND_NOTOPMOST };
+        log::debug!(
+            "[player:host] set_topmost({}) HWND={:?}",
+            topmost, self.hwnd.0
+        );
+        unsafe {
+            SetWindowPos(
+                self.hwnd,
+                Some(after),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )
+        }
+        .map_err(|e| format!("set_topmost SetWindowPos failed: {:?}", e))
     }
 
     /// Show or hide the host window without destroying it.
