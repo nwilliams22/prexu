@@ -181,6 +181,10 @@ pub async fn player_apply_sub_style(
 }
 
 /// Audio filter-chain preset. Valid values: `"off"`, `"light"`, `"night"`.
+///
+/// The HLS/Web Audio path mirrors these presets via DynamicsCompressorNode in
+/// `src/hooks/useAudioEnhancements.ts`. Keep the perceptual intent aligned —
+/// see the NORMALIZATION_PRESETS comment in that file for the mapping notes.
 #[tauri::command]
 pub async fn player_set_af_chain(
     preset: String,
@@ -189,7 +193,12 @@ pub async fn player_set_af_chain(
     log::debug!("[player:cmd] set_af_chain preset={}", preset);
     let chain = match preset.as_str() {
         "off" => "",
+        // light: gentle loudness normalization (LUFS -16) preserving dynamics
+        // (LRA 11 LU). Transparent across mixed content; minimal coloration.
         "light" => "lavfi=[loudnorm=I=-16:TP=-1.5:LRA=11]",
+        // night: moderate pre-compression (4:1, 50 ms release) followed by
+        // loudness normalization (LUFS -18). Quiet dialogue stays audible
+        // while loud action is tamed without pumping.
         "night" => "lavfi=[acompressor=threshold=-20dB:ratio=4:attack=5:release=50,loudnorm=I=-18]",
         other => return Err(format!("unknown af preset: {}", other)),
     };

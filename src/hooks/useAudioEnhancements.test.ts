@@ -135,9 +135,11 @@ describe("useAudioEnhancements", () => {
 
     act(() => result.current.setNormalizationPreset("light"));
 
+    // Tuned in prexu-3zc to align with the libmpv loudnorm preset's gentler
+    // intent (transparent loudness leveling, not aggressive compression).
     expect(result.current.normalizationPreset).toBe("light");
-    expect(mockCompressor.threshold.value).toBe(-24);
-    expect(mockCompressor.ratio.value).toBe(4);
+    expect(mockCompressor.threshold.value).toBe(-40);
+    expect(mockCompressor.ratio.value).toBe(2);
   });
 
   it("applies night preset compressor parameters", () => {
@@ -148,9 +150,11 @@ describe("useAudioEnhancements", () => {
 
     act(() => result.current.setNormalizationPreset("night"));
 
+    // Tuned in prexu-3zc to mirror the libmpv acompressor → loudnorm cascade
+    // with a moderate ratio and smoother release (less pumping).
     expect(result.current.normalizationPreset).toBe("night");
-    expect(mockCompressor.threshold.value).toBe(-40);
-    expect(mockCompressor.ratio.value).toBe(12);
+    expect(mockCompressor.threshold.value).toBe(-35);
+    expect(mockCompressor.ratio.value).toBe(6);
   });
 
   it("sets ratio to 1 (passthrough) when preset is off", () => {

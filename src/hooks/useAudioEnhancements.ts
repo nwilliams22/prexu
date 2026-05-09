@@ -1,7 +1,18 @@
 import { useRef, useEffect, useCallback, useState, type RefObject } from "react";
 import type { NormalizationPreset } from "../types/preferences";
 
-/** DynamicsCompressor parameters per normalization preset */
+// DynamicsCompressor parameters per normalization preset. Tuned to approximate
+// the perceptual intent of the libmpv-side presets in src-tauri/src/player/
+// commands.rs::player_set_af_chain (which uses ffmpeg `loudnorm` + optional
+// `acompressor`):
+//   - light: gentle loudness normalization for varied content (ad-break shock,
+//     mixed source levels). Soft threshold + low ratio approximates loudnorm
+//     without coloring quieter passages.
+//   - night: stronger compression for low-volume late-night listening (quiet
+//     dialogue audible without loud action blasting). Moderate ratio + smooth
+//     release approximates the libmpv acompressor → loudnorm cascade.
+// Web Audio's DynamicsCompressorNode is NOT a true equivalent of ffmpeg
+// loudnorm (psychoacoustic LUFS targeting); these are best-effort matches.
 const NORMALIZATION_PRESETS: Record<
   NormalizationPreset,
   {
@@ -13,8 +24,8 @@ const NORMALIZATION_PRESETS: Record<
   } | null
 > = {
   off: null,
-  light: { threshold: -24, knee: 30, ratio: 4, attack: 0.003, release: 0.25 },
-  night: { threshold: -40, knee: 10, ratio: 12, attack: 0.001, release: 0.1 },
+  light: { threshold: -40, knee: 40, ratio: 2, attack: 0.01, release: 0.5 },
+  night: { threshold: -35, knee: 20, ratio: 6, attack: 0.005, release: 0.25 },
 };
 
 export interface AudioEnhancementsResult {
