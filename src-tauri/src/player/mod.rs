@@ -105,6 +105,15 @@ impl PlayerState {
 
     /// Lazily create the host window + `Mpv` handle with our baseline config
     /// and start the event pump. Subsequent calls are no-ops.
+    ///
+    /// Note (prexu-34d): on app startup tao 0.34.x emits two warnings,
+    ///   "NewEvents emitted without explicit RedrawEventsCleared"
+    ///   "RedrawEventsCleared emitted without explicit MainEventsCleared"
+    /// These originate in tao's event-loop runner, not our code — our
+    /// run_on_main_thread dispatches and the WS_EX_NOACTIVATE host window are
+    /// canonical. The warnings are upstream noise tied to WebView2 init
+    /// timing and do not affect playback or geometry sync. Revisit on a tao
+    /// version bump.
     pub(crate) fn ensure_init(&self, app: &AppHandle) -> Result<(), String> {
         log::info!("[player] ensure_init called");
         let mut guard = self.inner.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
