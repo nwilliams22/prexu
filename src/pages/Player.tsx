@@ -27,6 +27,7 @@ import { useQueue } from "../contexts/QueueContext";
 import { useNextEpisodeDetection } from "../hooks/player/useNextEpisodeDetection";
 import { usePlayerKeyboardShortcuts } from "../hooks/player/usePlayerKeyboardShortcuts";
 import { usePictureInPicture } from "../hooks/player/usePictureInPicture";
+import { useMiniPlayer } from "../hooks/player/useMiniPlayer";
 import PlayerControls from "../components/PlayerControls";
 import ParticipantOverlay from "../components/ParticipantOverlay";
 import SyncIndicator from "../components/SyncIndicator";
@@ -198,8 +199,19 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     audioEnhancements.setMainBoost(Math.max(player.volume, 1));
   }, [player.volume, audioEnhancements]);
 
-  // Picture-in-Picture
+  // Picture-in-Picture vs Mini-player. The button in ControlsBottomBar is
+  // labelled "Picture-in-picture" but on the native (mpv) path there is no
+  // <video> element, so the browser PiP API silently fails. We branch here
+  // so the same control invokes our native Win32 mini-player on Tauri and
+  // the standard browser PiP everywhere else. See useMiniPlayer for the
+  // mini-mode geometry defaults (prexu-a6z.1 + .2 MVP).
   const pip = usePictureInPicture(player.videoRef);
+  const mini = useMiniPlayer();
+  const pipActive = IS_NATIVE_PLAYER ? mini.isMini : pip.isPiPActive;
+  const pipSupported = IS_NATIVE_PLAYER
+    ? mini.isMiniSupported
+    : pip.isPiPSupported;
+  const togglePiP = IS_NATIVE_PLAYER ? mini.toggleMini : pip.togglePiP;
 
   // Controls visibility (auto-hide on inactivity)
   const { controlsVisible, resetHideTimer, handleMouseMove } =
@@ -546,7 +558,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     onAudioEnhancementChange: handleAudioEnhancementChange,
     onNextEpisode: handleNextEpisode,
     onPrevEpisode: handlePrevEpisode,
-    togglePiP: pip.togglePiP,
+    togglePiP,
     onToggleShortcuts: toggleShortcuts,
   });
 
@@ -690,9 +702,9 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
           onPrevEpisode={handlePrevEpisode}
           audioEnhancements={audioEnhancements}
           onAudioEnhancementChange={handleAudioEnhancementChange}
-          isPiPActive={pip.isPiPActive}
-          isPiPSupported={pip.isPiPSupported}
-          onTogglePiP={pip.togglePiP}
+          isPiPActive={pipActive}
+          isPiPSupported={pipSupported}
+          onTogglePiP={togglePiP}
           queueCount={remainingCount}
           onToggleQueue={toggleQueuePanel}
           serverUri={server?.uri}
