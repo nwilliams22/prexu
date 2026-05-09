@@ -56,6 +56,10 @@ interface PostPlayScreenProps {
   airDate?: string;
   /** True when the user has already seen the next item (Plex viewCount > 0). */
   watched?: boolean;
+  /** Director name(s) — rendered as a "Directed by X" line when present. */
+  directors?: string[];
+  /** Top cast names — rendered as a "Starring X, Y, Z" line when present. */
+  cast?: string[];
 }
 
 /**
@@ -130,6 +134,8 @@ export default function PostPlayScreen({
   synopsis,
   airDate,
   watched,
+  directors,
+  cast,
 }: PostPlayScreenProps) {
   const [countdown, setCountdown] = useState(countdownSeconds);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -277,6 +283,18 @@ export default function PostPlayScreen({
               {airDate && <span style={styles.metaDot}>·</span>}
               {airDate && <span>{airDate}</span>}
             </div>
+            {directors && directors.length > 0 && (
+              <div style={styles.creditLine}>
+                <span style={styles.creditLabel}>Directed by</span>{" "}
+                {directors.join(", ")}
+              </div>
+            )}
+            {cast && cast.length > 0 && (
+              <div style={styles.creditLine}>
+                <span style={styles.creditLabel}>Starring</span>{" "}
+                {cast.join(", ")}
+              </div>
+            )}
           </div>
         </div>
 
@@ -340,19 +358,31 @@ export default function PostPlayScreen({
 
 const styles: Record<string, React.CSSProperties> = {
   container: {
+    // Anchored to the top half of the player surface — leaves the bottom
+    // half showing the player chrome (seek bar, transport controls) so the
+    // user can still scrub if they want, while the upper region holds the
+    // richer Playing Next card. Background is opaque Prexu navy so the
+    // paused video frame underneath doesn't bleed through.
     position: "absolute",
-    inset: 0,
-    background: "rgba(0, 0, 0, 0.92)",
+    top: 0,
+    left: 0,
+    right: 0,
+    height: "50vh",
+    background: "var(--bg-primary)",
     zIndex: 30,
     display: "flex",
     alignItems: "flex-start",
     justifyContent: "flex-start",
-    padding: "3rem",
+    padding: "2.5rem 3rem",
     animation: "fadeIn 0.3s ease-out",
+    overflow: "hidden",
   },
   content: {
-    maxWidth: "780px",
     width: "100%",
+    height: "100%",
+    display: "flex",
+    flexDirection: "column",
+    gap: "1.25rem",
   },
   transitionBanner: {
     display: "inline-block",
@@ -375,16 +405,18 @@ const styles: Record<string, React.CSSProperties> = {
   },
   mainRow: {
     display: "flex",
-    gap: "1.75rem",
+    gap: "2rem",
     alignItems: "flex-start",
+    flex: 1,
+    minHeight: 0,
   },
   thumbContainer: {
     position: "relative",
     flexShrink: 0,
   },
   thumb: {
-    width: "280px",
-    height: "158px",
+    width: "360px",
+    height: "203px",
     borderRadius: "10px",
     objectFit: "cover",
     boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
@@ -441,25 +473,38 @@ const styles: Record<string, React.CSSProperties> = {
     color: "var(--text-secondary)",
   },
   synopsis: {
-    fontSize: "0.9rem",
+    fontSize: "0.95rem",
     color: "var(--text-secondary)",
-    lineHeight: 1.45,
-    margin: "0.4rem 0 0 0",
+    lineHeight: 1.55,
+    margin: "0.5rem 0 0 0",
     display: "-webkit-box",
-    WebkitLineClamp: 2,
+    WebkitLineClamp: 4,
     WebkitBoxOrient: "vertical",
     overflow: "hidden",
   },
   metaRow: {
     display: "flex",
     gap: "0.4rem",
-    fontSize: "0.8rem",
+    fontSize: "0.85rem",
     color: "var(--text-secondary)",
-    marginTop: "0.5rem",
+    marginTop: "0.6rem",
     alignItems: "center",
   },
   metaDot: {
     opacity: 0.6,
+  },
+  creditLine: {
+    fontSize: "0.85rem",
+    color: "var(--text-secondary)",
+    marginTop: "0.35rem",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  creditLabel: {
+    fontWeight: 600,
+    color: "var(--text-primary)",
+    opacity: 0.7,
   },
   countdownSection: {
     marginTop: "1.5rem",

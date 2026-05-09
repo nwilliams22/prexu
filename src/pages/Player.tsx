@@ -12,7 +12,8 @@ import { Navigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useAuth } from "../hooks/useAuth";
 import { usePlayerSession, type PlayerWatchTogether } from "../contexts/PlayerContext";
-import { getImageUrl } from "../services/plex-library";
+import { getImageUrl, getItemMetadata } from "../services/plex-library";
+import type { PlexEpisode, PlexMediaItem } from "../types/library";
 import { usePlayer, IS_NATIVE_PLAYER } from "../hooks/usePlayer";
 import { useWatchTogether } from "../hooks/useWatchTogether";
 import { useAudioEnhancements } from "../hooks/useAudioEnhancements";
@@ -284,6 +285,14 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   // Post-play screen — show when playback ends and there's a logical next
   const [showPostPlay, setShowPostPlay] = useState(false);
   const postPlayShownRef = useRef(false);
+  // Enriched metadata for the next item — fetched when PostPlay is about to
+  // show so we can render synopsis, air date, watched chip, and credits in
+  // the upper-half overlay. Null until the fetch lands; the overlay still
+  // renders immediately with the lightweight QueueItem fields and fades the
+  // extras in when this populates. Cleared on ratingKey change.
+  const [postPlayDetail, setPostPlayDetail] = useState<
+    PlexEpisode | PlexMediaItem | null
+  >(null);
 
   // Forwarded handleExit — declared further down. handleEnded (inside the
   // EOF effect) and handleSkipSegment both call this on the no-continuation
@@ -365,6 +374,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   useEffect(() => {
     postPlayShownRef.current = false;
     setShowPostPlay(false);
+    setPostPlayDetail(null);
   }, [ratingKey]);
 
   const handlePostPlayNext = useCallback(() => {
@@ -394,6 +404,33 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     const nextIdx = currentIndex + 1;
     return nextIdx < items.length ? items[nextIdx] : null;
   }, [queue]);
+
+  // Fetch enriched metadata for the next item when PostPlay is about to show
+  // so synopsis/air date/cast/director/watched-chip can populate the upper-
+  // half overlay. The overlay still renders immediately from the lightweight
+  // QueueItem; this just lights up the richer fields when they arrive.
+  const nextRatingKeyForFetch =
+    showPostPlay && nextQueueItem ? nextQueueItem.ratingKey : null;
+  useEffect(() => {
+    if (!nextRatingKeyForFetch || !server) return;
+    let cancelled = false;
+    getItemMetadata<PlexMediaItem>(
+      server.uri,
+      server.accessToken,
+      nextRatingKeyForFetch,
+    )
+      .then((detail) => {
+        if (cancelled) return;
+        setPostPlayDetail(detail);
+      })
+      .catch((err) => {
+        // Best-effort — PostPlay still works without the enriched fields.
+        logger.warn("postplay", "next-item metadata fetch failed", String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [nextRatingKeyForFetch, server]);
 
   // Skip intro/credits segments. ratingKey passed as the reset trigger so
   // dismissals + last-active state clear cleanly on every episode change
@@ -728,10 +765,36 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
           nextItem={nextQueueItem}
           onPlayNext={handlePostPlayNext}
           onStop={handlePostPlayStop}
-          posterUrl={(path) => getImageUrl(server.uri, server.accessToken, path, 320, 220)}
+          posterUrl={(path) => getImageUrl(server.uri, server.accessToken, path, 480, 270)}
           autoPlayEnabled={pb.autoPlayEnabled}
           onAutoPlayChange={(enabled) =>
             updatePreferences({ playback: { autoPlayEnabled: enabled } })
+          }
+          synopsis={postPlayDetail?.summary || undefined}
+          airDate={
+            postPlayDetail &&
+            "originallyAvailableAt" in postPlayDetail &&
+            postPlayDetail.originallyAvailableAt
+              ? new Date(postPlayDetail.originallyAvailableAt).toLocaleDateString(
+                  undefined,
+                  { year: "numeric", month: "short", day: "numeric" },
+                )
+              : undefined
+          }
+          watched={
+            postPlayDetail
+              ? ((postPlayDetail as { viewCount?: number }).viewCount ?? 0) > 0
+              : undefined
+          }
+          directors={
+            postPlayDetail && "Director" in postPlayDetail
+              ? postPlayDetail.Director?.map((d) => d.tag).slice(0, 3)
+              : undefined
+          }
+          cast={
+            postPlayDetail && "Role" in postPlayDetail
+              ? postPlayDetail.Role?.map((r) => r.tag).slice(0, 3)
+              : undefined
           }
         />
       )}

@@ -265,4 +265,43 @@ describe("PostPlayScreen", () => {
     );
     expect(screen.getByText("2013-09-29")).toBeInTheDocument();
   });
+
+  it("renders directors as a 'Directed by' line when provided", () => {
+    render(
+      <PostPlayScreen
+        {...baseProps}
+        nextItem={episodeItem}
+        directors={["Vince Gilligan"]}
+      />,
+    );
+    expect(screen.getByText(/Directed by/i)).toBeInTheDocument();
+    expect(screen.getByText(/Vince Gilligan/)).toBeInTheDocument();
+  });
+
+  it("renders cast as a 'Starring' line when provided", () => {
+    render(
+      <PostPlayScreen
+        {...baseProps}
+        nextItem={episodeItem}
+        cast={["Bryan Cranston", "Aaron Paul", "Anna Gunn"]}
+      />,
+    );
+    expect(screen.getByText(/Starring/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Bryan Cranston, Aaron Paul, Anna Gunn/),
+    ).toBeInTheDocument();
+  });
+
+  it("does not render Directed by / Starring rows when arrays are empty", () => {
+    render(
+      <PostPlayScreen
+        {...baseProps}
+        nextItem={episodeItem}
+        directors={[]}
+        cast={[]}
+      />,
+    );
+    expect(screen.queryByText(/Directed by/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Starring/i)).not.toBeInTheDocument();
+  });
 });
