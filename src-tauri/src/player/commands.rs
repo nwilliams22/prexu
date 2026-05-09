@@ -6,8 +6,22 @@
 use std::collections::HashMap;
 
 use tauri::{AppHandle, Emitter, Manager, State};
+#[cfg(target_os = "windows")]
+use tauri::{PhysicalPosition, PhysicalSize, Position, Size};
+#[cfg(target_os = "windows")]
+use tauri_plugin_store::StoreExt;
 
 use super::PlayerState;
+
+/// Path used for the mini-player store. Kept separate from `secure-store.json`
+/// (which holds auth tokens managed via the JS LazyStore) so the Rust-side
+/// state and the frontend's secure data don't share a file lock.
+#[cfg(target_os = "windows")]
+const MINI_STORE_PATH: &str = "mini-player.json";
+#[cfg(target_os = "windows")]
+const MINI_KEY_CORNER: &str = "mini-player.corner";
+#[cfg(target_os = "windows")]
+const MINI_KEY_SIZE: &str = "mini-player.size";
 
 #[tauri::command]
 pub async fn player_load_url(
@@ -305,4 +319,230 @@ pub async fn player_set_fullscreen(
     let _ = app.emit("player://fullscreen", actual_fs);
 
     fs_result
+}
+
+// ── Mini-player commands (Phase 4) ────────────────────────────────────────
+//
+// Foundational backend for the mini-player overlay. Step 4.1 of prexu-a6z.
+// `player_enter_mini` resizes + repositions the Tauri main window (and the
+// HostWindow that mpv renders into) to a corner of the primary monitor's
+// work area, sets always-on-top, and stashes the previous geometry.
+// `player_exit_mini` reverses this. The TS hook lands in step 4.2.
+
+/// Query the primary monitor's WORK AREA in physical pixels (the desktop
+/// rect minus the taskbar / docked toolbars). Tauri v2 exposes monitor
+/// `position()` and `size()` but not work area, so we go to Win32 directly.
+/// `SystemParametersInfoW(SPI_GETWORKAREA)` returns the *primary* monitor's
+/// work area in virtual-screen coordinates — which is exactly what we want
+/// for snapping the main window to a corner of the user's main display.
+///
+/// On multi-monitor setups this is the primary monitor only; that's the
+/// chosen scope for 4.1 (the mini-player follows the primary). A future
+/// refinement could honor the monitor the main window currently lives on
+/// via `MonitorFromWindow` + `GetMonitorInfoW`.
+#[cfg(target_os = "windows")]
+fn primary_work_area() -> Result<(i32, i32, i32, i32), String> {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SystemParametersInfoW, SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    };
+    let mut rect = RECT::default();
+    unsafe {
+        SystemParametersInfoW(
+            SPI_GETWORKAREA,
+            0,
+            Some(&mut rect as *mut RECT as *mut _),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+        .map_err(|e| format!("SPI_GETWORKAREA failed: {:?}", e))?;
+    }
+    let x = rect.left;
+    let y = rect.top;
+    let w = rect.right - rect.left;
+    let h = rect.bottom - rect.top;
+    log::debug!("[player:mini] work area = ({},{},{}x{})", x, y, w, h);
+    Ok((x, y, w, h))
+}
+
+/// Compute the (x, y) origin for a `(width, height)` window snapped to
+/// `corner` of the work area `(wx, wy, ww, wh)`. Width/height are clamped
+/// against the work-area dimensions so a too-large request still fits.
+#[cfg(target_os = "windows")]
+fn corner_origin(
+    corner: &str,
+    width: u32,
+    height: u32,
+    wx: i32,
+    wy: i32,
+    ww: i32,
+    wh: i32,
+) -> Result<(i32, i32, u32, u32), String> {
+    let w = (width as i32).min(ww).max(1) as u32;
+    let h = (height as i32).min(wh).max(1) as u32;
+    let (x, y) = match corner {
+        "top-left" => (wx, wy),
+        "top-right" => (wx + ww - w as i32, wy),
+        "bottom-left" => (wx, wy + wh - h as i32),
+        "bottom-right" => (wx + ww - w as i32, wy + wh - h as i32),
+        other => return Err(format!("unknown corner: {}", other)),
+    };
+    Ok((x, y, w, h))
+}
+
+/// Enter mini-player mode: resize+reposition the Tauri main window to the
+/// requested corner of the primary monitor's work area, set always-on-top,
+/// and resync the mpv host window. The pre-mini outer geometry of the main
+/// window is stashed in `PlayerState::pre_mini_geometry` for `exit_mini`
+/// to restore. The chosen `corner` and `(width, height)` are persisted to
+/// `tauri-plugin-store` so the next session can re-enter at the same spot.
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub async fn player_enter_mini(
+    corner: String,
+    width: u32,
+    height: u32,
+    app: AppHandle,
+    state: State<'_, PlayerState>,
+) -> Result<(), String> {
+    log::info!(
+        "[player:cmd] enter_mini corner={} size={}x{}",
+        corner,
+        width,
+        height
+    );
+    let main = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main webview window not found".to_string())?;
+
+    let (wx, wy, ww, wh) = primary_work_area()?;
+    let (x, y, w, h) = corner_origin(&corner, width, height, wx, wy, ww, wh)?;
+
+    // Stash the current OUTER rect so exit_mini can restore exactly what the
+    // user had before. We capture outer (not inner) because set_position +
+    // set_size operate on the outer window rect on Windows.
+    if let (Ok(pos), Ok(size)) = (main.outer_position(), main.outer_size()) {
+        let stash = (pos.x, pos.y, size.width, size.height);
+        if let Ok(mut g) = state.pre_mini_geometry.lock() {
+            *g = Some(stash);
+            log::debug!(
+                "[player:mini] stashed pre-mini outer geometry ({},{},{}x{})",
+                stash.0, stash.1, stash.2, stash.3
+            );
+        }
+    } else {
+        log::warn!("[player:mini] could not read outer geometry to stash");
+    }
+
+    // Apply window changes. set_size + set_position take physical pixels via
+    // the Size/Position enums. set_always_on_top is a direct call.
+    main.set_always_on_top(true)
+        .map_err(|e| format!("set_always_on_top failed: {}", e))?;
+    main.set_size(Size::Physical(PhysicalSize { width: w, height: h }))
+        .map_err(|e| format!("set_size failed: {}", e))?;
+    main.set_position(Position::Physical(PhysicalPosition { x, y }))
+        .map_err(|e| format!("set_position failed: {}", e))?;
+
+    log::debug!(
+        "[player:mini] resized main to ({},{},{}x{}); resynced host",
+        x, y, w, h
+    );
+
+    // Resync the host immediately. The on_window_event listener will also
+    // fire from the resize, but it goes through the throttle; an explicit
+    // apply guarantees the video window is in place by the time the command
+    // returns.
+    if let (Ok(pos), Ok(size)) = (main.inner_position(), main.inner_size()) {
+        state.apply_host_geometry(pos.x, pos.y, size.width as i32, size.height as i32);
+    }
+
+    // Persist the chosen corner + size for next session. A failure here is
+    // not fatal — the user can re-enter mini and we'll save again.
+    match app.store(MINI_STORE_PATH) {
+        Ok(store) => {
+            store.set(MINI_KEY_CORNER, serde_json::Value::String(corner.clone()));
+            store.set(
+                MINI_KEY_SIZE,
+                serde_json::json!({ "width": w, "height": h }),
+            );
+            if let Err(e) = store.save() {
+                log::warn!("[player:mini] store save failed: {:?}", e);
+            } else {
+                log::debug!(
+                    "[player:mini] persisted corner={} size={}x{}",
+                    corner, w, h
+                );
+            }
+        }
+        Err(e) => log::warn!("[player:mini] store open failed: {:?}", e),
+    }
+
+    Ok(())
+}
+
+/// Exit mini-player mode: clear always-on-top and restore the main window
+/// to the outer geometry stashed by `player_enter_mini`. If no stash exists
+/// (e.g. exit called without a prior enter), this clears always-on-top and
+/// returns Ok without resizing.
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub async fn player_exit_mini(
+    app: AppHandle,
+    state: State<'_, PlayerState>,
+) -> Result<(), String> {
+    log::info!("[player:cmd] exit_mini");
+    let main = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main webview window not found".to_string())?;
+
+    main.set_always_on_top(false)
+        .map_err(|e| format!("set_always_on_top(false) failed: {}", e))?;
+
+    let stash = state
+        .pre_mini_geometry
+        .lock()
+        .ok()
+        .and_then(|mut g| g.take());
+
+    let Some((x, y, w, h)) = stash else {
+        log::debug!("[player:mini] exit_mini: no stash, only cleared always-on-top");
+        return Ok(());
+    };
+
+    main.set_size(Size::Physical(PhysicalSize { width: w, height: h }))
+        .map_err(|e| format!("set_size failed: {}", e))?;
+    main.set_position(Position::Physical(PhysicalPosition { x, y }))
+        .map_err(|e| format!("set_position failed: {}", e))?;
+
+    log::debug!(
+        "[player:mini] restored main to ({},{},{}x{}); resynced host",
+        x, y, w, h
+    );
+
+    if let (Ok(pos), Ok(size)) = (main.inner_position(), main.inner_size()) {
+        state.apply_host_geometry(pos.x, pos.y, size.width as i32, size.height as i32);
+    }
+
+    Ok(())
+}
+
+// Non-Windows stubs so the command names exist for the JS bridge but the
+// platform that hasn't been ported yet (macOS / Linux) returns a clear error
+// instead of failing at the IPC layer with "command not found". Keeps the
+// frontend code path uniform once 4.2 lands.
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+pub async fn player_enter_mini(
+    _corner: String,
+    _width: u32,
+    _height: u32,
+) -> Result<(), String> {
+    log::warn!("[player:cmd] enter_mini called on non-Windows platform");
+    Err("mini-player is only supported on Windows in Phase 4".into())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+pub async fn player_exit_mini() -> Result<(), String> {
+    log::warn!("[player:cmd] exit_mini called on non-Windows platform");
+    Err("mini-player is only supported on Windows in Phase 4".into())
 }

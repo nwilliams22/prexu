@@ -399,6 +399,8 @@ pub fn run() {
             player::commands::player_apply_sub_style,
             player::commands::player_unload,
             player::commands::player_set_fullscreen,
+            player::commands::player_enter_mini,
+            player::commands::player_exit_mini,
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {

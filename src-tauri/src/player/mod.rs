@@ -50,6 +50,11 @@ pub struct PlayerState {
     /// the throttle check will apply it, ensuring the final drag position is
     /// never lost.
     pending_geometry: Mutex<Option<(i32, i32, i32, i32)>>,
+    /// Saved (x, y, width, height) of the Tauri main window's outer rect
+    /// before entering mini-player mode. Stashed by `player_enter_mini` and
+    /// consumed by `player_exit_mini` to restore the previous geometry.
+    /// `None` when not in mini mode.
+    pub(crate) pre_mini_geometry: Mutex<Option<(i32, i32, u32, u32)>>,
 }
 
 struct Inner {
@@ -85,6 +90,7 @@ impl PlayerState {
             ),
             last_geometry: Mutex::new(None),
             pending_geometry: Mutex::new(None),
+            pre_mini_geometry: Mutex::new(None),
         }
     }
 
