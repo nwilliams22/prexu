@@ -25,13 +25,16 @@ export function useQueueAutoPopulate(
     if (populatedRef.current === ratingKey) return;
 
     // Don't re-populate if the queue already contains this ratingKey
-    // (user navigated to next ep via queue)
+    // (user navigated to next ep via queue). Preserve the existing
+    // queue.source — could be "user-built" if the user Play-All'd a
+    // playlist whose first item happens to be an episode, in which case
+    // we MUST NOT downgrade it to "auto-episodes".
     const inQueue = queue.items.some((item) => item.ratingKey === ratingKey);
     if (inQueue) {
       // Update currentIndex to match
       const idx = queue.items.findIndex((item) => item.ratingKey === ratingKey);
       if (idx !== -1 && idx !== queue.currentIndex) {
-        setQueue(queue.items, idx);
+        setQueue(queue.items, idx, queue.shuffled, queue.source);
       }
       populatedRef.current = ratingKey;
       return;
@@ -65,7 +68,9 @@ export function useQueueAutoPopulate(
         }));
 
         if (queueItems.length > 0) {
-          setQueue(queueItems, 0); // current episode is index 0
+          // Tag as auto-episodes so movie playback won't see this stale
+          // queue and pop PostPlay against it (see Player.tsx hasNextItem).
+          setQueue(queueItems, 0, undefined, "auto-episodes"); // current episode is index 0
         }
       } catch {
         // silently fail — queue is best-effort

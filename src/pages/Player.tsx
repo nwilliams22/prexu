@@ -39,6 +39,7 @@ import KeyboardShortcutsOverlay from "../components/player/KeyboardShortcutsOver
 import type { NormalizationPreset } from "../types/preferences";
 import { buildSubtitleCss } from "../utils/subtitle-css";
 import { logger } from "../services/logger";
+import { hasNextItem as computeHasNextItem } from "./player-postplay-gate";
 
 interface PlayerProps {
   ratingKey: string;
@@ -250,18 +251,23 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     }
   }, [playPrev, episodeNav.handlePrevEpisode, playerSession]);
 
-  // "Logical next" — current item is an episode AND a successor exists via
-  // queue or Plex episode-nav. Used by:
-  //   - PostPlayScreen trigger (only auto-prompt for episodes with a real
-  //     next; movies and final-episodes-with-empty-queue should NOT)
+  // "Logical next" — there is a real successor to the currently playing
+  // item. Used by:
+  //   - PostPlayScreen trigger (only auto-prompt when there's a real next;
+  //     standalone movies and final-episodes-with-empty-queue should NOT)
   //   - SkipSegmentButton's "Next Episode" vs "Skip Credits" label
   //   - useSkipSegments synthetic-credits gate (see hasNextEpisode arg)
-  // Movies always evaluate false here, so a stale TV item in the persisted
-  // queue can't hijack movie playback at the credits point.
-  const hasNextItem =
-    player.itemType === "episode" &&
-    (queue.currentIndex + 1 < queue.items.length ||
-      episodeNav.handleNextEpisode != null);
+  //
+  // Decision lives in player-postplay-gate.ts so it can be unit-tested
+  // directly. See that file's docblock for the rules. Movies inside a
+  // user-built playlist/collection do trigger PostPlay (prexu-9yn);
+  // standalone movies still auto-exit at EOF (prexu-3z9 unchanged).
+  const hasNextItem = computeHasNextItem({
+    itemType: player.itemType,
+    ratingKey,
+    queue,
+    hasPlexNextEpisode: episodeNav.handleNextEpisode != null,
+  });
 
   // Post-play screen — show when playback ends and there's a logical next
   const [showPostPlay, setShowPostPlay] = useState(false);
@@ -280,10 +286,20 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
 
   useEffect(() => {
     const handleEnded = () => {
-      // hasNextItem (itemType==="episode" AND queue/episode-nav has next)
-      // is the correct gate: a movie ending should NOT pop PostPlay even if
-      // the queue has stale items. Same root issue as SkipSegmentButton's
-      // "Next Episode" gate — both feed off the same notion of "logical next".
+      // hasNextItem encodes "real successor exists":
+      //  - episode with queue/episode-nav next, OR
+      //  - any type playing from a user-built queue with another item next.
+      // A standalone movie should NOT pop PostPlay against a stale auto-
+      // populated episode queue, which is why we distinguish queue.source
+      // (see prexu-9yn).
+      logger.debug("postplay", "EOF reached", {
+        itemType: player.itemType,
+        hasNextItem,
+        queueSource: queue.source,
+        queueCurrentIndex: queue.currentIndex,
+        queueLength: queue.items.length,
+        wtInSession: wt.isInSession,
+      });
       if (hasNextItem && !wt.isInSession && !postPlayShownRef.current) {
         postPlayShownRef.current = true;
         // Pause the underlying player synchronously with showing the overlay.
