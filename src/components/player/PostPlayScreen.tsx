@@ -1,5 +1,31 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import type { QueueItem } from "../../types/queue";
+import { logger } from "../../services/logger";
+
+/**
+ * Optional progress info for episodes — "Episode 5 of 13 in Season 2".
+ * Parent should pass this when known (e.g. via Plex episode-nav metadata).
+ */
+export interface PostPlayEpisodeProgress {
+  /** 1-indexed episode number within the season. */
+  episodeNumber: number;
+  /** Total episode count for the season. */
+  totalEpisodes: number;
+  /** Optional season number — when present we render "in Season N". */
+  seasonNumber?: number;
+}
+
+/**
+ * Optional progress info for playlists — "Item 3 of 7 in Playlist Foo".
+ */
+export interface PostPlayPlaylistContext {
+  /** Display name of the playlist. */
+  name: string;
+  /** 1-indexed position of the next item within the playlist. */
+  position: number;
+  /** Total item count in the playlist. */
+  total: number;
+}
 
 interface PostPlayScreenProps {
   nextItem: QueueItem;
@@ -11,6 +37,77 @@ interface PostPlayScreenProps {
   autoPlayEnabled: boolean;
   /** Persist a change to the auto-play toggle (writes to user prefs). */
   onAutoPlayChange: (enabled: boolean) => void;
+
+  // ── Optional rich context (parent passes when available) ──
+  /** The item that just finished — used to detect cross-show/season transitions. */
+  currentItem?: QueueItem;
+  /**
+   * Explicit "S2 E5" badge string. If omitted we attempt to parse it from
+   * `nextItem.subtitle` (the existing convention is "S01E02 · Title").
+   */
+  seasonEpisodeBadge?: string;
+  /** "Episode N of M in Season K" context line. */
+  episodeProgress?: PostPlayEpisodeProgress;
+  /** "Item N of M in Playlist X" context line — mutually exclusive with episodeProgress. */
+  playlistContext?: PostPlayPlaylistContext;
+  /** 1–2 line truncated synopsis. */
+  synopsis?: string;
+  /** Episode air date (ISO YYYY-MM-DD or display-formatted). */
+  airDate?: string;
+  /** True when the user has already seen the next item (Plex viewCount > 0). */
+  watched?: boolean;
+}
+
+/**
+ * Parse "S01E02 · Episode Title" → "S1 E2". Returns null on no match.
+ * Used as a graceful fallback when the parent does not pass an explicit badge.
+ */
+function parseSeasonEpisodeBadge(subtitle: string | undefined): string | null {
+  if (!subtitle) return null;
+  const match = subtitle.match(/S(\d+)\s*E(\d+)/i);
+  if (!match) return null;
+  // Strip leading zeros for a cleaner badge ("S01E02" → "S1 E2").
+  const season = String(parseInt(match[1], 10));
+  const episode = String(parseInt(match[2], 10));
+  return `S${season} E${episode}`;
+}
+
+/**
+ * Strip the "S01E02 · " prefix from an episode subtitle so we can show the
+ * raw episode title alongside an explicit badge without duplication.
+ */
+function stripBadgePrefix(subtitle: string | undefined): string {
+  if (!subtitle) return "";
+  return subtitle.replace(/^S\d+\s*E\d+\s*[·•\-–—]\s*/i, "").trim();
+}
+
+/**
+ * Detect a cross-show or new-season transition. Returns a short banner
+ * string like "Starting Season 3" or "New Show: Foo" when relevant.
+ * Falls back to null when no transition is detected.
+ */
+function getTransitionBanner(
+  current: QueueItem | undefined,
+  next: QueueItem,
+  nextProgress: PostPlayEpisodeProgress | undefined,
+): string | null {
+  if (!current || current.type !== "episode" || next.type !== "episode") return null;
+
+  const currentBadge = parseSeasonEpisodeBadge(current.subtitle);
+  const nextBadge = parseSeasonEpisodeBadge(next.subtitle);
+
+  // Compare grandparent (show) titles via the prefix of each subtitle is unreliable;
+  // QueueItem doesn't carry showTitle directly. For now we surface season changes
+  // (when both badges parse and the season number differs).
+  if (currentBadge && nextBadge) {
+    const curSeason = currentBadge.match(/S(\d+)/i)?.[1];
+    const nextSeason = nextBadge.match(/S(\d+)/i)?.[1];
+    if (curSeason && nextSeason && curSeason !== nextSeason) {
+      const seasonNum = nextProgress?.seasonNumber ?? parseInt(nextSeason, 10);
+      return `Starting Season ${seasonNum}`;
+    }
+  }
+  return null;
 }
 
 /**
@@ -26,9 +123,28 @@ export default function PostPlayScreen({
   countdownSeconds = 10,
   autoPlayEnabled,
   onAutoPlayChange,
+  currentItem,
+  seasonEpisodeBadge,
+  episodeProgress,
+  playlistContext,
+  synopsis,
+  airDate,
+  watched,
 }: PostPlayScreenProps) {
   const [countdown, setCountdown] = useState(countdownSeconds);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    logger.debug("postplay", "mount", {
+      nextRatingKey: nextItem.ratingKey,
+      type: nextItem.type,
+      autoPlayEnabled,
+      hasEpisodeProgress: !!episodeProgress,
+      hasPlaylistContext: !!playlistContext,
+    });
+    // Intentionally only logging on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!autoPlayEnabled) return;
@@ -49,6 +165,7 @@ export default function PostPlayScreen({
   // Auto-play when countdown reaches 0
   useEffect(() => {
     if (countdown === 0 && autoPlayEnabled) {
+      logger.debug("postplay", "countdown_fire_autoplay");
       onPlayNext();
     }
   }, [countdown, autoPlayEnabled, onPlayNext]);
@@ -58,6 +175,7 @@ export default function PostPlayScreen({
       clearInterval(intervalRef.current);
       intervalRef.current = null;
     }
+    logger.debug("postplay", "toggle_autoplay", { next: !autoPlayEnabled });
     onAutoPlayChange(!autoPlayEnabled);
   }, [autoPlayEnabled, onAutoPlayChange]);
 
@@ -76,66 +194,112 @@ export default function PostPlayScreen({
     return () => window.removeEventListener("keydown", handler);
   }, [onPlayNext, onStop]);
 
-  const progress = ((countdownSeconds - countdown) / countdownSeconds) * 100;
+  const progressPct = ((countdownSeconds - countdown) / countdownSeconds) * 100;
+
+  // Derive episode badge: prefer explicit prop, else parse from subtitle.
+  const badge = useMemo(
+    () => seasonEpisodeBadge ?? parseSeasonEpisodeBadge(nextItem.subtitle),
+    [seasonEpisodeBadge, nextItem.subtitle],
+  );
+
+  // For episodes, derive the cleaner "episode title" line by stripping the
+  // S/E prefix. For movies/other we just use the subtitle as-is.
+  const cleanSubtitle = useMemo(() => {
+    if (nextItem.type !== "episode") return nextItem.subtitle;
+    return stripBadgePrefix(nextItem.subtitle) || nextItem.subtitle;
+  }, [nextItem.type, nextItem.subtitle]);
+
+  const transitionBanner = useMemo(
+    () => getTransitionBanner(currentItem, nextItem, episodeProgress),
+    [currentItem, nextItem, episodeProgress],
+  );
+
+  const progressLine = useMemo<string | null>(() => {
+    if (playlistContext) {
+      return `Item ${playlistContext.position} of ${playlistContext.total} in ${playlistContext.name}`;
+    }
+    if (episodeProgress) {
+      const { episodeNumber, totalEpisodes, seasonNumber } = episodeProgress;
+      const season = seasonNumber != null ? ` in Season ${seasonNumber}` : "";
+      return `Episode ${episodeNumber} of ${totalEpisodes}${season}`;
+    }
+    return null;
+  }, [episodeProgress, playlistContext]);
+
+  const durationMin = Math.round(nextItem.duration / 60000);
 
   return (
-    <div style={styles.container}>
+    <div
+      style={styles.container}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Playing next"
+    >
       <div style={styles.content}>
-        {/* Next item info */}
+        {transitionBanner && (
+          <div style={styles.transitionBanner}>{transitionBanner}</div>
+        )}
+
         <div style={styles.headerLabel}>PLAYING NEXT</div>
 
         <div style={styles.mainRow}>
-          {/* Thumbnail with countdown ring */}
+          {/* Hero thumbnail with watched chip */}
           <div style={styles.thumbContainer}>
             <img
               src={posterUrl(nextItem.thumb)}
               alt=""
               style={styles.thumb}
             />
-            {autoPlayEnabled && (
-              <div style={styles.countdownOverlay}>
-                <svg
-                  width={48}
-                  height={48}
-                  viewBox="0 0 48 48"
-                  style={styles.countdownRing}
-                >
-                  <circle
-                    cx={24}
-                    cy={24}
-                    r={20}
-                    fill="none"
-                    stroke="rgba(255,255,255,0.2)"
-                    strokeWidth={3}
-                  />
-                  <circle
-                    cx={24}
-                    cy={24}
-                    r={20}
-                    fill="none"
-                    stroke="var(--accent)"
-                    strokeWidth={3}
-                    strokeDasharray={`${2 * Math.PI * 20}`}
-                    strokeDashoffset={`${2 * Math.PI * 20 * (1 - progress / 100)}`}
-                    strokeLinecap="round"
-                    transform="rotate(-90 24 24)"
-                    style={{ transition: "stroke-dashoffset 1s linear" }}
-                  />
-                </svg>
-                <span style={styles.countdownNumber}>{countdown}</span>
+            {watched && (
+              <div style={styles.watchedChip} aria-label="Already watched">
+                WATCHED
               </div>
             )}
           </div>
 
           {/* Item details */}
           <div style={styles.details}>
+            <div style={styles.badgeRow}>
+              {badge && nextItem.type === "episode" && (
+                <span style={styles.seasonEpisodeBadge}>{badge}</span>
+              )}
+              {progressLine && (
+                <span style={styles.progressLine}>{progressLine}</span>
+              )}
+            </div>
             <h2 style={styles.title}>{nextItem.title}</h2>
-            <div style={styles.subtitle}>{nextItem.subtitle}</div>
-            <div style={styles.meta}>
-              {Math.round(nextItem.duration / 60000)}min
+            {cleanSubtitle && (
+              <div style={styles.subtitle}>{cleanSubtitle}</div>
+            )}
+            {synopsis && <p style={styles.synopsis}>{synopsis}</p>}
+            <div style={styles.metaRow}>
+              {durationMin > 0 && <span>{durationMin} min</span>}
+              {airDate && <span style={styles.metaDot}>·</span>}
+              {airDate && <span>{airDate}</span>}
             </div>
           </div>
         </div>
+
+        {/* Countdown progress bar — full-width, more visible than the old 48x48 ring */}
+        {autoPlayEnabled && (
+          <div style={styles.countdownSection} aria-live="polite">
+            <div style={styles.countdownLabelRow}>
+              <span style={styles.countdownLabel}>
+                Auto-playing in {countdown}s
+              </span>
+            </div>
+            <div style={styles.countdownTrack}>
+              <div
+                style={{ ...styles.countdownFill, width: `${progressPct}%` }}
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={countdownSeconds}
+                aria-valuenow={countdownSeconds - countdown}
+                aria-label="Auto-play countdown"
+              />
+            </div>
+          </div>
+        )}
 
         {/* Actions */}
         <div style={styles.actions}>
@@ -149,13 +313,25 @@ export default function PostPlayScreen({
             AUTO PLAY ON
           </label>
           <div style={styles.buttonRow}>
-            <button onClick={onPlayNext} style={styles.playNowButton}>
+            <button
+              type="button"
+              onClick={onPlayNext}
+              style={styles.playNowButton}
+            >
               Play Now
             </button>
-            <button onClick={onStop} style={styles.stopButton}>
+            <button
+              type="button"
+              onClick={onStop}
+              style={styles.stopButton}
+            >
               Stop
             </button>
           </div>
+        </div>
+
+        <div style={styles.shortcutHint}>
+          Enter to play · Esc to stop
         </div>
       </div>
     </div>
@@ -175,7 +351,20 @@ const styles: Record<string, React.CSSProperties> = {
     animation: "fadeIn 0.3s ease-out",
   },
   content: {
-    maxWidth: "700px",
+    maxWidth: "780px",
+    width: "100%",
+  },
+  transitionBanner: {
+    display: "inline-block",
+    background: "var(--accent)",
+    color: "#000",
+    fontSize: "0.7rem",
+    fontWeight: 700,
+    letterSpacing: "0.1em",
+    padding: "0.3rem 0.65rem",
+    borderRadius: "999px",
+    marginBottom: "0.85rem",
+    textTransform: "uppercase",
   },
   headerLabel: {
     fontSize: "0.8rem",
@@ -186,7 +375,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   mainRow: {
     display: "flex",
-    gap: "1.5rem",
+    gap: "1.75rem",
     alignItems: "flex-start",
   },
   thumbContainer: {
@@ -194,50 +383,113 @@ const styles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
   },
   thumb: {
-    width: "160px",
-    height: "110px",
-    borderRadius: "8px",
+    width: "280px",
+    height: "158px",
+    borderRadius: "10px",
     objectFit: "cover",
+    boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
   },
-  countdownOverlay: {
+  watchedChip: {
     position: "absolute",
-    inset: 0,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    background: "rgba(0, 0, 0, 0.4)",
-    borderRadius: "8px",
-  },
-  countdownRing: {
-    position: "absolute",
-  },
-  countdownNumber: {
-    fontSize: "1.3rem",
+    top: "0.6rem",
+    left: "0.6rem",
+    background: "rgba(0,0,0,0.75)",
+    color: "var(--text-primary)",
+    fontSize: "0.65rem",
     fontWeight: 700,
-    color: "#fff",
+    letterSpacing: "0.08em",
+    padding: "0.25rem 0.55rem",
+    borderRadius: "4px",
   },
   details: {
     display: "flex",
     flexDirection: "column",
-    gap: "0.35rem",
+    gap: "0.4rem",
+    flex: 1,
+    minWidth: 0,
+  },
+  badgeRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.75rem",
+    marginBottom: "0.15rem",
+  },
+  seasonEpisodeBadge: {
+    background: "var(--accent)",
+    color: "#000",
+    fontSize: "0.85rem",
+    fontWeight: 700,
+    padding: "0.2rem 0.55rem",
+    borderRadius: "4px",
+    letterSpacing: "0.02em",
+  },
+  progressLine: {
+    fontSize: "0.8rem",
+    fontWeight: 600,
+    color: "var(--text-secondary)",
+    letterSpacing: "0.02em",
   },
   title: {
-    fontSize: "1.5rem",
+    fontSize: "1.75rem",
     fontWeight: 700,
     color: "var(--text-primary)",
     margin: 0,
+    lineHeight: 1.2,
   },
   subtitle: {
     fontSize: "1rem",
     color: "var(--text-secondary)",
   },
-  meta: {
-    fontSize: "0.85rem",
+  synopsis: {
+    fontSize: "0.9rem",
     color: "var(--text-secondary)",
-    marginTop: "0.25rem",
+    lineHeight: 1.45,
+    margin: "0.4rem 0 0 0",
+    display: "-webkit-box",
+    WebkitLineClamp: 2,
+    WebkitBoxOrient: "vertical",
+    overflow: "hidden",
+  },
+  metaRow: {
+    display: "flex",
+    gap: "0.4rem",
+    fontSize: "0.8rem",
+    color: "var(--text-secondary)",
+    marginTop: "0.5rem",
+    alignItems: "center",
+  },
+  metaDot: {
+    opacity: 0.6,
+  },
+  countdownSection: {
+    marginTop: "1.5rem",
+  },
+  countdownLabelRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    marginBottom: "0.4rem",
+  },
+  countdownLabel: {
+    fontSize: "0.75rem",
+    fontWeight: 600,
+    color: "var(--text-secondary)",
+    letterSpacing: "0.05em",
+  },
+  countdownTrack: {
+    width: "100%",
+    height: "4px",
+    background: "rgba(255,255,255,0.12)",
+    borderRadius: "2px",
+    overflow: "hidden",
+  },
+  countdownFill: {
+    height: "100%",
+    background: "var(--accent)",
+    borderRadius: "2px",
+    transition: "width 1s linear",
   },
   actions: {
-    marginTop: "1.25rem",
+    marginTop: "1.5rem",
     display: "flex",
     flexDirection: "column",
     gap: "1rem",
@@ -275,5 +527,12 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "8px",
     border: "1px solid rgba(255,255,255,0.15)",
     cursor: "pointer",
+  },
+  shortcutHint: {
+    marginTop: "1.25rem",
+    fontSize: "0.75rem",
+    color: "var(--text-secondary)",
+    letterSpacing: "0.04em",
+    opacity: 0.7,
   },
 };
