@@ -329,39 +329,41 @@ pub async fn player_set_fullscreen(
 // work area, sets always-on-top, and stashes the previous geometry.
 // `player_exit_mini` reverses this. The TS hook lands in step 4.2.
 
-/// Query the primary monitor's WORK AREA in physical pixels (the desktop
-/// rect minus the taskbar / docked toolbars). Tauri v2 exposes monitor
-/// `position()` and `size()` but not work area, so we go to Win32 directly.
-/// `SystemParametersInfoW(SPI_GETWORKAREA)` returns the *primary* monitor's
-/// work area in virtual-screen coordinates — which is exactly what we want
-/// for snapping the main window to a corner of the user's main display.
-///
-/// On multi-monitor setups this is the primary monitor only; that's the
-/// chosen scope for 4.1 (the mini-player follows the primary). A future
-/// refinement could honor the monitor the main window currently lives on
-/// via `MonitorFromWindow` + `GetMonitorInfoW`.
+/// Query the WORK AREA (desktop rect minus taskbar/docked toolbars) in
+/// physical pixels for the monitor the given window currently lives on.
+/// Uses `MonitorFromWindow` + `GetMonitorInfoW` so a mini-player triggered
+/// from the secondary display lands on that secondary display, not the
+/// primary one.
 #[cfg(target_os = "windows")]
-fn primary_work_area() -> Result<(i32, i32, i32, i32), String> {
-    use windows::Win32::Foundation::RECT;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        SystemParametersInfoW, SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+fn current_work_area(
+    main: &tauri::WebviewWindow,
+) -> Result<(i32, i32, i32, i32), String> {
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
     };
-    let mut rect = RECT::default();
+    let hwnd = main
+        .hwnd()
+        .map_err(|e| format!("get main hwnd failed: {}", e))?;
     unsafe {
-        SystemParametersInfoW(
-            SPI_GETWORKAREA,
-            0,
-            Some(&mut rect as *mut RECT as *mut _),
-            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
-        )
-        .map_err(|e| format!("SPI_GETWORKAREA failed: {:?}", e))?;
+        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if !GetMonitorInfoW(monitor, &mut info as *mut _).as_bool() {
+            return Err("GetMonitorInfoW failed".to_string());
+        }
+        let r = info.rcWork;
+        let x = r.left;
+        let y = r.top;
+        let w = r.right - r.left;
+        let h = r.bottom - r.top;
+        log::debug!(
+            "[player:mini] current-monitor work area = ({},{},{}x{})",
+            x, y, w, h
+        );
+        Ok((x, y, w, h))
     }
-    let x = rect.left;
-    let y = rect.top;
-    let w = rect.right - rect.left;
-    let h = rect.bottom - rect.top;
-    log::debug!("[player:mini] work area = ({},{},{}x{})", x, y, w, h);
-    Ok((x, y, w, h))
 }
 
 /// Compute the (x, y) origin for a `(width, height)` window snapped to
@@ -414,7 +416,7 @@ pub async fn player_enter_mini(
         .get_webview_window("main")
         .ok_or_else(|| "main webview window not found".to_string())?;
 
-    let (wx, wy, ww, wh) = primary_work_area()?;
+    let (wx, wy, ww, wh) = current_work_area(&main)?;
     let (x, y, w, h) = corner_origin(&corner, width, height, wx, wy, ww, wh)?;
 
     // Stash the current OUTER rect so exit_mini can restore exactly what the
