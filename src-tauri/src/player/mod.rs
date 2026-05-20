@@ -365,13 +365,22 @@ impl PlayerState {
             }
             *last = now;
         }
-        // Take pending geometry if one was stored (trailing-edge), or use
-        // the current args (leading-edge).
-        let (ax, ay, aw, ah) = if let Ok(mut pending) = self.pending_geometry.lock() {
-            pending.take().unwrap_or((x, y, width, height))
-        } else {
-            (x, y, width, height)
-        };
+        // Apply the CURRENT call's args, not any stored pending geometry
+        // (prexu-ifj). Pending was previously consumed here as a "trailing-
+        // edge guarantee", but that path silently overrode fresh args with
+        // stale ones: when a user maximizes (throttled, pending=maximize)
+        // and then restores (next call passes the throttle), the restored
+        // geometry would be ignored in favour of the older maximize. We
+        // still clear pending so it doesn't apply on a future call, but
+        // the current args are always the freshest known geometry — every
+        // Resized event triggers a new sync_geometry with the latest rect,
+        // so the trailing-edge case is already covered by the next event.
+        // Worst case: a drag that ends within the 50 ms throttle window
+        // may miss the final ~50 ms of motion, which is imperceptible.
+        if let Ok(mut pending) = self.pending_geometry.lock() {
+            pending.take();
+        }
+        let (ax, ay, aw, ah) = (x, y, width, height);
         // Skip if geometry hasn't changed since last apply.
         let new = (ax, ay, aw, ah);
         if let Ok(mut last_geom) = self.last_geometry.lock() {
@@ -441,9 +450,16 @@ impl PlayerState {
     /// enter/exit so the video itself floats above other apps the same way
     /// the WebView overlay does — without this the host stays in the
     /// regular z-order and other windows can render between the always-
-    /// on-top WebView and the video. Anchors below `parent` after the
-    /// topmost flip when entering so the WebView still sits visually on
-    /// top of the video within the topmost group.
+    /// on-top WebView and the video.
+    ///
+    /// Re-anchors below `parent` whenever a parent is provided, on BOTH
+    /// the topmost=true and topmost=false paths. This is critical on
+    /// pop-out EXIT (prexu-0c6): SetWindowPos(HWND_NOTOPMOST) only drops
+    /// the host below other topmost windows — it does NOT put it back
+    /// below the WebView in the regular z-order group. Without the
+    /// anchor_below(parent) here, after exit_popout the host floats above
+    /// the WebView and steals all mouse events (cursor stuck as the host
+    /// class's default arrow; app becomes uninteractable).
     #[cfg(target_os = "windows")]
     pub(crate) fn apply_host_topmost(
         &self,
@@ -459,14 +475,12 @@ impl PlayerState {
                 if let Err(e) = host.set_topmost(topmost) {
                     log::warn!("[player] apply_host_topmost failed: {}", e);
                 }
-                if topmost {
-                    if let Some(p) = parent {
-                        if let Err(e) = host.anchor_below(p) {
-                            log::warn!(
-                                "[player] apply_host_topmost: anchor_below failed: {}",
-                                e
-                            );
-                        }
+                if let Some(p) = parent {
+                    if let Err(e) = host.anchor_below(p) {
+                        log::warn!(
+                            "[player] apply_host_topmost: anchor_below failed: {}",
+                            e
+                        );
                     }
                 }
             }

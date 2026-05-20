@@ -597,9 +597,14 @@ pub async fn player_exit_popout(
     main.set_always_on_top(false)
         .map_err(|e| format!("set_always_on_top(false) failed: {}", e))?;
 
-    // Clear topmost on the mpv host window too — pairs with the
-    // apply_host_topmost(true) on enter (prexu-mw5).
-    state.apply_host_topmost(false, None);
+    // Clear topmost on the mpv host window AND re-anchor it below the
+    // WebView (prexu-0c6). Passing Some(parent) here is load-bearing:
+    // SetWindowPos(HWND_NOTOPMOST) alone leaves the host above normal-
+    // z-order siblings, so after exit the host floats over the WebView
+    // and the app becomes uninteractable. Anchoring below puts it back
+    // in its correct place underneath the WebView pixels.
+    let parent_hwnd = main.hwnd().ok();
+    state.apply_host_topmost(false, parent_hwnd);
 
     let stash = state
         .pre_popout_geometry
