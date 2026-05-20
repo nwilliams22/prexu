@@ -28,7 +28,7 @@ import { useQueue } from "../contexts/QueueContext";
 import { useNextEpisodeDetection } from "../hooks/player/useNextEpisodeDetection";
 import { usePlayerKeyboardShortcuts } from "../hooks/player/usePlayerKeyboardShortcuts";
 import { usePictureInPicture } from "../hooks/player/usePictureInPicture";
-import { useMiniPlayer } from "../hooks/player/useMiniPlayer";
+import { usePopOutPlayer } from "../hooks/player/usePopOutPlayer";
 import PlayerControls from "../components/PlayerControls";
 import ParticipantOverlay from "../components/ParticipantOverlay";
 import SyncIndicator from "../components/SyncIndicator";
@@ -200,19 +200,22 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     audioEnhancements.setMainBoost(Math.max(player.volume, 1));
   }, [player.volume, audioEnhancements]);
 
-  // Picture-in-Picture vs Mini-player. The button in ControlsBottomBar is
+  // Picture-in-Picture vs pop-out. The PiP button in ControlsBottomBar is
   // labelled "Picture-in-picture" but on the native (mpv) path there is no
   // <video> element, so the browser PiP API silently fails. We branch here
-  // so the same control invokes our native Win32 mini-player on Tauri and
-  // the standard browser PiP everywhere else. See useMiniPlayer for the
-  // mini-mode geometry defaults (prexu-a6z.1 + .2 MVP).
+  // so the same control invokes our native Win32 floating pop-out window
+  // on Tauri and the standard browser PiP everywhere else. The Rust side
+  // owns the pop-out geometry (corner + size) and reads it from the
+  // persisted store; user-driven resizes round-trip across sessions.
+  // prexu-7il splits this single button into separate Minimize + Pop-out
+  // affordances in 7il.4; for now the PiP slot maps to pop-out only.
   const pip = usePictureInPicture(player.videoRef);
-  const mini = useMiniPlayer();
-  const pipActive = IS_NATIVE_PLAYER ? mini.isMini : pip.isPiPActive;
+  const popOut = usePopOutPlayer();
+  const pipActive = IS_NATIVE_PLAYER ? popOut.isPopOut : pip.isPiPActive;
   const pipSupported = IS_NATIVE_PLAYER
-    ? mini.isMiniSupported
+    ? popOut.isPopOutSupported
     : pip.isPiPSupported;
-  const togglePiP = IS_NATIVE_PLAYER ? mini.toggleMini : pip.togglePiP;
+  const togglePiP = IS_NATIVE_PLAYER ? popOut.togglePopOut : pip.togglePiP;
 
   // Controls visibility (auto-hide on inactivity)
   const { controlsVisible, resetHideTimer, handleMouseMove } =
@@ -535,15 +538,16 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   // src-tauri/src/player/mod.rs destroy()).
   const handleExit = useCallback(async () => {
     logger.info("player", "handleExit start");
-    // If we're in mini-player mode, exit it FIRST so the main window is
-    // restored to its pre-mini outer geometry and always-on-top is cleared
-    // before we unload the player. Without this the app stays at the
-    // 480x270 mini size after the player closes (prexu-ltu follow-up).
-    if (IS_NATIVE_PLAYER && mini.isMini) {
+    // If we're in pop-out mode, exit it FIRST so the main window is
+    // restored to its pre-pop-out outer geometry and always-on-top is
+    // cleared before we unload the player. Without this the app stays at
+    // the 480x270 pop-out size after the player closes (prexu-ltu / mw5
+    // follow-up).
+    if (IS_NATIVE_PLAYER && popOut.isPopOut) {
       try {
-        mini.toggleMini();
+        popOut.togglePopOut();
       } catch (err) {
-        logger.warn("player", "handleExit exit-mini failed", String(err));
+        logger.warn("player", "handleExit exit-popout failed", String(err));
       }
     }
     await prepareNavAway();
@@ -555,7 +559,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
       }
     }
     playerSession.stop();
-  }, [prepareNavAway, playerSession, mini]);
+  }, [prepareNavAway, playerSession, popOut]);
   // Keep the ref pointed at the latest handleExit so handlePostPlayStop,
   // handleSkipSegment, and the EOF effect (all declared earlier) always
   // invoke the current closure.

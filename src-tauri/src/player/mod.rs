@@ -51,10 +51,10 @@ pub struct PlayerState {
     /// never lost.
     pending_geometry: Mutex<Option<(i32, i32, i32, i32)>>,
     /// Saved (x, y, width, height) of the Tauri main window's outer rect
-    /// before entering mini-player mode. Stashed by `player_enter_mini` and
-    /// consumed by `player_exit_mini` to restore the previous geometry.
-    /// `None` when not in mini mode.
-    pub(crate) pre_mini_geometry: Mutex<Option<(i32, i32, u32, u32)>>,
+    /// before entering pop-out mode. Stashed by `player_enter_popout` and
+    /// consumed by `player_exit_popout` to restore the previous geometry.
+    /// `None` when not in pop-out mode.
+    pub(crate) pre_popout_geometry: Mutex<Option<(i32, i32, u32, u32)>>,
 }
 
 struct Inner {
@@ -90,7 +90,7 @@ impl PlayerState {
             ),
             last_geometry: Mutex::new(None),
             pending_geometry: Mutex::new(None),
-            pre_mini_geometry: Mutex::new(None),
+            pre_popout_geometry: Mutex::new(None),
         }
     }
 
@@ -437,7 +437,7 @@ impl PlayerState {
         }
     }
 
-    /// Toggle the mpv host window's topmost flag. Used by mini-player
+    /// Toggle the mpv host window's topmost flag. Used by pop-out mode
     /// enter/exit so the video itself floats above other apps the same way
     /// the WebView overlay does — without this the host stays in the
     /// regular z-order and other windows can render between the always-

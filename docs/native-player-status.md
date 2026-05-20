@@ -22,7 +22,10 @@ All work on `feature/native-player`. Merged phases squash onto `main`.
   `--wid` target underneath, synchronised by a Rust window-group manager.
 - **Scope:** Windows-first. macOS/Linux deferred to phase 5.
 - **Audio enhancements:** map to mpv `volume` / `af=lavfi=[...]` / `audio-delay`.
-- **PiP:** replaced by a "mini-player" mode (resize two-window pair to corner).
+- **PiP:** replaced by two distinct modes — a floating "pop-out" window
+  (whole Tauri main window shrunk to a corner, always-on-top) and an
+  in-window "minimize" (small corner region inside the WebView while the
+  rest of the app stays usable). Tracked under prexu-7il.
 - **Subtitles:** libass via mpv replaces browser `::cue` styling.
 
 ## Phase progress
@@ -173,10 +176,14 @@ track switching, libass subtitle styling, audio-enhancement presets,
 Watch Together drift sync, offline-download playback, Direct Play
 relaxation, resume offset, PostPlay screen, buffered-range reporting.
 
-### ⬜ Phase 4 — Mini-player + polish (Windows)
-Tracked as epic `prexu-a6z` with steps 4.1–4.5. Replaces browser PiP
-with a Rust-driven mini-player mode (resize both windows to corner +
-always-on-top + minimal chrome).
+### 🚧 Phase 4 — Pop-out + minimize + polish (Windows)
+Originally tracked as epic `prexu-a6z` (steps 4.1–4.5) under the
+"mini-player" name. Step 4.1 + a 4.2 MVP shipped the floating pop-out
+mode (whole window shrinks to a corner, always-on-top). prexu-7il
+expanded scope into two distinct modes: pop-out (floating, resizable)
+and in-window minimize (small corner region inside the WebView,
+resizable, drag-snap to corners). Sub-tasks prexu-7il.1–.7 carry the
+remaining work.
 
 ### ⬜ Phase 5 — Cross-platform research (deferred)
 Tracked as epic `prexu-efy` (single research issue). ADR-style decision

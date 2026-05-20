@@ -157,7 +157,7 @@ impl HostWindow {
     ///
     /// The host is a sibling top-level window of the Tauri main window, so
     /// `WebviewWindow::set_always_on_top(true)` on main does NOT make the host
-    /// topmost — without this, mini-player mode shows the WebView overlay
+    /// topmost — without this, pop-out mode shows the WebView overlay
     /// floating above other apps while the actual video sits underneath them.
     /// After flipping topmost on, callers should re-anchor the host below
     /// the main window in z-order so the WebView still overlays the video

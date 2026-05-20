@@ -13,15 +13,26 @@ use tauri_plugin_store::StoreExt;
 
 use super::PlayerState;
 
-/// Path used for the mini-player store. Kept separate from `secure-store.json`
-/// (which holds auth tokens managed via the JS LazyStore) so the Rust-side
-/// state and the frontend's secure data don't share a file lock.
+/// Path used for the pop-out player store. Kept separate from
+/// `secure-store.json` (which holds auth tokens managed via the JS LazyStore)
+/// so the Rust-side state and the frontend's secure data don't share a file
+/// lock. Renamed from `mini-player.json` when the in-window minimize mode
+/// landed alongside the floating pop-out mode; old files are not migrated —
+/// existing users fall back to the defaults (bottom-right, 480x270) on first
+/// pop-out after upgrade.
 #[cfg(target_os = "windows")]
-const MINI_STORE_PATH: &str = "mini-player.json";
+const POPOUT_STORE_PATH: &str = "popout-player.json";
 #[cfg(target_os = "windows")]
-const MINI_KEY_CORNER: &str = "mini-player.corner";
+const POPOUT_KEY_CORNER: &str = "popout.corner";
 #[cfg(target_os = "windows")]
-const MINI_KEY_SIZE: &str = "mini-player.size";
+const POPOUT_KEY_SIZE: &str = "popout.size";
+
+#[cfg(target_os = "windows")]
+const POPOUT_DEFAULT_CORNER: &str = "bottom-right";
+#[cfg(target_os = "windows")]
+const POPOUT_DEFAULT_WIDTH: u32 = 480;
+#[cfg(target_os = "windows")]
+const POPOUT_DEFAULT_HEIGHT: u32 = 270;
 
 #[tauri::command]
 pub async fn player_load_url(
@@ -321,17 +332,18 @@ pub async fn player_set_fullscreen(
     fs_result
 }
 
-// ── Mini-player commands (Phase 4) ────────────────────────────────────────
+// ── Pop-out player commands (prexu-7il / Phase 4) ─────────────────────────
 //
-// Foundational backend for the mini-player overlay. Step 4.1 of prexu-a6z.
-// `player_enter_mini` resizes + repositions the Tauri main window (and the
-// HostWindow that mpv renders into) to a corner of the primary monitor's
-// work area, sets always-on-top, and stashes the previous geometry.
-// `player_exit_mini` reverses this. The TS hook lands in step 4.2.
+// Floating mini-window mode: shrinks the whole Tauri main window down to a
+// corner of the user's current display, sets always-on-top, and resyncs the
+// mpv host window. Distinct from the in-window "minimize" mode (prexu-7il.3)
+// which keeps the main window full size but renders the player chrome in a
+// small corner region of the WebView. The bugs prexu-cjo (maximize-while-
+// popped-out) and prexu-buq (black border) belong to this mode.
 
 /// Query the WORK AREA (desktop rect minus taskbar/docked toolbars) in
 /// physical pixels for the monitor the given window currently lives on.
-/// Uses `MonitorFromWindow` + `GetMonitorInfoW` so a mini-player triggered
+/// Uses `MonitorFromWindow` + `GetMonitorInfoW` so a pop-out triggered
 /// from the secondary display lands on that secondary display, not the
 /// primary one.
 #[cfg(target_os = "windows")]
@@ -359,11 +371,42 @@ fn current_work_area(
         let w = r.right - r.left;
         let h = r.bottom - r.top;
         log::debug!(
-            "[player:mini] current-monitor work area = ({},{},{}x{})",
+            "[player:popout] current-monitor work area = ({},{},{}x{})",
             x, y, w, h
         );
         Ok((x, y, w, h))
     }
+}
+
+/// Load the persisted pop-out corner + size from the store, falling back to
+/// the project defaults when no entry exists yet. Returns `(corner, width,
+/// height)` ready to feed into `corner_origin`.
+#[cfg(target_os = "windows")]
+fn load_persisted_popout(app: &AppHandle) -> (String, u32, u32) {
+    let mut corner = POPOUT_DEFAULT_CORNER.to_string();
+    let mut width = POPOUT_DEFAULT_WIDTH;
+    let mut height = POPOUT_DEFAULT_HEIGHT;
+    if let Ok(store) = app.store(POPOUT_STORE_PATH) {
+        if let Some(v) = store.get(POPOUT_KEY_CORNER) {
+            if let Some(s) = v.as_str() {
+                corner = s.to_string();
+            }
+        }
+        if let Some(v) = store.get(POPOUT_KEY_SIZE) {
+            if let (Some(w), Some(h)) = (
+                v.get("width").and_then(|x| x.as_u64()),
+                v.get("height").and_then(|x| x.as_u64()),
+            ) {
+                width = w as u32;
+                height = h as u32;
+            }
+        }
+    }
+    log::debug!(
+        "[player:popout] resolved persisted geometry corner={} size={}x{}",
+        corner, width, height
+    );
+    (corner, width, height)
 }
 
 /// Compute the (x, y) origin for a `(width, height)` window snapped to
@@ -391,23 +434,31 @@ fn corner_origin(
     Ok((x, y, w, h))
 }
 
-/// Enter mini-player mode: resize+reposition the Tauri main window to the
-/// requested corner of the primary monitor's work area, set always-on-top,
-/// and resync the mpv host window. The pre-mini outer geometry of the main
-/// window is stashed in `PlayerState::pre_mini_geometry` for `exit_mini`
-/// to restore. The chosen `corner` and `(width, height)` are persisted to
-/// `tauri-plugin-store` so the next session can re-enter at the same spot.
+/// Enter pop-out mode: resize+reposition the Tauri main window to a corner
+/// of the current display's work area, set always-on-top, and resync the
+/// mpv host window. The pre-pop-out outer geometry of the main window is
+/// stashed in `PlayerState::pre_popout_geometry` for `player_exit_popout`
+/// to restore.
+///
+/// All args are `Option` so the frontend can pass `undefined` to mean "use
+/// the persisted geometry from `popout-player.json`". When the store is
+/// empty (first run on this profile), `POPOUT_DEFAULT_*` are used. The hook
+/// typically calls this with no args after the first session.
 #[cfg(target_os = "windows")]
 #[tauri::command]
-pub async fn player_enter_mini(
-    corner: String,
-    width: u32,
-    height: u32,
+pub async fn player_enter_popout(
+    corner: Option<String>,
+    width: Option<u32>,
+    height: Option<u32>,
     app: AppHandle,
     state: State<'_, PlayerState>,
 ) -> Result<(), String> {
+    let (saved_corner, saved_w, saved_h) = load_persisted_popout(&app);
+    let corner = corner.unwrap_or(saved_corner);
+    let width = width.unwrap_or(saved_w);
+    let height = height.unwrap_or(saved_h);
     log::info!(
-        "[player:cmd] enter_mini corner={} size={}x{}",
+        "[player:cmd] enter_popout corner={} size={}x{}",
         corner,
         width,
         height
@@ -419,24 +470,28 @@ pub async fn player_enter_mini(
     let (wx, wy, ww, wh) = current_work_area(&main)?;
     let (x, y, w, h) = corner_origin(&corner, width, height, wx, wy, ww, wh)?;
 
-    // Stash the current OUTER rect so exit_mini can restore exactly what the
-    // user had before. We capture outer (not inner) because set_position +
-    // set_size operate on the outer window rect on Windows.
+    // Stash the current OUTER rect so exit_popout can restore exactly what
+    // the user had before. We capture outer (not inner) because set_position
+    // + set_size operate on the outer window rect on Windows.
     if let (Ok(pos), Ok(size)) = (main.outer_position(), main.outer_size()) {
         let stash = (pos.x, pos.y, size.width, size.height);
-        if let Ok(mut g) = state.pre_mini_geometry.lock() {
+        if let Ok(mut g) = state.pre_popout_geometry.lock() {
             *g = Some(stash);
             log::debug!(
-                "[player:mini] stashed pre-mini outer geometry ({},{},{}x{})",
+                "[player:popout] stashed pre-popout outer geometry ({},{},{}x{})",
                 stash.0, stash.1, stash.2, stash.3
             );
         }
     } else {
-        log::warn!("[player:mini] could not read outer geometry to stash");
+        log::warn!("[player:popout] could not read outer geometry to stash");
     }
 
     // Apply window changes. set_size + set_position take physical pixels via
-    // the Size/Position enums. set_always_on_top is a direct call.
+    // the Size/Position enums. set_always_on_top is a direct call. We leave
+    // the window resizable (tauri.conf.json `resizable: true`) so the user
+    // can grab the top-left corner to resize the floating window; the new
+    // size is persisted in `player_exit_popout` so the next entry restores
+    // it.
     main.set_always_on_top(true)
         .map_err(|e| format!("set_always_on_top failed: {}", e))?;
     main.set_size(Size::Physical(PhysicalSize { width: w, height: h }))
@@ -445,7 +500,7 @@ pub async fn player_enter_mini(
         .map_err(|e| format!("set_position failed: {}", e))?;
 
     log::debug!(
-        "[player:mini] resized main to ({},{},{}x{}); resynced host",
+        "[player:popout] resized main to ({},{},{}x{}); resynced host",
         x, y, w, h
     );
 
@@ -470,43 +525,74 @@ pub async fn player_enter_mini(
     }
 
     // Persist the chosen corner + size for next session. A failure here is
-    // not fatal — the user can re-enter mini and we'll save again.
-    match app.store(MINI_STORE_PATH) {
+    // not fatal — the user can re-enter pop-out and we'll save again.
+    match app.store(POPOUT_STORE_PATH) {
         Ok(store) => {
-            store.set(MINI_KEY_CORNER, serde_json::Value::String(corner.clone()));
+            store.set(POPOUT_KEY_CORNER, serde_json::Value::String(corner.clone()));
             store.set(
-                MINI_KEY_SIZE,
+                POPOUT_KEY_SIZE,
                 serde_json::json!({ "width": w, "height": h }),
             );
             if let Err(e) = store.save() {
-                log::warn!("[player:mini] store save failed: {:?}", e);
+                log::warn!("[player:popout] store save failed: {:?}", e);
             } else {
                 log::debug!(
-                    "[player:mini] persisted corner={} size={}x{}",
+                    "[player:popout] persisted corner={} size={}x{}",
                     corner, w, h
                 );
             }
         }
-        Err(e) => log::warn!("[player:mini] store open failed: {:?}", e),
+        Err(e) => log::warn!("[player:popout] store open failed: {:?}", e),
     }
 
     Ok(())
 }
 
-/// Exit mini-player mode: clear always-on-top and restore the main window
-/// to the outer geometry stashed by `player_enter_mini`. If no stash exists
+/// Exit pop-out mode: clear always-on-top and restore the main window to
+/// the outer geometry stashed by `player_enter_popout`. If no stash exists
 /// (e.g. exit called without a prior enter), this clears always-on-top and
 /// returns Ok without resizing.
+///
+/// Persistence: BEFORE restoring, we read the main window's current outer
+/// size and write it back to the store under `POPOUT_KEY_SIZE`. This is
+/// how user-driven resizes (dragging the top-left corner while the pop-out
+/// is open) round-trip across sessions — the next `player_enter_popout`
+/// with no args reads this saved size via `load_persisted_popout`.
 #[cfg(target_os = "windows")]
 #[tauri::command]
-pub async fn player_exit_mini(
+pub async fn player_exit_popout(
     app: AppHandle,
     state: State<'_, PlayerState>,
 ) -> Result<(), String> {
-    log::info!("[player:cmd] exit_mini");
+    log::info!("[player:cmd] exit_popout");
     let main = app
         .get_webview_window("main")
         .ok_or_else(|| "main webview window not found".to_string())?;
+
+    // Capture the user's current size BEFORE restoring so any post-enter
+    // resize is preserved. Outer size matches what set_size set in enter,
+    // so the next enter can pass it to corner_origin unchanged.
+    if let Ok(size) = main.outer_size() {
+        match app.store(POPOUT_STORE_PATH) {
+            Ok(store) => {
+                store.set(
+                    POPOUT_KEY_SIZE,
+                    serde_json::json!({ "width": size.width, "height": size.height }),
+                );
+                if let Err(e) = store.save() {
+                    log::warn!("[player:popout] resize-on-exit save failed: {:?}", e);
+                } else {
+                    log::debug!(
+                        "[player:popout] persisted resized size {}x{} on exit",
+                        size.width, size.height
+                    );
+                }
+            }
+            Err(e) => log::warn!("[player:popout] resize-on-exit store open failed: {:?}", e),
+        }
+    } else {
+        log::warn!("[player:popout] could not read current outer_size on exit");
+    }
 
     main.set_always_on_top(false)
         .map_err(|e| format!("set_always_on_top(false) failed: {}", e))?;
@@ -516,13 +602,13 @@ pub async fn player_exit_mini(
     state.apply_host_topmost(false, None);
 
     let stash = state
-        .pre_mini_geometry
+        .pre_popout_geometry
         .lock()
         .ok()
         .and_then(|mut g| g.take());
 
     let Some((x, y, w, h)) = stash else {
-        log::debug!("[player:mini] exit_mini: no stash, only cleared always-on-top");
+        log::debug!("[player:popout] exit_popout: no stash, only cleared always-on-top");
         return Ok(());
     };
 
@@ -532,7 +618,7 @@ pub async fn player_exit_mini(
         .map_err(|e| format!("set_position failed: {}", e))?;
 
     log::debug!(
-        "[player:mini] restored main to ({},{},{}x{}); resynced host",
+        "[player:popout] restored main to ({},{},{}x{}); resynced host",
         x, y, w, h
     );
 
@@ -546,21 +632,22 @@ pub async fn player_exit_mini(
 // Non-Windows stubs so the command names exist for the JS bridge but the
 // platform that hasn't been ported yet (macOS / Linux) returns a clear error
 // instead of failing at the IPC layer with "command not found". Keeps the
-// frontend code path uniform once 4.2 lands.
+// frontend code path uniform; cross-platform pop-out / minimize lands in
+// prexu-efy (Phase 5 research).
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
-pub async fn player_enter_mini(
-    _corner: String,
-    _width: u32,
-    _height: u32,
+pub async fn player_enter_popout(
+    _corner: Option<String>,
+    _width: Option<u32>,
+    _height: Option<u32>,
 ) -> Result<(), String> {
-    log::warn!("[player:cmd] enter_mini called on non-Windows platform");
-    Err("mini-player is only supported on Windows in Phase 4".into())
+    log::warn!("[player:cmd] enter_popout called on non-Windows platform");
+    Err("pop-out mode is only supported on Windows in Phase 4".into())
 }
 
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
-pub async fn player_exit_mini() -> Result<(), String> {
-    log::warn!("[player:cmd] exit_mini called on non-Windows platform");
-    Err("mini-player is only supported on Windows in Phase 4".into())
+pub async fn player_exit_popout() -> Result<(), String> {
+    log::warn!("[player:cmd] exit_popout called on non-Windows platform");
+    Err("pop-out mode is only supported on Windows in Phase 4".into())
 }

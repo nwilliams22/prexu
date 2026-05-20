@@ -6,48 +6,53 @@
  * where the TS↔Rust contract is documented and logged consistently with
  * the project's logging conventions (see CLAUDE.md / `services/logger.ts`).
  *
- * The mini-player commands (Phase 4 / prexu-a6z.1) are the first batch —
- * `useMiniPlayer` (prexu-a6z.2) will consume these wrappers, not invoke
- * directly.
+ * The pop-out player commands (renamed from "mini-player" in prexu-7il.1)
+ * are the first batch — `usePopOutPlayer` consumes these wrappers, not
+ * invoke directly.
  */
 
 import { invoke } from "@tauri-apps/api/core";
 import { logger } from "./logger";
 
-/** Corner of the work area to snap the mini-player window to. */
-export type MiniPlayerCorner =
+/** Corner of the work area to snap the pop-out window to. */
+export type PopOutCorner =
   | "top-left"
   | "top-right"
   | "bottom-left"
   | "bottom-right";
 
 /**
- * Enter mini-player mode. The Tauri main window is resized to
- * (width, height) and snapped to `corner` of the primary monitor's WORK
- * area (taskbar excluded), set always-on-top, and the mpv host window is
- * resynced. The chosen corner + size are persisted via tauri-plugin-store
- * for the next session.
+ * Enter pop-out mode. The Tauri main window is resized + snapped to a
+ * corner of the current display's WORK area (taskbar excluded), set
+ * always-on-top, and the mpv host window is resynced.
  *
- * Sizes are physical pixels. The Rust side clamps oversized requests against
- * the work area so e.g. 9999x9999 is safe.
+ * All args are optional — when omitted, the Rust side reads the last-known
+ * `corner` and `(width, height)` from `popout-player.json` (falling back
+ * to bottom-right / 480×270 on first run). User-driven resizes of the
+ * pop-out window round-trip via this path: `playerExitPopOut` saves the
+ * window's current outer size before restoring, so the next call here
+ * with no args reopens at the same dimensions.
  */
-export async function playerEnterMini(
-  corner: MiniPlayerCorner,
-  width: number,
-  height: number,
+export async function playerEnterPopOut(
+  corner?: PopOutCorner,
+  width?: number,
+  height?: number,
 ): Promise<void> {
-  logger.info("player", "player_enter_mini", { corner, width, height });
-  await invoke("player_enter_mini", { corner, width, height });
+  logger.info("player", "player_enter_popout", { corner, width, height });
+  await invoke("player_enter_popout", { corner, width, height });
 }
 
 /**
- * Exit mini-player mode. Always-on-top is cleared and the main window is
+ * Exit pop-out mode. Always-on-top is cleared and the main window is
  * restored to whatever outer geometry it had before the most recent
- * `playerEnterMini` (the Rust side stashes it in PlayerState). Calling
+ * `playerEnterPopOut` (the Rust side stashes it in PlayerState). Calling
  * this without a prior enter is a no-op for size/position but still clears
  * always-on-top.
+ *
+ * Side effect: the current outer size is persisted to the store so any
+ * user-driven resize during pop-out is remembered for the next session.
  */
-export async function playerExitMini(): Promise<void> {
-  logger.info("player", "player_exit_mini");
-  await invoke("player_exit_mini");
+export async function playerExitPopOut(): Promise<void> {
+  logger.info("player", "player_exit_popout");
+  await invoke("player_exit_popout");
 }
