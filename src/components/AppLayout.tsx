@@ -115,12 +115,39 @@ function AppLayout() {
   const playerActive =
     playerSession.session != null && !playerSession.isMinimized;
 
+  // prexu-s0f: when minimized, punch a 360x200 hole in the bottom-right
+  // (16 px gutter on the right + bottom edges) of AppLayout so the mpv
+  // Win32 sibling window BEHIND the WebView shows through. AppLayout's
+  // opaque header/sidebar/main covers everywhere else. The hole's
+  // dimensions match miniContainer in Player.tsx exactly. CSS mask
+  // with two layers + `exclude` composite (Webkit prefixed `xor`)
+  // gives us the cut-out. When 7il.5's resizable-minimize lands, this
+  // will need to bind to the actual size from PlayerContext instead
+  // of the hardcoded 360x200.
+  const maskStyle: React.CSSProperties = playerSession.isMinimized
+    ? {
+        WebkitMaskImage:
+          "linear-gradient(#000, #000), linear-gradient(#000, #000)",
+        maskImage:
+          "linear-gradient(#000, #000), linear-gradient(#000, #000)",
+        WebkitMaskSize: "100% 100%, 360px 200px",
+        maskSize: "100% 100%, 360px 200px",
+        WebkitMaskPosition: "0 0, calc(100% - 376px) calc(100% - 216px)",
+        maskPosition: "0 0, calc(100% - 376px) calc(100% - 216px)",
+        WebkitMaskRepeat: "no-repeat, no-repeat",
+        maskRepeat: "no-repeat, no-repeat",
+        WebkitMaskComposite: "xor",
+        maskComposite: "exclude",
+      }
+    : {};
+
   return (
     <div
       style={{
         ...styles.container,
         visibility: playerActive ? "hidden" : "visible",
         pointerEvents: playerActive ? "none" : "auto",
+        ...maskStyle,
       }}
     >
       {/* Header */}

@@ -125,24 +125,23 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   // leave body set to an earlier "transparent" if anything else mutated
   // it in between.
   //
-  // prexu-4k5: gate transparency on !isMinimized. In minimize mode
-  // Player.tsx renders only a small bottom-right region, and the rest
-  // of the viewport should reveal the route content (AppLayout) — not
-  // the OS desktop wallpaper showing through the transparent main
-  // window. The mini-container itself has its own `background:
-  // transparent` so the small mpv host area still shows through; only
-  // the body outside that region is restored to the navy default.
+  // prexu-s0f: body MUST stay transparent during minimize mode too.
+  // The mini region needs the WebView pixels to be truly transparent
+  // (alpha=0) so the OS composites the Win32 mpv host window behind
+  // through. The previous prexu-4k5 attempt to flip body to opaque
+  // navy in minimize mode covered the mpv host. With AppLayout now
+  // painted opaquely (prexu-ya6) but masked to have a 360x200 hole
+  // in the bottom-right (this fix's mate over in AppLayout.tsx), the
+  // hole reveals body (transparent) → WebView pixels transparent in
+  // that region → Win32 mpv host visible through. Everywhere else,
+  // AppLayout's opaque content covers body.
   useLayoutEffect(() => {
     if (!IS_NATIVE_PLAYER) return;
-    if (playerSession.isMinimized) {
-      document.body.style.background = "#1a1a2e";
-    } else {
-      document.body.style.background = "transparent";
-    }
+    document.body.style.background = "transparent";
     return () => {
       document.body.style.background = "#1a1a2e";
     };
-  }, [playerSession.isMinimized]);
+  }, []);
 
   // Audio enhancements — Web Audio API processing graph
   const audioEnhancements = useAudioEnhancements(
