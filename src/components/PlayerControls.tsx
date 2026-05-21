@@ -35,10 +35,17 @@ interface PlayerControlsProps {
     normalizationPreset?: NormalizationPreset;
     audioOffsetMs?: number;
   }) => void;
-  /** Picture-in-Picture */
+  /** Picture-in-Picture (or pop-out on native). See ControlsBottomBar
+   *  for the `isPopOutMode` semantics. */
   isPiPActive?: boolean;
   isPiPSupported?: boolean;
   onTogglePiP?: () => void;
+  isPopOutMode?: boolean;
+  /** In-window minimize (7il.4). Windows-only for now; HTML5 path leaves
+   *  the props undefined so the button doesn't render. */
+  isMinimizeSupported?: boolean;
+  isMinimizeActive?: boolean;
+  onMinimize?: () => void;
   /** Queue */
   queueCount?: number;
   onToggleQueue?: () => void;
@@ -49,7 +56,7 @@ interface PlayerControlsProps {
   onSubtitleDownloaded?: () => void;
 }
 
-function PlayerControls({ player, onExit, onPrevious, visible, syncIndicator, chapters, onSeek, onActivity, onNextEpisode, onPrevEpisode, audioEnhancements, onAudioEnhancementChange, isPiPActive, isPiPSupported, onTogglePiP, queueCount, onToggleQueue, serverUri, serverToken, ratingKey, onSubtitleDownloaded }: PlayerControlsProps) {
+function PlayerControls({ player, onExit, onPrevious, visible, syncIndicator, chapters, onSeek, onActivity, onNextEpisode, onPrevEpisode, audioEnhancements, onAudioEnhancementChange, isPiPActive, isPiPSupported, onTogglePiP, isPopOutMode, isMinimizeSupported, isMinimizeActive, onMinimize, queueCount, onToggleQueue, serverUri, serverToken, ratingKey, onSubtitleDownloaded }: PlayerControlsProps) {
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
   const [previousHovered, setPreviousHovered] = useState(false);
@@ -144,6 +151,10 @@ function PlayerControls({ player, onExit, onPrevious, visible, syncIndicator, ch
         isPiPActive={isPiPActive}
         isPiPSupported={isPiPSupported}
         onTogglePiP={onTogglePiP}
+        isPopOutMode={isPopOutMode}
+        isMinimizeSupported={isMinimizeSupported}
+        isMinimizeActive={isMinimizeActive}
+        onMinimize={onMinimize}
         queueCount={queueCount}
         onToggleQueue={onToggleQueue}
         serverUri={serverUri}

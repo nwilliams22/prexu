@@ -201,22 +201,44 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     audioEnhancements.setMainBoost(Math.max(player.volume, 1));
   }, [player.volume, audioEnhancements]);
 
-  // Picture-in-Picture vs pop-out. The PiP button in ControlsBottomBar is
-  // labelled "Picture-in-picture" but on the native (mpv) path there is no
-  // <video> element, so the browser PiP API silently fails. We branch here
-  // so the same control invokes our native Win32 floating pop-out window
-  // on Tauri and the standard browser PiP everywhere else. The Rust side
-  // owns the pop-out geometry (corner + size) and reads it from the
-  // persisted store; user-driven resizes round-trip across sessions.
-  // prexu-7il splits this single button into separate Minimize + Pop-out
-  // affordances in 7il.4; for now the PiP slot maps to pop-out only.
+  // Picture-in-Picture vs pop-out. On the native (mpv) path there's no
+  // <video> element so the browser PiP API silently fails — we route the
+  // PiP slot to our Win32-native floating pop-out window on Tauri, and
+  // to the standard browser PiP everywhere else. The Rust side owns the
+  // pop-out geometry (corner + size) and reads it from the persisted
+  // store; user-driven resizes round-trip across sessions.
+  //
+  // 7il.4: the native path now has a SECOND button for in-window minimize
+  // (the small bottom-right corner mode). The two buttons are mutually
+  // exclusive — `handleMinimize` exits pop-out first when needed, and
+  // `togglePiP` exits minimize first when needed.
   const pip = usePictureInPicture(player.videoRef);
   const popOut = usePopOutPlayer();
   const pipActive = IS_NATIVE_PLAYER ? popOut.isPopOut : pip.isPiPActive;
   const pipSupported = IS_NATIVE_PLAYER
     ? popOut.isPopOutSupported
     : pip.isPiPSupported;
-  const togglePiP = IS_NATIVE_PLAYER ? popOut.togglePopOut : pip.togglePiP;
+  const togglePiP = useCallback(() => {
+    if (IS_NATIVE_PLAYER) {
+      // Mutual exclusion with minimize: if currently minimized, restore
+      // to full first, then pop out (7il.4).
+      if (playerSession.isMinimized) {
+        playerSession.restoreFromMinimize();
+      }
+      popOut.togglePopOut();
+    } else {
+      pip.togglePiP();
+    }
+  }, [popOut, pip, playerSession]);
+
+  const handleMinimize = useCallback(() => {
+    // Mutual exclusion with pop-out: if currently popped out, exit
+    // pop-out first, then minimize (7il.4).
+    if (IS_NATIVE_PLAYER && popOut.isPopOut) {
+      popOut.togglePopOut();
+    }
+    playerSession.minimize();
+  }, [popOut, playerSession]);
 
   // Controls visibility (auto-hide on inactivity)
   const { controlsVisible, resetHideTimer, handleMouseMove } =
@@ -782,6 +804,10 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
           isPiPActive={pipActive}
           isPiPSupported={pipSupported}
           onTogglePiP={togglePiP}
+          isPopOutMode={IS_NATIVE_PLAYER}
+          isMinimizeSupported={IS_NATIVE_PLAYER}
+          isMinimizeActive={playerSession.isMinimized}
+          onMinimize={handleMinimize}
           queueCount={remainingCount}
           onToggleQueue={toggleQueuePanel}
           serverUri={server?.uri}
