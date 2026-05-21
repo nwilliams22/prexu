@@ -744,16 +744,29 @@ pub async fn player_enter_minimize(
     state: State<'_, PlayerState>,
 ) -> Result<(), String> {
     let padding = padding.unwrap_or(MINIMIZE_DEFAULT_PADDING);
-    log::info!(
-        "[player:cmd] enter_minimize size={}x{} padding={}",
-        width, height, padding
-    );
     let main = app
         .get_webview_window("main")
         .ok_or_else(|| "main webview window not found".to_string())?;
 
+    // DPI scaling (prexu-7a2). The frontend passes width/height/padding in
+    // CSS (logical) pixels so the mini chrome and the AppLayout mask hole
+    // are sized consistently across DPI scales. Tauri's inner_size /
+    // inner_position are physical pixels, and our apply_minimize_inset
+    // math runs in that physical-px space — so we scale up the CSS units
+    // here once on entry. ScaleFactorChanged while minimized (rare cross-
+    // monitor case) is not currently handled; the host would render at
+    // the old DPI's pixel sizes until exit/re-enter.
+    let scale = main.scale_factor().unwrap_or(1.0);
+    let width_phys = ((width as f64) * scale).round() as u32;
+    let height_phys = ((height as f64) * scale).round() as u32;
+    let padding_phys = ((padding as f64) * scale).round() as u32;
+    log::info!(
+        "[player:cmd] enter_minimize size={}x{} padding={} scale={:.2} → physical {}x{} pad={}",
+        width, height, padding, scale, width_phys, height_phys, padding_phys
+    );
+
     if let Ok(mut mz) = state.minimize.lock() {
-        *mz = Some((width, height, padding));
+        *mz = Some((width_phys, height_phys, padding_phys));
     } else {
         return Err("minimize lock poisoned".to_string());
     }
