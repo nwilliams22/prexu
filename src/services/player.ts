@@ -60,10 +60,14 @@ export async function playerExitPopOut(): Promise<void> {
 /**
  * Enter in-window minimize mode (prexu-7il.2). The Tauri main window
  * stays at its current size; only the mpv host shrinks to a
- * `(width, height)` rect anchored to the bottom-right of the WebView
- * client area, with `padding` pixels of gutter. The host re-snaps to
- * the corner on every Resized event so it tracks the bottom-right as
- * the user resizes the main window.
+ * `(width, height)` rect anchored to `corner` of the WebView client area,
+ * with `padding` pixels of gutter. The host re-snaps to the corner on
+ * every Resized event so it tracks the chosen corner as the user resizes
+ * the main window.
+ *
+ * `corner` was added in prexu-7il.7 (anchor-drag). Omitting it preserves
+ * the legacy bottom-right placement so existing call sites + first-time
+ * entry paths continue working unchanged.
  *
  * Distinct from pop-out (which shrinks the entire Tauri window into a
  * floating always-on-top mini window). Mutual exclusion is handled at
@@ -73,9 +77,10 @@ export async function playerEnterMinimize(
   width: number,
   height: number,
   padding?: number,
+  corner?: PopOutCorner,
 ): Promise<void> {
-  logger.info("player", "player_enter_minimize", { width, height, padding });
-  await invoke("player_enter_minimize", { width, height, padding });
+  logger.info("player", "player_enter_minimize", { width, height, padding, corner });
+  await invoke("player_enter_minimize", { width, height, padding, corner });
 }
 
 /**

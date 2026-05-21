@@ -724,10 +724,47 @@ pub async fn player_exit_popout(
 
 #[cfg(target_os = "windows")]
 const MINIMIZE_DEFAULT_PADDING: u32 = 16;
+#[cfg(target_os = "windows")]
+const MINIMIZE_DEFAULT_CORNER: &str = "bottom-right";
 
-/// Enter minimize mode: store the (width, height, padding) of the desired
-/// inset rect in PlayerState and force a host resync so the mpv window
-/// shrinks to the bottom-right of the current WebView client area.
+/// Parse a corner string into the validated enum variant used by
+/// `apply_minimize_inset`. Mirrors the four-string identifiers exposed to
+/// the React side (`MiniCorner` in `src/utils/mini-rect.ts`). An unknown
+/// or absent value falls back to bottom-right so the legacy 7il.2 contract
+/// (no `corner` parameter) keeps working byte-for-byte.
+#[cfg(target_os = "windows")]
+fn parse_minimize_corner(corner: Option<&str>) -> super::MinimizeCorner {
+    use super::MinimizeCorner;
+    match corner {
+        Some("top-left") => MinimizeCorner::TopLeft,
+        Some("top-right") => MinimizeCorner::TopRight,
+        Some("bottom-left") => MinimizeCorner::BottomLeft,
+        Some("bottom-right") | None => MinimizeCorner::BottomRight,
+        Some(other) => {
+            log::warn!(
+                "[player:cmd] enter_minimize unknown corner '{}', falling back to {}",
+                other,
+                MINIMIZE_DEFAULT_CORNER
+            );
+            MinimizeCorner::BottomRight
+        }
+    }
+}
+
+/// Enter minimize mode: store the (corner, width, height, padding) of the
+/// desired inset rect in PlayerState and force a host resync so the mpv
+/// window shrinks to the chosen corner of the current WebView client area.
+///
+/// Frontend callers may pass `corner` to anchor the mini player to any of
+/// the four corners (prexu-7il.7); omitting it preserves the original
+/// bottom-right placement from 7il.2. The host re-snaps to the chosen
+/// corner on every Resized event via `apply_minimize_inset`, so the small
+/// region tracks the corner regardless of subsequent window resizes.
+///
+/// Re-entrant: calling this again while already in minimize mode (e.g. the
+/// React side dragging the resize handle or moving to a different corner)
+/// updates the inset in place. The synchronous resync via
+/// `apply_host_geometry` makes the new geometry visible within one frame.
 ///
 /// Mutual exclusion with pop-out is handled at the React button layer
 /// (7il.4) so the IPC contract stays simple — this command itself does
@@ -740,10 +777,12 @@ pub async fn player_enter_minimize(
     width: u32,
     height: u32,
     padding: Option<u32>,
+    corner: Option<String>,
     app: AppHandle,
     state: State<'_, PlayerState>,
 ) -> Result<(), String> {
     let padding = padding.unwrap_or(MINIMIZE_DEFAULT_PADDING);
+    let corner_enum = parse_minimize_corner(corner.as_deref());
     let main = app
         .get_webview_window("main")
         .ok_or_else(|| "main webview window not found".to_string())?;
@@ -761,12 +800,17 @@ pub async fn player_enter_minimize(
     let height_phys = ((height as f64) * scale).round() as u32;
     let padding_phys = ((padding as f64) * scale).round() as u32;
     log::info!(
-        "[player:cmd] enter_minimize size={}x{} padding={} scale={:.2} → physical {}x{} pad={}",
-        width, height, padding, scale, width_phys, height_phys, padding_phys
+        "[player:cmd] enter_minimize size={}x{} padding={} corner={:?} scale={:.2} → physical {}x{} pad={}",
+        width, height, padding, corner_enum, scale, width_phys, height_phys, padding_phys
     );
 
     if let Ok(mut mz) = state.minimize.lock() {
-        *mz = Some((width_phys, height_phys, padding_phys));
+        *mz = Some(super::MinimizeState {
+            width: width_phys,
+            height: height_phys,
+            padding: padding_phys,
+            corner: corner_enum,
+        });
     } else {
         return Err("minimize lock poisoned".to_string());
     }
@@ -815,6 +859,7 @@ pub async fn player_enter_minimize(
     _width: u32,
     _height: u32,
     _padding: Option<u32>,
+    _corner: Option<String>,
 ) -> Result<(), String> {
     log::warn!("[player:cmd] enter_minimize called on non-Windows platform");
     Err("minimize mode is only supported on Windows in Phase 4".into())

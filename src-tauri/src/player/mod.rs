@@ -55,9 +55,9 @@ pub struct PlayerState {
     /// consumed by `player_exit_popout` to restore the previous geometry.
     /// `None` when not in pop-out mode.
     pub(crate) pre_popout_geometry: Mutex<Option<(i32, i32, u32, u32)>>,
-    /// In-window minimize state: `(width, height, padding)` of the small
-    /// player region anchored to the bottom-right corner of the main
-    /// window's client area (prexu-7il.2). `None` when not minimized.
+    /// In-window minimize state: the size+corner of the small player
+    /// region anchored inside the main window's client area
+    /// (prexu-7il.2 / 7il.7). `None` when not minimized.
     ///
     /// Distinct from pop-out: pop-out shrinks the entire Tauri main
     /// window, minimize keeps the main window full size and only
@@ -65,11 +65,31 @@ pub struct PlayerState {
     /// navigate the rest of the app underneath / around the video.
     /// `sync_geometry` and `apply_host_geometry` honor this when set —
     /// instead of placing the host at the full WebView client rect, they
-    /// place it at the corresponding bottom-right inset.
-    ///
-    /// Corner is hard-coded to bottom-right in 7il.2; the four-corner
-    /// anchor-drag picker lands in prexu-7il.7.
-    pub(crate) minimize: Mutex<Option<(u32, u32, u32)>>,
+    /// place it at the inset corresponding to `corner`.
+    pub(crate) minimize: Mutex<Option<MinimizeState>>,
+}
+
+/// Which of the four corners the mini player anchors to. Mirrors the
+/// `MiniCorner` string union in `src/utils/mini-rect.ts`; the IPC layer
+/// translates the on-the-wire string into this variant via
+/// `parse_minimize_corner` in `commands.rs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MinimizeCorner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+/// All-physical-pixel parameters of the in-window mini region. Stored in
+/// `PlayerState::minimize` so `apply_minimize_inset` can produce the
+/// correct host geometry on every Resized event.
+#[derive(Debug, Clone, Copy)]
+pub struct MinimizeState {
+    pub width: u32,
+    pub height: u32,
+    pub padding: u32,
+    pub corner: MinimizeCorner,
 }
 
 struct Inner {
@@ -117,12 +137,12 @@ impl PlayerState {
 
     /// Transform a desired host geometry `(x, y, width, height)` — which
     /// normally matches the Tauri main window's inner (client) rect — to
-    /// the bottom-right inset when minimize mode is active (prexu-7il.2).
-    /// Pass-through when minimize is `None`.
+    /// the corner-anchored inset when minimize mode is active
+    /// (prexu-7il.2 / 7il.7). Pass-through when minimize is `None`.
     ///
-    /// The inset stays anchored to the bottom-right corner of the client
+    /// The inset stays anchored to `MinimizeState::corner` of the client
     /// rect: when the user resizes the main window, the host re-snaps to
-    /// the bottom-right on each Resized event, so the small video region
+    /// the chosen corner on each Resized event, so the small video region
     /// always tracks the corner regardless of window size.
     #[cfg(target_os = "windows")]
     fn apply_minimize_inset(
@@ -133,10 +153,33 @@ impl PlayerState {
         height: i32,
     ) -> (i32, i32, i32, i32) {
         if let Ok(mz) = self.minimize.lock() {
-            if let Some((mw, mh, pad)) = *mz {
-                let off_x = (width - mw as i32 - pad as i32).max(0);
-                let off_y = (height - mh as i32 - pad as i32).max(0);
-                return (x + off_x, y + off_y, mw as i32, mh as i32);
+            if let Some(state) = *mz {
+                let mw = state.width as i32;
+                let mh = state.height as i32;
+                let pad = state.padding as i32;
+                // Right-anchored corners: offset is `clientWidth - miniWidth
+                // - padding` so the inset hugs the right edge with `pad`
+                // pixels of gutter. Left-anchored: simply `pad` from x.
+                // Same vertical math for top/bottom. The .max(0) clamps
+                // protect against pathological cases where the client
+                // rect is narrower than the requested inset (e.g. user
+                // shrinks the window below the mini width); the inset
+                // collapses to the top-left of the client area rather
+                // than producing negative offsets that would put the
+                // host off-screen.
+                let off_x = match state.corner {
+                    MinimizeCorner::TopLeft | MinimizeCorner::BottomLeft => pad,
+                    MinimizeCorner::TopRight | MinimizeCorner::BottomRight => {
+                        (width - mw - pad).max(0)
+                    }
+                };
+                let off_y = match state.corner {
+                    MinimizeCorner::TopLeft | MinimizeCorner::TopRight => pad,
+                    MinimizeCorner::BottomLeft | MinimizeCorner::BottomRight => {
+                        (height - mh - pad).max(0)
+                    }
+                };
+                return (x + off_x, y + off_y, mw, mh);
             }
         }
         (x, y, width, height)
