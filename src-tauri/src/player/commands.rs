@@ -698,11 +698,107 @@ pub async fn player_exit_popout(
     Ok(())
 }
 
+// ── In-window minimize commands (prexu-7il.2) ─────────────────────────────
+//
+// Keeps the Tauri main window full size and only constrains the mpv host
+// to a small bottom-right inset of the WebView client area. The rest of
+// the WebView remains interactive so the user can browse the Library,
+// check cast/crew, etc. while the small video region keeps playing in the
+// corner. The in-window chrome lands in prexu-7il.3; this just establishes
+// the IPC + state-management seam.
+
+#[cfg(target_os = "windows")]
+const MINIMIZE_DEFAULT_PADDING: u32 = 16;
+
+/// Enter minimize mode: store the (width, height, padding) of the desired
+/// inset rect in PlayerState and force a host resync so the mpv window
+/// shrinks to the bottom-right of the current WebView client area.
+///
+/// Mutual exclusion with pop-out is handled at the React button layer
+/// (7il.4) so the IPC contract stays simple — this command itself does
+/// not touch popout state. Calling it while popped-out will inset the
+/// host within the small popout window's client rect, which is harmless
+/// but not user-facing once the buttons coordinate things.
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub async fn player_enter_minimize(
+    width: u32,
+    height: u32,
+    padding: Option<u32>,
+    app: AppHandle,
+    state: State<'_, PlayerState>,
+) -> Result<(), String> {
+    let padding = padding.unwrap_or(MINIMIZE_DEFAULT_PADDING);
+    log::info!(
+        "[player:cmd] enter_minimize size={}x{} padding={}",
+        width, height, padding
+    );
+    let main = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main webview window not found".to_string())?;
+
+    if let Ok(mut mz) = state.minimize.lock() {
+        *mz = Some((width, height, padding));
+    } else {
+        return Err("minimize lock poisoned".to_string());
+    }
+
+    // Force resync now so the host shrinks immediately rather than waiting
+    // for the next window event. apply_host_geometry honors the inset.
+    if let (Ok(pos), Ok(size)) = (main.inner_position(), main.inner_size()) {
+        state.apply_host_geometry(pos.x, pos.y, size.width as i32, size.height as i32);
+    }
+    Ok(())
+}
+
+/// Exit minimize mode: clear the inset and force a host resync so the
+/// mpv window expands back to the full WebView client area.
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub async fn player_exit_minimize(
+    app: AppHandle,
+    state: State<'_, PlayerState>,
+) -> Result<(), String> {
+    log::info!("[player:cmd] exit_minimize");
+    let main = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main webview window not found".to_string())?;
+
+    if let Ok(mut mz) = state.minimize.lock() {
+        *mz = None;
+    } else {
+        return Err("minimize lock poisoned".to_string());
+    }
+
+    if let (Ok(pos), Ok(size)) = (main.inner_position(), main.inner_size()) {
+        state.apply_host_geometry(pos.x, pos.y, size.width as i32, size.height as i32);
+    }
+    Ok(())
+}
+
 // Non-Windows stubs so the command names exist for the JS bridge but the
 // platform that hasn't been ported yet (macOS / Linux) returns a clear error
 // instead of failing at the IPC layer with "command not found". Keeps the
 // frontend code path uniform; cross-platform pop-out / minimize lands in
 // prexu-efy (Phase 5 research).
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+pub async fn player_enter_minimize(
+    _width: u32,
+    _height: u32,
+    _padding: Option<u32>,
+) -> Result<(), String> {
+    log::warn!("[player:cmd] enter_minimize called on non-Windows platform");
+    Err("minimize mode is only supported on Windows in Phase 4".into())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+pub async fn player_exit_minimize() -> Result<(), String> {
+    log::warn!("[player:cmd] exit_minimize called on non-Windows platform");
+    Err("minimize mode is only supported on Windows in Phase 4".into())
+}
+
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
 pub async fn player_enter_popout(

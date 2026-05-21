@@ -55,6 +55,21 @@ pub struct PlayerState {
     /// consumed by `player_exit_popout` to restore the previous geometry.
     /// `None` when not in pop-out mode.
     pub(crate) pre_popout_geometry: Mutex<Option<(i32, i32, u32, u32)>>,
+    /// In-window minimize state: `(width, height, padding)` of the small
+    /// player region anchored to the bottom-right corner of the main
+    /// window's client area (prexu-7il.2). `None` when not minimized.
+    ///
+    /// Distinct from pop-out: pop-out shrinks the entire Tauri main
+    /// window, minimize keeps the main window full size and only
+    /// constrains the mpv host to a small inset region so the user can
+    /// navigate the rest of the app underneath / around the video.
+    /// `sync_geometry` and `apply_host_geometry` honor this when set —
+    /// instead of placing the host at the full WebView client rect, they
+    /// place it at the corresponding bottom-right inset.
+    ///
+    /// Corner is hard-coded to bottom-right in 7il.2; the four-corner
+    /// anchor-drag picker lands in prexu-7il.7.
+    pub(crate) minimize: Mutex<Option<(u32, u32, u32)>>,
 }
 
 struct Inner {
@@ -91,12 +106,40 @@ impl PlayerState {
             last_geometry: Mutex::new(None),
             pending_geometry: Mutex::new(None),
             pre_popout_geometry: Mutex::new(None),
+            minimize: Mutex::new(None),
         }
     }
 
     pub(crate) fn set_fullscreen_transition(&self, in_progress: bool) {
         self.fullscreen_transition
             .store(in_progress, Ordering::Release);
+    }
+
+    /// Transform a desired host geometry `(x, y, width, height)` — which
+    /// normally matches the Tauri main window's inner (client) rect — to
+    /// the bottom-right inset when minimize mode is active (prexu-7il.2).
+    /// Pass-through when minimize is `None`.
+    ///
+    /// The inset stays anchored to the bottom-right corner of the client
+    /// rect: when the user resizes the main window, the host re-snaps to
+    /// the bottom-right on each Resized event, so the small video region
+    /// always tracks the corner regardless of window size.
+    #[cfg(target_os = "windows")]
+    fn apply_minimize_inset(
+        &self,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) -> (i32, i32, i32, i32) {
+        if let Ok(mz) = self.minimize.lock() {
+            if let Some((mw, mh, pad)) = *mz {
+                let off_x = (width - mw as i32 - pad as i32).max(0);
+                let off_y = (height - mh as i32 - pad as i32).max(0);
+                return (x + off_x, y + off_y, mw as i32, mh as i32);
+            }
+        }
+        (x, y, width, height)
     }
 
     /// True when `ensure_init` has run and `destroy` has not. Used by
@@ -380,7 +423,9 @@ impl PlayerState {
         if let Ok(mut pending) = self.pending_geometry.lock() {
             pending.take();
         }
-        let (ax, ay, aw, ah) = (x, y, width, height);
+        // Apply the minimize inset (prexu-7il.2). When not minimized this
+        // is a pass-through, so non-minimize playback is unaffected.
+        let (ax, ay, aw, ah) = self.apply_minimize_inset(x, y, width, height);
         // Skip if geometry hasn't changed since last apply.
         let new = (ax, ay, aw, ah);
         if let Ok(mut last_geom) = self.last_geometry.lock() {
@@ -428,18 +473,22 @@ impl PlayerState {
         let Ok(guard) = self.inner.lock() else {
             return;
         };
+        // Honor the minimize inset (prexu-7il.2). When not minimized this
+        // is a pass-through, so the existing fullscreen + popout call
+        // sites get the full client rect they pass in.
+        let (ax, ay, aw, ah) = self.apply_minimize_inset(x, y, width, height);
         if let Some(inner) = guard.as_ref() {
             if let Some(host) = inner.host.as_ref() {
                 log::debug!(
                     "[player] apply_host_geometry force ({},{},{}x{})",
-                    x, y, width, height
+                    ax, ay, aw, ah
                 );
                 // Update last_geometry so the throttled sync_geometry doesn't
                 // re-apply the same value right after this.
                 if let Ok(mut lg) = self.last_geometry.lock() {
-                    *lg = Some((x, y, width, height));
+                    *lg = Some((ax, ay, aw, ah));
                 }
-                if let Err(e) = host.set_geometry(x, y, width, height) {
+                if let Err(e) = host.set_geometry(ax, ay, aw, ah) {
                     log::warn!("[player] apply_host_geometry failed: {}", e);
                 }
             }

@@ -6,6 +6,17 @@ import {
   useMemo,
   type ReactNode,
 } from "react";
+import { logger } from "../services/logger";
+import { playerEnterMinimize, playerExitMinimize } from "../services/player";
+
+/**
+ * Default size + padding for the in-window minimize region (prexu-7il.2).
+ * The chrome lands in 7il.3; user-resizable handle is 7il.5. These
+ * defaults give a ~360x200 16:9-ish corner region with a 16px gutter.
+ */
+const MINIMIZE_DEFAULT_WIDTH = 360;
+const MINIMIZE_DEFAULT_HEIGHT = 200;
+const MINIMIZE_DEFAULT_PADDING = 16;
 
 /**
  * Watch Together connection details that travel with the player session.
@@ -63,12 +74,30 @@ interface PlayerContextValue {
    * ratingKey (e.g. host clicks "Leave Session"). No-op if no session.
    */
   updateSession: (changes: Partial<PlayerSession>) => void;
+  /**
+   * True while the player is in in-window minimize mode (prexu-7il.2):
+   * the Tauri main window stays full size and only the mpv host shrinks
+   * to a small corner of the WebView, letting the user navigate the
+   * rest of the app while playback continues. Distinct from pop-out
+   * (`usePopOutPlayer().isPopOut`), which floats the entire window.
+   */
+  isMinimized: boolean;
+  /**
+   * Enter in-window minimize mode. Drives the Rust `player_enter_minimize`
+   * command and flips `isMinimized` on success. Caller is responsible for
+   * coordinating with pop-out — the button-layer integration in 7il.4
+   * exits pop-out first when both modes would otherwise overlap.
+   */
+  minimize: () => void;
+  /** Exit in-window minimize mode and clear `isMinimized`. */
+  restoreFromMinimize: () => void;
 }
 
 const PlayerContext = createContext<PlayerContextValue | null>(null);
 
 export function PlayerProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<PlayerSession | null>(null);
+  const [isMinimized, setIsMinimized] = useState(false);
 
   const play = useCallback((ratingKey: string, options?: PlayOptions) => {
     setSession({
@@ -76,10 +105,20 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       offset: options?.offset,
       watchTogether: options?.watchTogether,
     });
+    // Starting a new session always lands in full player; any stale
+    // minimize flag from a previous session is cleared here. The mpv
+    // host re-init in ensure_init also passes a fresh inner rect, but
+    // the Rust-side minimize state is per-app-process (not per-session)
+    // and the React flag must mirror it.
+    setIsMinimized(false);
   }, []);
 
   const stop = useCallback(() => {
     setSession(null);
+    // Closing the player clears minimize too. The Rust side gets reset
+    // via the existing `player_unload` -> `destroy` path; this just
+    // keeps the React flag aligned for the next session.
+    setIsMinimized(false);
   }, []);
 
   const replaceRatingKey = useCallback((ratingKey: string) => {
@@ -90,9 +129,53 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setSession((prev) => (prev ? { ...prev, ...changes } : prev));
   }, []);
 
+  const minimize = useCallback(() => {
+    logger.info("player:minimize", "entering", {
+      width: MINIMIZE_DEFAULT_WIDTH,
+      height: MINIMIZE_DEFAULT_HEIGHT,
+      padding: MINIMIZE_DEFAULT_PADDING,
+    });
+    playerEnterMinimize(
+      MINIMIZE_DEFAULT_WIDTH,
+      MINIMIZE_DEFAULT_HEIGHT,
+      MINIMIZE_DEFAULT_PADDING,
+    )
+      .then(() => setIsMinimized(true))
+      .catch((err) =>
+        logger.error("player:minimize", "enter failed", String(err)),
+      );
+  }, []);
+
+  const restoreFromMinimize = useCallback(() => {
+    logger.info("player:minimize", "restoring");
+    playerExitMinimize()
+      .then(() => setIsMinimized(false))
+      .catch((err) =>
+        logger.error("player:minimize", "exit failed", String(err)),
+      );
+  }, []);
+
   const value = useMemo<PlayerContextValue>(
-    () => ({ session, play, stop, replaceRatingKey, updateSession }),
-    [session, play, stop, replaceRatingKey, updateSession],
+    () => ({
+      session,
+      play,
+      stop,
+      replaceRatingKey,
+      updateSession,
+      isMinimized,
+      minimize,
+      restoreFromMinimize,
+    }),
+    [
+      session,
+      play,
+      stop,
+      replaceRatingKey,
+      updateSession,
+      isMinimized,
+      minimize,
+      restoreFromMinimize,
+    ],
   );
 
   return <PlayerContext.Provider value={value}>{children}</PlayerContext.Provider>;

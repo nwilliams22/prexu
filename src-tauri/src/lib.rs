@@ -401,6 +401,8 @@ pub fn run() {
             player::commands::player_set_fullscreen,
             player::commands::player_enter_popout,
             player::commands::player_exit_popout,
+            player::commands::player_enter_minimize,
+            player::commands::player_exit_minimize,
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {

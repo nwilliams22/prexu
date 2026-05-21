@@ -56,3 +56,33 @@ export async function playerExitPopOut(): Promise<void> {
   logger.info("player", "player_exit_popout");
   await invoke("player_exit_popout");
 }
+
+/**
+ * Enter in-window minimize mode (prexu-7il.2). The Tauri main window
+ * stays at its current size; only the mpv host shrinks to a
+ * `(width, height)` rect anchored to the bottom-right of the WebView
+ * client area, with `padding` pixels of gutter. The host re-snaps to
+ * the corner on every Resized event so it tracks the bottom-right as
+ * the user resizes the main window.
+ *
+ * Distinct from pop-out (which shrinks the entire Tauri window into a
+ * floating always-on-top mini window). Mutual exclusion is handled at
+ * the React button layer (7il.4), not in the Rust commands.
+ */
+export async function playerEnterMinimize(
+  width: number,
+  height: number,
+  padding?: number,
+): Promise<void> {
+  logger.info("player", "player_enter_minimize", { width, height, padding });
+  await invoke("player_enter_minimize", { width, height, padding });
+}
+
+/**
+ * Exit minimize mode. Clears the inset and resyncs the mpv host to the
+ * full WebView client area.
+ */
+export async function playerExitMinimize(): Promise<void> {
+  logger.info("player", "player_exit_minimize");
+  await invoke("player_exit_minimize");
+}
