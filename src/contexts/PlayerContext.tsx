@@ -156,13 +156,31 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  // prexu-7cb: NO optimistic flip on restore. Symmetric reasoning to
+  // minimize is wrong here because Rust takes hundreds of ms to resize
+  // mpv from small back to full (Win32 SetWindowPos), while React
+  // would IMMEDIATELY swap AppLayout from corner-mask (mostly opaque)
+  // to full-viewport-mask (entirely invisible). During that gap mpv is
+  // still small in the corner; the rest of the WebView is transparent
+  // through to the desktop. The result is a visible transparent flash
+  // for the whole duration of Rust's resize.
+  //
+  // Waiting for the IPC means React stays in minimize-mode (corner mask
+  // still opaque outside the corner) while Rust expands mpv. AppLayout
+  // opaque covers mpv as it expands behind. Once Rust is done AND
+  // React flips to full-player, AppLayout becomes invisible and mpv is
+  // already full size and visible everywhere — no transparent gap.
+  //
+  // (Minimize direction still flips optimistically because that gap is
+  // benign — the corner mask exposes a slice of the still-full mpv
+  // frame, no desktop transparency.)
   const restoreFromMinimize = useCallback(() => {
     logger.info("player:minimize", "restoring");
-    setIsMinimized(false);
-    playerExitMinimize().catch((err) => {
-      logger.error("player:minimize", "exit failed", String(err));
-      setIsMinimized(true);
-    });
+    playerExitMinimize()
+      .then(() => setIsMinimized(false))
+      .catch((err) =>
+        logger.error("player:minimize", "exit failed", String(err)),
+      );
   }, []);
 
   const value = useMemo<PlayerContextValue>(
