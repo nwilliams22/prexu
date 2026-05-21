@@ -91,19 +91,29 @@ function AppLayout() {
   if (!isAuthenticated) return <Navigate to="/login" replace />;
   if (!serverSelected) return <Navigate to="/servers" replace />;
 
-  // When a player session is active, hide the entire app shell so mpv's
-  // HostWindow (a Win32 window sitting behind the WebView2) is unobscured.
-  // visibility:hidden (NOT display:none) — boxes still take layout space
-  // so children retain their measured dimensions. Without this,
-  // VirtualizedLibraryGrid's clientWidth was zero while hidden, the
-  // ResizeObserver didn't reliably re-fire on the visibility flip, and
-  // the grid stayed pinned at its default 4-column layout after Stop.
-  // pointerEvents:none lets clicks pass through to PlayerOverlay below.
-  // Without ANY of this the WebView2 paints AppLayout's opaque header/
-  // sidebar/main OVER the HostWindow, leaving the video invisible (the
-  // route model unmounted AppLayout entirely while in /play/*, so this
-  // was never an issue before prexu-kfa).
-  const playerActive = playerSession.session != null;
+  // When a player session is active AND in full-viewport mode, hide the
+  // entire app shell so mpv's HostWindow (a Win32 window sitting behind
+  // the WebView2) is unobscured. visibility:hidden (NOT display:none) —
+  // boxes still take layout space so children retain their measured
+  // dimensions. Without this, VirtualizedLibraryGrid's clientWidth was
+  // zero while hidden, the ResizeObserver didn't reliably re-fire on
+  // the visibility flip, and the grid stayed pinned at its default
+  // 4-column layout after Stop. pointerEvents:none lets clicks pass
+  // through to PlayerOverlay below. Without ANY of this the WebView2
+  // paints AppLayout's opaque header/sidebar/main OVER the HostWindow,
+  // leaving the video invisible (the route model unmounted AppLayout
+  // entirely while in /play/*, so this was never an issue before
+  // prexu-kfa).
+  //
+  // prexu-ya6: in-window minimize mode (7il.3) needs the app shell
+  // VISIBLE so the user can browse Library / Dashboard / etc. behind
+  // the small corner video. The mpv host occupies only the 360x200
+  // bottom-right region; AppLayout's opaque content covers the rest of
+  // the viewport. The miniContainer in Player.tsx has its own
+  // `background: transparent` so the WebView pixels in that small
+  // region still see through to the mpv host behind.
+  const playerActive =
+    playerSession.session != null && !playerSession.isMinimized;
 
   return (
     <div
