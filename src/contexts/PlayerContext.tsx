@@ -129,30 +129,40 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setSession((prev) => (prev ? { ...prev, ...changes } : prev));
   }, []);
 
+  // prexu-di9: optimistic state flip BEFORE the IPC. Rust resizes the
+  // mpv host the moment its handler runs (a few hundred ms before the
+  // IPC promise resolves on Dashboard-heavy routes). If we waited for
+  // .then() to setIsMinimized, the full chrome stays painted while
+  // AppLayout is still visibility:hidden and mpv has already shrunk —
+  // a visible transparency gap that's worst on the Dashboard route.
+  // Flipping React first means Player.tsx swaps to the mini wrapper
+  // and AppLayout becomes visible-with-mask in the same paint frame,
+  // hiding the gap behind the briefly-cropped full-size video before
+  // Rust's resize lands. Revert on failure.
   const minimize = useCallback(() => {
     logger.info("player:minimize", "entering", {
       width: MINIMIZE_DEFAULT_WIDTH,
       height: MINIMIZE_DEFAULT_HEIGHT,
       padding: MINIMIZE_DEFAULT_PADDING,
     });
+    setIsMinimized(true);
     playerEnterMinimize(
       MINIMIZE_DEFAULT_WIDTH,
       MINIMIZE_DEFAULT_HEIGHT,
       MINIMIZE_DEFAULT_PADDING,
-    )
-      .then(() => setIsMinimized(true))
-      .catch((err) =>
-        logger.error("player:minimize", "enter failed", String(err)),
-      );
+    ).catch((err) => {
+      logger.error("player:minimize", "enter failed", String(err));
+      setIsMinimized(false);
+    });
   }, []);
 
   const restoreFromMinimize = useCallback(() => {
     logger.info("player:minimize", "restoring");
-    playerExitMinimize()
-      .then(() => setIsMinimized(false))
-      .catch((err) =>
-        logger.error("player:minimize", "exit failed", String(err)),
-      );
+    setIsMinimized(false);
+    playerExitMinimize().catch((err) => {
+      logger.error("player:minimize", "exit failed", String(err));
+      setIsMinimized(true);
+    });
   }, []);
 
   const value = useMemo<PlayerContextValue>(
