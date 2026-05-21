@@ -7,8 +7,6 @@ use std::collections::HashMap;
 
 use tauri::{AppHandle, Emitter, Manager, State};
 #[cfg(target_os = "windows")]
-use tauri::{PhysicalPosition, PhysicalSize, Position, Size};
-#[cfg(target_os = "windows")]
 use tauri_plugin_store::StoreExt;
 
 use super::PlayerState;
@@ -409,6 +407,73 @@ fn load_persisted_popout(app: &AppHandle) -> (String, u32, u32) {
     (corner, width, height)
 }
 
+/// Read the Tauri main window's outer rect via Win32 `GetWindowRect` and
+/// return `(x, y, width, height)`. We stash this on `enter_popout` and
+/// re-apply it on `exit_popout` via `write_window_rect` so the round-trip
+/// uses one coordinate system and the window snaps back to exactly where
+/// it started (prexu-bm0).
+///
+/// We bypass Tauri's `WebviewWindow::outer_position` / `outer_size` here
+/// because they go through tao, which on Win11 mixes GetWindowRect output
+/// with logical/inner sizing math. Combined with Win11's invisible DWM
+/// resize borders (`GetWindowRect` includes them but `set_size` does not
+/// expect them), a stash via tao + restore via tao drifts by ~7 px per
+/// cycle, growing the window each enter/exit. Going through pure Win32
+/// removes the asymmetry — `GetWindowRect` and `SetWindowPos` operate
+/// on the same outer rect that includes the invisible borders.
+#[cfg(target_os = "windows")]
+fn read_window_rect(
+    main: &tauri::WebviewWindow,
+) -> Result<(i32, i32, i32, i32), String> {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
+    let hwnd = main
+        .hwnd()
+        .map_err(|e| format!("get main hwnd failed: {}", e))?;
+    let mut rect = RECT::default();
+    unsafe {
+        GetWindowRect(hwnd, &mut rect as *mut _)
+            .map_err(|e| format!("GetWindowRect failed: {:?}", e))?;
+    }
+    Ok((
+        rect.left,
+        rect.top,
+        rect.right - rect.left,
+        rect.bottom - rect.top,
+    ))
+}
+
+/// Apply an outer rect to the Tauri main window via Win32 `SetWindowPos`.
+/// Paired with `read_window_rect` to round-trip pre-popout geometry
+/// exactly (prexu-bm0).
+#[cfg(target_os = "windows")]
+fn write_window_rect(
+    main: &tauri::WebviewWindow,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> Result<(), String> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER,
+    };
+    let hwnd = main
+        .hwnd()
+        .map_err(|e| format!("get main hwnd failed: {}", e))?;
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            None,
+            x,
+            y,
+            width,
+            height,
+            SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER,
+        )
+        .map_err(|e| format!("SetWindowPos failed: {:?}", e))
+    }
+}
+
 /// Compute the (x, y) origin for a `(width, height)` window snapped to
 /// `corner` of the work area `(wx, wy, ww, wh)`. Width/height are clamped
 /// against the work-area dimensions so a too-large request still fits.
@@ -470,34 +535,36 @@ pub async fn player_enter_popout(
     let (wx, wy, ww, wh) = current_work_area(&main)?;
     let (x, y, w, h) = corner_origin(&corner, width, height, wx, wy, ww, wh)?;
 
-    // Stash the current OUTER rect so exit_popout can restore exactly what
-    // the user had before. We capture outer (not inner) because set_position
-    // + set_size operate on the outer window rect on Windows.
-    if let (Ok(pos), Ok(size)) = (main.outer_position(), main.outer_size()) {
-        let stash = (pos.x, pos.y, size.width, size.height);
-        if let Ok(mut g) = state.pre_popout_geometry.lock() {
-            *g = Some(stash);
-            log::debug!(
-                "[player:popout] stashed pre-popout outer geometry ({},{},{}x{})",
-                stash.0, stash.1, stash.2, stash.3
-            );
+    // Stash the current OUTER rect via Win32 GetWindowRect (prexu-bm0).
+    // Captured + restored through the same Win32 API so the round-trip is
+    // exact — Tauri's outer_size/outer_position go through tao which
+    // disagrees with SetWindowPos by ~7 px due to Win11's invisible DWM
+    // resize borders, causing the window to grow on each enter/exit cycle.
+    match read_window_rect(&main) {
+        Ok((rx, ry, rw, rh)) => {
+            let stash = (rx, ry, rw as u32, rh as u32);
+            if let Ok(mut g) = state.pre_popout_geometry.lock() {
+                *g = Some(stash);
+                log::debug!(
+                    "[player:popout] stashed pre-popout outer geometry ({},{},{}x{}) via GetWindowRect",
+                    stash.0, stash.1, stash.2, stash.3
+                );
+            }
         }
-    } else {
-        log::warn!("[player:popout] could not read outer geometry to stash");
+        Err(e) => log::warn!("[player:popout] read_window_rect for stash failed: {}", e),
     }
 
-    // Apply window changes. set_size + set_position take physical pixels via
-    // the Size/Position enums. set_always_on_top is a direct call. We leave
-    // the window resizable (tauri.conf.json `resizable: true`) so the user
-    // can grab the top-left corner to resize the floating window; the new
-    // size is persisted in `player_exit_popout` so the next entry restores
-    // it.
+    // Apply window changes via Win32 SetWindowPos (matches GetWindowRect's
+    // coordinate system; see read_window_rect doc). set_always_on_top stays
+    // on Tauri because that API call also flips WS_EX_TOPMOST on the
+    // WebView's ancestor chain, not just the main HWND. We leave the
+    // window resizable (tauri.conf.json `resizable: true`) so the user can
+    // grab the top-left corner of the floating window; the new size is
+    // persisted in `player_exit_popout` so the next entry restores it.
     main.set_always_on_top(true)
         .map_err(|e| format!("set_always_on_top failed: {}", e))?;
-    main.set_size(Size::Physical(PhysicalSize { width: w, height: h }))
-        .map_err(|e| format!("set_size failed: {}", e))?;
-    main.set_position(Position::Physical(PhysicalPosition { x, y }))
-        .map_err(|e| format!("set_position failed: {}", e))?;
+    write_window_rect(&main, x, y, w as i32, h as i32)
+        .map_err(|e| format!("popout geometry apply failed: {}", e))?;
 
     log::debug!(
         "[player:popout] resized main to ({},{},{}x{}); resynced host",
@@ -570,28 +637,27 @@ pub async fn player_exit_popout(
         .ok_or_else(|| "main webview window not found".to_string())?;
 
     // Capture the user's current size BEFORE restoring so any post-enter
-    // resize is preserved. Outer size matches what set_size set in enter,
-    // so the next enter can pass it to corner_origin unchanged.
-    if let Ok(size) = main.outer_size() {
-        match app.store(POPOUT_STORE_PATH) {
+    // resize is preserved. Read via Win32 GetWindowRect so the stored value
+    // matches what SetWindowPos on a subsequent enter will receive (prexu-bm0).
+    match read_window_rect(&main) {
+        Ok((_, _, rw, rh)) => match app.store(POPOUT_STORE_PATH) {
             Ok(store) => {
                 store.set(
                     POPOUT_KEY_SIZE,
-                    serde_json::json!({ "width": size.width, "height": size.height }),
+                    serde_json::json!({ "width": rw, "height": rh }),
                 );
                 if let Err(e) = store.save() {
                     log::warn!("[player:popout] resize-on-exit save failed: {:?}", e);
                 } else {
                     log::debug!(
                         "[player:popout] persisted resized size {}x{} on exit",
-                        size.width, size.height
+                        rw, rh
                     );
                 }
             }
             Err(e) => log::warn!("[player:popout] resize-on-exit store open failed: {:?}", e),
-        }
-    } else {
-        log::warn!("[player:popout] could not read current outer_size on exit");
+        },
+        Err(e) => log::warn!("[player:popout] resize-on-exit read failed: {}", e),
     }
 
     main.set_always_on_top(false)
@@ -617,13 +683,11 @@ pub async fn player_exit_popout(
         return Ok(());
     };
 
-    main.set_size(Size::Physical(PhysicalSize { width: w, height: h }))
-        .map_err(|e| format!("set_size failed: {}", e))?;
-    main.set_position(Position::Physical(PhysicalPosition { x, y }))
-        .map_err(|e| format!("set_position failed: {}", e))?;
+    write_window_rect(&main, x, y, w as i32, h as i32)
+        .map_err(|e| format!("popout restore apply failed: {}", e))?;
 
     log::debug!(
-        "[player:popout] restored main to ({},{},{}x{}); resynced host",
+        "[player:popout] restored main to ({},{},{}x{}) via SetWindowPos; resynced host",
         x, y, w, h
     );
 
