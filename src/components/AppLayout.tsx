@@ -91,65 +91,51 @@ function AppLayout() {
   if (!isAuthenticated) return <Navigate to="/login" replace />;
   if (!serverSelected) return <Navigate to="/servers" replace />;
 
-  // prexu-9bk: hide AppLayout via mask compositing, not opacity or
-  // visibility. Both visibility:hidden (skips paint entirely) and
-  // opacity:0 (browsers may skip paint as an optimization) cause a
-  // visible delay when the layer becomes visible again — observed as
-  // ~1s of transparent app on the heavy Dashboard route. Mask
-  // compositing keeps the layer continuously painted; the mask just
-  // decides which pixels are visible. Mask-size + mask-position
-  // changes are GPU compositor operations, no paint pass required.
+  // prexu-quq: keep the AppLayout mask STATIC across full-player ↔
+  // minimize. The corner hole is applied whenever a player session is
+  // active — full-player or minimize. Switching between modes only
+  // changes OPACITY (0 in full-player, 1 in minimize). This avoids the
+  // ~1s Dashboard repaint we were hitting when the mask shape changed:
+  // mask-size/mask-position transitions invalidate the compositor
+  // cache, forcing the browser to re-paint every child of AppLayout.
   //
-  // Three modes (driven by player state):
-  //   - idle (no session)      → no mask, AppLayout fully visible
-  //   - full-player            → mask hole covers entire viewport
-  //                              (everything composites to transparent;
-  //                              mpv Win32 sibling shows through)
-  //   - minimize               → mask hole 360x200 in bottom-right
-  //                              (only the corner is transparent so
-  //                              mpv shows there; rest of AppLayout
-  //                              composites visible)
+  // Opacity is a pure GPU compositor toggle on a persistent layer.
+  // To make sure the browser doesn't optimize away the painted layer
+  // while opacity is 0, we add `will-change: opacity` AND
+  // `transform: translateZ(0)` whenever a session exists — these two
+  // together force a persistent GPU layer that survives opacity:0
+  // without being purged.
+  //
+  // Why the corner hole in full-player mode? It's invisible anyway
+  // (whole element at opacity:0), so the hole shape doesn't matter
+  // visually. Keeping the SAME mask means zero compositor invalidation
+  // on transition. The hole only "matters" when opacity flips back
+  // to 1 in minimize mode.
   //
   // pointerEvents:none in full-player so clicks pass through to
-  // PlayerOverlay below. Always opacity:1 — that's how the layer
-  // stays warm.
+  // PlayerOverlay below.
   //
   // History of this hiding mechanism on this branch:
   //   prexu-kfa  → introduced visibility:hidden (replaced display:none
   //                which broke VirtualizedLibraryGrid's clientWidth)
   //   prexu-ya6  → gated on !isMinimized so app shows in 7il.3
   //   prexu-cay  → switched to opacity:0 to keep paint warm
-  //   prexu-9bk  → switched to mask-based hiding (current) because
-  //                opacity:0 still allowed paint-skip on Dashboard
+  //   prexu-9bk  → switched to mask-based hiding because opacity:0
+  //                still allowed paint-skip on Dashboard
+  //   prexu-quq  → realized the mask CHANGE was the cost; keep mask
+  //                static + use opacity + will-change for the toggle
   //
-  // prexu-s0f, prexu-4ml: when MINIMIZED, the corner hole is sized
-  // and positioned to match miniContainer in Player.tsx exactly.
-  // Uses the four-value mask-position syntax (`right 16px bottom
-  // 16px`) — NOT calc(100% - 376px) which percentage-rule-resolves
-  // to (W − 360) − 376 = W − 736 (one full hole-width off-corner).
-  // When 7il.5's resizable-minimize lands, the corner-hole values
-  // will need to bind to PlayerContext state instead of hardcoded.
+  // prexu-s0f, prexu-4ml: corner hole is sized + positioned to match
+  // miniContainer in Player.tsx exactly. Four-value mask-position
+  // syntax (`right 16px bottom 16px`) — NOT calc(100% - 376px) which
+  // percentage-rule-resolves wrong. When 7il.5's resizable-minimize
+  // lands, the corner-hole values will need to bind to PlayerContext
+  // state instead of hardcoded.
   const isFullPlayer =
     playerSession.session != null && !playerSession.isMinimized;
-  const isMinimizedPlayer = playerSession.isMinimized;
+  const hasSession = playerSession.session != null;
 
-  const maskStyle: React.CSSProperties = isFullPlayer
-    ? {
-        // Entire viewport is the hole — everything composites transparent.
-        WebkitMaskImage:
-          "linear-gradient(#000, #000), linear-gradient(#000, #000)",
-        maskImage:
-          "linear-gradient(#000, #000), linear-gradient(#000, #000)",
-        WebkitMaskSize: "100% 100%, 100% 100%",
-        maskSize: "100% 100%, 100% 100%",
-        WebkitMaskPosition: "0 0, 0 0",
-        maskPosition: "0 0, 0 0",
-        WebkitMaskRepeat: "no-repeat, no-repeat",
-        maskRepeat: "no-repeat, no-repeat",
-        WebkitMaskComposite: "xor",
-        maskComposite: "exclude",
-      }
-    : isMinimizedPlayer
+  const maskStyle: React.CSSProperties = hasSession
     ? {
         WebkitMaskImage:
           "linear-gradient(#000, #000), linear-gradient(#000, #000)",
@@ -166,11 +152,20 @@ function AppLayout() {
       }
     : {};
 
+  const layerStyle: React.CSSProperties = hasSession
+    ? {
+        willChange: "opacity",
+        transform: "translateZ(0)",
+      }
+    : {};
+
   return (
     <div
       style={{
         ...styles.container,
+        opacity: isFullPlayer ? 0 : 1,
         pointerEvents: isFullPlayer ? "none" : "auto",
+        ...layerStyle,
         ...maskStyle,
       }}
     >
