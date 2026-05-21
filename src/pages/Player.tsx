@@ -38,6 +38,7 @@ import SkipSegmentButton from "../components/player/SkipSegmentButton";
 import QueuePanel from "../components/player/QueuePanel";
 import PostPlayScreen from "../components/player/PostPlayScreen";
 import KeyboardShortcutsOverlay from "../components/player/KeyboardShortcutsOverlay";
+import MiniChrome from "../components/player/MiniChrome";
 import type { NormalizationPreset } from "../types/preferences";
 import { buildSubtitleCss } from "../utils/subtitle-css";
 import { logger } from "../services/logger";
@@ -623,6 +624,30 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   if (!isAuthenticated) return <Navigate to="/login" replace />;
   if (!serverSelected) return <Navigate to="/servers" replace />;
 
+  // Minimized branch (prexu-7il.3) — render just the small bottom-right
+  // region with MiniChrome. All hooks above still run (so playback, WT,
+  // timeline reporting, etc. continue) but the full-viewport chrome,
+  // PostPlayScreen, KeyboardShortcutsOverlay, etc. are suppressed so
+  // the routes underneath remain interactive. The mpv host has already
+  // been shrunk by the Rust-side player_enter_minimize call from
+  // PlayerContext.minimize(); this just makes the React chrome match.
+  if (playerSession.isMinimized) {
+    return (
+      <div style={styles.miniContainer}>
+        <MiniChrome
+          isPlaying={player.isPlaying}
+          onTogglePlay={togglePlay}
+          onRestore={playerSession.restoreFromMinimize}
+          onClose={handleExit}
+          title={player.title ?? undefined}
+          visible={controlsVisible}
+          onActivity={resetHideTimer}
+          onMouseMove={handleMouseMove}
+        />
+      </div>
+    );
+  }
+
   return (
     <div
       style={{
@@ -841,6 +866,23 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
+  },
+  // Bottom-right corner region used when PlayerContext.isMinimized is true
+  // (prexu-7il.3). Default size matches the Rust-side player_enter_minimize
+  // (360x200 with 16 px gutter), so the React chrome overlay aligns with
+  // the mpv host window pixel-for-pixel. Background stays transparent so
+  // the mpv host sibling Win32 window shows through.
+  miniContainer: {
+    position: "fixed",
+    bottom: 16,
+    right: 16,
+    width: 360,
+    height: 200,
+    background: "transparent",
+    overflow: "hidden",
+    // High z-index so chrome floats above any underlying routes that may
+    // have their own elevated layers (sidebars, modals, etc.).
+    zIndex: 1000,
   },
   video: {
     width: "100%",
