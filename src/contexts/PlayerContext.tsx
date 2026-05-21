@@ -3,21 +3,21 @@ import {
   useContext,
   useState,
   useCallback,
+  useEffect,
   useMemo,
+  useRef,
   type ReactNode,
 } from "react";
 import { flushSync } from "react-dom";
 import { logger } from "../services/logger";
 import { playerEnterMinimize, playerExitMinimize } from "../services/player";
-
-/**
- * Default size + padding for the in-window minimize region (prexu-7il.2).
- * The chrome lands in 7il.3; user-resizable handle is 7il.5. These
- * defaults give a ~360x200 16:9-ish corner region with a 16px gutter.
- */
-const MINIMIZE_DEFAULT_WIDTH = 360;
-const MINIMIZE_DEFAULT_HEIGHT = 200;
-const MINIMIZE_DEFAULT_PADDING = 16;
+import {
+  DEFAULT_MINI_RECT,
+  loadPersistedMiniRect,
+  saveMiniRect,
+  type MiniCorner,
+  type MiniRect,
+} from "../utils/mini-rect";
 
 /**
  * Watch Together connection details that travel with the player session.
@@ -85,13 +85,31 @@ interface PlayerContextValue {
   isMinimized: boolean;
   /**
    * Enter in-window minimize mode. Drives the Rust `player_enter_minimize`
-   * command and flips `isMinimized` on success. Caller is responsible for
-   * coordinating with pop-out — the button-layer integration in 7il.4
-   * exits pop-out first when both modes would otherwise overlap.
+   * command (using the current `miniRect`) and flips `isMinimized` on
+   * success. Caller is responsible for coordinating with pop-out — the
+   * button-layer integration in 7il.4 exits pop-out first when both modes
+   * would otherwise overlap.
    */
   minimize: () => void;
   /** Exit in-window minimize mode and clear `isMinimized`. */
   restoreFromMinimize: () => void;
+  /**
+   * Current geometry for the in-window mini player: corner anchor, size,
+   * and gutter padding. Persisted to `localStorage` under `mini-player.rect`
+   * and seeded on mount via `loadPersistedMiniRect`. Drives the AppLayout
+   * mask + Player.tsx miniContainer + Rust IPC.
+   */
+  miniRect: MiniRect;
+  /**
+   * Apply a partial update to `miniRect`. Merges with current state, saves
+   * to localStorage, and — while minimized — re-fires
+   * `player_enter_minimize` so the mpv host catches up to the new geometry.
+   *
+   * Updates while minimized do NOT use `flushSync` (no Dashboard cascade
+   * since `isMinimized` is already true). Initial enter still does — see
+   * `minimize` docblock.
+   */
+  updateMiniRect: (updates: Partial<MiniRect>) => void;
 }
 
 const PlayerContext = createContext<PlayerContextValue | null>(null);
@@ -99,6 +117,26 @@ const PlayerContext = createContext<PlayerContextValue | null>(null);
 export function PlayerProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<PlayerSession | null>(null);
   const [isMinimized, setIsMinimized] = useState(false);
+  // prexu-7il.5 + 7il.7: load the persisted size + corner once on mount.
+  // The default branch in `loadPersistedMiniRect` covers first-run,
+  // corrupted-payload, and out-of-range values. Synchronous read at
+  // init time avoids the one-frame flash from a useEffect-driven hydrate.
+  const [miniRect, setMiniRect] = useState<MiniRect>(() => loadPersistedMiniRect());
+
+  // Keep a ref to the latest miniRect so `minimize()` always reads the
+  // freshest geometry without participating in its useCallback deps (we
+  // want minimize to keep stable identity for the button layer).
+  const miniRectRef = useRef(miniRect);
+  useEffect(() => {
+    miniRectRef.current = miniRect;
+  }, [miniRect]);
+
+  // Mirror isMinimized for use inside `updateMiniRect` without re-creating
+  // the callback every flip. Same reasoning as miniRectRef.
+  const isMinimizedRef = useRef(isMinimized);
+  useEffect(() => {
+    isMinimizedRef.current = isMinimized;
+  }, [isMinimized]);
 
   const play = useCallback((ratingKey: string, options?: PlayOptions) => {
     setSession({
@@ -155,22 +193,17 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // the IPC's microtask. That works on lighter routes but not on
   // Dashboard where the commit is slow.
   const minimize = useCallback(() => {
-    logger.info("player:minimize", "entering", {
-      width: MINIMIZE_DEFAULT_WIDTH,
-      height: MINIMIZE_DEFAULT_HEIGHT,
-      padding: MINIMIZE_DEFAULT_PADDING,
-    });
+    const rect = miniRectRef.current;
+    logger.info("player:minimize", "entering", rect);
     flushSync(() => {
       setIsMinimized(true);
     });
-    playerEnterMinimize(
-      MINIMIZE_DEFAULT_WIDTH,
-      MINIMIZE_DEFAULT_HEIGHT,
-      MINIMIZE_DEFAULT_PADDING,
-    ).catch((err) => {
-      logger.error("player:minimize", "enter failed", String(err));
-      setIsMinimized(false);
-    });
+    playerEnterMinimize(rect.width, rect.height, rect.padding, rect.corner).catch(
+      (err) => {
+        logger.error("player:minimize", "enter failed", String(err));
+        setIsMinimized(false);
+      },
+    );
   }, []);
 
   // prexu-7cb: NO optimistic flip on restore. Symmetric reasoning to
@@ -200,6 +233,38 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       );
   }, []);
 
+  // Merge + persist + (if minimized) sync to Rust. The Rust resync is
+  // fire-and-forget — failures just log; the React-side mini chrome will
+  // still reflect the requested geometry. We deliberately don't flushSync
+  // here: callers (resize handle drag, corner-snap on mouse-up) fire this
+  // many times during a single interaction and the state is already
+  // minimized, so the Dashboard-cascade concern from `minimize()` doesn't
+  // apply.
+  const updateMiniRect = useCallback((updates: Partial<MiniRect>) => {
+    setMiniRect((prev) => {
+      const next: MiniRect = { ...prev, ...updates };
+      // Identity short-circuit: if nothing actually changed (common when
+      // a drag ends on the same corner), skip persistence + IPC entirely.
+      if (
+        next.corner === prev.corner &&
+        next.width === prev.width &&
+        next.height === prev.height &&
+        next.padding === prev.padding
+      ) {
+        return prev;
+      }
+      saveMiniRect(next);
+      if (isMinimizedRef.current) {
+        logger.debug("player:minimize", "rect updated while minimized", next);
+        playerEnterMinimize(next.width, next.height, next.padding, next.corner).catch(
+          (err) =>
+            logger.warn("player:minimize", "rect update IPC failed", String(err)),
+        );
+      }
+      return next;
+    });
+  }, []);
+
   const value = useMemo<PlayerContextValue>(
     () => ({
       session,
@@ -210,6 +275,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       isMinimized,
       minimize,
       restoreFromMinimize,
+      miniRect,
+      updateMiniRect,
     }),
     [
       session,
@@ -220,6 +287,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       isMinimized,
       minimize,
       restoreFromMinimize,
+      miniRect,
+      updateMiniRect,
     ],
   );
 
@@ -241,3 +310,8 @@ export function usePlayerSession(): PlayerContextValue {
   }
   return ctx;
 }
+
+// Re-export the default for callers that want to seed component-level
+// state without depending on the helper module directly.
+export { DEFAULT_MINI_RECT };
+export type { MiniCorner, MiniRect };
