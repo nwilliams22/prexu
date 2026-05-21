@@ -18,6 +18,7 @@ import ActivityButton from "./ActivityButton";
 import InviteNotification from "./InviteNotification";
 import ErrorBoundary from "./ErrorBoundary";
 import BottomNav from "./BottomNav";
+import { miniRectToMaskPosition } from "../utils/mini-rect";
 
 function AppLayout() {
   const auth = useAuth();
@@ -125,15 +126,20 @@ function AppLayout() {
   //   prexu-quq  → realized the mask CHANGE was the cost; keep mask
   //                static + use opacity + will-change for the toggle
   //
-  // prexu-s0f, prexu-4ml: corner hole is sized + positioned to match
-  // miniContainer in Player.tsx exactly. Four-value mask-position
-  // syntax (`right 16px bottom 16px`) — NOT calc(100% - 376px) which
-  // percentage-rule-resolves wrong. When 7il.5's resizable-minimize
-  // lands, the corner-hole values will need to bind to PlayerContext
-  // state instead of hardcoded.
+  // prexu-s0f, prexu-4ml, prexu-7il.5/7: corner hole is sized + positioned
+  // from PlayerContext.miniRect so it matches Player.tsx's miniContainer
+  // exactly. Four-value mask-position syntax (`right 16px bottom 16px`,
+  // `top 16px left 16px`, …) — NOT calc(100% - 376px) which percentage-
+  // rule-resolves wrong. Both axes track miniRect so user-resize +
+  // anchor-drag are reflected in the AppLayout cut-out as soon as the
+  // user releases the mouse (and live during resize drag).
   const isFullPlayer =
     playerSession.session != null && !playerSession.isMinimized;
   const hasSession = playerSession.session != null;
+
+  const miniRect = playerSession.miniRect;
+  const maskSize = `100% 100%, ${miniRect.width}px ${miniRect.height}px`;
+  const maskPosition = `0 0, ${miniRectToMaskPosition(miniRect)}`;
 
   const maskStyle: React.CSSProperties = hasSession
     ? {
@@ -141,10 +147,10 @@ function AppLayout() {
           "linear-gradient(#000, #000), linear-gradient(#000, #000)",
         maskImage:
           "linear-gradient(#000, #000), linear-gradient(#000, #000)",
-        WebkitMaskSize: "100% 100%, 360px 200px",
-        maskSize: "100% 100%, 360px 200px",
-        WebkitMaskPosition: "0 0, right 16px bottom 16px",
-        maskPosition: "0 0, right 16px bottom 16px",
+        WebkitMaskSize: maskSize,
+        maskSize: maskSize,
+        WebkitMaskPosition: maskPosition,
+        maskPosition: maskPosition,
         WebkitMaskRepeat: "no-repeat, no-repeat",
         maskRepeat: "no-repeat, no-repeat",
         WebkitMaskComposite: "xor",

@@ -43,6 +43,7 @@ import type { NormalizationPreset } from "../types/preferences";
 import { buildSubtitleCss } from "../utils/subtitle-css";
 import { logger } from "../services/logger";
 import { hasNextItem as computeHasNextItem } from "./player-postplay-gate";
+import { miniRectToContainerStyle } from "../utils/mini-rect";
 
 interface PlayerProps {
   ratingKey: string;
@@ -657,16 +658,27 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   if (!isAuthenticated) return <Navigate to="/login" replace />;
   if (!serverSelected) return <Navigate to="/servers" replace />;
 
-  // Minimized branch (prexu-7il.3) — render just the small bottom-right
+  // Minimized branch (prexu-7il.3/.5/.7) — render just the mini corner
   // region with MiniChrome. All hooks above still run (so playback, WT,
   // timeline reporting, etc. continue) but the full-viewport chrome,
   // PostPlayScreen, KeyboardShortcutsOverlay, etc. are suppressed so
   // the routes underneath remain interactive. The mpv host has already
   // been shrunk by the Rust-side player_enter_minimize call from
   // PlayerContext.minimize(); this just makes the React chrome match.
+  //
+  // Position + size come from PlayerContext.miniRect so the cut-out
+  // (AppLayout mask) and this overlay stay in lockstep with the user's
+  // chosen corner + size. miniRectToContainerStyle picks the right
+  // top/bottom/left/right pair for the anchor corner.
   if (playerSession.isMinimized) {
+    const miniRect = playerSession.miniRect;
     return (
-      <div style={styles.miniContainer}>
+      <div
+        style={{
+          ...styles.miniContainerBase,
+          ...miniRectToContainerStyle(miniRect),
+        }}
+      >
         <MiniChrome
           isPlaying={player.isPlaying}
           onTogglePlay={togglePlay}
@@ -676,6 +688,8 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
           visible={controlsVisible}
           onActivity={resetHideTimer}
           onMouseMove={handleMouseMove}
+          miniRect={miniRect}
+          onUpdateMiniRect={playerSession.updateMiniRect}
         />
       </div>
     );
@@ -904,19 +918,20 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "center",
     overflow: "hidden",
   },
-  // Bottom-right corner region used when PlayerContext.isMinimized is true
-  // (prexu-7il.3). Default size matches the Rust-side player_enter_minimize
-  // (360x200 with 16 px gutter), so the React chrome overlay aligns with
-  // the mpv host window pixel-for-pixel. Background stays transparent so
-  // the mpv host sibling Win32 window shows through.
-  miniContainer: {
+  // Corner region used when PlayerContext.isMinimized is true
+  // (prexu-7il.3/.5/.7). Size + anchor offsets are spread on top via
+  // `miniRectToContainerStyle(miniRect)` so the wrapper aligns with the
+  // mpv host window pixel-for-pixel as the user resizes and drags it
+  // between corners. Background stays transparent so the mpv host sibling
+  // Win32 window shows through.
+  miniContainerBase: {
     position: "fixed",
-    bottom: 16,
-    right: 16,
-    width: 360,
-    height: 200,
     background: "transparent",
-    overflow: "hidden",
+    // overflow: visible lets the resize handle (which sits on the corner
+    // opposite the anchor, at an offset of -6,-6) hang slightly outside
+    // the mini bounds — it remains hit-testable. The container itself is
+    // still bounded by width/height for layout purposes.
+    overflow: "visible",
     // High z-index so chrome floats above any underlying routes that may
     // have their own elevated layers (sidebars, modals, etc.).
     zIndex: 1000,
