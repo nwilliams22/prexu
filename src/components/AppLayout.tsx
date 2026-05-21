@@ -124,6 +124,16 @@ function AppLayout() {
   // gives us the cut-out. When 7il.5's resizable-minimize lands, this
   // will need to bind to the actual size from PlayerContext instead
   // of the hardcoded 360x200.
+  //
+  // prexu-4ml: use the four-value mask-position syntax (`right 16px
+  // bottom 16px`) — NOT `calc(100% - 376px) ...`. Percentages in
+  // mask-position follow background-position rules: offset =
+  // (positioning_area − image_size) × percentage, so
+  // calc(100% - 376px) actually resolves to (W − 360) − 376 = W − 736,
+  // placing the hole one full hole-width LEFT and one hole-height UP
+  // from the corner (DOM-verified misalignment). The four-value form
+  // anchors mask edges directly to positioning-area edges, matching
+  // miniContainer's bottom:16/right:16 exactly.
   const maskStyle: React.CSSProperties = playerSession.isMinimized
     ? {
         WebkitMaskImage:
@@ -132,8 +142,8 @@ function AppLayout() {
           "linear-gradient(#000, #000), linear-gradient(#000, #000)",
         WebkitMaskSize: "100% 100%, 360px 200px",
         maskSize: "100% 100%, 360px 200px",
-        WebkitMaskPosition: "0 0, calc(100% - 376px) calc(100% - 216px)",
-        maskPosition: "0 0, calc(100% - 376px) calc(100% - 216px)",
+        WebkitMaskPosition: "0 0, right 16px bottom 16px",
+        maskPosition: "0 0, right 16px bottom 16px",
         WebkitMaskRepeat: "no-repeat, no-repeat",
         maskRepeat: "no-repeat, no-repeat",
         WebkitMaskComposite: "xor",
