@@ -124,13 +124,25 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   // instead of the empty-string captured value so we can't accidentally
   // leave body set to an earlier "transparent" if anything else mutated
   // it in between.
+  //
+  // prexu-4k5: gate transparency on !isMinimized. In minimize mode
+  // Player.tsx renders only a small bottom-right region, and the rest
+  // of the viewport should reveal the route content (AppLayout) — not
+  // the OS desktop wallpaper showing through the transparent main
+  // window. The mini-container itself has its own `background:
+  // transparent` so the small mpv host area still shows through; only
+  // the body outside that region is restored to the navy default.
   useLayoutEffect(() => {
     if (!IS_NATIVE_PLAYER) return;
-    document.body.style.background = "transparent";
+    if (playerSession.isMinimized) {
+      document.body.style.background = "#1a1a2e";
+    } else {
+      document.body.style.background = "transparent";
+    }
     return () => {
       document.body.style.background = "#1a1a2e";
     };
-  }, []);
+  }, [playerSession.isMinimized]);
 
   // Audio enhancements — Web Audio API processing graph
   const audioEnhancements = useAudioEnhancements(
