@@ -91,56 +91,65 @@ function AppLayout() {
   if (!isAuthenticated) return <Navigate to="/login" replace />;
   if (!serverSelected) return <Navigate to="/servers" replace />;
 
-  // When a player session is active AND in full-viewport mode, hide the
-  // entire app shell so mpv's HostWindow (a Win32 window sitting behind
-  // the WebView2) is unobscured. pointerEvents:none lets clicks pass
-  // through to PlayerOverlay below. Without ANY of this the WebView2
-  // paints AppLayout's opaque header/sidebar/main OVER the HostWindow,
-  // leaving the video invisible (the route model unmounted AppLayout
-  // entirely while in /play/*, so this was never an issue before
-  // prexu-kfa).
+  // prexu-9bk: hide AppLayout via mask compositing, not opacity or
+  // visibility. Both visibility:hidden (skips paint entirely) and
+  // opacity:0 (browsers may skip paint as an optimization) cause a
+  // visible delay when the layer becomes visible again — observed as
+  // ~1s of transparent app on the heavy Dashboard route. Mask
+  // compositing keeps the layer continuously painted; the mask just
+  // decides which pixels are visible. Mask-size + mask-position
+  // changes are GPU compositor operations, no paint pass required.
   //
-  // prexu-ya6: in-window minimize mode (7il.3) needs the app shell
-  // VISIBLE so the user can browse Library / Dashboard / etc. behind
-  // the small corner video. The mpv host occupies only the 360x200
-  // bottom-right region; AppLayout's opaque content covers the rest of
-  // the viewport. The miniContainer in Player.tsx has its own
-  // `background: transparent` so the WebView pixels in that small
-  // region still see through to the mpv host behind.
+  // Three modes (driven by player state):
+  //   - idle (no session)      → no mask, AppLayout fully visible
+  //   - full-player            → mask hole covers entire viewport
+  //                              (everything composites to transparent;
+  //                              mpv Win32 sibling shows through)
+  //   - minimize               → mask hole 360x200 in bottom-right
+  //                              (only the corner is transparent so
+  //                              mpv shows there; rest of AppLayout
+  //                              composites visible)
   //
-  // prexu-cay: use opacity:0 (NOT visibility:hidden) to hide during
-  // full-player. visibility:hidden makes the browser skip painting
-  // hidden subtrees; when visibility flips back, the browser has to
-  // do a fresh paint pass that takes ~50–150ms on Dashboard-heavy
-  // routes — visible to the user as see-through-to-desktop. opacity:0
-  // keeps the GPU-composited layer warm: paint happens normally, the
-  // layer just renders at zero alpha. Flipping back to opacity:1 is a
-  // compositor toggle, not a paint pass. (prexu-kfa's display:none
-  // concern about VirtualizedLibraryGrid's clientWidth/ResizeObserver
-  // doesn't apply to opacity — opacity doesn't touch layout.)
-  const playerActive =
+  // pointerEvents:none in full-player so clicks pass through to
+  // PlayerOverlay below. Always opacity:1 — that's how the layer
+  // stays warm.
+  //
+  // History of this hiding mechanism on this branch:
+  //   prexu-kfa  → introduced visibility:hidden (replaced display:none
+  //                which broke VirtualizedLibraryGrid's clientWidth)
+  //   prexu-ya6  → gated on !isMinimized so app shows in 7il.3
+  //   prexu-cay  → switched to opacity:0 to keep paint warm
+  //   prexu-9bk  → switched to mask-based hiding (current) because
+  //                opacity:0 still allowed paint-skip on Dashboard
+  //
+  // prexu-s0f, prexu-4ml: when MINIMIZED, the corner hole is sized
+  // and positioned to match miniContainer in Player.tsx exactly.
+  // Uses the four-value mask-position syntax (`right 16px bottom
+  // 16px`) — NOT calc(100% - 376px) which percentage-rule-resolves
+  // to (W − 360) − 376 = W − 736 (one full hole-width off-corner).
+  // When 7il.5's resizable-minimize lands, the corner-hole values
+  // will need to bind to PlayerContext state instead of hardcoded.
+  const isFullPlayer =
     playerSession.session != null && !playerSession.isMinimized;
+  const isMinimizedPlayer = playerSession.isMinimized;
 
-  // prexu-s0f: when minimized, punch a 360x200 hole in the bottom-right
-  // (16 px gutter on the right + bottom edges) of AppLayout so the mpv
-  // Win32 sibling window BEHIND the WebView shows through. AppLayout's
-  // opaque header/sidebar/main covers everywhere else. The hole's
-  // dimensions match miniContainer in Player.tsx exactly. CSS mask
-  // with two layers + `exclude` composite (Webkit prefixed `xor`)
-  // gives us the cut-out. When 7il.5's resizable-minimize lands, this
-  // will need to bind to the actual size from PlayerContext instead
-  // of the hardcoded 360x200.
-  //
-  // prexu-4ml: use the four-value mask-position syntax (`right 16px
-  // bottom 16px`) — NOT `calc(100% - 376px) ...`. Percentages in
-  // mask-position follow background-position rules: offset =
-  // (positioning_area − image_size) × percentage, so
-  // calc(100% - 376px) actually resolves to (W − 360) − 376 = W − 736,
-  // placing the hole one full hole-width LEFT and one hole-height UP
-  // from the corner (DOM-verified misalignment). The four-value form
-  // anchors mask edges directly to positioning-area edges, matching
-  // miniContainer's bottom:16/right:16 exactly.
-  const maskStyle: React.CSSProperties = playerSession.isMinimized
+  const maskStyle: React.CSSProperties = isFullPlayer
+    ? {
+        // Entire viewport is the hole — everything composites transparent.
+        WebkitMaskImage:
+          "linear-gradient(#000, #000), linear-gradient(#000, #000)",
+        maskImage:
+          "linear-gradient(#000, #000), linear-gradient(#000, #000)",
+        WebkitMaskSize: "100% 100%, 100% 100%",
+        maskSize: "100% 100%, 100% 100%",
+        WebkitMaskPosition: "0 0, 0 0",
+        maskPosition: "0 0, 0 0",
+        WebkitMaskRepeat: "no-repeat, no-repeat",
+        maskRepeat: "no-repeat, no-repeat",
+        WebkitMaskComposite: "xor",
+        maskComposite: "exclude",
+      }
+    : isMinimizedPlayer
     ? {
         WebkitMaskImage:
           "linear-gradient(#000, #000), linear-gradient(#000, #000)",
@@ -161,8 +170,7 @@ function AppLayout() {
     <div
       style={{
         ...styles.container,
-        opacity: playerActive ? 0 : 1,
-        pointerEvents: playerActive ? "none" : "auto",
+        pointerEvents: isFullPlayer ? "none" : "auto",
         ...maskStyle,
       }}
     >
