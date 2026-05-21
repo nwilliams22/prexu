@@ -93,12 +93,7 @@ function AppLayout() {
 
   // When a player session is active AND in full-viewport mode, hide the
   // entire app shell so mpv's HostWindow (a Win32 window sitting behind
-  // the WebView2) is unobscured. visibility:hidden (NOT display:none) —
-  // boxes still take layout space so children retain their measured
-  // dimensions. Without this, VirtualizedLibraryGrid's clientWidth was
-  // zero while hidden, the ResizeObserver didn't reliably re-fire on
-  // the visibility flip, and the grid stayed pinned at its default
-  // 4-column layout after Stop. pointerEvents:none lets clicks pass
+  // the WebView2) is unobscured. pointerEvents:none lets clicks pass
   // through to PlayerOverlay below. Without ANY of this the WebView2
   // paints AppLayout's opaque header/sidebar/main OVER the HostWindow,
   // leaving the video invisible (the route model unmounted AppLayout
@@ -112,6 +107,17 @@ function AppLayout() {
   // the viewport. The miniContainer in Player.tsx has its own
   // `background: transparent` so the WebView pixels in that small
   // region still see through to the mpv host behind.
+  //
+  // prexu-cay: use opacity:0 (NOT visibility:hidden) to hide during
+  // full-player. visibility:hidden makes the browser skip painting
+  // hidden subtrees; when visibility flips back, the browser has to
+  // do a fresh paint pass that takes ~50–150ms on Dashboard-heavy
+  // routes — visible to the user as see-through-to-desktop. opacity:0
+  // keeps the GPU-composited layer warm: paint happens normally, the
+  // layer just renders at zero alpha. Flipping back to opacity:1 is a
+  // compositor toggle, not a paint pass. (prexu-kfa's display:none
+  // concern about VirtualizedLibraryGrid's clientWidth/ResizeObserver
+  // doesn't apply to opacity — opacity doesn't touch layout.)
   const playerActive =
     playerSession.session != null && !playerSession.isMinimized;
 
@@ -155,7 +161,7 @@ function AppLayout() {
     <div
       style={{
         ...styles.container,
-        visibility: playerActive ? "hidden" : "visible",
+        opacity: playerActive ? 0 : 1,
         pointerEvents: playerActive ? "none" : "auto",
         ...maskStyle,
       }}
