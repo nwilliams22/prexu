@@ -532,6 +532,21 @@ pub async fn player_enter_popout(
         .get_webview_window("main")
         .ok_or_else(|| "main webview window not found".to_string())?;
 
+    // Clear any minimize inset BEFORE doing any geometry work (prexu-wow).
+    // Pop-out and minimize are mutually exclusive (7il.4 design); without
+    // this, a frontend race between playerExitMinimize and playerEnterPopOut
+    // can leave state.minimize=Some while we apply the popout geometry,
+    // causing the SetWindowPos resize storm to read the stale inset and
+    // shrink the host to the bottom-right corner of the new popout window.
+    // Clearing here is authoritative — subsequent Resized events from the
+    // window resize will all see minimize=None and skip apply_minimize_inset.
+    if let Ok(mut mz) = state.minimize.lock() {
+        if mz.is_some() {
+            log::debug!("[player:popout] clearing leftover minimize inset on enter");
+        }
+        *mz = None;
+    }
+
     let (wx, wy, ww, wh) = current_work_area(&main)?;
     let (x, y, w, h) = corner_origin(&corner, width, height, wx, wy, ww, wh)?;
 
