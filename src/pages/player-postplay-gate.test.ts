@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { hasNextItem } from "./player-postplay-gate";
+import {
+  hasNextItem,
+  minimizedPostPlayAction,
+} from "./player-postplay-gate";
 import type { PlaybackQueue, QueueItem } from "../types/queue";
 
 const movie = (key: string): QueueItem => ({
@@ -212,5 +215,67 @@ describe("hasNextItem (PostPlay gate)", () => {
         }),
       ).toBe(false);
     });
+  });
+});
+
+describe("minimizedPostPlayAction (prexu-jk0)", () => {
+  it("returns 'none' when not minimized regardless of other inputs", () => {
+    expect(
+      minimizedPostPlayAction({
+        isMinimized: false,
+        showPostPlay: true,
+        autoPlayEnabled: true,
+      }),
+    ).toBe("none");
+    expect(
+      minimizedPostPlayAction({
+        isMinimized: false,
+        showPostPlay: true,
+        autoPlayEnabled: false,
+      }),
+    ).toBe("none");
+  });
+
+  it("returns 'none' when PostPlay is not pending", () => {
+    expect(
+      minimizedPostPlayAction({
+        isMinimized: true,
+        showPostPlay: false,
+        autoPlayEnabled: true,
+      }),
+    ).toBe("none");
+    expect(
+      minimizedPostPlayAction({
+        isMinimized: true,
+        showPostPlay: false,
+        autoPlayEnabled: false,
+      }),
+    ).toBe("none");
+  });
+
+  it("returns 'fire-next' when minimized + PostPlay pending + autoplay on", () => {
+    // Seamless next-episode: PostPlayScreen would normally run its 10s
+    // countdown and fire handlePostPlayNext, but it never mounts in mini.
+    // Caller invokes handlePostPlayNext directly so the next item starts
+    // playing without leaving mini mode.
+    expect(
+      minimizedPostPlayAction({
+        isMinimized: true,
+        showPostPlay: true,
+        autoPlayEnabled: true,
+      }),
+    ).toBe("fire-next");
+  });
+
+  it("returns 'restore' when minimized + PostPlay pending + autoplay off", () => {
+    // The user needs the PostPlayScreen UI to decide Play Now vs Stop;
+    // restore from mini so the full chrome (and the screen itself) mounts.
+    expect(
+      minimizedPostPlayAction({
+        isMinimized: true,
+        showPostPlay: true,
+        autoPlayEnabled: false,
+      }),
+    ).toBe("restore");
   });
 });

@@ -56,3 +56,40 @@ export function hasNextItem({
   }
   return playingFromUserBuiltQueue;
 }
+
+/**
+ * What to do when PostPlay would normally show but the player is in
+ * mini mode (prexu-jk0).
+ *
+ * The full `<PostPlayScreen>` is rendered in the post-early-return branch
+ * of `Player.tsx`, so when `isMinimized` is true the screen never mounts
+ * and its 10s countdown never fires `handlePostPlayNext`. Without a
+ * bridge, EOF in mini leaves the user staring at a black frame.
+ *
+ *  - `"fire-next"` — autoplay is on, so we fire `handlePostPlayNext`
+ *    directly. The next item loads seamlessly while the player stays
+ *    minimized. Matches the "mini = minimal" design — no countdown card,
+ *    just continuous playback.
+ *  - `"restore"` — autoplay is off; the user needs the Play Now / Stop /
+ *    AutoPlay toggle on `PostPlayScreen` to decide what to do, so we
+ *    call `restoreFromMinimize` to let the full chrome (and the screen
+ *    itself) mount.
+ *  - `"none"` — not minimized or no PostPlay pending; let the regular
+ *    fullscreen flow run.
+ */
+export type MinimizedPostPlayAction = "none" | "fire-next" | "restore";
+
+export interface MinimizedPostPlayArgs {
+  isMinimized: boolean;
+  showPostPlay: boolean;
+  autoPlayEnabled: boolean;
+}
+
+export function minimizedPostPlayAction({
+  isMinimized,
+  showPostPlay,
+  autoPlayEnabled,
+}: MinimizedPostPlayArgs): MinimizedPostPlayAction {
+  if (!isMinimized || !showPostPlay) return "none";
+  return autoPlayEnabled ? "fire-next" : "restore";
+}

@@ -42,7 +42,10 @@ import MiniChrome from "../components/player/MiniChrome";
 import type { NormalizationPreset } from "../types/preferences";
 import { buildSubtitleCss } from "../utils/subtitle-css";
 import { logger } from "../services/logger";
-import { hasNextItem as computeHasNextItem } from "./player-postplay-gate";
+import {
+  hasNextItem as computeHasNextItem,
+  minimizedPostPlayAction,
+} from "./player-postplay-gate";
 import { miniRectToContainerStyle } from "../utils/mini-rect";
 
 interface PlayerProps {
@@ -435,6 +438,36 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     postPlayShownRef.current = false;
     handleExitRef.current();
   }, []);
+
+  // prexu-jk0: PostPlay handoff for mini mode. The full <PostPlayScreen>
+  // is in the post-early-return branch (line ~853), so when isMinimized
+  // is true it never mounts and its 10s countdown never fires
+  // handlePostPlayNext — the user sees a black frame at EOF instead of
+  // the next episode. Bridge that gap here: autoplay-on → fire next
+  // directly so playback continues seamlessly in mini; autoplay-off →
+  // restore to fullscreen so the user can see the Play Now / Stop
+  // buttons and decide. minimizedPostPlayAction's "none" return covers
+  // every non-minimized path so the regular flow is unaffected.
+  useEffect(() => {
+    const action = minimizedPostPlayAction({
+      isMinimized: playerSession.isMinimized,
+      showPostPlay,
+      autoPlayEnabled: pb.autoPlayEnabled,
+    });
+    if (action === "none") return;
+    logger.info("postplay", "mini-mode handoff", { action });
+    if (action === "fire-next") {
+      handlePostPlayNext();
+    } else {
+      playerSession.restoreFromMinimize();
+    }
+  }, [
+    playerSession.isMinimized,
+    playerSession.restoreFromMinimize,
+    showPostPlay,
+    pb.autoPlayEnabled,
+    handlePostPlayNext,
+  ]);
 
   // Get the next queue item for the post-play screen
   const nextQueueItem = useMemo(() => {
