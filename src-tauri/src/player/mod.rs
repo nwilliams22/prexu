@@ -67,6 +67,20 @@ pub struct PlayerState {
     /// instead of placing the host at the full WebView client rect, they
     /// place it at the inset corresponding to `corner`.
     pub(crate) minimize: Mutex<Option<MinimizeState>>,
+    /// Last observed DPI scale factor of the main window. Used by
+    /// `apply_minimize_inset` to convert the logical-px `MinimizeState`
+    /// into physical-px host geometry on every sync (prexu-buw).
+    ///
+    /// Updated from two places:
+    /// 1. `player_enter_minimize` — when the user enters minimize mode,
+    ///    so the initial conversion uses the live scale of the monitor
+    ///    the main window currently lives on.
+    /// 2. `WindowEvent::ScaleFactorChanged` — when the main window crosses
+    ///    a DPI boundary (e.g. 100% → 125% monitor). The handler stores
+    ///    the new scale BEFORE calling `sync_geometry`, so the very next
+    ///    host placement uses the new scale and the mini region remains
+    ///    visually correct at its anchor corner.
+    pub(crate) scale_factor: Mutex<f64>,
 }
 
 /// Which of the four corners the mini player anchors to. Mirrors the
@@ -81,9 +95,17 @@ pub enum MinimizeCorner {
     BottomRight,
 }
 
-/// All-physical-pixel parameters of the in-window mini region. Stored in
+/// Logical-pixel parameters of the in-window mini region. Stored in
 /// `PlayerState::minimize` so `apply_minimize_inset` can produce the
 /// correct host geometry on every Resized event.
+///
+/// Width / height / padding are CSS (logical) pixels, matching what the
+/// React side sends across the IPC. The conversion to physical pixels
+/// happens lazily inside `apply_minimize_inset` against the latest
+/// `PlayerState::scale_factor` — this lets cross-monitor DPI changes
+/// (`WindowEvent::ScaleFactorChanged`, prexu-buw) recompute the host
+/// rect at the new scale without re-firing `player_enter_minimize`
+/// from the frontend.
 #[derive(Debug, Clone, Copy)]
 pub struct MinimizeState {
     pub width: u32,
@@ -127,7 +149,38 @@ impl PlayerState {
             pending_geometry: Mutex::new(None),
             pre_popout_geometry: Mutex::new(None),
             minimize: Mutex::new(None),
+            // 1.0 is the safe default — single-monitor 100% DPI. The very
+            // first `player_enter_minimize` overwrites this with the real
+            // scale before applying the inset; `WindowEvent::ScaleFactorChanged`
+            // keeps it fresh thereafter (prexu-buw).
+            scale_factor: Mutex::new(1.0),
         }
+    }
+
+    /// Update the stored DPI scale factor. Called from the
+    /// `ScaleFactorChanged` window-event handler and from
+    /// `player_enter_minimize` so `apply_minimize_inset` always converts
+    /// the logical-px `MinimizeState` against the live scale (prexu-buw).
+    #[cfg(target_os = "windows")]
+    pub(crate) fn set_scale_factor(&self, scale: f64) {
+        if let Ok(mut sf) = self.scale_factor.lock() {
+            if (*sf - scale).abs() > f64::EPSILON {
+                log::info!(
+                    "[player:host] scale factor {:.3} → {:.3}",
+                    *sf,
+                    scale
+                );
+                *sf = scale;
+            }
+        }
+    }
+
+    /// Read the stored DPI scale factor. Defaults to 1.0 if the mutex is
+    /// poisoned (which should never happen in practice — we only ever
+    /// hold this lock for the duration of a read or single write).
+    #[cfg(target_os = "windows")]
+    pub(crate) fn current_scale_factor(&self) -> f64 {
+        self.scale_factor.lock().map(|sf| *sf).unwrap_or(1.0)
     }
 
     pub(crate) fn set_fullscreen_transition(&self, in_progress: bool) {
@@ -144,6 +197,14 @@ impl PlayerState {
     /// rect: when the user resizes the main window, the host re-snaps to
     /// the chosen corner on each Resized event, so the small video region
     /// always tracks the corner regardless of window size.
+    ///
+    /// `MinimizeState` is stored in CSS (logical) pixels — width / height /
+    /// padding are multiplied here by `current_scale_factor()` so the host
+    /// rect is always sized against the live DPI of whichever monitor the
+    /// main window currently lives on. This is what makes cross-monitor
+    /// DPI changes (`WindowEvent::ScaleFactorChanged`, prexu-buw) Just Work
+    /// once the handler refreshes the stored scale before calling
+    /// `sync_geometry`.
     #[cfg(target_os = "windows")]
     fn apply_minimize_inset(
         &self,
@@ -152,37 +213,12 @@ impl PlayerState {
         width: i32,
         height: i32,
     ) -> (i32, i32, i32, i32) {
-        if let Ok(mz) = self.minimize.lock() {
-            if let Some(state) = *mz {
-                let mw = state.width as i32;
-                let mh = state.height as i32;
-                let pad = state.padding as i32;
-                // Right-anchored corners: offset is `clientWidth - miniWidth
-                // - padding` so the inset hugs the right edge with `pad`
-                // pixels of gutter. Left-anchored: simply `pad` from x.
-                // Same vertical math for top/bottom. The .max(0) clamps
-                // protect against pathological cases where the client
-                // rect is narrower than the requested inset (e.g. user
-                // shrinks the window below the mini width); the inset
-                // collapses to the top-left of the client area rather
-                // than producing negative offsets that would put the
-                // host off-screen.
-                let off_x = match state.corner {
-                    MinimizeCorner::TopLeft | MinimizeCorner::BottomLeft => pad,
-                    MinimizeCorner::TopRight | MinimizeCorner::BottomRight => {
-                        (width - mw - pad).max(0)
-                    }
-                };
-                let off_y = match state.corner {
-                    MinimizeCorner::TopLeft | MinimizeCorner::TopRight => pad,
-                    MinimizeCorner::BottomLeft | MinimizeCorner::BottomRight => {
-                        (height - mh - pad).max(0)
-                    }
-                };
-                return (x + off_x, y + off_y, mw, mh);
-            }
-        }
-        (x, y, width, height)
+        let snapshot = self.minimize.lock().ok().and_then(|g| *g);
+        let Some(state) = snapshot else {
+            return (x, y, width, height);
+        };
+        let scale = self.current_scale_factor();
+        compute_minimize_inset(state, scale, x, y, width, height)
     }
 
     /// True when `ensure_init` has run and `destroy` has not. Used by
@@ -583,5 +619,113 @@ impl PlayerState {
 impl Default for PlayerState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Pure helper: compute the corner-anchored physical-px inset for the mpv
+/// host given a logical-px `MinimizeState`, a DPI scale factor, and the
+/// physical-px Tauri inner rect.
+///
+/// Extracted from `PlayerState::apply_minimize_inset` so it can be unit
+/// tested without spinning up a real `PlayerState` + Win32 host window.
+/// Returns the host `(x, y, w, h)` in physical pixels.
+#[cfg(target_os = "windows")]
+pub(crate) fn compute_minimize_inset(
+    state: MinimizeState,
+    scale: f64,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> (i32, i32, i32, i32) {
+    // Round the logical → physical conversion to the nearest pixel. Using
+    // floor or ceil would drift cumulatively across DPI changes; round
+    // gives the same value coming back from a logical → physical → logical
+    // round-trip (within ±0.5 px per dimension).
+    let mw = ((state.width as f64) * scale).round() as i32;
+    let mh = ((state.height as f64) * scale).round() as i32;
+    let pad = ((state.padding as f64) * scale).round() as i32;
+    // Right-anchored corners: offset is `clientWidth - miniWidth
+    // - padding` so the inset hugs the right edge with `pad`
+    // pixels of gutter. Left-anchored: simply `pad` from x.
+    // Same vertical math for top/bottom. The .max(0) clamps
+    // protect against pathological cases where the client
+    // rect is narrower than the requested inset (e.g. user
+    // shrinks the window below the mini width); the inset
+    // collapses to the top-left of the client area rather
+    // than producing negative offsets that would put the
+    // host off-screen.
+    let off_x = match state.corner {
+        MinimizeCorner::TopLeft | MinimizeCorner::BottomLeft => pad,
+        MinimizeCorner::TopRight | MinimizeCorner::BottomRight => {
+            (width - mw - pad).max(0)
+        }
+    };
+    let off_y = match state.corner {
+        MinimizeCorner::TopLeft | MinimizeCorner::TopRight => pad,
+        MinimizeCorner::BottomLeft | MinimizeCorner::BottomRight => {
+            (height - mh - pad).max(0)
+        }
+    };
+    (x + off_x, y + off_y, mw, mh)
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::*;
+
+    /// 360×200 mini-rect at 16 px padding, bottom-right corner. Mirrors
+    /// `DEFAULT_MINI_RECT` from `src/utils/mini-rect.ts`.
+    const DEFAULT: MinimizeState = MinimizeState {
+        width: 360,
+        height: 200,
+        padding: 16,
+        corner: MinimizeCorner::BottomRight,
+    };
+
+    #[test]
+    fn inset_at_scale_1_matches_legacy_physical_math() {
+        // 1920×1080 client at 100% DPI. With logical = physical at 1.0,
+        // the result must equal the pre-prexu-buw output where width /
+        // height / padding were already physical.
+        let (x, y, w, h) = compute_minimize_inset(DEFAULT, 1.0, 0, 0, 1920, 1080);
+        // bottom-right anchor: x = 1920 - 360 - 16 = 1544
+        //                      y = 1080 - 200 - 16 =  864
+        assert_eq!((x, y, w, h), (1544, 864, 360, 200));
+    }
+
+    #[test]
+    fn inset_rescales_when_dpi_changes() {
+        // Move from 100% → 125% DPI on a 2400×1350 physical client (which
+        // is the same 1920×1080 logical viewport scaled by 1.25). The mini
+        // region should grow proportionally so it occupies the same logical
+        // footprint on the new monitor.
+        let (x, y, w, h) =
+            compute_minimize_inset(DEFAULT, 1.25, 0, 0, 2400, 1350);
+        // mw = 360 * 1.25 = 450, mh = 200 * 1.25 = 250, pad = 16 * 1.25 = 20
+        // x = 2400 - 450 - 20 = 1930
+        // y = 1350 - 250 - 20 = 1080
+        assert_eq!((x, y, w, h), (1930, 1080, 450, 250));
+    }
+
+    #[test]
+    fn inset_honors_left_anchored_corners() {
+        let state = MinimizeState {
+            corner: MinimizeCorner::TopLeft,
+            ..DEFAULT
+        };
+        let (x, y, w, h) = compute_minimize_inset(state, 1.0, 100, 50, 1920, 1080);
+        // top-left: offset = (pad, pad) from client origin
+        assert_eq!((x, y, w, h), (116, 66, 360, 200));
+    }
+
+    #[test]
+    fn inset_clamps_when_client_smaller_than_mini() {
+        // User shrunk the window below the mini width — offsets must clamp
+        // to 0 rather than producing negative coords that would push the
+        // host off-screen.
+        let (x, y, _w, _h) =
+            compute_minimize_inset(DEFAULT, 1.0, 0, 0, 100, 100);
+        assert_eq!((x, y), (0, 0));
     }
 }

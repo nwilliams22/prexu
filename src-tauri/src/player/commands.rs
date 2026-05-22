@@ -787,28 +787,31 @@ pub async fn player_enter_minimize(
         .get_webview_window("main")
         .ok_or_else(|| "main webview window not found".to_string())?;
 
-    // DPI scaling (prexu-7a2). The frontend passes width/height/padding in
-    // CSS (logical) pixels so the mini chrome and the AppLayout mask hole
-    // are sized consistently across DPI scales. Tauri's inner_size /
-    // inner_position are physical pixels, and our apply_minimize_inset
-    // math runs in that physical-px space — so we scale up the CSS units
-    // here once on entry. ScaleFactorChanged while minimized (rare cross-
-    // monitor case) is not currently handled; the host would render at
-    // the old DPI's pixel sizes until exit/re-enter.
+    // DPI scaling (prexu-7a2 + prexu-buw). The frontend passes
+    // width / height / padding in CSS (logical) pixels so the mini chrome
+    // and the AppLayout mask hole are sized consistently across DPI scales.
+    // We store the logical px here verbatim and refresh the cached
+    // `scale_factor` from the live main window; `apply_minimize_inset`
+    // then multiplies by the cached scale on every host placement.
+    //
+    // This makes cross-monitor DPI changes (WM_DPICHANGED → Tauri's
+    // WindowEvent::ScaleFactorChanged) Just Work — the handler updates
+    // the cached scale and the very next `sync_geometry` produces the
+    // correct host rect for the new monitor's DPI without re-issuing
+    // this IPC from React. Pre-prexu-buw the inset stayed at the old
+    // monitor's physical sizes until the user manually toggled off and on.
     let scale = main.scale_factor().unwrap_or(1.0);
-    let width_phys = ((width as f64) * scale).round() as u32;
-    let height_phys = ((height as f64) * scale).round() as u32;
-    let padding_phys = ((padding as f64) * scale).round() as u32;
+    state.set_scale_factor(scale);
     log::info!(
-        "[player:cmd] enter_minimize size={}x{} padding={} corner={:?} scale={:.2} → physical {}x{} pad={}",
-        width, height, padding, corner_enum, scale, width_phys, height_phys, padding_phys
+        "[player:cmd] enter_minimize size={}x{} padding={} corner={:?} scale={:.2} (logical px stored)",
+        width, height, padding, corner_enum, scale
     );
 
     if let Ok(mut mz) = state.minimize.lock() {
         *mz = Some(super::MinimizeState {
-            width: width_phys,
-            height: height_phys,
-            padding: padding_phys,
+            width,
+            height,
+            padding,
             corner: corner_enum,
         });
     } else {

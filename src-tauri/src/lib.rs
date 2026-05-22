@@ -440,10 +440,28 @@ pub fn run() {
                             }
                             // Cross-monitor DPI change: tao gives us the new
                             // physical size directly to dodge a stale read.
+                            //
+                            // The destructured `scale_factor` is the NEW scale
+                            // for the monitor the window just landed on. We
+                            // push it into PlayerState BEFORE calling
+                            // sync_geometry so `apply_minimize_inset` sees
+                            // the new scale on the very first re-place
+                            // (prexu-buw). Without this, a minimized mini
+                            // player keeps using the old monitor's DPI for
+                            // its physical size and ends up wrong-sized at
+                            // the anchor corner.
                             WindowEvent::ScaleFactorChanged {
-                                new_inner_size, ..
+                                new_inner_size,
+                                scale_factor,
+                                ..
                             } => {
-                                log::debug!("[window] ScaleFactorChanged {}x{}", new_inner_size.width, new_inner_size.height);
+                                log::info!(
+                                    "[window] ScaleFactorChanged scale={:.3} new_size={}x{}",
+                                    scale_factor,
+                                    new_inner_size.width,
+                                    new_inner_size.height
+                                );
+                                state.set_scale_factor(*scale_factor);
                                 if let Ok(pos) = win_clone.inner_position() {
                                     state.sync_geometry(
                                         pos.x,
