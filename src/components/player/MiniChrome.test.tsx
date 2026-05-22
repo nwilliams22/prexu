@@ -310,6 +310,48 @@ describe("MiniChrome anchor drag", () => {
     expect(onUpdateMiniRect).toHaveBeenCalledWith({ corner: "top-left" });
   });
 
+  // prexu-ois regression: anchor-drag was selecting/highlighting the
+  // dashboard cards underneath as the cursor crossed them. Fix is to
+  // preventDefault on mousedown AND lock document.body.userSelect for
+  // the duration of the drag. Restore on mouseup (and on cleanup).
+  it("anchor-drag locks document.body.style.userSelect during the drag and restores on mouseup", () => {
+    render(<MiniChrome {...baseProps} />);
+    const region = screen.getByTestId("mini-chrome");
+    expect(document.body.style.userSelect).toBe("");
+    fireEvent.mouseDown(region, { button: 0, clientX: 1800, clientY: 1000 });
+    expect(document.body.style.userSelect).toBe("none");
+    fireEvent.mouseMove(window, { clientX: 100, clientY: 100 });
+    expect(document.body.style.userSelect).toBe("none");
+    fireEvent.mouseUp(window, { clientX: 100, clientY: 100 });
+    expect(document.body.style.userSelect).toBe("");
+  });
+
+  it("anchor-drag mousedown calls preventDefault to inhibit browser drag-select", () => {
+    render(<MiniChrome {...baseProps} />);
+    const region = screen.getByTestId("mini-chrome");
+    const ev = new MouseEvent("mousedown", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      clientX: 1800,
+      clientY: 1000,
+    });
+    region.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
+    // Clean up the in-flight drag so other tests aren't affected.
+    fireEvent.mouseUp(window, { clientX: 1800, clientY: 1000 });
+  });
+
+  it("resize-drag also locks userSelect during the drag", () => {
+    render(<MiniChrome {...baseProps} />);
+    const handle = screen.getByTestId("mini-chrome-resize");
+    expect(document.body.style.userSelect).toBe("");
+    fireEvent.mouseDown(handle, { button: 0, clientX: 100, clientY: 100 });
+    expect(document.body.style.userSelect).toBe("none");
+    fireEvent.mouseUp(window, { clientX: 200, clientY: 200 });
+    expect(document.body.style.userSelect).toBe("");
+  });
+
   // prexu-lhs regression: anchor-drag also dispatches a synthetic click
   // after mouseup. The user just committed a corner change — we don't
   // want that click to also trigger onRestore.

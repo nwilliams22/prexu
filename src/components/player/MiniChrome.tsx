@@ -67,6 +67,24 @@ interface MiniChromeProps {
  *  a drag rather than a click. Below this we still fire onRestore. */
 const DRAG_THRESHOLD_PX = 4;
 
+/** Suppress the browser's default drag-selection on the page underneath
+ *  while the user is dragging the mini player around. Without this the
+ *  cursor crossing dashboard cards/text starts a marquee selection that
+ *  highlights everything in its path. (prexu-ois) */
+function lockTextSelection(): void {
+  if (typeof document === "undefined") return;
+  document.body.style.userSelect = "none";
+  document.body.style.cursor = "grabbing";
+  // Clear any selection that may have started on the very first
+  // millisecond before userSelect:none kicked in.
+  window.getSelection?.()?.removeAllRanges?.();
+}
+function unlockTextSelection(): void {
+  if (typeof document === "undefined") return;
+  document.body.style.userSelect = "";
+  document.body.style.cursor = "";
+}
+
 /** Throttle window for mid-drag IPC during resize. The mpv host re-snaps
  *  to the corner on every Resized event; ~20 Hz balances perceived
  *  smoothness with sync_geometry's ~50 ms minimum interval. */
@@ -298,6 +316,15 @@ export default function MiniChrome({
       const target = e.target as HTMLElement | null;
       if (target?.closest('[data-mini-no-drag="true"]')) return;
 
+      // Suppress the browser's default text/marquee selection on the
+      // dashboard underneath — without this, dragging the mini across
+      // the Home view highlights cards and text as the cursor crosses
+      // them (prexu-ois). preventDefault on mousedown still allows the
+      // subsequent click event to fire (click is based on the mouseup
+      // target), so handleRegionClick keeps working for no-move clicks.
+      e.preventDefault();
+      lockTextSelection();
+
       onActivity();
       dragRef.current = {
         kind: "anchor",
@@ -333,6 +360,7 @@ export default function MiniChrome({
         cleanupListenersRef.current?.();
         cleanupListenersRef.current = null;
         setGhost(null);
+        unlockTextSelection();
         if (!drag) return;
         if (!drag.moved) {
           // Treat as a regular click → fall through to handleRegionClick.
@@ -365,6 +393,7 @@ export default function MiniChrome({
       cleanupListenersRef.current = () => {
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
+        unlockTextSelection();
       };
     },
     [miniRect, onActivity, onUpdateMiniRect],
@@ -376,6 +405,7 @@ export default function MiniChrome({
       if (e.button !== 0) return;
       e.stopPropagation();
       e.preventDefault();
+      lockTextSelection();
       onActivity();
 
       dragRef.current = {
@@ -425,6 +455,7 @@ export default function MiniChrome({
         dragRef.current = null;
         cleanupListenersRef.current?.();
         cleanupListenersRef.current = null;
+        unlockTextSelection();
         if (!drag) return;
         const dx = ev.clientX - drag.startX;
         const dy = ev.clientY - drag.startY;
@@ -450,6 +481,7 @@ export default function MiniChrome({
       cleanupListenersRef.current = () => {
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
+        unlockTextSelection();
       };
     },
     [miniRect, onActivity, onUpdateMiniRect],
