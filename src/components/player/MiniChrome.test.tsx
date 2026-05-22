@@ -240,6 +240,35 @@ describe("MiniChrome resize handle", () => {
     fireEvent.mouseUp(window, { clientX: 100, clientY: 100 });
     expect(onRestore).not.toHaveBeenCalled();
   });
+
+  // prexu-lhs regression: shrink resize moves the cursor INTO the
+  // mini chrome's root region. mouseup is on window; the synthetic
+  // click that follows lands on the root and would call onRestore.
+  it("shrink-resize (mouseup over root region, then click on root) does NOT trigger onRestore", () => {
+    const onRestore = vi.fn();
+    const onUpdateMiniRect = vi.fn();
+    render(
+      <MiniChrome
+        {...baseProps}
+        onRestore={onRestore}
+        onUpdateMiniRect={onUpdateMiniRect}
+      />,
+    );
+    const handle = screen.getByTestId("mini-chrome-resize");
+    const region = screen.getByTestId("mini-chrome");
+    // bottom-right anchor → handle at top-left → dragging RIGHT/DOWN shrinks.
+    fireEvent.mouseDown(handle, { button: 0, clientX: 100, clientY: 100 });
+    fireEvent.mouseMove(window, { clientX: 400, clientY: 300 });
+    fireEvent.mouseUp(window, { clientX: 400, clientY: 300 });
+    // Browser dispatches click on the common ancestor (the root region).
+    fireEvent.click(region);
+    expect(onRestore).not.toHaveBeenCalled();
+    // The resize commit still fires its size update.
+    const sizeCall = onUpdateMiniRect.mock.calls.find(
+      ([arg]) => typeof arg.width === "number" && typeof arg.height === "number",
+    );
+    expect(sizeCall).toBeTruthy();
+  });
 });
 
 // ── Anchor-drag (prexu-7il.7) ───────────────────────────────────────────────
@@ -279,6 +308,28 @@ describe("MiniChrome anchor drag", () => {
     fireEvent.mouseMove(window, { clientX: 100, clientY: 100 });
     fireEvent.mouseUp(window, { clientX: 100, clientY: 100 });
     expect(onUpdateMiniRect).toHaveBeenCalledWith({ corner: "top-left" });
+  });
+
+  // prexu-lhs regression: anchor-drag also dispatches a synthetic click
+  // after mouseup. The user just committed a corner change — we don't
+  // want that click to also trigger onRestore.
+  it("committed anchor-drag (followed by browser-synthesized click) does NOT trigger onRestore", () => {
+    const onRestore = vi.fn();
+    const onUpdateMiniRect = vi.fn();
+    render(
+      <MiniChrome
+        {...baseProps}
+        onRestore={onRestore}
+        onUpdateMiniRect={onUpdateMiniRect}
+      />,
+    );
+    const region = screen.getByTestId("mini-chrome");
+    fireEvent.mouseDown(region, { button: 0, clientX: 1800, clientY: 1000 });
+    fireEvent.mouseMove(window, { clientX: 100, clientY: 100 });
+    fireEvent.mouseUp(window, { clientX: 100, clientY: 100 });
+    fireEvent.click(region);
+    expect(onUpdateMiniRect).toHaveBeenCalledWith({ corner: "top-left" });
+    expect(onRestore).not.toHaveBeenCalled();
   });
 
   it("releasing in the bottom-left quadrant snaps to bottom-left", () => {

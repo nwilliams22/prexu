@@ -273,6 +273,20 @@ export default function MiniChrome({
     };
   }, []);
 
+  // Timestamp (ms epoch) of the last drag-mouseup that committed real
+  // movement — resize, or anchor-drag past the threshold. Used by
+  // handleRegionClick to swallow the synthetic `click` the browser
+  // dispatches right after mouseup. Without this, shrinking the mini
+  // player ends with the cursor inside the (now-smaller) root region;
+  // the browser fires click → handleRegionClick → onRestore. Enlarging
+  // doesn't hit this because the cursor lands on the resize handle
+  // itself (data-mini-no-drag) and handleRegionClick early-returns.
+  // 200 ms covers the gap between window mouseup and the bubbled click
+  // without swallowing genuine restore clicks the user makes shortly
+  // after a drag.
+  const recentlyDraggedAtRef = useRef<number>(0);
+  const DRAG_CLICK_SUPPRESS_MS = 200;
+
   // ── Anchor-drag (move the mini between corners) ─────────────────────────
   const handleRegionMouseDown = useCallback(
     (e: React.MouseEvent) => {
@@ -343,6 +357,7 @@ export default function MiniChrome({
           cursor: { x: ev.clientX, y: ev.clientY },
         });
         onUpdateMiniRect({ corner });
+        recentlyDraggedAtRef.current = Date.now();
       };
 
       window.addEventListener("mousemove", onMove);
@@ -427,6 +442,7 @@ export default function MiniChrome({
           to: final,
         });
         onUpdateMiniRect(final);
+        recentlyDraggedAtRef.current = Date.now();
       };
 
       window.addEventListener("mousemove", onMove);
@@ -445,6 +461,16 @@ export default function MiniChrome({
   // click because dragRef.moved stays false below the threshold.
   const handleRegionClick = useCallback(
     (e: React.MouseEvent) => {
+      // Browser fires a synthetic click after mouseup on the closest
+      // common ancestor of mousedown+mouseup targets. After a shrink
+      // resize the cursor ends up inside this root region, so without
+      // this guard the resize-mouseup → click → onRestore() chain runs
+      // and exits minimize. recentlyDraggedAtRef is set by the resize
+      // and anchor-drag onUp handlers when they commit real movement.
+      if (Date.now() - recentlyDraggedAtRef.current < DRAG_CLICK_SUPPRESS_MS) {
+        recentlyDraggedAtRef.current = 0;
+        return;
+      }
       const target = e.target as HTMLElement | null;
       // If the click landed on a button or the resize handle, those have
       // their own handlers; don't bubble up to restore.
