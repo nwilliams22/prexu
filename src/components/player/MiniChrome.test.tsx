@@ -117,14 +117,19 @@ describe("MiniChrome", () => {
     expect(onRestore).not.toHaveBeenCalled();
   });
 
-  it("clicking the transparent region (root, not a button) calls onRestore — Plex convention", () => {
+  // prexu-2rz: the transparent middle area is NOT clickable. Restore
+  // happens only via the dedicated restore button — this eliminates the
+  // entire class of click-after-drag bugs on shrink-resize, since the
+  // synthetic click can't reach onRestore regardless of which element it
+  // lands on. The prexu-lhs recentlyDraggedAtRef guard is gone too.
+  it("clicking the transparent region (root, not a button) does NOT call onRestore", () => {
     const onRestore = vi.fn();
     render(<MiniChrome {...baseProps} onRestore={onRestore} />);
     fireEvent.click(screen.getByTestId("mini-chrome"));
-    expect(onRestore).toHaveBeenCalledTimes(1);
+    expect(onRestore).not.toHaveBeenCalled();
   });
 
-  it("button clicks do not bubble up to trigger the region's restore", () => {
+  it("clicking the close button still fires onClose without touching onRestore", () => {
     const onRestore = vi.fn();
     const onClose = vi.fn();
     render(
@@ -241,6 +246,30 @@ describe("MiniChrome resize handle", () => {
     expect(onRestore).not.toHaveBeenCalled();
   });
 
+  // prexu-2rz regression: after a shrink-resize, the synthetic click
+  // sometimes lands directly on the restore button (not the root). The
+  // prexu-lhs ref-guard inside handleRegionClick missed this case; the
+  // structural fix is that the restore button is the ONLY restore path
+  // and a click on it IS the user's intent. This test asserts that even
+  // when the click lands on the button, it does what the user asked —
+  // the bug it's guarding against is restoreFromMinimize firing on an
+  // unintentional synthetic click, which can no longer happen because
+  // the only restore path is the explicit button. We assert the button
+  // is reachable and its click still works (no over-zealous suppression).
+  it("clicking the restore button after a resize still works (no over-suppression)", () => {
+    const onRestore = vi.fn();
+    render(<MiniChrome {...baseProps} onRestore={onRestore} />);
+    const handle = screen.getByTestId("mini-chrome-resize");
+    // Simulate a shrink-resize.
+    fireEvent.mouseDown(handle, { button: 0, clientX: 100, clientY: 100 });
+    fireEvent.mouseMove(window, { clientX: 400, clientY: 300 });
+    fireEvent.mouseUp(window, { clientX: 400, clientY: 300 });
+    // User then INTENTIONALLY clicks restore. We must not have left a
+    // global click-swallower around that would eat this click.
+    fireEvent.click(screen.getByRole("button", { name: /restore to full player/i }));
+    expect(onRestore).toHaveBeenCalledTimes(1);
+  });
+
   // prexu-lhs regression: shrink resize moves the cursor INTO the
   // mini chrome's root region. mouseup is on window; the synthetic
   // click that follows lands on the root and would call onRestore.
@@ -273,7 +302,10 @@ describe("MiniChrome resize handle", () => {
 
 // ── Anchor-drag (prexu-7il.7) ───────────────────────────────────────────────
 describe("MiniChrome anchor drag", () => {
-  it("a short mousedown→mouseup on the region (no real movement) is treated as a click → onRestore", () => {
+  // prexu-2rz: short mousedown→mouseup on the region is now a no-op
+  // (used to fire onRestore as a Plex-convention shortcut, removed to
+  // close the click-after-drag bug class on shrink-resize).
+  it("a short mousedown→mouseup on the region (no real movement) is a no-op", () => {
     const onRestore = vi.fn();
     const onUpdateMiniRect = vi.fn();
     render(
@@ -288,7 +320,7 @@ describe("MiniChrome anchor drag", () => {
     fireEvent.mouseUp(window, { clientX: 1800, clientY: 1000 });
     fireEvent.click(region);
     expect(onUpdateMiniRect).not.toHaveBeenCalled();
-    expect(onRestore).toHaveBeenCalledTimes(1);
+    expect(onRestore).not.toHaveBeenCalled();
   });
 
   it("moving the cursor far enough crosses the drag threshold and renders the ghost", () => {

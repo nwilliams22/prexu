@@ -5,22 +5,26 @@
  * Sits absolutely-positioned inside the small corner wrapper Player.tsx
  * builds when `usePlayerSession().isMinimized` is true. Renders:
  *
- * - Top-right cluster: Restore (return to full player) + Close (stop playback)
+ * - Top-right cluster: Restore (return to full player) + Close (stop playback).
+ *   The restore button is the ONLY way to leave minimize from the chrome —
+ *   we deliberately do not honor clicks on the transparent middle area.
+ *   (prexu-2rz: the click-to-restore "Plex convention" produced a
+ *   click-after-drag bug on shrink-resize that the recentlyDraggedAtRef
+ *   guard in prexu-lhs only partially solved, since synthetic clicks
+ *   often land on a chrome button rather than the root.)
  * - Bottom-center: Play/Pause transport
  * - Resize handle on the corner OPPOSITE the active anchor (7il.5).
  *   Dragging it grows/shrinks the mini player; mid-drag IPC is throttled
  *   to ~50 ms so the mpv host follows the drag without flooding
  *   sync_geometry.
- * - Drag handle covering the rest of the chrome (7il.7) — click+drag
+ * - Drag surface covering the rest of the chrome (7il.7) — mousedown+drag
  *   from any non-button area to grab the mini player. A semi-transparent
  *   ghost previews the new position; on release we snap to the nearest
  *   of the four corners and commit via `updateMiniRect({ corner })`.
  *
  * Auto-hides after inactivity using the same visibility flag the main
  * chrome uses (passed in as `visible`). Mouse activity anywhere inside
- * the region resets the hide timer via `onActivity`. A short click on
- * empty area still triggers Restore — we distinguish click from drag by
- * the pointer-movement threshold (4 px) and time (<200 ms).
+ * the region resets the hide timer via `onActivity`.
  *
  * The title is shown as the native browser tooltip on the region root so
  * users can hover to confirm what's playing without taking up visible
@@ -63,8 +67,10 @@ interface MiniChromeProps {
   onUpdateMiniRect: (updates: Partial<MiniRect>) => void;
 }
 
-/** Pointer-movement threshold (logical px) for treating mouse activity as
- *  a drag rather than a click. Below this we still fire onRestore. */
+/** Pointer-movement threshold (logical px) below which an anchor-drag
+ *  mousedown→mouseup is treated as not-a-drag (no ghost, no corner
+ *  commit). The root region is intentionally not clickable, so falling
+ *  below the threshold is a true no-op (prexu-2rz). */
 const DRAG_THRESHOLD_PX = 4;
 
 /** Suppress the browser's default drag-selection on the page underneath
@@ -95,7 +101,9 @@ const styles = {
     position: "absolute" as const,
     inset: 0,
     pointerEvents: "auto" as const,
-    cursor: "pointer",
+    // grab → grabbing during an anchor drag. No longer "pointer" — the
+    // root area is draggable but not clickable (prexu-2rz).
+    cursor: "grab",
   },
   topCluster: {
     position: "absolute" as const,
@@ -274,7 +282,7 @@ export default function MiniChrome({
   } | null>(null);
 
   // Visible ghost overlay state — only set once we've crossed the drag
-  // threshold so a short click still falls through to handleRegionClick.
+  // threshold so sub-threshold mousedowns produce no visual artifact.
   const [ghost, setGhost] = useState<{
     x: number;
     y: number;
@@ -291,20 +299,6 @@ export default function MiniChrome({
     };
   }, []);
 
-  // Timestamp (ms epoch) of the last drag-mouseup that committed real
-  // movement — resize, or anchor-drag past the threshold. Used by
-  // handleRegionClick to swallow the synthetic `click` the browser
-  // dispatches right after mouseup. Without this, shrinking the mini
-  // player ends with the cursor inside the (now-smaller) root region;
-  // the browser fires click → handleRegionClick → onRestore. Enlarging
-  // doesn't hit this because the cursor lands on the resize handle
-  // itself (data-mini-no-drag) and handleRegionClick early-returns.
-  // 200 ms covers the gap between window mouseup and the bubbled click
-  // without swallowing genuine restore clicks the user makes shortly
-  // after a drag.
-  const recentlyDraggedAtRef = useRef<number>(0);
-  const DRAG_CLICK_SUPPRESS_MS = 200;
-
   // ── Anchor-drag (move the mini between corners) ─────────────────────────
   const handleRegionMouseDown = useCallback(
     (e: React.MouseEvent) => {
@@ -319,9 +313,7 @@ export default function MiniChrome({
       // Suppress the browser's default text/marquee selection on the
       // dashboard underneath — without this, dragging the mini across
       // the Home view highlights cards and text as the cursor crosses
-      // them (prexu-ois). preventDefault on mousedown still allows the
-      // subsequent click event to fire (click is based on the mouseup
-      // target), so handleRegionClick keeps working for no-move clicks.
+      // them (prexu-ois).
       e.preventDefault();
       lockTextSelection();
 
@@ -363,9 +355,9 @@ export default function MiniChrome({
         unlockTextSelection();
         if (!drag) return;
         if (!drag.moved) {
-          // Treat as a regular click → fall through to handleRegionClick.
-          // We can't call onRestore here because handleRegionClick also
-          // runs and we'd double-fire; instead let the click event finish.
+          // Sub-threshold mousedown→mouseup. Nothing to commit; we
+          // intentionally do NOT treat this as a restore click (prexu-2rz —
+          // the restore button is the only chrome path back to full).
           return;
         }
         // Compute nearest corner. Use the cursor position as the "centre"
@@ -385,7 +377,6 @@ export default function MiniChrome({
           cursor: { x: ev.clientX, y: ev.clientY },
         });
         onUpdateMiniRect({ corner });
-        recentlyDraggedAtRef.current = Date.now();
       };
 
       window.addEventListener("mousemove", onMove);
@@ -473,7 +464,6 @@ export default function MiniChrome({
           to: final,
         });
         onUpdateMiniRect(final);
-        recentlyDraggedAtRef.current = Date.now();
       };
 
       window.addEventListener("mousemove", onMove);
@@ -485,32 +475,6 @@ export default function MiniChrome({
       };
     },
     [miniRect, onActivity, onUpdateMiniRect],
-  );
-
-  // Click on the transparent middle area = restore (Plex convention).
-  // Suppressed when the user actually dragged (anchor-drag commits via
-  // mouseup instead). Drag-then-release-on-same-spot still counts as a
-  // click because dragRef.moved stays false below the threshold.
-  const handleRegionClick = useCallback(
-    (e: React.MouseEvent) => {
-      // Browser fires a synthetic click after mouseup on the closest
-      // common ancestor of mousedown+mouseup targets. After a shrink
-      // resize the cursor ends up inside this root region, so without
-      // this guard the resize-mouseup → click → onRestore() chain runs
-      // and exits minimize. recentlyDraggedAtRef is set by the resize
-      // and anchor-drag onUp handlers when they commit real movement.
-      if (Date.now() - recentlyDraggedAtRef.current < DRAG_CLICK_SUPPRESS_MS) {
-        recentlyDraggedAtRef.current = 0;
-        return;
-      }
-      const target = e.target as HTMLElement | null;
-      // If the click landed on a button or the resize handle, those have
-      // their own handlers; don't bubble up to restore.
-      if (target?.closest('[data-mini-no-drag="true"]')) return;
-      onActivity();
-      onRestore();
-    },
-    [onActivity, onRestore],
   );
 
   const handleButtonClick = useCallback(
@@ -528,7 +492,6 @@ export default function MiniChrome({
     <>
       <div
         style={styles.root}
-        onClick={handleRegionClick}
         onMouseDown={handleRegionMouseDown}
         onMouseMove={onMouseMove}
         title={title}
