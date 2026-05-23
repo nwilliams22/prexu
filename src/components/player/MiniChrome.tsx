@@ -426,17 +426,23 @@ export default function MiniChrome({
           window.innerWidth,
           window.innerHeight,
         );
-        // Throttle IPC — but always update React state so the mini chrome
-        // and the AppLayout mask stay in lockstep with the cursor.
+        // Throttle the React state update (and therefore the IPC) to
+        // ~20 Hz. Previously both `if` and `else` called onUpdateMiniRect,
+        // making the throttle a no-op — every mousemove fired a
+        // playerEnterMinimize IPC + a setMiniRect re-render. The
+        // setMiniRect changed AppLayout's mask-size/mask-position, which
+        // forced WebView2 to re-rasterize the whole Dashboard layer; the
+        // visible mask cut-out then trailed the cursor by hundreds of ms
+        // even though the mpv host was following more quickly via IPC.
+        //
+        // With actual throttling, the mask + mpv host stay in lockstep at
+        // 20 Hz. The cursor leads both by up to 50 ms but they no longer
+        // drift apart visually. The final position is always committed by
+        // the onUp handler below, so the last frame of the drag is never
+        // lost. (prexu-vm2)
         const now = Date.now();
-        const shouldIpc = now - drag.lastIpcTime >= RESIZE_IPC_THROTTLE_MS;
-        if (shouldIpc) {
+        if (now - drag.lastIpcTime >= RESIZE_IPC_THROTTLE_MS) {
           drag.lastIpcTime = now;
-          onUpdateMiniRect({ width, height });
-        } else {
-          // Push a transient update through the same path so React reflects
-          // the live drag. PlayerContext.updateMiniRect short-circuits when
-          // nothing changed, so the throttled IPC path stays clean.
           onUpdateMiniRect({ width, height });
         }
       };

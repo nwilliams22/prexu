@@ -223,6 +223,34 @@ describe("MiniChrome resize handle", () => {
     expect(lastCall).toEqual({ width: 410, height: 230 });
   });
 
+  // prexu-vm2: the RESIZE_IPC_THROTTLE_MS gate was a no-op (both
+  // branches of `if (shouldIpc)` called onUpdateMiniRect identically),
+  // so every mousemove fired an IPC + a setMiniRect re-render and the
+  // AppLayout mask trailed the cursor by hundreds of ms. With the throttle
+  // working, a rapid burst of mousemoves (well under 50 ms apart) must
+  // produce only the first mid-drag update plus the final commit.
+  it("throttles mid-drag onUpdateMiniRect to ~20 Hz", () => {
+    const onUpdateMiniRect = vi.fn();
+    render(<MiniChrome {...baseProps} onUpdateMiniRect={onUpdateMiniRect} />);
+    const handle = screen.getByTestId("mini-chrome-resize");
+    fireEvent.mouseDown(handle, { button: 0, clientX: 100, clientY: 100 });
+    // Five synchronous moves in the same JS tick — Date.now() will not
+    // tick fast enough between them to cross the 50 ms throttle window.
+    fireEvent.mouseMove(window, { clientX: 90, clientY: 90 });
+    fireEvent.mouseMove(window, { clientX: 80, clientY: 80 });
+    fireEvent.mouseMove(window, { clientX: 70, clientY: 70 });
+    fireEvent.mouseMove(window, { clientX: 60, clientY: 60 });
+    fireEvent.mouseMove(window, { clientX: 50, clientY: 50 });
+    fireEvent.mouseUp(window, { clientX: 50, clientY: 50 });
+    // 1 first-move update + 1 mouseup commit. Pre-fix this was 6.
+    expect(onUpdateMiniRect).toHaveBeenCalledTimes(2);
+    // Final commit must reflect the LAST cursor position, not the first.
+    expect(onUpdateMiniRect.mock.calls.at(-1)?.[0]).toEqual({
+      width: 410,
+      height: 250,
+    });
+  });
+
   it("resize clamps to the per-axis minimum", () => {
     const onUpdateMiniRect = vi.fn();
     render(<MiniChrome {...baseProps} onUpdateMiniRect={onUpdateMiniRect} />);
