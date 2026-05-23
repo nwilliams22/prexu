@@ -436,6 +436,41 @@ pub fn run() {
                                         size.width as i32,
                                         size.height as i32,
                                     );
+                                    // Schedule a trailing-edge flush on the first
+                                    // event of a burst. A fast drag-resize whose
+                                    // final WM_SIZE lands inside the 50ms throttle
+                                    // window leaves the host stuck at stale
+                                    // geometry — sync_geometry stashes the final
+                                    // rect in pending, but no further event arrives
+                                    // to consume it. The worker sleeps the throttle
+                                    // window, then dispatches back to the main
+                                    // thread to apply whatever pending holds at
+                                    // that moment (which is always the most recent
+                                    // rect, since later events overwrite earlier
+                                    // ones). claim_trailing_schedule's atomic swap
+                                    // means subsequent events in the same burst
+                                    // don't double-spawn. (prexu-hhx)
+                                    if state.claim_trailing_schedule() {
+                                        let ah_sleep = app_handle.clone();
+                                        let ah_closure = app_handle.clone();
+                                        std::thread::spawn(move || {
+                                            std::thread::sleep(
+                                                player::GEOMETRY_SYNC_MIN_INTERVAL,
+                                            );
+                                            if let Err(e) =
+                                                ah_sleep.run_on_main_thread(move || {
+                                                    let state = ah_closure
+                                                        .state::<player::PlayerState>();
+                                                    state.flush_pending_geometry();
+                                                })
+                                            {
+                                                log::warn!(
+                                                    "[player] trailing flush dispatch failed: {:?}",
+                                                    e
+                                                );
+                                            }
+                                        });
+                                    }
                                 }
                             }
                             // Cross-monitor DPI change: tao gives us the new

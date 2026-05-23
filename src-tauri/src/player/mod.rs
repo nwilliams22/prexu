@@ -23,7 +23,7 @@ use tauri::{AppHandle, Manager};
 /// threads keep playing audio/video, but UI input + paint stop).
 /// 20 Hz is smooth enough visually and gives mpv 50 ms to settle between
 /// swapchain rebuilds (empirically safe on Win11 with gpu-next + D3D11).
-const GEOMETRY_SYNC_MIN_INTERVAL: Duration = Duration::from_millis(50);
+pub(crate) const GEOMETRY_SYNC_MIN_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Managed state container holding the mpv handle + (on Windows) the native
 /// HWND that mpv renders into. Created lazily on the first `ensure_init`.
@@ -50,6 +50,19 @@ pub struct PlayerState {
     /// the throttle check will apply it, ensuring the final drag position is
     /// never lost.
     pending_geometry: Mutex<Option<(i32, i32, i32, i32)>>,
+    /// True while a trailing-edge flush is scheduled for the pending
+    /// geometry. Acts as a one-shot debounce: the first event of a fast
+    /// burst spawns a worker thread that sleeps the throttle window and
+    /// then calls `flush_pending_geometry` on the main thread; subsequent
+    /// events that lose the race (`swap` returns true) skip the spawn so
+    /// we never have more than one flush in flight. Cleared by
+    /// `flush_pending_geometry` before it consumes pending.
+    ///
+    /// Without this, a fast drag-resize whose FINAL event lands inside the
+    /// 50ms throttle window leaves the host stuck at stale geometry —
+    /// `sync_geometry` stores the final geometry to pending but no further
+    /// event arrives to consume it. (prexu-hhx)
+    trailing_scheduled: AtomicBool,
     /// Saved (x, y, width, height) of the Tauri main window's outer rect
     /// before entering pop-out mode. Stashed by `player_enter_popout` and
     /// consumed by `player_exit_popout` to restore the previous geometry.
@@ -147,6 +160,7 @@ impl PlayerState {
             ),
             last_geometry: Mutex::new(None),
             pending_geometry: Mutex::new(None),
+            trailing_scheduled: AtomicBool::new(false),
             pre_popout_geometry: Mutex::new(None),
             minimize: Mutex::new(None),
             // 1.0 is the safe default — single-monitor 100% DPI. The very
@@ -529,6 +543,49 @@ impl PlayerState {
         }
     }
 
+    /// Try to claim the right to schedule a trailing-edge flush. Returns
+    /// true if the caller is the first to ask since the last flush (the
+    /// caller should now spawn the worker that will eventually call
+    /// `flush_pending_geometry`); returns false if someone else has
+    /// already claimed it and a flush is already in flight.
+    ///
+    /// Atomic swap so claim/flush race-free across the window-event
+    /// handler (main thread) and the trailing worker thread. See
+    /// `trailing_scheduled` for the full design rationale (prexu-hhx).
+    #[cfg(target_os = "windows")]
+    pub(crate) fn claim_trailing_schedule(&self) -> bool {
+        !self.trailing_scheduled.swap(true, Ordering::AcqRel)
+    }
+
+    /// Apply any pending geometry stashed by a throttled `sync_geometry`
+    /// call. Called from the trailing worker after sleeping the throttle
+    /// window. Order matters: clear `trailing_scheduled` BEFORE consuming
+    /// pending so a Resized event that arrives mid-flush can schedule a
+    /// fresh worker for whatever geometry comes next. No-op when nothing
+    /// is pending (e.g. the throttle-passing event already cleared it).
+    /// (prexu-hhx)
+    #[cfg(target_os = "windows")]
+    pub(crate) fn flush_pending_geometry(&self) {
+        self.trailing_scheduled.store(false, Ordering::Release);
+        let pending = self
+            .pending_geometry
+            .lock()
+            .ok()
+            .and_then(|mut p| p.take());
+        match pending {
+            Some((x, y, w, h)) => {
+                log::debug!(
+                    "[player] flush_pending_geometry applying ({},{},{}x{})",
+                    x, y, w, h
+                );
+                self.sync_geometry(x, y, w, h);
+            }
+            None => {
+                log::trace!("[player] flush_pending_geometry: no pending");
+            }
+        }
+    }
+
     pub(crate) fn with_mpv<R>(
         &self,
         f: impl FnOnce(&Mpv) -> Result<R, libmpv2::Error>,
@@ -727,5 +784,112 @@ mod tests {
         let (x, y, _w, _h) =
             compute_minimize_inset(DEFAULT, 1.0, 0, 0, 100, 100);
         assert_eq!((x, y), (0, 0));
+    }
+
+    // ---- Trailing-edge geometry flush (prexu-hhx) ----------------------
+    //
+    // PlayerState::sync_geometry / flush_pending_geometry are exercised
+    // here without an initialised mpv host: `inner` stays `None`, so the
+    // SetWindowPos branch is skipped and we only assert on the throttle/
+    // pending state machine. That is exactly the surface area being
+    // changed in prexu-hhx; the host-side application of the geometry is
+    // covered by the existing manual-test plan.
+
+    /// Force the throttle clock far enough in the past that the next
+    /// `sync_geometry` call is guaranteed to pass the throttle gate. Used
+    /// in tests where we want to simulate "throttle window has elapsed"
+    /// without actually sleeping.
+    fn release_throttle(state: &PlayerState) {
+        let past = Instant::now()
+            .checked_sub(GEOMETRY_SYNC_MIN_INTERVAL * 2)
+            .unwrap_or_else(Instant::now);
+        *state.last_sync.lock().unwrap() = past;
+    }
+
+    #[test]
+    fn throttled_sync_geometry_stores_pending() {
+        let state = PlayerState::new();
+        // First call passes the throttle (new() sets last_sync to
+        // now - interval) and resets the clock to now.
+        state.sync_geometry(0, 0, 1920, 1080);
+        assert!(state.pending_geometry.lock().unwrap().is_none());
+        // Second call immediately after is throttled → stored as pending.
+        state.sync_geometry(10, 20, 800, 600);
+        assert_eq!(
+            *state.pending_geometry.lock().unwrap(),
+            Some((10, 20, 800, 600))
+        );
+    }
+
+    #[test]
+    fn multi_throttled_overwrites_to_latest() {
+        let state = PlayerState::new();
+        state.sync_geometry(0, 0, 1920, 1080); // passes throttle
+        state.sync_geometry(1, 1, 100, 100); // throttled → pending
+        state.sync_geometry(2, 2, 200, 200); // throttled → overwrites
+        state.sync_geometry(3, 3, 300, 300); // throttled → overwrites again
+        // Only the most recent geometry survives — last writer wins.
+        assert_eq!(
+            *state.pending_geometry.lock().unwrap(),
+            Some((3, 3, 300, 300))
+        );
+    }
+
+    #[test]
+    fn flush_consumes_pending_geometry() {
+        let state = PlayerState::new();
+        state.sync_geometry(0, 0, 1920, 1080); // passes throttle
+        state.sync_geometry(50, 60, 400, 300); // throttled → pending
+        assert_eq!(
+            *state.pending_geometry.lock().unwrap(),
+            Some((50, 60, 400, 300))
+        );
+        // Simulate the throttle window having elapsed (what the worker
+        // thread does by sleeping GEOMETRY_SYNC_MIN_INTERVAL before
+        // dispatching this call to the main thread).
+        release_throttle(&state);
+        state.trailing_scheduled
+            .store(true, Ordering::Release);
+
+        state.flush_pending_geometry();
+
+        // After flush: pending taken, trailing_scheduled cleared, and the
+        // (50,60,400,300) geometry made it all the way through
+        // sync_geometry's apply path so last_geometry now reflects it.
+        assert!(state.pending_geometry.lock().unwrap().is_none());
+        assert!(!state.trailing_scheduled.load(Ordering::Acquire));
+        assert_eq!(
+            *state.last_geometry.lock().unwrap(),
+            Some((50, 60, 400, 300))
+        );
+    }
+
+    #[test]
+    fn flush_with_no_pending_is_noop() {
+        let state = PlayerState::new();
+        // Pretend a worker is scheduled but nothing was ever throttled
+        // (e.g. all events naturally spaced > 50ms apart). The flush
+        // should silently clear the flag and not touch last_geometry.
+        state.trailing_scheduled
+            .store(true, Ordering::Release);
+
+        state.flush_pending_geometry();
+
+        assert!(state.pending_geometry.lock().unwrap().is_none());
+        assert!(!state.trailing_scheduled.load(Ordering::Acquire));
+        assert!(state.last_geometry.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn claim_trailing_schedule_is_one_shot_until_flushed() {
+        let state = PlayerState::new();
+        // First claimer wins.
+        assert!(state.claim_trailing_schedule());
+        // Subsequent claims lose while the flag is set.
+        assert!(!state.claim_trailing_schedule());
+        assert!(!state.claim_trailing_schedule());
+        // Flush clears the flag → next claim wins again.
+        state.flush_pending_geometry();
+        assert!(state.claim_trailing_schedule());
     }
 }
