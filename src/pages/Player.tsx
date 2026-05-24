@@ -42,7 +42,10 @@ import MinimizedPlayer from "../components/player/MinimizedPlayer";
 import type { NormalizationPreset } from "../types/preferences";
 import { logger } from "../services/logger";
 import { hasNextItem as computeHasNextItem } from "./player-postplay-gate";
-import { derivePostPlayDetailProps } from "./player-postplay-props";
+import {
+  derivePostPlayDetailProps,
+  deriveUpNextSlice,
+} from "./player-postplay-props";
 import { playerStyles as styles } from "./Player.styles";
 
 interface PlayerProps {
@@ -608,11 +611,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
             updatePreferences({ playback: { autoPlayEnabled: enabled } })
           }
           {...derivePostPlayDetailProps(postPlay.postPlayDetail)}
-          upNext={(() => {
-            const start = queue.currentIndex + 2;
-            const slice = queue.items.slice(start, start + 4);
-            return slice.length > 0 ? slice : undefined;
-          })()}
+          upNext={deriveUpNextSlice(queue)}
         />
       )}
 

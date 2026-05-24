@@ -13,6 +13,7 @@
  */
 
 import type { PlexEpisode, PlexMediaItem } from "../types/library";
+import type { PlaybackQueue, QueueItem } from "../types/queue";
 
 export interface DerivedPostPlayDetailProps {
   synopsis: string | undefined;
@@ -55,4 +56,21 @@ export function derivePostPlayDetailProps(
     directors,
     cast,
   };
+}
+
+/**
+ * "Coming up" strip for PostPlayScreen — items after the next one in the
+ * queue, capped at 4 so the strip stays short. The next item itself is
+ * the hero card so we skip currentIndex+1 and start at +2.
+ *
+ * Returns undefined when there's nothing left to show — PostPlayScreen
+ * checks that to decide whether to render the strip at all. Empty array
+ * would force the section to mount with no children.
+ */
+export function deriveUpNextSlice(
+  queue: PlaybackQueue,
+): QueueItem[] | undefined {
+  const start = queue.currentIndex + 2;
+  const slice = queue.items.slice(start, start + 4);
+  return slice.length > 0 ? slice : undefined;
 }
