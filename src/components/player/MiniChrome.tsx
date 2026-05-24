@@ -65,7 +65,18 @@ interface MiniChromeProps {
   /** Apply a partial update to the rect. PlayerContext persists the
    *  result and resyncs the Rust mpv host while minimized. */
   onUpdateMiniRect: (updates: Partial<MiniRect>) => void;
+  /** Playback position in seconds. Drives the scrub bar fill. */
+  currentTime: number;
+  /** Total duration in seconds. Scrub bar + skip controls hide when
+   *  duration is 0 (e.g. before metadata loads). */
+  duration: number;
+  /** Seek to an absolute time (seconds). Should be the WT-aware variant
+   *  when in a session, matching `onTogglePlay`. (prexu-a6z.4) */
+  onSeek: (seconds: number) => void;
 }
+
+/** Skip-back / skip-forward delta in seconds. (prexu-a6z.4) */
+const SKIP_SECONDS = 10;
 
 /** Pointer-movement threshold (logical px) below which an anchor-drag
  *  mousedown→mouseup is treated as not-a-drag (no ghost, no corner
@@ -126,8 +137,26 @@ const styles = {
     right: 0,
     display: "flex",
     justifyContent: "center",
+    alignItems: "center",
+    gap: 8,
     transition: "opacity 0.2s ease",
     zIndex: 2,
+  },
+  scrubWrap: {
+    position: "absolute" as const,
+    bottom: 56,
+    left: 12,
+    right: 12,
+    transition: "opacity 0.2s ease",
+    zIndex: 2,
+  },
+  scrubInput: {
+    width: "100%",
+    height: 4,
+    cursor: "pointer",
+    accentColor: "white",
+    background: "transparent",
+    margin: 0,
   },
   iconButton: {
     background: "rgba(0, 0, 0, 0.55)",
@@ -266,7 +295,43 @@ export default function MiniChrome({
   onMouseMove,
   miniRect,
   onUpdateMiniRect,
+  currentTime,
+  duration,
+  onSeek,
 }: MiniChromeProps) {
+  // Scrub + skip controls only meaningful once metadata has loaded.
+  const hasDuration = duration > 0;
+
+  const seekTo = useCallback(
+    (target: number) => {
+      if (!hasDuration) return;
+      const clamped = Math.max(0, Math.min(duration, target));
+      logger.debug("player:minimize", "mini-seek", { from: currentTime, to: clamped });
+      onSeek(clamped);
+    },
+    [currentTime, duration, hasDuration, onSeek],
+  );
+
+  const skip = useCallback(
+    (delta: number) => {
+      logger.debug("player:minimize", "mini-skip", {
+        delta,
+        from: currentTime,
+      });
+      seekTo(currentTime + delta);
+    },
+    [currentTime, seekTo],
+  );
+
+  const handleScrubChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      onActivity();
+      const v = Number(e.target.value);
+      if (!Number.isFinite(v)) return;
+      seekTo(v);
+    },
+    [onActivity, seekTo],
+  );
   // Track in-progress drag state without re-renders. State is only updated
   // when the ghost actually appears (after threshold crossed) or on commit.
   type DragKind = "anchor" | "resize" | null;
@@ -559,7 +624,35 @@ export default function MiniChrome({
           </button>
         </div>
 
-        {/* Bottom-center: play/pause */}
+        {/* Scrub bar — slim range above the bottom cluster. Hidden when
+            duration hasn't been reported yet (e.g. pre-metadata). The
+            range input gets keyboard a11y for free. (prexu-a6z.4) */}
+        {hasDuration && (
+          <div
+            style={{
+              ...styles.scrubWrap,
+              opacity: visible ? 1 : 0,
+              pointerEvents: visible ? "auto" : "none",
+            }}
+            data-testid="mini-chrome-scrub-wrap"
+            data-mini-no-drag="true"
+          >
+            <input
+              type="range"
+              min={0}
+              max={duration}
+              step={0.1}
+              value={Math.min(currentTime, duration)}
+              onChange={handleScrubChange}
+              onMouseDown={(e) => e.stopPropagation()}
+              style={styles.scrubInput}
+              aria-label="Seek"
+              data-testid="mini-chrome-scrub"
+            />
+          </div>
+        )}
+
+        {/* Bottom-center: ±10s + play/pause cluster. */}
         <div
           style={{
             ...styles.bottomCluster,
@@ -569,6 +662,22 @@ export default function MiniChrome({
           data-testid="mini-chrome-bottom"
           data-mini-no-drag="true"
         >
+          {hasDuration && (
+            <button
+              type="button"
+              style={styles.iconButton}
+              onClick={handleButtonClick(() => skip(-SKIP_SECONDS))}
+              aria-label={`Skip back ${SKIP_SECONDS} seconds`}
+              title={`Back ${SKIP_SECONDS}s`}
+              data-testid="mini-chrome-skip-back"
+            >
+              {/* Chevron-double-left */}
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="11 17 6 12 11 7" />
+                <polyline points="18 17 13 12 18 7" />
+              </svg>
+            </button>
+          )}
           <button
             type="button"
             style={styles.iconButton}
@@ -587,6 +696,22 @@ export default function MiniChrome({
               </svg>
             )}
           </button>
+          {hasDuration && (
+            <button
+              type="button"
+              style={styles.iconButton}
+              onClick={handleButtonClick(() => skip(SKIP_SECONDS))}
+              aria-label={`Skip forward ${SKIP_SECONDS} seconds`}
+              title={`Forward ${SKIP_SECONDS}s`}
+              data-testid="mini-chrome-skip-forward"
+            >
+              {/* Chevron-double-right */}
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="13 17 18 12 13 7" />
+                <polyline points="6 17 11 12 6 7" />
+              </svg>
+            </button>
+          )}
         </div>
 
         {/* Resize handle — opposite the active anchor (7il.5). Drag to

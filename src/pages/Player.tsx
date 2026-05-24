@@ -723,6 +723,9 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
           onMouseMove={handleMouseMove}
           miniRect={miniRect}
           onUpdateMiniRect={playerSession.updateMiniRect}
+          currentTime={player.currentTime}
+          duration={player.duration}
+          onSeek={seek}
         />
       </div>
     );
