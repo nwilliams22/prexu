@@ -1,4 +1,4 @@
-import { validateToken, getPlexUser, getHomeUsers, switchHomeUser, timedFetch, isTimeoutError } from "./plex-api";
+import { validateToken, getPlexUser, getHomeUsers, switchHomeUser, getPlexFriends, timedFetch, isTimeoutError } from "./plex-api";
 
 // Mock storage module
 vi.mock("./storage", () => ({
@@ -16,6 +16,16 @@ function jsonResponse(data: unknown, status = 200): Response {
     statusText: status === 200 ? "OK" : "Error",
     json: () => Promise.resolve(data),
     text: () => Promise.resolve(JSON.stringify(data)),
+  } as Response;
+}
+
+function xmlResponse(xml: string, status = 200): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: status === 200 ? "OK" : "Error",
+    json: () => Promise.reject(new Error("not json")),
+    text: () => Promise.resolve(xml),
   } as Response;
 }
 
@@ -316,6 +326,118 @@ describe("plex-api", () => {
         timedFetch(url, { retries: 1 }),
       ).rejects.toThrow("Network error");
       expect(calls).toBe(1);
+    });
+  });
+
+  // ── getPlexFriends (prexu-0wq: merges v2 friends + v1 shared users) ──
+
+  describe("getPlexFriends", () => {
+    /** Route mockFetch by URL so the order of v2/v1 resolution doesn't matter. */
+    function setupFetch(routes: {
+      v2?: () => Promise<Response>;
+      v1?: () => Promise<Response>;
+    }) {
+      mockFetch.mockImplementation((url: string) => {
+        if (typeof url === "string" && url.includes("/api/v2/friends")) {
+          return routes.v2?.() ?? Promise.reject(new Error("v2 not stubbed"));
+        }
+        if (typeof url === "string" && url.includes("/api/users")) {
+          return routes.v1?.() ?? Promise.reject(new Error("v1 not stubbed"));
+        }
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
+    }
+
+    it("merges v2 friends + v1 shared users, de-duped by id (v2 wins on collision)", async () => {
+      setupFetch({
+        v2: () =>
+          Promise.resolve(
+            jsonResponse([
+              { id: 1, username: "alice-v2", email: "a@v2", friendlyName: "Alice V2", thumb: "t1" },
+              { id: 2, username: "bob", email: "b@e", friendlyName: "Bob", thumb: "t2" },
+            ]),
+          ),
+        v1: () =>
+          Promise.resolve(
+            xmlResponse(`<?xml version="1.0"?><MediaContainer>
+              <User id="1" username="alice-v1" email="a@v1" friendlyName="Alice V1" thumb="t1v1" status="accepted" home="0" />
+              <User id="3" username="carol" email="c@e" friendlyName="Carol" thumb="t3" status="accepted" home="0" />
+            </MediaContainer>`),
+          ),
+      });
+
+      const friends = await getPlexFriends("token");
+
+      // 3 unique users: alice (1), bob (2), carol (3)
+      expect(friends).toHaveLength(3);
+      const byId = Object.fromEntries(friends.map((f) => [f.id, f]));
+      // v2 wins for alice (collision on id=1)
+      expect(byId[1].username).toBe("alice-v2");
+      expect(byId[1].friendlyName).toBe("Alice V2");
+      // bob comes from v2 only
+      expect(byId[2].username).toBe("bob");
+      // carol comes from v1 only
+      expect(byId[3].username).toBe("carol");
+    });
+
+    it("returns v1 results when v2 fails", async () => {
+      setupFetch({
+        v2: () => Promise.reject(new Error("v2 down")),
+        v1: () =>
+          Promise.resolve(
+            xmlResponse(`<?xml version="1.0"?><MediaContainer>
+              <User id="3" username="carol" email="c@e" friendlyName="Carol" thumb="t3" status="accepted" home="0" />
+            </MediaContainer>`),
+          ),
+      });
+
+      const friends = await getPlexFriends("token");
+      expect(friends).toHaveLength(1);
+      expect(friends[0].username).toBe("carol");
+    });
+
+    it("returns v2 results when v1 fails", async () => {
+      setupFetch({
+        v2: () =>
+          Promise.resolve(
+            jsonResponse([
+              { id: 1, username: "alice", email: "a@e", friendlyName: "Alice", thumb: "t1" },
+            ]),
+          ),
+        v1: () => Promise.reject(new Error("v1 down")),
+      });
+
+      const friends = await getPlexFriends("token");
+      expect(friends).toHaveLength(1);
+      expect(friends[0].username).toBe("alice");
+    });
+
+    it("throws a combined error when both endpoints fail", async () => {
+      setupFetch({
+        v2: () => Promise.reject(new Error("v2 down")),
+        v1: () => Promise.reject(new Error("v1 down")),
+      });
+
+      await expect(getPlexFriends("token")).rejects.toThrow(/v2 down/);
+      await expect(getPlexFriends("token")).rejects.toThrow(/v1 down/);
+    });
+
+    it("REGRESSION (prexu-0wq): v2 returning 200 with empty array does NOT prevent v1 from contributing", async () => {
+      // Pre-fix behavior: v2 200 + empty array → return [] without ever trying v1.
+      // Post-fix: v1 results are merged in too.
+      setupFetch({
+        v2: () => Promise.resolve(jsonResponse([])),
+        v1: () =>
+          Promise.resolve(
+            xmlResponse(`<?xml version="1.0"?><MediaContainer>
+              <User id="3" username="carol" email="c@e" friendlyName="Carol" thumb="t3" status="accepted" home="0" />
+            </MediaContainer>`),
+          ),
+      });
+
+      const friends = await getPlexFriends("token");
+      expect(friends).toHaveLength(1);
+      expect(friends[0].username).toBe("carol");
     });
   });
 });
