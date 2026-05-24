@@ -30,6 +30,9 @@ const baseProps = {
   onMouseMove: vi.fn(),
   miniRect: defaultRect,
   onUpdateMiniRect: vi.fn(),
+  currentTime: 30,
+  duration: 600,
+  onSeek: vi.fn(),
 };
 
 beforeEach(() => {
@@ -472,5 +475,69 @@ describe("MiniChrome anchor drag", () => {
     fireEvent.mouseMove(window, { clientX: 200, clientY: 200 });
     fireEvent.mouseUp(window, { clientX: 200, clientY: 200 });
     expect(onUpdateMiniRect).not.toHaveBeenCalled();
+  });
+});
+
+// ── Scrub bar + ±10s skip (prexu-a6z.4) ─────────────────────────────────────
+describe("MiniChrome scrub + skip", () => {
+  it("renders skip-back, skip-forward, and scrub bar when duration > 0", () => {
+    render(<MiniChrome {...baseProps} />);
+    expect(screen.getByTestId("mini-chrome-skip-back")).toBeTruthy();
+    expect(screen.getByTestId("mini-chrome-skip-forward")).toBeTruthy();
+    expect(screen.getByTestId("mini-chrome-scrub")).toBeTruthy();
+  });
+
+  it("hides skip + scrub when duration is 0 (pre-metadata)", () => {
+    render(<MiniChrome {...baseProps} duration={0} />);
+    expect(screen.queryByTestId("mini-chrome-skip-back")).toBeNull();
+    expect(screen.queryByTestId("mini-chrome-skip-forward")).toBeNull();
+    expect(screen.queryByTestId("mini-chrome-scrub")).toBeNull();
+  });
+
+  it("clicking skip-forward calls onSeek with currentTime + 10", () => {
+    const onSeek = vi.fn();
+    render(<MiniChrome {...baseProps} onSeek={onSeek} currentTime={30} duration={600} />);
+    fireEvent.click(screen.getByTestId("mini-chrome-skip-forward"));
+    expect(onSeek).toHaveBeenCalledWith(40);
+  });
+
+  it("clicking skip-back calls onSeek with currentTime - 10, clamped to 0", () => {
+    const onSeek = vi.fn();
+    render(<MiniChrome {...baseProps} onSeek={onSeek} currentTime={5} duration={600} />);
+    fireEvent.click(screen.getByTestId("mini-chrome-skip-back"));
+    expect(onSeek).toHaveBeenCalledWith(0);
+  });
+
+  it("skip-forward clamps to duration when overshooting", () => {
+    const onSeek = vi.fn();
+    render(<MiniChrome {...baseProps} onSeek={onSeek} currentTime={595} duration={600} />);
+    fireEvent.click(screen.getByTestId("mini-chrome-skip-forward"));
+    expect(onSeek).toHaveBeenCalledWith(600);
+  });
+
+  it("scrubbing the range input calls onSeek with the new value", () => {
+    const onSeek = vi.fn();
+    render(<MiniChrome {...baseProps} onSeek={onSeek} duration={600} />);
+    const scrub = screen.getByTestId("mini-chrome-scrub") as HTMLInputElement;
+    fireEvent.change(scrub, { target: { value: "123" } });
+    expect(onSeek).toHaveBeenCalledWith(123);
+  });
+
+  it("skip + scrub controls all carry data-mini-no-drag so they don't start an anchor drag", () => {
+    render(<MiniChrome {...baseProps} />);
+    expect(
+      screen.getByTestId("mini-chrome-scrub-wrap").getAttribute("data-mini-no-drag"),
+    ).toBe("true");
+    // skip buttons are inside mini-chrome-bottom which has data-mini-no-drag,
+    // so their closest('[data-mini-no-drag="true"]') resolves to the cluster.
+    const back = screen.getByTestId("mini-chrome-skip-back");
+    expect(back.closest('[data-mini-no-drag="true"]')).toBeTruthy();
+  });
+
+  it("clicking skip-forward also calls onActivity", () => {
+    const onActivity = vi.fn();
+    render(<MiniChrome {...baseProps} onActivity={onActivity} />);
+    fireEvent.click(screen.getByTestId("mini-chrome-skip-forward"));
+    expect(onActivity).toHaveBeenCalled();
   });
 });
