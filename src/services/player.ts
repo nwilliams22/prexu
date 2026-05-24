@@ -13,13 +13,9 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { logger } from "./logger";
+import { type MiniCorner } from "../utils/mini-rect";
 
-/** Corner of the work area to snap the pop-out window to. */
-export type PopOutCorner =
-  | "top-left"
-  | "top-right"
-  | "bottom-left"
-  | "bottom-right";
+export type { MiniCorner };
 
 /**
  * Enter pop-out mode. The Tauri main window is resized + snapped to a
@@ -34,7 +30,7 @@ export type PopOutCorner =
  * with no args reopens at the same dimensions.
  */
 export async function playerEnterPopOut(
-  corner?: PopOutCorner,
+  corner?: MiniCorner,
   width?: number,
   height?: number,
 ): Promise<void> {
@@ -77,7 +73,7 @@ export async function playerEnterMinimize(
   width: number,
   height: number,
   padding?: number,
-  corner?: PopOutCorner,
+  corner?: MiniCorner,
 ): Promise<void> {
   logger.info("player", "player_enter_minimize", { width, height, padding, corner });
   await invoke("player_enter_minimize", { width, height, padding, corner });

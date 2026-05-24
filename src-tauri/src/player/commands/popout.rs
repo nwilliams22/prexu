@@ -11,7 +11,7 @@ use tauri::{AppHandle, Manager, State};
 #[cfg(target_os = "windows")]
 use tauri_plugin_store::StoreExt;
 
-use crate::player::PlayerState;
+use crate::player::{MinimizeCorner, PlayerState};
 
 /// Path used for the pop-out player store. Kept separate from
 /// `secure-store.json` (which holds auth tokens managed via the JS LazyStore)
@@ -74,15 +74,24 @@ fn current_work_area(
 /// Load the persisted pop-out corner + size from the store, falling back to
 /// the project defaults when no entry exists yet. Returns `(corner, width,
 /// height)` ready to feed into `corner_origin`.
+///
+/// The on-disk format is kebab-case strings (e.g. `"bottom-right"`) which
+/// serde deserializes directly into `MinimizeCorner` via `#[serde(rename_all =
+/// "kebab-case")]`. Unknown strings (corrupted store, future migration) fall
+/// back to `BottomRight` with a warning so the app keeps working.
 #[cfg(target_os = "windows")]
-fn load_persisted_popout(app: &AppHandle) -> (String, u32, u32) {
-    let mut corner = POPOUT_DEFAULT_CORNER.to_string();
+fn load_persisted_popout(app: &AppHandle) -> (MinimizeCorner, u32, u32) {
+    let mut corner = MinimizeCorner::BottomRight;
     let mut width = POPOUT_DEFAULT_WIDTH;
     let mut height = POPOUT_DEFAULT_HEIGHT;
     if let Ok(store) = app.store(POPOUT_STORE_PATH) {
         if let Some(v) = store.get(POPOUT_KEY_CORNER) {
-            if let Some(s) = v.as_str() {
-                corner = s.to_string();
+            match serde_json::from_value::<MinimizeCorner>(v.clone()) {
+                Ok(c) => corner = c,
+                Err(e) => log::warn!(
+                    "[player:popout] persisted corner unrecognised ({:?}), using default: {}",
+                    v, e
+                ),
             }
         }
         if let Some(v) = store.get(POPOUT_KEY_SIZE) {
@@ -96,7 +105,7 @@ fn load_persisted_popout(app: &AppHandle) -> (String, u32, u32) {
         }
     }
     log::debug!(
-        "[player:popout] resolved persisted geometry corner={} size={}x{}",
+        "[player:popout] resolved persisted geometry corner={:?} size={}x{}",
         corner, width, height
     );
     (corner, width, height)
@@ -174,22 +183,21 @@ fn write_window_rect(
 /// against the work-area dimensions so a too-large request still fits.
 #[cfg(target_os = "windows")]
 fn corner_origin(
-    corner: &str,
+    corner: MinimizeCorner,
     width: u32,
     height: u32,
     wx: i32,
     wy: i32,
     ww: i32,
     wh: i32,
-) -> Result<(i32, i32, u32, u32), String> {
+) -> (i32, i32, u32, u32) {
     let w = (width as i32).min(ww).max(1) as u32;
     let h = (height as i32).min(wh).max(1) as u32;
     let (x, y) = match corner {
-        "top-left" => (wx, wy),
-        "top-right" => (wx + ww - w as i32, wy),
-        "bottom-left" => (wx, wy + wh - h as i32),
-        "bottom-right" => (wx + ww - w as i32, wy + wh - h as i32),
-        other => return Err(format!("unknown corner: {}", other)),
+        MinimizeCorner::TopLeft => (wx, wy),
+        MinimizeCorner::TopRight => (wx + ww - w as i32, wy),
+        MinimizeCorner::BottomLeft => (wx, wy + wh - h as i32),
+        MinimizeCorner::BottomRight => (wx + ww - w as i32, wy + wh - h as i32),
     };
     // Defense-in-depth (prexu-nhs): on multi-monitor setups with negative
     // work-area origins (monitors arranged above/left of primary), or when
@@ -200,10 +208,10 @@ fn corner_origin(
     let x = x.max(wx).min(wx + ww - w as i32);
     let y = y.max(wy).min(wy + wh - h as i32);
     log::debug!(
-        "[player:popout] corner_origin corner={} requested={}x{} work=({},{},{}x{}) final=({},{},{}x{})",
+        "[player:popout] corner_origin corner={:?} requested={}x{} work=({},{},{}x{}) final=({},{},{}x{})",
         corner, width, height, wx, wy, ww, wh, x, y, w, h
     );
-    Ok((x, y, w, h))
+    (x, y, w, h)
 }
 
 /// Enter pop-out mode: resize+reposition the Tauri main window to a corner
@@ -219,7 +227,7 @@ fn corner_origin(
 #[cfg(target_os = "windows")]
 #[tauri::command]
 pub async fn player_enter_popout(
-    corner: Option<String>,
+    corner: Option<MinimizeCorner>,
     width: Option<u32>,
     height: Option<u32>,
     app: AppHandle,
@@ -230,7 +238,7 @@ pub async fn player_enter_popout(
     let width = width.unwrap_or(saved_w);
     let height = height.unwrap_or(saved_h);
     log::info!(
-        "[player:cmd] enter_popout corner={} size={}x{}",
+        "[player:cmd] enter_popout corner={:?} size={}x{}",
         corner,
         width,
         height
@@ -255,7 +263,7 @@ pub async fn player_enter_popout(
     }
 
     let (wx, wy, ww, wh) = current_work_area(&main)?;
-    let (x, y, w, h) = corner_origin(&corner, width, height, wx, wy, ww, wh)?;
+    let (x, y, w, h) = corner_origin(corner, width, height, wx, wy, ww, wh);
 
     // Stash the current OUTER rect via Win32 GetWindowRect (prexu-bm0).
     // Captured + restored through the same Win32 API so the round-trip is
@@ -317,7 +325,11 @@ pub async fn player_enter_popout(
     // not fatal — the user can re-enter pop-out and we'll save again.
     match app.store(POPOUT_STORE_PATH) {
         Ok(store) => {
-            store.set(POPOUT_KEY_CORNER, serde_json::Value::String(corner.clone()));
+            // Serialize the enum back to its kebab-case string to keep the
+            // on-disk format stable (old user data remains compatible).
+            let corner_str = serde_json::to_value(corner)
+                .unwrap_or_else(|_| serde_json::Value::String(POPOUT_DEFAULT_CORNER.to_string()));
+            store.set(POPOUT_KEY_CORNER, corner_str);
             store.set(
                 POPOUT_KEY_SIZE,
                 serde_json::json!({ "width": w, "height": h }),
@@ -326,7 +338,7 @@ pub async fn player_enter_popout(
                 log::warn!("[player:popout] store save failed: {:?}", e);
             } else {
                 log::debug!(
-                    "[player:popout] persisted corner={} size={}x{}",
+                    "[player:popout] persisted corner={:?} size={}x{}",
                     corner, w, h
                 );
             }
@@ -428,7 +440,7 @@ pub async fn player_exit_popout(
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
 pub async fn player_enter_popout(
-    _corner: Option<String>,
+    _corner: Option<crate::player::MinimizeCorner>,
     _width: Option<u32>,
     _height: Option<u32>,
 ) -> Result<(), String> {

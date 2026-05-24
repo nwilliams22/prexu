@@ -97,10 +97,11 @@ pub struct PlayerState {
 }
 
 /// Which of the four corners the mini player anchors to. Mirrors the
-/// `MiniCorner` string union in `src/utils/mini-rect.ts`; the IPC layer
-/// translates the on-the-wire string into this variant via
-/// `parse_minimize_corner` in `commands.rs`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `MiniCorner` string union in `src/utils/mini-rect.ts`. Serde deserializes
+/// the kebab-case IPC string directly into this enum at the command boundary,
+/// so unknown strings are a hard error rather than a silent fallback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum MinimizeCorner {
     TopLeft,
     TopRight,
@@ -891,5 +892,28 @@ mod tests {
         // Flush clears the flag → next claim wins again.
         state.flush_pending_geometry();
         assert!(state.claim_trailing_schedule());
+    }
+
+    #[test]
+    fn minimize_corner_deserializes_kebab_case() {
+        use MinimizeCorner::*;
+        assert_eq!(
+            serde_json::from_str::<MinimizeCorner>(r#""top-left""#).unwrap(),
+            TopLeft
+        );
+        assert_eq!(
+            serde_json::from_str::<MinimizeCorner>(r#""top-right""#).unwrap(),
+            TopRight
+        );
+        assert_eq!(
+            serde_json::from_str::<MinimizeCorner>(r#""bottom-left""#).unwrap(),
+            BottomLeft
+        );
+        assert_eq!(
+            serde_json::from_str::<MinimizeCorner>(r#""bottom-right""#).unwrap(),
+            BottomRight
+        );
+        // Unknown string is a hard error, not a silent fallback.
+        assert!(serde_json::from_str::<MinimizeCorner>(r#""diagonal""#).is_err());
     }
 }

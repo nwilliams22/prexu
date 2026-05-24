@@ -13,31 +13,6 @@ use crate::player::{MinimizeCorner, MinimizeState, PlayerState};
 
 #[cfg(target_os = "windows")]
 const MINIMIZE_DEFAULT_PADDING: u32 = 16;
-#[cfg(target_os = "windows")]
-const MINIMIZE_DEFAULT_CORNER: &str = "bottom-right";
-
-/// Parse a corner string into the validated enum variant used by
-/// `apply_minimize_inset`. Mirrors the four-string identifiers exposed to
-/// the React side (`MiniCorner` in `src/utils/mini-rect.ts`). An unknown
-/// or absent value falls back to bottom-right so the legacy 7il.2 contract
-/// (no `corner` parameter) keeps working byte-for-byte.
-#[cfg(target_os = "windows")]
-fn parse_minimize_corner(corner: Option<&str>) -> MinimizeCorner {
-    match corner {
-        Some("top-left") => MinimizeCorner::TopLeft,
-        Some("top-right") => MinimizeCorner::TopRight,
-        Some("bottom-left") => MinimizeCorner::BottomLeft,
-        Some("bottom-right") | None => MinimizeCorner::BottomRight,
-        Some(other) => {
-            log::warn!(
-                "[player:cmd] enter_minimize unknown corner '{}', falling back to {}",
-                other,
-                MINIMIZE_DEFAULT_CORNER
-            );
-            MinimizeCorner::BottomRight
-        }
-    }
-}
 
 /// Enter minimize mode: store the (corner, width, height, padding) of the
 /// desired inset rect in PlayerState and force a host resync so the mpv
@@ -65,12 +40,12 @@ pub async fn player_enter_minimize(
     width: u32,
     height: u32,
     padding: Option<u32>,
-    corner: Option<String>,
+    corner: Option<MinimizeCorner>,
     app: AppHandle,
     state: State<'_, PlayerState>,
 ) -> Result<(), String> {
     let padding = padding.unwrap_or(MINIMIZE_DEFAULT_PADDING);
-    let corner_enum = parse_minimize_corner(corner.as_deref());
+    let corner_enum = corner.unwrap_or(MinimizeCorner::BottomRight);
     let main = app
         .get_webview_window("main")
         .ok_or_else(|| "main webview window not found".to_string())?;
@@ -150,7 +125,7 @@ pub async fn player_enter_minimize(
     _width: u32,
     _height: u32,
     _padding: Option<u32>,
-    _corner: Option<String>,
+    _corner: Option<crate::player::MinimizeCorner>,
 ) -> Result<(), String> {
     log::warn!("[player:cmd] enter_minimize called on non-Windows platform");
     Err("minimize mode is only supported on Windows in Phase 4".into())
