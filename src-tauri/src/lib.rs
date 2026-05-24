@@ -2,11 +2,12 @@ mod downloads;
 mod player;
 
 use tauri_plugin_log::{Target, TargetKind};
-use tauri::Manager;
+use tauri::{AppHandle, Manager};
 use std::io::{BufRead, BufReader, Read as StdRead, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 // ── Local HTTP proxy for HLS streaming ──
 //
@@ -31,6 +32,22 @@ impl ProxyState {
             downloads_dir: Arc::new(Mutex::new(None)),
         }
     }
+}
+
+/// Show the main window. Called from the frontend once React has painted
+/// its first frame (App.tsx useLayoutEffect). The window is created with
+/// `visible: false` in tauri.conf.json so it stays hidden until content
+/// has rendered, avoiding the "transparent window shows desktop pixels
+/// before chrome paints" flash (prexu-vs5). Idempotent — calling on an
+/// already-visible window is a no-op.
+#[tauri::command]
+fn app_ready(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
+        log::info!("[setup] app_ready — frontend signalled first paint; showing window");
+        window.show().map_err(|e| format!("show failed: {e}"))?;
+        let _ = window.set_focus();
+    }
+    Ok(())
 }
 
 /// Validate that a server URL looks like a legitimate Plex server.
@@ -380,6 +397,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
             start_proxy,
+            app_ready,
             downloads::get_downloads_dir,
             downloads::download_media,
             downloads::cancel_download,
@@ -406,7 +424,28 @@ pub fn run() {
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
-                window.show().unwrap_or_default();
+                // Window is `visible: false` in tauri.conf.json. We do NOT
+                // call window.show() here — the frontend invokes
+                // app_ready once React has painted its first frame
+                // (prexu-vs5). Without that handshake the user sees the
+                // OS window frame appear over a transparent client area
+                // for the duration of the WebView's HTML-parse + CSS
+                // load + first React commit.
+                //
+                // Safety net: if the frontend never signals (broken
+                // bundle, JS error before mount, etc.), show the window
+                // after 3 s so the user isn't staring at nothing. The
+                // common case lands in well under 500 ms.
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(3000));
+                    if let Some(w) = app_handle.get_webview_window("main") {
+                        if !w.is_visible().unwrap_or(true) {
+                            log::warn!("[setup] safety-net show: frontend never invoked app_ready within 3 s");
+                            let _ = w.show();
+                        }
+                    }
+                });
 
                 #[cfg(target_os = "windows")]
                 {

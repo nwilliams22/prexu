@@ -5,6 +5,15 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Prexu</title>
+    <!-- Inline opaque navy so the WebView's first paint is opaque even
+         before styles.css loads. Tauri main window is `transparent: true`
+         for the native-mpv path; without this, any frame where the
+         window is visible but no React content has painted shows the
+         desktop through. Belt-and-suspenders alongside the visible:false
+         + app_ready handshake (prexu-vs5). -->
+    <style>
+      html, body { background-color: #1a1a2e; margin: 0; }
+    </style>
   </head>
   <body>
     <div id="root"></div>

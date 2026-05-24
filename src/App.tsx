@@ -1,5 +1,6 @@
 import { lazy, Suspense, useState, useEffect } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { invoke } from "@tauri-apps/api/core";
 import AppLayout from "./components/AppLayout";
 import PlayerOverlay from "./components/PlayerOverlay";
 import PlayBridge from "./components/PlayBridge";
@@ -234,6 +235,18 @@ function AppRoutes() {
 
 function App() {
   const auth = useAuthState();
+
+  // Signal the Tauri shell that React has painted its first frame so it
+  // can show the main window. The window is created with `visible: false`
+  // in tauri.conf.json; without this handshake the OS frame would appear
+  // over a transparent client area before the splash/AppLayout paint.
+  // A Rust-side 3 s safety net shows the window unconditionally if this
+  // invoke never lands (broken bundle, JS error before mount). (prexu-vs5)
+  useEffect(() => {
+    invoke("app_ready").catch(() => {
+      // Best-effort: failure here just means the safety net handles it.
+    });
+  }, []);
 
   return (
     <AuthProvider value={auth}>
