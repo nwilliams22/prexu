@@ -32,7 +32,7 @@
  */
 
 import type React from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
   clampMiniSize,
   nearestCorner,
@@ -40,6 +40,7 @@ import {
   type MiniRect,
 } from "../../utils/mini-rect";
 import { logger } from "../../services/logger";
+import { useDragGesture } from "../../hooks/player/useDragGesture";
 
 interface MiniChromeProps {
   /** True when playback is unpaused; toggles the play vs pause icon. */
@@ -83,24 +84,6 @@ const SKIP_SECONDS = 10;
  *  commit). The root region is intentionally not clickable, so falling
  *  below the threshold is a true no-op (prexu-2rz). */
 const DRAG_THRESHOLD_PX = 4;
-
-/** Suppress the browser's default drag-selection on the page underneath
- *  while the user is dragging the mini player around. Without this the
- *  cursor crossing dashboard cards/text starts a marquee selection that
- *  highlights everything in its path. (prexu-ois) */
-function lockTextSelection(): void {
-  if (typeof document === "undefined") return;
-  document.body.style.userSelect = "none";
-  document.body.style.cursor = "grabbing";
-  // Clear any selection that may have started on the very first
-  // millisecond before userSelect:none kicked in.
-  window.getSelection?.()?.removeAllRanges?.();
-}
-function unlockTextSelection(): void {
-  if (typeof document === "undefined") return;
-  document.body.style.userSelect = "";
-  document.body.style.cursor = "";
-}
 
 /** Throttle window for mid-drag IPC during resize. The mpv host re-snaps
  *  to the corner on every Resized event; ~20 Hz balances perceived
@@ -332,20 +315,6 @@ export default function MiniChrome({
     },
     [onActivity, seekTo],
   );
-  // Track in-progress drag state without re-renders. State is only updated
-  // when the ghost actually appears (after threshold crossed) or on commit.
-  type DragKind = "anchor" | "resize" | null;
-  const dragRef = useRef<{
-    kind: DragKind;
-    startX: number;
-    startY: number;
-    startW: number;
-    startH: number;
-    startTime: number;
-    moved: boolean;
-    lastIpcTime: number;
-  } | null>(null);
-
   // Visible ghost overlay state — only set once we've crossed the drag
   // threshold so sub-threshold mousedowns produce no visual artifact.
   const [ghost, setGhost] = useState<{
@@ -355,197 +324,152 @@ export default function MiniChrome({
     height: number;
   } | null>(null);
 
-  // Cancel any in-flight drag if the component unmounts mid-gesture. Window
-  // listeners are added inside the mousedown handlers and torn down here.
-  const cleanupListenersRef = useRef<(() => void) | null>(null);
-  useEffect(() => {
-    return () => {
-      cleanupListenersRef.current?.();
-    };
-  }, []);
+  // ── Resize IPC throttle state (ref — no re-renders) ────────────────────
+  const lastResizeIpcRef = useRef<number>(0);
 
   // ── Anchor-drag (move the mini between corners) ─────────────────────────
+  // useDragGesture handles all listener bookkeeping, lockTextSelection, and
+  // unmount cleanup. MiniChrome supplies the three lines of differing math.
+  const getAnchorStart = useCallback(
+    () => ({ width: miniRect.width, height: miniRect.height }),
+    [miniRect.width, miniRect.height],
+  );
+
+  const onAnchorDragStart = useCallback(
+    ({ clientX, clientY, start }: { clientX: number; clientY: number; start: { width: number; height: number } }) => {
+      setGhost({
+        x: clientX - start.width / 2,
+        y: clientY - start.height / 2,
+        width: start.width,
+        height: start.height,
+      });
+    },
+    [],
+  );
+
+  const onAnchorMove = useCallback(
+    ({ clientX, clientY, start }: { clientX: number; clientY: number; start: { width: number; height: number } }) => {
+      setGhost({
+        x: clientX - start.width / 2,
+        y: clientY - start.height / 2,
+        width: start.width,
+        height: start.height,
+      });
+    },
+    [],
+  );
+
+  const onAnchorCommit = useCallback(
+    ({ clientX, clientY }: { clientX: number; clientY: number }) => {
+      setGhost(null);
+      const corner: MiniCorner = nearestCorner(
+        { x: clientX, y: clientY },
+        miniRect,
+        window.innerWidth,
+        window.innerHeight,
+      );
+      logger.info("player:minimize", "anchor-drag commit", {
+        from: miniRect.corner,
+        to: corner,
+        cursor: { x: clientX, y: clientY },
+      });
+      onUpdateMiniRect({ corner });
+    },
+    [miniRect, onUpdateMiniRect],
+  );
+
+  const onAnchorCancel = useCallback(() => {
+    setGhost(null);
+    // Sub-threshold mousedown→mouseup is a true no-op (prexu-2rz).
+  }, []);
+
+  const { onMouseDown: anchorOnMouseDown } = useDragGesture({
+    getStart: getAnchorStart,
+    threshold: DRAG_THRESHOLD_PX,
+    onDragStart: onAnchorDragStart,
+    onMove: onAnchorMove,
+    onCommit: onAnchorCommit,
+    onCancel: onAnchorCancel,
+  });
+
+  // Wrap to guard data-mini-no-drag targets and call onActivity.
   const handleRegionMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      // Only respond to primary button. Right-click / middle-click should
-      // pass through to native context menus etc.
-      if (e.button !== 0) return;
-      // If the target is a button or the resize handle, those have their
-      // own handlers; don't start an anchor drag here.
       const target = e.target as HTMLElement | null;
       if (target?.closest('[data-mini-no-drag="true"]')) return;
-
-      // Suppress the browser's default text/marquee selection on the
-      // dashboard underneath — without this, dragging the mini across
-      // the Home view highlights cards and text as the cursor crosses
-      // them (prexu-ois).
-      e.preventDefault();
-      lockTextSelection();
-
       onActivity();
-      dragRef.current = {
-        kind: "anchor",
-        startX: e.clientX,
-        startY: e.clientY,
-        startW: miniRect.width,
-        startH: miniRect.height,
-        startTime: Date.now(),
-        moved: false,
-        lastIpcTime: 0,
-      };
-
-      // Initial ghost geometry: centred on cursor. We update it on every
-      // mousemove after threshold-crossing.
-      const onMove = (ev: MouseEvent) => {
-        const drag = dragRef.current;
-        if (!drag || drag.kind !== "anchor") return;
-        const dx = ev.clientX - drag.startX;
-        const dy = ev.clientY - drag.startY;
-        if (!drag.moved && Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
-        drag.moved = true;
-        setGhost({
-          x: ev.clientX - drag.startW / 2,
-          y: ev.clientY - drag.startH / 2,
-          width: drag.startW,
-          height: drag.startH,
-        });
-      };
-
-      const onUp = (ev: MouseEvent) => {
-        const drag = dragRef.current;
-        dragRef.current = null;
-        cleanupListenersRef.current?.();
-        cleanupListenersRef.current = null;
-        setGhost(null);
-        unlockTextSelection();
-        if (!drag) return;
-        if (!drag.moved) {
-          // Sub-threshold mousedown→mouseup. Nothing to commit; we
-          // intentionally do NOT treat this as a restore click (prexu-2rz —
-          // the restore button is the only chrome path back to full).
-          return;
-        }
-        // Compute nearest corner. Use the cursor position as the "centre"
-        // proxy because the ghost is centred on cursor for the duration
-        // of the drag.
-        const viewportWidth = window.innerWidth;
-        const viewportHeight = window.innerHeight;
-        const corner: MiniCorner = nearestCorner(
-          { x: ev.clientX, y: ev.clientY },
-          miniRect,
-          viewportWidth,
-          viewportHeight,
-        );
-        logger.info("player:minimize", "anchor-drag commit", {
-          from: miniRect.corner,
-          to: corner,
-          cursor: { x: ev.clientX, y: ev.clientY },
-        });
-        onUpdateMiniRect({ corner });
-      };
-
-      window.addEventListener("mousemove", onMove);
-      window.addEventListener("mouseup", onUp, { once: true });
-      cleanupListenersRef.current = () => {
-        window.removeEventListener("mousemove", onMove);
-        window.removeEventListener("mouseup", onUp);
-        unlockTextSelection();
-      };
+      anchorOnMouseDown(e);
     },
-    [miniRect, onActivity, onUpdateMiniRect],
+    [anchorOnMouseDown, onActivity],
   );
 
   // ── Resize-handle drag (grow/shrink the mini) ───────────────────────────
+  const getResizeStart = useCallback(
+    () => ({
+      width: miniRect.width,
+      height: miniRect.height,
+      corner: miniRect.corner,
+    }),
+    [miniRect.width, miniRect.height, miniRect.corner],
+  );
+
+  const onResizeMove = useCallback(
+    ({ dx, dy, start }: { dx: number; dy: number; start: { width: number; height: number; corner: MiniCorner } }) => {
+      const { width, height } = nextSizeFromResize(
+        start.width,
+        start.height,
+        dx,
+        dy,
+        start.corner,
+        window.innerWidth,
+        window.innerHeight,
+      );
+      // Throttle the React state update (and therefore the IPC) to ~20 Hz.
+      // With actual throttling, the mask + mpv host stay in lockstep.
+      // The final position is always committed by onResizeCommit. (prexu-vm2)
+      const now = Date.now();
+      if (now - lastResizeIpcRef.current >= RESIZE_IPC_THROTTLE_MS) {
+        lastResizeIpcRef.current = now;
+        onUpdateMiniRect({ width, height });
+      }
+    },
+    [onUpdateMiniRect],
+  );
+
+  const onResizeCommit = useCallback(
+    ({ dx, dy, start }: { dx: number; dy: number; start: { width: number; height: number; corner: MiniCorner } }) => {
+      const final = nextSizeFromResize(
+        start.width,
+        start.height,
+        dx,
+        dy,
+        start.corner,
+        window.innerWidth,
+        window.innerHeight,
+      );
+      logger.info("player:minimize", "resize commit", {
+        from: { w: start.width, h: start.height },
+        to: final,
+      });
+      onUpdateMiniRect(final);
+    },
+    [onUpdateMiniRect],
+  );
+
+  const { onMouseDown: resizeOnMouseDown } = useDragGesture({
+    getStart: getResizeStart,
+    threshold: 0, // resize is always a drag — no click fall-through
+    onMove: onResizeMove,
+    onCommit: onResizeCommit,
+  });
+
   const handleResizeMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      if (e.button !== 0) return;
       e.stopPropagation();
-      e.preventDefault();
-      lockTextSelection();
       onActivity();
-
-      dragRef.current = {
-        kind: "resize",
-        startX: e.clientX,
-        startY: e.clientY,
-        startW: miniRect.width,
-        startH: miniRect.height,
-        startTime: Date.now(),
-        moved: true, // resize is always a drag — no click fall-through
-        lastIpcTime: 0,
-      };
-
-      const anchorCorner = miniRect.corner;
-
-      const onMove = (ev: MouseEvent) => {
-        const drag = dragRef.current;
-        if (!drag || drag.kind !== "resize") return;
-        const dx = ev.clientX - drag.startX;
-        const dy = ev.clientY - drag.startY;
-        const { width, height } = nextSizeFromResize(
-          drag.startW,
-          drag.startH,
-          dx,
-          dy,
-          anchorCorner,
-          window.innerWidth,
-          window.innerHeight,
-        );
-        // Throttle the React state update (and therefore the IPC) to
-        // ~20 Hz. Previously both `if` and `else` called onUpdateMiniRect,
-        // making the throttle a no-op — every mousemove fired a
-        // playerEnterMinimize IPC + a setMiniRect re-render. The
-        // setMiniRect changed AppLayout's mask-size/mask-position, which
-        // forced WebView2 to re-rasterize the whole Dashboard layer; the
-        // visible mask cut-out then trailed the cursor by hundreds of ms
-        // even though the mpv host was following more quickly via IPC.
-        //
-        // With actual throttling, the mask + mpv host stay in lockstep at
-        // 20 Hz. The cursor leads both by up to 50 ms but they no longer
-        // drift apart visually. The final position is always committed by
-        // the onUp handler below, so the last frame of the drag is never
-        // lost. (prexu-vm2)
-        const now = Date.now();
-        if (now - drag.lastIpcTime >= RESIZE_IPC_THROTTLE_MS) {
-          drag.lastIpcTime = now;
-          onUpdateMiniRect({ width, height });
-        }
-      };
-
-      const onUp = (ev: MouseEvent) => {
-        const drag = dragRef.current;
-        dragRef.current = null;
-        cleanupListenersRef.current?.();
-        cleanupListenersRef.current = null;
-        unlockTextSelection();
-        if (!drag) return;
-        const dx = ev.clientX - drag.startX;
-        const dy = ev.clientY - drag.startY;
-        const final = nextSizeFromResize(
-          drag.startW,
-          drag.startH,
-          dx,
-          dy,
-          anchorCorner,
-          window.innerWidth,
-          window.innerHeight,
-        );
-        logger.info("player:minimize", "resize commit", {
-          from: { w: drag.startW, h: drag.startH },
-          to: final,
-        });
-        onUpdateMiniRect(final);
-      };
-
-      window.addEventListener("mousemove", onMove);
-      window.addEventListener("mouseup", onUp, { once: true });
-      cleanupListenersRef.current = () => {
-        window.removeEventListener("mousemove", onMove);
-        window.removeEventListener("mouseup", onUp);
-        unlockTextSelection();
-      };
+      resizeOnMouseDown(e);
     },
-    [miniRect, onActivity, onUpdateMiniRect],
+    [resizeOnMouseDown, onActivity],
   );
 
   const handleButtonClick = useCallback(
