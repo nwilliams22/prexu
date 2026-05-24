@@ -496,6 +496,18 @@ fn corner_origin(
         "bottom-right" => (wx + ww - w as i32, wy + wh - h as i32),
         other => return Err(format!("unknown corner: {}", other)),
     };
+    // Defense-in-depth (prexu-nhs): on multi-monitor setups with negative
+    // work-area origins (monitors arranged above/left of primary), or when
+    // a saved size from a larger display gets carried to a smaller one,
+    // the final rect could land partly off-screen. Width/height are
+    // clamped above, so this just keeps the (x, y) corner placement fully
+    // inside the work area. No-op in the common case.
+    let x = x.max(wx).min(wx + ww - w as i32);
+    let y = y.max(wy).min(wy + wh - h as i32);
+    log::debug!(
+        "[player:popout] corner_origin corner={} requested={}x{} work=({},{},{}x{}) final=({},{},{}x{})",
+        corner, width, height, wx, wy, ww, wh, x, y, w, h
+    );
     Ok((x, y, w, h))
 }
 
