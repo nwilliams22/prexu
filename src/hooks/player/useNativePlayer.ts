@@ -15,20 +15,15 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useAuth } from "../useAuth";
 import { usePreferences } from "../usePreferences";
 import { useTimelineReporting } from "./useTimelineReporting";
-import { getItemMetadata } from "../../services/plex-library";
-import { getLocalFilePath } from "../../services/downloads";
 import { addPendingWatchSync } from "../../services/storage";
 import {
-  buildDirectPlayUrl,
-  buildTranscodeUrl,
-  categorizeStreams,
+  prepareSource,
+  deriveDisplayTitles,
   reportTimeline,
   getSavedVolume,
   saveVolume,
 } from "../../services/plex-playback";
 import type {
-  PlexMediaItem,
-  PlexMovie,
   PlexEpisode,
   PlexStream,
   PlexChapter,
@@ -180,124 +175,45 @@ export function useNativePlayer(
     setPlaybackError(null);
 
     try {
-      const item = await getItemMetadata<PlexMediaItem>(
-        server.uri,
-        server.accessToken,
+      const prepared = await prepareSource({
+        server,
         ratingKey,
-      );
+        preferences: prefsRef.current.playback,
+        offsetOverride: offsetOverrideRef.current,
+        directPlayFailed: directPlayFailedRef.current,
+        skipCodecCheck: true,
+      });
 
-      if (item.type === "episode") {
-        const ep = item as PlexEpisode;
-        setTitle(ep.grandparentTitle);
-        setSubtitle(
-          `S${String(ep.parentIndex).padStart(2, "0")}E${String(ep.index).padStart(2, "0")} — ${ep.title}`,
-        );
-      } else if (item.type === "movie") {
-        const movie = item as PlexMovie;
-        setTitle(movie.title);
-        setSubtitle(movie.year ? String(movie.year) : "");
-      } else {
-        setTitle(item.title);
-        setSubtitle("");
-      }
+      const { title: t, subtitle: s } = deriveDisplayTitles(prepared.item);
+      setTitle(t);
+      setSubtitle(s);
 
-      const playableItem = item as PlexMovie | PlexEpisode;
-      const media = playableItem.Media?.[0];
-      if (!media || !media.Part || media.Part.length === 0) {
-        throw new Error("No playable media found");
-      }
-      const part = media.Part[0];
-      setChapters(part.Chapter ?? []);
-      setMarkers(playableItem.Marker ?? []);
-      setItemType(item.type);
+      setChapters(prepared.part.Chapter ?? []);
+      setMarkers(prepared.playable.Marker ?? []);
+      setItemType(prepared.item.type);
       setParentRatingKey(
-        item.type === "episode"
-          ? (playableItem as PlexEpisode).parentRatingKey ?? ""
+        prepared.item.type === "episode"
+          ? (prepared.playable as PlexEpisode).parentRatingKey ?? ""
           : "",
       );
 
-      const categorized = categorizeStreams(part);
-      setAudioTracks(categorized.audio);
-      setSubtitleTracks(categorized.subtitles);
+      setAudioTracks(prepared.categorized.audio);
+      setSubtitleTracks(prepared.categorized.subtitles);
+      setSelectedAudioId(prepared.defaultAudio?.id ?? prepared.categorized.audio[0]?.id ?? null);
+      setSelectedSubtitleId(prepared.defaultSub?.id ?? null);
 
-      const pb = prefsRef.current.playback;
-      let defaultAudio = pb.preferredAudioLanguage
-        ? categorized.audio.find((s) => s.languageCode === pb.preferredAudioLanguage)
-        : undefined;
-      if (!defaultAudio) defaultAudio = categorized.audio.find((s) => s.selected);
-      setSelectedAudioId(defaultAudio?.id ?? categorized.audio[0]?.id ?? null);
+      isLocalPlaybackRef.current = prepared.isLocal;
 
-      let defaultSub: PlexStream | undefined;
-      if (pb.defaultSubtitles === "off") {
-        defaultSub = undefined;
-      } else if (pb.defaultSubtitles === "always" && pb.preferredSubtitleLanguage) {
-        defaultSub =
-          categorized.subtitles.find(
-            (s) => s.languageCode === pb.preferredSubtitleLanguage,
-          ) ?? categorized.subtitles[0];
-      } else {
-        defaultSub = categorized.subtitles.find((s) => s.selected);
-      }
-      setSelectedSubtitleId(defaultSub?.id ?? null);
-
-      const viewOffset =
-        offsetOverrideRef.current != null
-          ? offsetOverrideRef.current
-          : (playableItem.viewOffset ?? 0);
-
-      // Pick a source URL. Local downloads first, then direct play / transcode.
-      //
-      // libmpv decodes every common codec/container natively, so the
-      // HTML5-centric canDirectPlay() whitelist would force transcodes
-      // for files mpv plays fine (e.g. HEVC in MKV). Plex transcode
-      // cold-start adds 15-20 s to first-play latency on a warm server,
-      // which is unacceptable. On native we Direct Play by default in
-      // auto/always modes; users who need bandwidth-capped streams can
-      // pick directPlayPreference="never". On Direct Play failure, we
-      // fall back to transcode via directPlayFailedRef (set by the mpv
-      // error path + retry).
-      let url: string;
-      isLocalPlaybackRef.current = false;
-      const localPath = await getLocalFilePath(ratingKey).catch(() => null);
-      if (localPath) {
-        url = localPath; // mpv accepts raw Windows paths
-        isLocalPlaybackRef.current = true;
-      } else {
-        const shouldDirectPlay =
-          !directPlayFailedRef.current &&
-          pb.directPlayPreference !== "never";
-
-        if (shouldDirectPlay) {
-          url = buildDirectPlayUrl(server.uri, server.accessToken, part.key);
-          logger.debug("player", "URL chosen: direct play", {
-            container: part.container,
-            videoCodec: media.videoCodec,
-            audioCodec: media.audioCodec,
-          });
-        } else {
-          url = await buildTranscodeUrl(server.uri, server.accessToken, ratingKey, {
-            audioStreamId: defaultAudio?.id,
-            subtitleStreamId: defaultSub?.id,
-            quality: pb.quality,
-            subtitleSize: pb.subtitleSize,
-            audioBoost: pb.audioBoost,
-            audioCodec: defaultAudio?.codec ?? media.audioCodec,
-          });
-          logger.debug("player", "URL chosen: transcode", {
-            reason: directPlayFailedRef.current ? "previous direct-play failure" : "user preference=never",
-            quality: pb.quality,
-          });
-        }
-      }
+      logger.debug("player", "URL chosen", { kind: prepared.sourceKind, url: prepared.url.substring(0, 80) });
 
       // load_url runs ensure_init server-side which actually creates the
       // mpv handle. Volume/mute commands assume an initialised handle, so
       // they MUST come after load_url, not before.
-      logger.info("player", "loading URL", { url: url.substring(0, 80), startOffsetMs: viewOffset });
+      logger.info("player", "loading URL", { url: prepared.url.substring(0, 80), startOffsetMs: prepared.viewOffset });
       await invoke("player_load_url", {
-        url,
+        url: prepared.url,
         headers: {} as Record<string, string>,
-        startOffsetMs: viewOffset,
+        startOffsetMs: prepared.viewOffset,
       });
       logger.info("player", "load_url returned OK, waiting for ready event");
 
@@ -316,6 +232,7 @@ export function useNativePlayer(
       // mpv's default would otherwise show the first sub track. External subs
       // (Plex sidecar .srt, recognised by the `key` field) need sub-add
       // instead — mpv only sees embedded tracks in a direct-played file.
+      const { defaultAudio, defaultSub, categorized } = prepared;
       if (defaultAudio) {
         const aidIdx = categorized.audio.findIndex((s) => s.id === defaultAudio.id);
         if (aidIdx >= 0) {

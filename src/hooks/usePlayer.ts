@@ -20,26 +20,19 @@ import { useHlsLoader } from "./player/useHlsLoader";
 import { useTimelineReporting } from "./player/useTimelineReporting";
 import { useStreamSelection } from "./player/useStreamSelection";
 import { useNativePlayer } from "./player/useNativePlayer";
-import { getItemMetadata } from "../services/plex-library";
-import { getLocalFilePath } from "../services/downloads";
 import { addPendingWatchSync } from "../services/storage";
 import {
-  canDirectPlay,
-  buildDirectPlayUrl,
-  buildTranscodeUrl,
+  prepareSource,
+  deriveDisplayTitles,
   buildHlsConfig,
-  categorizeStreams,
   reportTimeline,
   getSavedVolume,
   saveVolume,
 } from "../services/plex-playback";
 import type {
-  PlexMediaItem,
-  PlexMovie,
-  PlexEpisode,
-  PlexStream,
   PlexChapter,
   PlexMarker,
+  PlexStream,
 } from "../types/library";
 
 export const IS_NATIVE_PLAYER =
@@ -177,71 +170,34 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
     setPlaybackError(null);
 
     try {
-      const item = await getItemMetadata<PlexMediaItem>(
-        server.uri,
-        server.accessToken,
+      const prepared = await prepareSource({
+        server,
         ratingKey,
-      );
+        preferences: prefsRef.current.playback,
+        offsetOverride: offsetOverrideRef.current,
+        directPlayFailed: directPlayFailedRef.current,
+        skipCodecCheck: false,
+      });
 
-      // Set display title
-      if (item.type === "episode") {
-        const ep = item as PlexEpisode;
-        setTitle(ep.grandparentTitle);
-        setSubtitle(
-          `S${String(ep.parentIndex).padStart(2, "0")}E${String(ep.index).padStart(2, "0")} — ${ep.title}`,
-        );
-      } else if (item.type === "movie") {
-        const movie = item as PlexMovie;
-        setTitle(movie.title);
-        setSubtitle(movie.year ? String(movie.year) : "");
-      } else {
-        setTitle(item.title);
-        setSubtitle("");
-      }
+      const { title: t, subtitle: s } = deriveDisplayTitles(prepared.item);
+      setTitle(t);
+      setSubtitle(s);
 
-      // Get media info
-      const playableItem = item as PlexMovie | PlexEpisode;
-      const media = playableItem.Media?.[0];
-      if (!media || !media.Part || media.Part.length === 0) {
-        throw new Error("No playable media found");
-      }
-
-      const part = media.Part[0];
-      setChapters(part.Chapter ?? []);
-      setMarkers(playableItem.Marker ?? []);
-      setItemType(item.type);
+      setChapters(prepared.part.Chapter ?? []);
+      setMarkers(prepared.playable.Marker ?? []);
+      setItemType(prepared.item.type);
       setParentRatingKey(
-        item.type === "episode"
-          ? (playableItem as PlexEpisode).parentRatingKey ?? ""
+        prepared.item.type === "episode"
+          ? (prepared.playable as import("../types/library").PlexEpisode).parentRatingKey ?? ""
           : "",
       );
 
-      // Categorize and set default streams
-      const categorized = categorizeStreams(part);
-      streams.setAudioTracks(categorized.audio);
-      streams.setSubtitleTracks(categorized.subtitles);
+      streams.setAudioTracks(prepared.categorized.audio);
+      streams.setSubtitleTracks(prepared.categorized.subtitles);
+      streams.setSelectedAudioId(prepared.defaultAudio?.id ?? prepared.categorized.audio[0]?.id ?? null);
+      streams.setSelectedSubtitleId(prepared.defaultSub?.id ?? null);
 
-      const pb = prefsRef.current.playback;
-      let defaultAudio = pb.preferredAudioLanguage
-        ? categorized.audio.find((s) => s.languageCode === pb.preferredAudioLanguage)
-        : undefined;
-      if (!defaultAudio) defaultAudio = categorized.audio.find((s) => s.selected);
-      streams.setSelectedAudioId(defaultAudio?.id ?? categorized.audio[0]?.id ?? null);
-
-      let defaultSub: PlexStream | undefined;
-      if (pb.defaultSubtitles === "off") {
-        defaultSub = undefined;
-      } else if (pb.defaultSubtitles === "always" && pb.preferredSubtitleLanguage) {
-        defaultSub = categorized.subtitles.find(
-          (s) => s.languageCode === pb.preferredSubtitleLanguage,
-        ) ?? categorized.subtitles[0];
-      } else {
-        defaultSub = categorized.subtitles.find((s) => s.selected);
-      }
-      streams.setSelectedSubtitleId(defaultSub?.id ?? null);
-
-      // Get resume position
-      const viewOffset = offsetOverrideRef.current != null ? offsetOverrideRef.current : (playableItem.viewOffset ?? 0);
+      isLocalPlaybackRef.current = prepared.isLocal;
 
       const video = videoRef.current;
       if (!video) {
@@ -253,62 +209,28 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
       video.volume = Math.min(volumeRef.current, 1);
       video.muted = isMutedRef.current;
 
-      // Check for downloaded local file first
-      isLocalPlaybackRef.current = false;
-      try {
-        const localPath = await getLocalFilePath(ratingKey);
-        if (localPath) {
-          // Use Tauri's asset protocol to serve local files
-          const { convertFileSrc } = await import("@tauri-apps/api/core");
-          const localUrl = convertFileSrc(localPath);
-          hlsLoader.destroyHls();
-          video.src = localUrl;
-          if (viewOffset > 0) video.currentTime = viewOffset / 1000;
-          video.play().catch(() => {});
-          isLocalPlaybackRef.current = true;
-          setIsLoading(false);
-          timeline.startTimeline();
-          return;
-        }
-      } catch {
-        // Not in Tauri or no local file — continue with streaming
+      if (prepared.sourceKind === "local") {
+        const { convertFileSrc } = await import("@tauri-apps/api/core");
+        const localUrl = convertFileSrc(prepared.url);
+        hlsLoader.destroyHls();
+        video.src = localUrl;
+        if (prepared.viewOffset > 0) video.currentTime = prepared.viewOffset / 1000;
+        video.play().catch(() => {});
+        setIsLoading(false);
+        timeline.startTimeline();
+        return;
       }
 
-      // Direct play decision
-      const shouldDirectPlay =
-        !directPlayFailedRef.current &&
-        (pb.directPlayPreference === "always" ||
-        (pb.directPlayPreference === "auto" &&
-          (pb.quality === "original" || canDirectPlay(media))));
-      const forceTranscode = pb.directPlayPreference === "never" || directPlayFailedRef.current;
-
-      if (shouldDirectPlay && !forceTranscode && canDirectPlay(media)) {
-        const url = buildDirectPlayUrl(server.uri, server.accessToken, part.key);
+      if (prepared.sourceKind === "direct") {
         hlsLoader.destroyHls();
-        video.src = url;
-        if (viewOffset > 0) video.currentTime = viewOffset / 1000;
+        video.src = prepared.url;
+        if (prepared.viewOffset > 0) video.currentTime = prepared.viewOffset / 1000;
         video.play().catch(() => {});
       } else {
         const Hls = await hlsLoader.loadHls();
         if (!Hls.isSupported()) {
           throw new Error("HLS playback is not supported in this browser/webview");
         }
-
-        // Don't pass offset to Plex — start transcode from beginning.
-        // We'll seek to the resume point after the manifest loads.
-        const hlsUrl = await buildTranscodeUrl(
-          server.uri,
-          server.accessToken,
-          ratingKey,
-          {
-            audioStreamId: defaultAudio?.id,
-            subtitleStreamId: defaultSub?.id,
-            quality: pb.quality,
-            subtitleSize: pb.subtitleSize,
-            audioBoost: pb.audioBoost,
-            audioCodec: defaultAudio?.codec ?? media.audioCodec,
-          },
-        );
 
         hlsLoader.destroyHls();
 
@@ -318,13 +240,13 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
         });
         const hls = new Hls(hlsConfig);
 
-        hls.loadSource(hlsUrl);
+        hls.loadSource(prepared.url);
         hls.attachMedia(video);
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
           // Seek to resume position after manifest is ready
-          if (viewOffset > 0) {
-            video.currentTime = viewOffset / 1000;
+          if (prepared.viewOffset > 0) {
+            video.currentTime = prepared.viewOffset / 1000;
           }
           video.play().catch(() => {});
         });
