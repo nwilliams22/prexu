@@ -168,42 +168,22 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setSession((prev) => (prev ? { ...prev, ...changes } : prev));
   }, []);
 
-  // prexu-pa4: use flushSync to force React to commit setIsMinimized
-  // SYNCHRONOUSLY before firing the IPC. Without flushSync, React
-  // batches the state update and processes it after the event handler
-  // returns — meanwhile playerEnterMinimize has already fired and Rust
-  // has resized the mpv host. The user sees ~1 second of DOM-still-in-
-  // full-chrome + mpv-already-shrunk + AppLayout-still-invisible =
-  // transparent flash to desktop.
+  // flushSync forces React to commit setIsMinimized SYNCHRONOUSLY before
+  // returning. Without it, React batches the state update — by the time
+  // the post-commit effect (below) fires the IPC, Rust resizes the mpv
+  // host but the React tree is still showing full-chrome. The user sees
+  // a transparent flash to desktop until React catches up.
   //
-  // flushSync makes the commit blocking: by the time playerEnterMinimize
-  // is called, the DOM already reflects mini mode. Rust's mpv resize
-  // arrives a few ms later, but the visual states never diverge. The
-  // user perceives the same total elapsed time but with no "wrong" state
-  // visible.
-  //
-  // (Caveat: flushSync blocks the event loop for the duration of the
-  // commit. On the Dashboard route the commit cascades through many
-  // components and can take ~1s. The proper long-term fix is to split
+  // flushSync blocks the event loop for the commit duration; on the
+  // Dashboard route that's ~1s. The structural fix is to split
   // PlayerContext so isMinimized changes don't invalidate Dashboard's
-  // tree — but flushSync is the right tactical fix until that lands.)
-  //
-  // prexu-di9 history: previously this was setIsMinimized(true)
-  // followed by the IPC, relying on React's batching to commit before
-  // the IPC's microtask. That works on lighter routes but not on
-  // Dashboard where the commit is slow.
+  // tree (prexu-ii3) — flushSync is the tactical bridge until then.
   const minimize = useCallback(() => {
-    const rect = miniRectRef.current;
-    logger.info("player:minimize", "entering", rect);
+    logger.info("player:minimize", "entering", miniRectRef.current);
     flushSync(() => {
       setIsMinimized(true);
     });
-    playerEnterMinimize(rect.width, rect.height, rect.padding, rect.corner).catch(
-      (err) => {
-        logger.error("player:minimize", "enter failed", String(err));
-        setIsMinimized(false);
-      },
-    );
+    // IPC fires from the useEffect below on the resulting commit.
   }, []);
 
   // prexu-7cb: NO optimistic flip on restore. Symmetric reasoning to
@@ -233,18 +213,16 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       );
   }, []);
 
-  // Merge + persist + (if minimized) sync to Rust. The Rust resync is
-  // fire-and-forget — failures just log; the React-side mini chrome will
-  // still reflect the requested geometry. We deliberately don't flushSync
-  // here: callers (resize handle drag, corner-snap on mouse-up) fire this
-  // many times during a single interaction and the state is already
-  // minimized, so the Dashboard-cascade concern from `minimize()` doesn't
-  // apply.
+  // Pure reducer — no side effects inside the updater so the contract
+  // works under StrictMode's intentional double-invocation in dev.
+  // Persistence + IPC live in the effects below. Identity short-circuit
+  // is preserved: when an interaction (resize-drag mouse-up landing on
+  // the same corner with the same size) produces no actual change, we
+  // return `prev` so React skips the re-render and the dep-driven
+  // effects don't run.
   const updateMiniRect = useCallback((updates: Partial<MiniRect>) => {
     setMiniRect((prev) => {
       const next: MiniRect = { ...prev, ...updates };
-      // Identity short-circuit: if nothing actually changed (common when
-      // a drag ends on the same corner), skip persistence + IPC entirely.
       if (
         next.corner === prev.corner &&
         next.width === prev.width &&
@@ -253,17 +231,41 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       ) {
         return prev;
       }
-      saveMiniRect(next);
-      if (isMinimizedRef.current) {
-        logger.debug("player:minimize", "rect updated while minimized", next);
-        playerEnterMinimize(next.width, next.height, next.padding, next.corner).catch(
-          (err) =>
-            logger.warn("player:minimize", "rect update IPC failed", String(err)),
-        );
-      }
       return next;
     });
   }, []);
+
+  // Persist any non-initial miniRect change. The initial state is
+  // already seeded from localStorage by loadPersistedMiniRect, so
+  // writing it back on mount is redundant — skip the first commit.
+  const skipFirstSaveRef = useRef(true);
+  useEffect(() => {
+    if (skipFirstSaveRef.current) {
+      skipFirstSaveRef.current = false;
+      return;
+    }
+    saveMiniRect(miniRect);
+  }, [miniRect]);
+
+  // Sync the mpv host geometry whenever we are minimized. Covers both
+  // (a) the false → true transition triggered by `minimize()` and
+  // (b) rect updates while minimized (drag, resize handle, corner snap).
+  // The exit IPC stays in `restoreFromMinimize` because it must await
+  // before flipping `isMinimized` to false (see that callback's docblock
+  // for the visual-flash rationale).
+  useEffect(() => {
+    if (!isMinimized) return;
+    logger.debug("player:minimize", "applying mini rect via effect", miniRect);
+    playerEnterMinimize(
+      miniRect.width,
+      miniRect.height,
+      miniRect.padding,
+      miniRect.corner,
+    ).catch((err) => {
+      logger.error("player:minimize", "enter failed", String(err));
+      setIsMinimized(false);
+    });
+  }, [isMinimized, miniRect]);
 
   const value = useMemo<PlayerContextValue>(
     () => ({
