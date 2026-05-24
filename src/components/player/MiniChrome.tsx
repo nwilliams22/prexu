@@ -1,6 +1,5 @@
 /**
- * Compact chrome rendered inside the minimized player region
- * (prexu-7il.3 / .5 / .7).
+ * Compact chrome rendered inside the minimized player region.
  *
  * Sits absolutely-positioned inside the small corner wrapper Player.tsx
  * builds when `usePlayerSession().isMinimized` is true. Renders:
@@ -8,19 +7,17 @@
  * - Top-right cluster: Restore (return to full player) + Close (stop playback).
  *   The restore button is the ONLY way to leave minimize from the chrome —
  *   we deliberately do not honor clicks on the transparent middle area.
- *   (prexu-2rz: the click-to-restore "Plex convention" produced a
- *   click-after-drag bug on shrink-resize that the recentlyDraggedAtRef
- *   guard in prexu-lhs only partially solved, since synthetic clicks
- *   often land on a chrome button rather than the root.)
+ *   Click-to-restore produced a click-after-drag bug where synthetic clicks
+ *   often land on a chrome button rather than the root, so the whole region
+ *   is drag-only (no click fall-through).
  * - Bottom-center: Play/Pause transport
- * - Resize handle on the corner OPPOSITE the active anchor (7il.5).
- *   Dragging it grows/shrinks the mini player; mid-drag IPC is throttled
- *   to ~50 ms so the mpv host follows the drag without flooding
- *   sync_geometry.
- * - Drag surface covering the rest of the chrome (7il.7) — mousedown+drag
- *   from any non-button area to grab the mini player. A semi-transparent
- *   ghost previews the new position; on release we snap to the nearest
- *   of the four corners and commit via `updateMiniRect({ corner })`.
+ * - Resize handle on the corner OPPOSITE the active anchor. Dragging it
+ *   grows/shrinks the mini player; mid-drag IPC is throttled to ~50 ms so
+ *   the mpv host follows without flooding sync_geometry.
+ * - Drag surface covering the rest of the chrome — mousedown+drag from any
+ *   non-button area to grab the mini player. A semi-transparent ghost previews
+ *   the new position; on release we snap to the nearest of the four corners
+ *   and commit via `updateMiniRect({ corner })`.
  *
  * Auto-hides after inactivity using the same visibility flag the main
  * chrome uses (passed in as `visible`). Mouse activity anywhere inside
@@ -72,17 +69,17 @@ interface MiniChromeProps {
    *  duration is 0 (e.g. before metadata loads). */
   duration: number;
   /** Seek to an absolute time (seconds). Should be the WT-aware variant
-   *  when in a session, matching `onTogglePlay`. (prexu-a6z.4) */
+   *  when in a session, matching `onTogglePlay`. */
   onSeek: (seconds: number) => void;
 }
 
-/** Skip-back / skip-forward delta in seconds. (prexu-a6z.4) */
+/** Skip-back / skip-forward delta in seconds. */
 const SKIP_SECONDS = 10;
 
 /** Pointer-movement threshold (logical px) below which an anchor-drag
  *  mousedown→mouseup is treated as not-a-drag (no ghost, no corner
  *  commit). The root region is intentionally not clickable, so falling
- *  below the threshold is a true no-op (prexu-2rz). */
+ *  below the threshold is a true no-op. */
 const DRAG_THRESHOLD_PX = 4;
 
 /** Throttle window for mid-drag IPC during resize. The mpv host re-snaps
@@ -95,8 +92,8 @@ const styles = {
     position: "absolute" as const,
     inset: 0,
     pointerEvents: "auto" as const,
-    // grab → grabbing during an anchor drag. No longer "pointer" — the
-    // root area is draggable but not clickable (prexu-2rz).
+    // grab → grabbing during an anchor drag. The root area is draggable
+    // but not clickable — no click fall-through by design.
     cursor: "grab",
   },
   topCluster: {
@@ -380,7 +377,7 @@ export default function MiniChrome({
 
   const onAnchorCancel = useCallback(() => {
     setGhost(null);
-    // Sub-threshold mousedown→mouseup is a true no-op (prexu-2rz).
+    // Sub-threshold mousedown→mouseup is a true no-op.
   }, []);
 
   const { onMouseDown: anchorOnMouseDown } = useDragGesture({
@@ -426,7 +423,7 @@ export default function MiniChrome({
       );
       // Throttle the React state update (and therefore the IPC) to ~20 Hz.
       // With actual throttling, the mask + mpv host stay in lockstep.
-      // The final position is always committed by onResizeCommit. (prexu-vm2)
+      // The final position is always committed by onResizeCommit.
       const now = Date.now();
       if (now - lastResizeIpcRef.current >= RESIZE_IPC_THROTTLE_MS) {
         lastResizeIpcRef.current = now;
@@ -550,7 +547,7 @@ export default function MiniChrome({
 
         {/* Scrub bar — slim range above the bottom cluster. Hidden when
             duration hasn't been reported yet (e.g. pre-metadata). The
-            range input gets keyboard a11y for free. (prexu-a6z.4) */}
+            range input gets keyboard a11y for free. */}
         {hasDuration && (
           <div
             style={{
@@ -638,9 +635,9 @@ export default function MiniChrome({
           )}
         </div>
 
-        {/* Resize handle — opposite the active anchor (7il.5). Drag to
-            grow/shrink; live IPC throttled to ~50 ms in the mousemove
-            handler so the mpv host follows without flooding sync_geometry. */}
+        {/* Resize handle — opposite the active anchor. Drag to grow/shrink;
+            live IPC throttled to ~50 ms in the mousemove handler so the
+            mpv host follows without flooding sync_geometry. */}
         <div
           style={{
             ...handleResize,

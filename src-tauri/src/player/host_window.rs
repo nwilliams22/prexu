@@ -44,10 +44,8 @@ fn ensure_class_registered() {
             lpfnWndProc: Some(wnd_proc),
             lpszClassName: CLASS_NAME,
             // Solid brush matching the app's --bg-primary navy (#1a1a2e, BGR
-            // 0x002e1a1a). The previous BLACK_BRUSH avoided a white flash
-            // before mpv attached its child but left a visible black rim
-            // around the video in mini-mode (prexu-buq). Matching navy keeps
-            // the no-flash property and blends with the surrounding chrome.
+            // 0x002e1a1a). Using the navy colour avoids a visible rim around
+            // the video in mini-mode and blends with the surrounding chrome.
             // Leaks for app lifetime — acceptable for a once-per-process
             // class registration.
             hbrBackground: CreateSolidBrush(COLORREF(0x002e_1a1a)),

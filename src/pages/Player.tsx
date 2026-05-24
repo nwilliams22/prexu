@@ -78,16 +78,14 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   // Subtitle styling — dispatched to the active backend (native uses libass
   // via invoke + ready-gated retry; HTML5 maintains a <style id="prexu-
   // subtitle-style"> tag with ::cue CSS derived from prefs). Player.tsx
-  // doesn't know which is active — the hook contract does (prexu-ve9).
+  // doesn't know which is active — the hook contract does.
   useEffect(() => {
     player.applySubtitleStyle({ size: pb.subtitleSize, style: pb.subtitleStyle });
   }, [player, pb.subtitleSize, pb.subtitleStyle]);
 
   // Body-transparency for the native-mpv path is owned by
   // useTransparentWindow inside PlayerOverlay (see hooks/player/
-  // useTransparentWindow.ts). The previous useLayoutEffect here was one
-  // of three call sites writing document.body.style.background; the new
-  // hook + CSS class consolidates all of them.
+  // useTransparentWindow.ts).
 
   // Audio enhancements — Web Audio API processing graph
   const audioEnhancements = useAudioEnhancements(
@@ -149,10 +147,9 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   // pop-out geometry (corner + size) and reads it from the persisted
   // store; user-driven resizes round-trip across sessions.
   //
-  // 7il.4: the native path now has a SECOND button for in-window minimize
-  // (the small bottom-right corner mode). The two buttons are mutually
-  // exclusive — `handleMinimize` exits pop-out first when needed, and
-  // `togglePiP` exits minimize first when needed.
+  // The native path has a separate button for in-window minimize (the small
+  // corner mode). The two modes are mutually exclusive — `handleMinimize`
+  // exits pop-out first when needed, and `togglePiP` exits minimize first.
   const pip = usePictureInPicture(player.videoRef);
   const popOut = usePopOutPlayer();
   const pipActive = IS_NATIVE_PLAYER ? popOut.isPopOut : pip.isPiPActive;
@@ -162,7 +159,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   const togglePiP = useCallback(() => {
     if (IS_NATIVE_PLAYER) {
       // Mutual exclusion with minimize: if currently minimized, restore
-      // to full first, then pop out (7il.4).
+      // to full first, then pop out.
       if (playerSession.isMinimized) {
         playerSession.restoreFromMinimize();
       }
@@ -174,7 +171,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
 
   const handleMinimize = useCallback(() => {
     // Mutual exclusion with pop-out: if currently popped out, exit
-    // pop-out first, then minimize (7il.4).
+    // pop-out first, then minimize.
     if (IS_NATIVE_PLAYER && popOut.isPopOut) {
       popOut.togglePopOut();
     }
@@ -239,9 +236,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   //   - useSkipSegments synthetic-credits gate (see hasNextEpisode arg)
   //
   // Decision lives in player-postplay-gate.ts so it can be unit-tested
-  // directly. See that file's docblock for the rules. Movies inside a
-  // user-built playlist/collection do trigger PostPlay (prexu-9yn);
-  // standalone movies still auto-exit at EOF (prexu-3z9 unchanged).
+  // directly. See that file's docblock for the rules.
   const hasNextItem = computeHasNextItem({
     itemType: player.itemType,
     ratingKey,
@@ -255,8 +250,6 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   playerIsFullscreenRef.current = player.isFullscreen;
 
   // Player lifecycle — exit/prepareNavAway/navAwayPreservingMount.
-  // Consolidates the previous three near-duplicate fullscreen-exit dances
-  // into a single hook (prexu-ps6).
   const lifecycle = usePlayerLifecycle({
     player,
     popOut,
@@ -393,13 +386,13 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   if (!isAuthenticated) return <Navigate to="/login" replace />;
   if (!serverSelected) return <Navigate to="/servers" replace />;
 
-  // Minimized branch (prexu-7il.3/.5/.7) — render just the mini corner
-  // region with MiniChrome. All hooks above still run (so playback, WT,
-  // timeline reporting, etc. continue) but the full-viewport chrome,
-  // PostPlayScreen, KeyboardShortcutsOverlay, etc. are suppressed so
-  // the routes underneath remain interactive. The mpv host has already
-  // been shrunk by the Rust-side player_enter_minimize call from
-  // PlayerContext.minimize(); this just makes the React chrome match.
+  // Minimized branch — render just the mini corner region with MiniChrome.
+  // All hooks above still run (so playback, WT, timeline reporting, etc.
+  // continue) but the full-viewport chrome, PostPlayScreen,
+  // KeyboardShortcutsOverlay, etc. are suppressed so the routes underneath
+  // remain interactive. The mpv host has already been shrunk by the
+  // Rust-side player_enter_minimize call from PlayerContext.minimize();
+  // this just makes the React chrome match.
   if (playerSession.isMinimized) {
     return (
       <MinimizedPlayer

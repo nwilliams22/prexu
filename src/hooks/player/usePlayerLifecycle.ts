@@ -1,20 +1,16 @@
 /**
  * Player lifecycle hook — owns the "exit the player overlay" choreography.
  *
- * Extracted from Player.tsx (prexu-ps6) so the three previously-duplicated
- * fullscreen-exit dance variants live in one place:
+ * Three exported callbacks:
  *   - `exit`: full teardown (popout-exit if needed → fullscreen exit →
  *     mpv unload → playerSession.stop).
  *   - `prepareNavAway`: pre-navigation cleanup for the unmount path
  *     (body-bg paint + fullscreen exit). Used by lifecycle.exit and by
- *     any future caller that needs the same band-aid before navigation.
+ *     any future caller that needs the same cleanup before navigation.
  *   - `navAwayPreservingMount`: fullscreen exit + run a supplied nav
  *     callback. Used by the Previous-episode button where Player stays
- *     mounted across ratingKey swaps and the useLayoutEffect cleanup
- *     never re-runs (so we deliberately DON'T paint body opaque).
- *
- * The body-bg dance is intentionally preserved verbatim here — its
- * structural fix is tracked separately as prexu-r3l.
+ *     mounted across ratingKey swaps (so we deliberately DON'T paint
+ *     body opaque — the cleanup effect never re-runs).
  */
 
 import { useCallback } from "react";
@@ -105,8 +101,7 @@ export function usePlayerLifecycle({
     // If we're in pop-out mode, exit it FIRST so the main window is
     // restored to its pre-pop-out outer geometry and always-on-top is
     // cleared before we unload the player. Without this the app stays at
-    // the 480x270 pop-out size after the player closes (prexu-ltu / mw5
-    // follow-up).
+    // the pop-out size after the player closes.
     if (IS_NATIVE_PLAYER && popOut.isPopOut) {
       try {
         popOut.togglePopOut();

@@ -1,11 +1,10 @@
-//! Pop-out player commands (prexu-7il / Phase 4).
+//! Pop-out player commands.
 //!
 //! Floating mini-window mode: shrinks the whole Tauri main window down to a
 //! corner of the user's current display, sets always-on-top, and resyncs the
-//! mpv host window. Distinct from the in-window "minimize" mode (prexu-7il.3)
-//! which keeps the main window full size but renders the player chrome in a
-//! small corner region of the WebView. The bugs prexu-cjo (maximize-while-
-//! popped-out) and prexu-buq (black border) belong to this mode.
+//! mpv host window. Distinct from the in-window "minimize" mode which keeps
+//! the main window full size but renders the player chrome in a small corner
+//! region of the WebView.
 
 use tauri::{AppHandle, Manager, State};
 #[cfg(target_os = "windows")]
@@ -16,10 +15,8 @@ use crate::player::{MinimizeCorner, PlayerState};
 /// Path used for the pop-out player store. Kept separate from
 /// `secure-store.json` (which holds auth tokens managed via the JS LazyStore)
 /// so the Rust-side state and the frontend's secure data don't share a file
-/// lock. Renamed from `mini-player.json` when the in-window minimize mode
-/// landed alongside the floating pop-out mode; old files are not migrated —
-/// existing users fall back to the defaults (bottom-right, 480x270) on first
-/// pop-out after upgrade.
+/// lock. Existing users without a stored entry fall back to the defaults
+/// (bottom-right, 480×270) on first pop-out.
 #[cfg(target_os = "windows")]
 const POPOUT_STORE_PATH: &str = "popout-player.json";
 #[cfg(target_os = "windows")]
@@ -112,19 +109,16 @@ fn load_persisted_popout(app: &AppHandle) -> (MinimizeCorner, u32, u32) {
 }
 
 /// Read the Tauri main window's outer rect via Win32 `GetWindowRect` and
-/// return `(x, y, width, height)`. We stash this on `enter_popout` and
-/// re-apply it on `exit_popout` via `write_window_rect` so the round-trip
-/// uses one coordinate system and the window snaps back to exactly where
-/// it started (prexu-bm0).
+/// return `(x, y, width, height)`. Stashed on `enter_popout` and restored
+/// on `exit_popout` so the window snaps back to exactly where it started.
 ///
-/// We bypass Tauri's `WebviewWindow::outer_position` / `outer_size` here
-/// because they go through tao, which on Win11 mixes GetWindowRect output
-/// with logical/inner sizing math. Combined with Win11's invisible DWM
-/// resize borders (`GetWindowRect` includes them but `set_size` does not
-/// expect them), a stash via tao + restore via tao drifts by ~7 px per
-/// cycle, growing the window each enter/exit. Going through pure Win32
-/// removes the asymmetry — `GetWindowRect` and `SetWindowPos` operate
-/// on the same outer rect that includes the invisible borders.
+/// Bypasses Tauri's `WebviewWindow::outer_position` / `outer_size` because
+/// tao on Win11 mixes GetWindowRect output with logical/inner sizing math.
+/// Combined with Win11's invisible DWM resize borders (`GetWindowRect`
+/// includes them but `set_size` does not), a stash+restore via tao drifts
+/// by ~7 px per cycle, growing the window on each enter/exit. Going through
+/// pure Win32 removes the asymmetry — `GetWindowRect` and `SetWindowPos`
+/// operate on the same outer rect including invisible borders.
 #[cfg(target_os = "windows")]
 fn read_window_rect(
     main: &tauri::WebviewWindow,
@@ -148,8 +142,7 @@ fn read_window_rect(
 }
 
 /// Apply an outer rect to the Tauri main window via Win32 `SetWindowPos`.
-/// Paired with `read_window_rect` to round-trip pre-popout geometry
-/// exactly (prexu-bm0).
+/// Paired with `read_window_rect` to round-trip pre-popout geometry exactly.
 #[cfg(target_os = "windows")]
 fn write_window_rect(
     main: &tauri::WebviewWindow,
@@ -199,12 +192,12 @@ fn corner_origin(
         MinimizeCorner::BottomLeft => (wx, wy + wh - h as i32),
         MinimizeCorner::BottomRight => (wx + ww - w as i32, wy + wh - h as i32),
     };
-    // Defense-in-depth (prexu-nhs): on multi-monitor setups with negative
-    // work-area origins (monitors arranged above/left of primary), or when
-    // a saved size from a larger display gets carried to a smaller one,
-    // the final rect could land partly off-screen. Width/height are
-    // clamped above, so this just keeps the (x, y) corner placement fully
-    // inside the work area. No-op in the common case.
+    // Defense-in-depth: on multi-monitor setups with negative work-area
+    // origins (monitors arranged above/left of primary), or when a saved
+    // size from a larger display gets carried to a smaller one, the final
+    // rect could land partly off-screen. Width/height are clamped above,
+    // so this just keeps the (x, y) corner placement fully inside the work
+    // area. No-op in the common case.
     let x = x.max(wx).min(wx + ww - w as i32);
     let y = y.max(wy).min(wy + wh - h as i32);
     log::debug!(
@@ -247,14 +240,13 @@ pub async fn player_enter_popout(
         .get_webview_window("main")
         .ok_or_else(|| "main webview window not found".to_string())?;
 
-    // Clear any minimize inset BEFORE doing any geometry work (prexu-wow).
-    // Pop-out and minimize are mutually exclusive (7il.4 design); without
-    // this, a frontend race between playerExitMinimize and playerEnterPopOut
-    // can leave state.minimize=Some while we apply the popout geometry,
-    // causing the SetWindowPos resize storm to read the stale inset and
-    // shrink the host to the bottom-right corner of the new popout window.
-    // Clearing here is authoritative — subsequent Resized events from the
-    // window resize will all see minimize=None and skip apply_minimize_inset.
+    // Clear any minimize inset BEFORE doing any geometry work. Pop-out and
+    // minimize are mutually exclusive; without this, a frontend race between
+    // playerExitMinimize and playerEnterPopOut can leave state.minimize=Some
+    // while we apply the popout geometry, causing the SetWindowPos resize
+    // storm to read the stale inset and shrink the host to the bottom-right
+    // corner of the new popout window. Clearing here is authoritative —
+    // subsequent Resized events will all see minimize=None.
     if let Ok(mut mz) = state.minimize.lock() {
         if mz.is_some() {
             log::debug!("[player:popout] clearing leftover minimize inset on enter");
@@ -265,11 +257,11 @@ pub async fn player_enter_popout(
     let (wx, wy, ww, wh) = current_work_area(&main)?;
     let (x, y, w, h) = corner_origin(corner, width, height, wx, wy, ww, wh);
 
-    // Stash the current OUTER rect via Win32 GetWindowRect (prexu-bm0).
-    // Captured + restored through the same Win32 API so the round-trip is
-    // exact — Tauri's outer_size/outer_position go through tao which
-    // disagrees with SetWindowPos by ~7 px due to Win11's invisible DWM
-    // resize borders, causing the window to grow on each enter/exit cycle.
+    // Stash the current OUTER rect via Win32 GetWindowRect. Captured +
+    // restored through the same Win32 API so the round-trip is exact —
+    // Tauri's outer_size/outer_position go through tao which disagrees with
+    // SetWindowPos by ~7 px due to Win11's invisible DWM resize borders,
+    // causing the window to grow on each enter/exit cycle.
     match read_window_rect(&main) {
         Ok((rx, ry, rw, rh)) => {
             let stash = (rx, ry, rw as u32, rh as u32);
@@ -372,7 +364,7 @@ pub async fn player_exit_popout(
 
     // Capture the user's current size BEFORE restoring so any post-enter
     // resize is preserved. Read via Win32 GetWindowRect so the stored value
-    // matches what SetWindowPos on a subsequent enter will receive (prexu-bm0).
+    // matches what SetWindowPos on a subsequent enter will receive.
     match read_window_rect(&main) {
         Ok((_, _, rw, rh)) => match app.store(POPOUT_STORE_PATH) {
             Ok(store) => {
@@ -398,7 +390,7 @@ pub async fn player_exit_popout(
         .map_err(|e| format!("set_always_on_top(false) failed: {}", e))?;
 
     // Clear topmost on the mpv host window AND re-anchor it below the
-    // WebView (prexu-0c6). Passing Some(parent) here is load-bearing:
+    // WebView. Passing Some(parent) here is load-bearing:
     // SetWindowPos(HWND_NOTOPMOST) alone leaves the host above normal-
     // z-order siblings, so after exit the host floats over the WebView
     // and the app becomes uninteractable. Anchoring below puts it back
@@ -435,8 +427,7 @@ pub async fn player_exit_popout(
 // Non-Windows stubs so the command names exist for the JS bridge but the
 // platform that hasn't been ported yet (macOS / Linux) returns a clear error
 // instead of failing at the IPC layer with "command not found". Keeps the
-// frontend code path uniform; cross-platform pop-out / minimize lands in
-// prexu-efy (Phase 5 research).
+// frontend code path uniform.
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
 pub async fn player_enter_popout(

@@ -1,7 +1,4 @@
 //! Tauri commands exposing the native player to the React frontend.
-//!
-//! All commands wired through to libmpv (phase 1 steps 1.3, 1.4, 1.6 done).
-//! Event-side reporting (time-pos, eof, …) lands with the event pump in 1.5.
 
 use std::collections::HashMap;
 

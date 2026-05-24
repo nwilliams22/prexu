@@ -59,10 +59,9 @@ function AppLayout() {
   // and the destination page's first paint. Most visible when navigating
   // FROM the player route, because AppLayout itself is freshly mounting
   // (Player is rendered outside AppLayout). Without this overlay the user
-  // sees ~1s of static navy bg before the destination page renders content,
-  // which feels broken (prexu-zq4). The 600ms ceiling is empirical: covers
-  // the dev-mode gap observed in user testing while staying short enough
-  // that snappy transitions don't visibly linger.
+  // sees ~1s of static navy bg before the destination page renders content.
+  // The 600ms ceiling is empirical: covers the dev-mode gap observed in user
+  // testing while staying short enough that snappy transitions don't linger.
   const location = useLocation();
   const lastPathRef = useRef(location.pathname);
   const [showTransitionSpinner, setShowTransitionSpinner] = useState(true);
@@ -274,9 +273,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     // Owns the background for the route content area so the post-Player-
     // unmount transition doesn't show body navy through a transparent
-    // Outlet (prexu-zq4). Same colour as body bg, so no visual change in
-    // steady state — but it lets us decouple Player.tsx's body-bg dance
-    // from what the user sees during route transitions.
+    // Outlet. Same colour as body bg, so no visual change in steady state.
     background: "var(--bg-primary)",
     // Required for the absolutely-positioned transition spinner overlay.
     position: "relative",

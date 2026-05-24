@@ -1,7 +1,7 @@
 /**
  * PostPlay flow hook — owns end-of-playback continuation behavior.
  *
- * Extracted from Player.tsx (prexu-ps6). Owns:
+ * Owns:
  *   - `showPostPlay` + `postPlayShownRef` (overlay visibility latch).
  *   - `postPlayDetail` enriched-metadata state + the fetch effect.
  *   - The EOF subscription effect (dispatched through
@@ -12,7 +12,7 @@
  *     restore-from-minimize so the user can see the overlay).
  *   - `nextQueueItem` derivation.
  *
- * Critical invariants preserved verbatim:
+ * Critical invariants:
  *   - EOF with `!hasNextItem && !wtInSession` → calls `onExit` so the
  *     user lands back on the dashboard instead of a paused-at-EOF black
  *     frame.
@@ -101,19 +101,17 @@ export function usePostPlay({
   onExitRef.current = onExit;
 
   // ── EOF subscription ────────────────────────────────────────────────────
-  // Single path now — player.subscribeToEof dispatches to the correct
-  // backend (mpv player://eof on native, video.addEventListener("ended")
-  // on HTML5). The pause-on-PostPlay call below is similarly dispatched
-  // via player.pause(). usePostPlay no longer touches videoRef directly
-  // (prexu-ve9).
+  // player.subscribeToEof dispatches to the correct backend (mpv
+  // player://eof on native, video.addEventListener("ended") on HTML5).
+  // The pause-on-PostPlay call below is similarly dispatched via
+  // player.pause(); this hook does not touch videoRef directly.
   useEffect(() => {
     const handleEnded = () => {
       // hasNextItem encodes "real successor exists":
       //  - episode with queue/episode-nav next, OR
       //  - any type playing from a user-built queue with another item next.
       // A standalone movie should NOT pop PostPlay against a stale auto-
-      // populated episode queue, which is why we distinguish queue.source
-      // (see prexu-9yn).
+      // populated episode queue, which is why we distinguish queue.source.
       logger.debug("postplay", "EOF reached", {
         itemType,
         hasNextItem,
@@ -179,13 +177,13 @@ export function usePostPlay({
     onExitRef.current();
   }, []);
 
-  // prexu-jk0: PostPlay handoff for mini mode. The full <PostPlayScreen>
-  // is in the post-early-return branch of Player.tsx, so when isMinimized
-  // is true it never mounts and its 10s countdown never fires onPlayNext
-  // — the user sees a black frame at EOF instead of the next episode.
-  // Bridge that gap here: autoplay-on → fire next directly so playback
-  // continues seamlessly in mini; autoplay-off → restore to fullscreen
-  // so the user can see the Play Now / Stop buttons and decide.
+  // PostPlay handoff for mini mode. The full <PostPlayScreen> is in the
+  // post-early-return branch of Player.tsx, so when isMinimized is true
+  // it never mounts and its 10s countdown never fires onPlayNext — the
+  // user sees a black frame at EOF instead of the next episode. Bridge
+  // that gap here: autoplay-on → fire next directly so playback continues
+  // seamlessly in mini; autoplay-off → restore to fullscreen so the user
+  // can see the Play Now / Stop buttons and decide.
   // minimizedPostPlayAction's "none" return covers every non-minimized
   // path so the regular flow is unaffected.
   useEffect(() => {

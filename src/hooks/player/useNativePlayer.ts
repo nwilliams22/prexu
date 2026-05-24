@@ -97,7 +97,7 @@ export function useNativePlayer(
   const offsetOverrideRef = useRef(offsetOverride);
   offsetOverrideRef.current = offsetOverride;
 
-  // ── Backend dispatch ref state (prexu-ve9) ──
+  // ── Backend dispatch ref state ──
   // Track readiness so applySubtitleStyle / applyAudioEnhancement can defer
   // IPC until mpv exists. isLoading starts true and flips false on
   // player://ready; we mirror it in a ref so the callbacks stay stable.
@@ -110,17 +110,16 @@ export function useNativePlayer(
   >(null);
   // Latest audio-enhancement state awaiting initial apply at ready time.
   // Player.tsx populates this once via applyAudioEnhancement(prefs) before
-  // mpv exists, and we replay it on ready so persisted prefs survive
-  // restart. Subsequent user changes hit the live IPCs directly.
+  // mpv exists; we replay it on ready so persisted prefs survive restart.
+  // Subsequent user changes hit the live IPCs directly.
   const pendingAfRef = useRef<{
     normalizationPreset?: NormalizationPreset;
     audioOffsetMs?: number;
   } | null>(null);
   // Subscriber slots for the public subscribeToEof contract. Kept separate
-  // from the bookkeeping listener below (which handles
-  // addPendingWatchSync + reportTimeline + setIsPlaying); these fire so
-  // consumers like usePostPlay can react to EOF without each backend re-
-  // implementing the trigger.
+  // from the bookkeeping listener below (addPendingWatchSync + reportTimeline
+  // + setIsPlaying); these fire so consumers like usePostPlay can react to
+  // EOF without each backend re-implementing the trigger.
   const eofSubscribersRef = useRef<Set<() => void>>(new Set());
 
   // Keep timeline refs in sync
@@ -153,9 +152,8 @@ export function useNativePlayer(
           setIsLoading(false);
           setIsBuffering(false);
           // Flush any sub-style change that arrived before mpv existed.
-          // applySubtitleStyle stores the latest request in
-          // pendingSubStyleRef; we replay it here so the persisted prefs
-          // take effect on cold start without Player.tsx having to retry.
+          // applySubtitleStyle stores the latest request in pendingSubStyleRef;
+          // we replay it here so persisted prefs take effect on cold start.
           const subStyle = pendingSubStyleRef.current;
           if (subStyle) {
             const payload = {
@@ -175,9 +173,8 @@ export function useNativePlayer(
           }
           // Flush initial audio-enhancement state. Web Audio path handles
           // its own initial values via constructor args; native needs an
-          // explicit IPC pair once mpv exists. Player.tsx primes
-          // pendingAfRef with the current prefs via applyAudioEnhancement
-          // before ready fires.
+          // explicit IPC pair once mpv exists. Player.tsx primes this
+          // before ready fires so persisted prefs survive cold start.
           const af = pendingAfRef.current;
           if (af) {
             if (af.normalizationPreset !== undefined) {
@@ -224,8 +221,8 @@ export function useNativePlayer(
               timeline.durationRef.current * 1000,
             );
           }
-          // Notify public subscribeToEof consumers. Kept separate from the
-          // bookkeeping above so each side can evolve independently.
+          // Notify public subscribeToEof consumers. Kept separate from
+          // the bookkeeping above so each side can evolve independently.
           for (const fn of eofSubscribersRef.current) {
             try {
               fn();
@@ -394,9 +391,7 @@ export function useNativePlayer(
       // terminates mpv (see destroy() in player/mod.rs), so by the time
       // it resolves, player_set_fullscreen hits its fast path (no mpv =>
       // no transition wait, no geometry sync). Running them in parallel
-      // would let the slow mpv-aware fullscreen path race with mpv
-      // teardown. Errors were previously swallowed silently; if unload
-      // fails now we want it in the log because audio may keep playing.
+      // would let the mpv-aware fullscreen path race with mpv teardown.
       const wasFullscreen = isFullscreenRef.current;
       invoke("player_unload")
         .catch((err) =>
@@ -542,7 +537,7 @@ export function useNativePlayer(
     initPlayback();
   }, [initPlayback]);
 
-  // ── Public dispatch methods (prexu-ve9) ──────────────────────────────────
+  // ── Public dispatch methods ──────────────────────────────────────────────
 
   // Idempotent pause — invoked by usePostPlay when the overlay opens so audio
   // doesn't leak under the post-play screen. mpv treats "set pause=true on
@@ -556,19 +551,18 @@ export function useNativePlayer(
 
   // Public unload — exposes the existing player_unload command so
   // usePlayerLifecycle.exit can drive teardown without invoking directly.
-  // The unmount-time cleanup useEffect below still issues its own unload;
-  // calling this BEFORE unmount (current sequencing) ensures audio is
-  // silenced synchronously. mpv's player_unload is idempotent at the Rust
-  // layer (destroy() guards on the optional handle).
+  // The unmount-time cleanup useEffect still issues its own unload; calling
+  // this BEFORE unmount ensures audio is silenced synchronously. player_unload
+  // is idempotent at the Rust layer (destroy() guards on the optional handle).
   const unload = useCallback(async () => {
     logger.info("player", "unload (public)");
     await invoke("player_unload");
   }, []);
 
-  // Public EOF subscription. The internal listener in the effect above
-  // handles bookkeeping (timeline report, watch-sync); this set is for
-  // consumer-side reactions (e.g. usePostPlay deciding whether to flip
-  // the PostPlay overlay open). Returns a stable unsubscribe.
+  // Public EOF subscription. The internal listener handles bookkeeping
+  // (timeline report, watch-sync); this set is for consumer-side reactions
+  // (e.g. usePostPlay deciding whether to open the overlay). Returns a
+  // stable unsubscribe.
   const subscribeToEof = useCallback((handler: () => void) => {
     eofSubscribersRef.current.add(handler);
     return () => {
@@ -578,7 +572,6 @@ export function useNativePlayer(
 
   // Cache the latest sub-style request and apply it now if mpv is ready;
   // otherwise the ready listener above will flush pendingSubStyleRef.
-  // This replaces the Player.tsx isLoading-gate + retry-on-ready pattern.
   const applySubtitleStyle = useCallback(
     ({ size, style }: { size: number; style: SubtitleStylePreferences }) => {
       pendingSubStyleRef.current = { size, style };

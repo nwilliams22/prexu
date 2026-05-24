@@ -88,10 +88,10 @@ fn run_pump(mpv: Arc<Mpv>, app: AppHandle) {
     // Reset on each FileLoaded; logged once per file on the first
     // PlaybackRestart so we don't spam on every seek.
     let mut hwdec_logged = false;
-    // prexu-ps1: log the FIRST duration property arrival at info level so
-    // cold-start traces show when the demuxer first parsed the stream
-    // headers (a load-bearing checkpoint between loadfile and FileLoaded).
-    // Subsequent duration changes (rare on VOD) drop back to debug.
+    // Log the FIRST duration property arrival at info level so cold-start
+    // traces show when the demuxer first parsed the stream headers (a
+    // load-bearing checkpoint between loadfile and FileLoaded). Subsequent
+    // duration changes (rare on VOD) drop back to debug.
     let mut duration_logged = false;
     loop {
         loop_iterations += 1;
@@ -157,10 +157,6 @@ fn dispatch(
             }
             *hwdec_logged = false;
             *duration_logged = false;
-            // prexu-ps1: bumped from debug to info — FileLoaded is the
-            // load-bearing checkpoint for cold-start latency attribution
-            // and "file loaded" is explicitly an info-level state per
-            // CLAUDE.md logging conventions.
             log::info!("[player:events] FileLoaded → player://ready");
             let _ = app.emit("player://ready", ());
         }
@@ -198,9 +194,8 @@ fn dispatch(
             }
             (REPLY_DURATION, PropertyData::Double(d)) => {
                 if !*duration_logged && d > 0.0 {
-                    // prexu-ps1: first non-zero duration = demuxer parsed
-                    // the stream headers. Useful for attributing the gap
-                    // between loadfile and FileLoaded.
+                    // First non-zero duration = demuxer parsed the stream
+                    // headers. Useful for attributing cold-start latency.
                     log::info!("[player:events] first duration={:.1} (stream opened)", d);
                     *duration_logged = true;
                 } else {

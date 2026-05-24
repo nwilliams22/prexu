@@ -1,23 +1,20 @@
 /**
  * Pop-out player hook for the native (mpv-backed) player path.
  *
- * Wraps `playerEnterPopOut` / `playerExitPopOut` (the Rust commands shipped
- * in prexu-a6z.1, renamed in prexu-7il.1, behind `src/services/player.ts`)
- * with React state so the existing Pop-out button in ControlsBottomBar can
- * drive a Win32-native floating window. The browser Picture-in-Picture API
- * silently no-ops inside Tauri's WebView2 because there is no `<video>`
- * element on the native path (mpv renders into a sibling Win32 HostWindow),
- * which is why clicking the PiP button on native used to do nothing.
+ * Wraps `playerEnterPopOut` / `playerExitPopOut` with React state so the
+ * Pop-out button in ControlsBottomBar can drive a Win32-native floating
+ * window. The browser Picture-in-Picture API silently no-ops inside Tauri's
+ * WebView2 because there is no `<video>` element on the native path (mpv
+ * renders into a sibling Win32 HostWindow).
  *
  * The Rust side owns the geometry: it reads the persisted corner + size
  * from `popout-player.json` on enter (falling back to bottom-right / 480×
  * 270 on first run) and writes the current outer size back on exit. This
  * hook just toggles — it does not need to know the dimensions.
  *
- * Distinct from the new in-window "minimize" mode that lands in prexu-7il.3
- * (`usePlayerSession().minimize()`). Pop-out shrinks the entire Tauri
- * window; minimize keeps the main window full size and renders the player
- * chrome in a small corner region of the WebView.
+ * Distinct from in-window minimize (`usePlayerSession().minimize()`). Pop-out
+ * shrinks the entire Tauri window; minimize keeps the main window full size
+ * and renders the player chrome in a small corner region of the WebView.
  */
 
 import { useCallback, useState } from "react";

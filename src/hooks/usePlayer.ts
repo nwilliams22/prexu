@@ -92,7 +92,7 @@ export interface UsePlayerResult {
   selectSubtitleTrack: (streamId: number | null) => void;
   retry: () => void;
 
-  // ── Backend dispatch methods (prexu-ve9) ─────────────────────────────────
+  // ── Backend dispatch methods ──────────────────────────────────────────────
   // These let consumers drive platform-specific player IPC without
   // branching on IS_NATIVE_PLAYER. Each backend implements them per its
   // own semantics; the consumer just calls the method on `player`.
@@ -492,7 +492,7 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
     initPlayback();
   }, [initPlayback]);
 
-  // ── Backend dispatch methods (prexu-ve9) ─────────────────────────────────
+  // ── Backend dispatch methods ──────────────────────────────────────────────
   const pause = useCallback(() => {
     videoRef.current?.pause();
   }, []);

@@ -1,11 +1,9 @@
-//! In-window minimize commands (prexu-7il.2).
+//! In-window minimize commands.
 //!
 //! Keeps the Tauri main window full size and only constrains the mpv host
-//! to a small bottom-right inset of the WebView client area. The rest of
-//! the WebView remains interactive so the user can browse the Library,
-//! check cast/crew, etc. while the small video region keeps playing in the
-//! corner. The in-window chrome lands in prexu-7il.3; this just establishes
-//! the IPC + state-management seam.
+//! to a small inset of the WebView client area. The rest of the WebView
+//! remains interactive so the user can browse the Library, check cast/crew,
+//! etc. while the small video region keeps playing in the corner.
 
 use tauri::{AppHandle, Manager, State};
 
@@ -18,22 +16,19 @@ const MINIMIZE_DEFAULT_PADDING: u32 = 16;
 /// desired inset rect in PlayerState and force a host resync so the mpv
 /// window shrinks to the chosen corner of the current WebView client area.
 ///
-/// Frontend callers may pass `corner` to anchor the mini player to any of
-/// the four corners (prexu-7il.7); omitting it preserves the original
-/// bottom-right placement from 7il.2. The host re-snaps to the chosen
-/// corner on every Resized event via `apply_minimize_inset`, so the small
-/// region tracks the corner regardless of subsequent window resizes.
+/// Omitting `corner` preserves the default bottom-right placement. The
+/// host re-snaps to the chosen corner on every Resized event via
+/// `apply_minimize_inset`, so the small region tracks the corner regardless
+/// of subsequent window resizes.
 ///
 /// Re-entrant: calling this again while already in minimize mode (e.g. the
 /// React side dragging the resize handle or moving to a different corner)
 /// updates the inset in place. The synchronous resync via
 /// `apply_host_geometry` makes the new geometry visible within one frame.
 ///
-/// Mutual exclusion with pop-out is handled at the React button layer
-/// (7il.4) so the IPC contract stays simple — this command itself does
-/// not touch popout state. Calling it while popped-out will inset the
-/// host within the small popout window's client rect, which is harmless
-/// but not user-facing once the buttons coordinate things.
+/// Mutual exclusion with pop-out is handled at the React button layer so
+/// the IPC contract stays simple — this command itself does not touch
+/// popout state.
 #[cfg(target_os = "windows")]
 #[tauri::command]
 pub async fn player_enter_minimize(
@@ -50,19 +45,18 @@ pub async fn player_enter_minimize(
         .get_webview_window("main")
         .ok_or_else(|| "main webview window not found".to_string())?;
 
-    // DPI scaling (prexu-7a2 + prexu-buw). The frontend passes
-    // width / height / padding in CSS (logical) pixels so the mini chrome
-    // and the AppLayout mask hole are sized consistently across DPI scales.
-    // We store the logical px here verbatim and refresh the cached
-    // `scale_factor` from the live main window; `apply_minimize_inset`
-    // then multiplies by the cached scale on every host placement.
+    // The frontend passes width / height / padding in CSS (logical) pixels
+    // so the mini chrome and the AppLayout mask hole are sized consistently
+    // across DPI scales. We store the logical px here verbatim and refresh
+    // the cached `scale_factor` from the live main window;
+    // `apply_minimize_inset` then multiplies by the cached scale on every
+    // host placement.
     //
     // This makes cross-monitor DPI changes (WM_DPICHANGED → Tauri's
     // WindowEvent::ScaleFactorChanged) Just Work — the handler updates
     // the cached scale and the very next `sync_geometry` produces the
     // correct host rect for the new monitor's DPI without re-issuing
-    // this IPC from React. Pre-prexu-buw the inset stayed at the old
-    // monitor's physical sizes until the user manually toggled off and on.
+    // this IPC from React.
     let scale = main.scale_factor().unwrap_or(1.0);
     state.set_scale_factor(scale);
     log::info!(
@@ -117,8 +111,7 @@ pub async fn player_exit_minimize(
 // Non-Windows stubs so the command names exist for the JS bridge but the
 // platform that hasn't been ported yet (macOS / Linux) returns a clear error
 // instead of failing at the IPC layer with "command not found". Keeps the
-// frontend code path uniform; cross-platform pop-out / minimize lands in
-// prexu-efy (Phase 5 research).
+// frontend code path uniform.
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
 pub async fn player_enter_minimize(

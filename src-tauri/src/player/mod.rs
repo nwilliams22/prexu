@@ -61,7 +61,7 @@ pub struct PlayerState {
     /// Without this, a fast drag-resize whose FINAL event lands inside the
     /// 50ms throttle window leaves the host stuck at stale geometry —
     /// `sync_geometry` stores the final geometry to pending but no further
-    /// event arrives to consume it. (prexu-hhx)
+    /// event arrives to consume it.
     trailing_scheduled: AtomicBool,
     /// Saved (x, y, width, height) of the Tauri main window's outer rect
     /// before entering pop-out mode. Stashed by `player_enter_popout` and
@@ -69,8 +69,8 @@ pub struct PlayerState {
     /// `None` when not in pop-out mode.
     pub(crate) pre_popout_geometry: Mutex<Option<(i32, i32, u32, u32)>>,
     /// In-window minimize state: the size+corner of the small player
-    /// region anchored inside the main window's client area
-    /// (prexu-7il.2 / 7il.7). `None` when not minimized.
+    /// region anchored inside the main window's client area.
+    /// `None` when not minimized.
     ///
     /// Distinct from pop-out: pop-out shrinks the entire Tauri main
     /// window, minimize keeps the main window full size and only
@@ -82,7 +82,7 @@ pub struct PlayerState {
     pub(crate) minimize: Mutex<Option<MinimizeState>>,
     /// Last observed DPI scale factor of the main window. Used by
     /// `apply_minimize_inset` to convert the logical-px `MinimizeState`
-    /// into physical-px host geometry on every sync (prexu-buw).
+    /// into physical-px host geometry on every sync.
     ///
     /// Updated from two places:
     /// 1. `player_enter_minimize` — when the user enters minimize mode,
@@ -117,9 +117,8 @@ pub enum MinimizeCorner {
 /// React side sends across the IPC. The conversion to physical pixels
 /// happens lazily inside `apply_minimize_inset` against the latest
 /// `PlayerState::scale_factor` — this lets cross-monitor DPI changes
-/// (`WindowEvent::ScaleFactorChanged`, prexu-buw) recompute the host
-/// rect at the new scale without re-firing `player_enter_minimize`
-/// from the frontend.
+/// (`WindowEvent::ScaleFactorChanged`) recompute the host rect at the
+/// new scale without re-firing `player_enter_minimize` from the frontend.
 #[derive(Debug, Clone, Copy)]
 pub struct MinimizeState {
     pub width: u32,
@@ -167,7 +166,7 @@ impl PlayerState {
             // 1.0 is the safe default — single-monitor 100% DPI. The very
             // first `player_enter_minimize` overwrites this with the real
             // scale before applying the inset; `WindowEvent::ScaleFactorChanged`
-            // keeps it fresh thereafter (prexu-buw).
+            // keeps it fresh thereafter.
             scale_factor: Mutex::new(1.0),
         }
     }
@@ -175,7 +174,7 @@ impl PlayerState {
     /// Update the stored DPI scale factor. Called from the
     /// `ScaleFactorChanged` window-event handler and from
     /// `player_enter_minimize` so `apply_minimize_inset` always converts
-    /// the logical-px `MinimizeState` against the live scale (prexu-buw).
+    /// the logical-px `MinimizeState` against the live scale.
     #[cfg(target_os = "windows")]
     pub(crate) fn set_scale_factor(&self, scale: f64) {
         if let Ok(mut sf) = self.scale_factor.lock() {
@@ -205,8 +204,8 @@ impl PlayerState {
 
     /// Transform a desired host geometry `(x, y, width, height)` — which
     /// normally matches the Tauri main window's inner (client) rect — to
-    /// the corner-anchored inset when minimize mode is active
-    /// (prexu-7il.2 / 7il.7). Pass-through when minimize is `None`.
+    /// the corner-anchored inset when minimize mode is active.
+    /// Pass-through when minimize is `None`.
     ///
     /// The inset stays anchored to `MinimizeState::corner` of the client
     /// rect: when the user resizes the main window, the host re-snaps to
@@ -217,9 +216,8 @@ impl PlayerState {
     /// padding are multiplied here by `current_scale_factor()` so the host
     /// rect is always sized against the live DPI of whichever monitor the
     /// main window currently lives on. This is what makes cross-monitor
-    /// DPI changes (`WindowEvent::ScaleFactorChanged`, prexu-buw) Just Work
-    /// once the handler refreshes the stored scale before calling
-    /// `sync_geometry`.
+    /// DPI changes (`WindowEvent::ScaleFactorChanged`) Just Work — the
+    /// handler refreshes the stored scale before calling `sync_geometry`.
     #[cfg(target_os = "windows")]
     fn apply_minimize_inset(
         &self,
@@ -249,14 +247,12 @@ impl PlayerState {
     /// Lazily create the host window + `Mpv` handle with our baseline config
     /// and start the event pump. Subsequent calls are no-ops.
     ///
-    /// Note (prexu-34d): on app startup tao 0.34.x emits two warnings,
+    /// Note: on app startup tao emits two warnings,
     ///   "NewEvents emitted without explicit RedrawEventsCleared"
     ///   "RedrawEventsCleared emitted without explicit MainEventsCleared"
-    /// These originate in tao's event-loop runner, not our code — our
-    /// run_on_main_thread dispatches and the WS_EX_NOACTIVATE host window are
-    /// canonical. The warnings are upstream noise tied to WebView2 init
-    /// timing and do not affect playback or geometry sync. Revisit on a tao
-    /// version bump.
+    /// These originate in tao's event-loop runner, not our code. The
+    /// warnings are upstream noise tied to WebView2 init timing and do not
+    /// affect playback or geometry sync. Revisit on a tao version bump.
     pub(crate) fn ensure_init(&self, app: &AppHandle) -> Result<(), String> {
         log::info!("[player] ensure_init called");
         let mut guard = self.inner.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
@@ -326,13 +322,10 @@ impl PlayerState {
         #[cfg(target_os = "windows")]
         let wid = host.hwnd_as_i64();
 
-        // prexu-ps1: marker for cold-start latency attribution. The gap
-        // between this log and the first "FileLoaded" event below covers
-        // (a) mpv handle construction, (b) demuxer opening the network
-        // stream (cold plex.direct connect), and (c) hardware decoder
-        // probing. Compare this timestamp with the next FileLoaded /
-        // PlaybackRestart entries to see where the 12s cold-start window
-        // lives.
+        // Marker for cold-start latency attribution. The gap between this
+        // log and the first "FileLoaded" event covers: (a) mpv handle
+        // construction, (b) demuxer opening the network stream (cold
+        // plex.direct connect), and (c) hardware decoder probing.
         log::info!("[player:init] starting mpv init (hwdec=auto-safe)");
 
         let mpv = Mpv::with_initializer(|init| {
@@ -502,13 +495,8 @@ impl PlayerState {
             }
             *last = now;
         }
-        // Apply the CURRENT call's args, not any stored pending geometry
-        // (prexu-ifj). Pending was previously consumed here as a "trailing-
-        // edge guarantee", but that path silently overrode fresh args with
-        // stale ones: when a user maximizes (throttled, pending=maximize)
-        // and then restores (next call passes the throttle), the restored
-        // geometry would be ignored in favour of the older maximize. We
-        // still clear pending so it doesn't apply on a future call, but
+        // Apply the CURRENT call's args, not any stored pending geometry.
+        // Pending is cleared so it doesn't apply on a future call, but
         // the current args are always the freshest known geometry — every
         // Resized event triggers a new sync_geometry with the latest rect,
         // so the trailing-edge case is already covered by the next event.
@@ -517,8 +505,8 @@ impl PlayerState {
         if let Ok(mut pending) = self.pending_geometry.lock() {
             pending.take();
         }
-        // Apply the minimize inset (prexu-7il.2). When not minimized this
-        // is a pass-through, so non-minimize playback is unaffected.
+        // Apply the minimize inset. When not minimized this is a
+        // pass-through, so non-minimize playback is unaffected.
         let (ax, ay, aw, ah) = self.apply_minimize_inset(x, y, width, height);
         // Skip if geometry hasn't changed since last apply.
         let new = (ax, ay, aw, ah);
@@ -551,8 +539,7 @@ impl PlayerState {
     /// already claimed it and a flush is already in flight.
     ///
     /// Atomic swap so claim/flush race-free across the window-event
-    /// handler (main thread) and the trailing worker thread. See
-    /// `trailing_scheduled` for the full design rationale (prexu-hhx).
+    /// handler (main thread) and the trailing worker thread.
     #[cfg(target_os = "windows")]
     pub(crate) fn claim_trailing_schedule(&self) -> bool {
         !self.trailing_scheduled.swap(true, Ordering::AcqRel)
@@ -564,7 +551,6 @@ impl PlayerState {
     /// pending so a Resized event that arrives mid-flush can schedule a
     /// fresh worker for whatever geometry comes next. No-op when nothing
     /// is pending (e.g. the throttle-passing event already cleared it).
-    /// (prexu-hhx)
     #[cfg(target_os = "windows")]
     pub(crate) fn flush_pending_geometry(&self) {
         self.trailing_scheduled.store(false, Ordering::Release);
@@ -610,9 +596,9 @@ impl PlayerState {
         let Ok(guard) = self.inner.lock() else {
             return;
         };
-        // Honor the minimize inset (prexu-7il.2). When not minimized this
-        // is a pass-through, so the existing fullscreen + popout call
-        // sites get the full client rect they pass in.
+        // Honor the minimize inset. When not minimized this is a
+        // pass-through, so fullscreen + popout call sites get the full
+        // client rect they pass in.
         let (ax, ay, aw, ah) = self.apply_minimize_inset(x, y, width, height);
         if let Some(inner) = guard.as_ref() {
             if let Some(host) = inner.host.as_ref() {
@@ -632,20 +618,15 @@ impl PlayerState {
         }
     }
 
-    /// Toggle the mpv host window's topmost flag. Used by pop-out mode
-    /// enter/exit so the video itself floats above other apps the same way
-    /// the WebView overlay does — without this the host stays in the
-    /// regular z-order and other windows can render between the always-
-    /// on-top WebView and the video.
+    /// Toggle the mpv host window's topmost flag for pop-out mode so the
+    /// video floats above other apps the same way the WebView overlay does.
     ///
     /// Re-anchors below `parent` whenever a parent is provided, on BOTH
-    /// the topmost=true and topmost=false paths. This is critical on
-    /// pop-out EXIT (prexu-0c6): SetWindowPos(HWND_NOTOPMOST) only drops
-    /// the host below other topmost windows — it does NOT put it back
-    /// below the WebView in the regular z-order group. Without the
+    /// the topmost=true and topmost=false paths. SetWindowPos(HWND_NOTOPMOST)
+    /// only drops the host below other topmost windows — it does NOT put
+    /// it back below the WebView in the regular z-order group. Without the
     /// anchor_below(parent) here, after exit_popout the host floats above
-    /// the WebView and steals all mouse events (cursor stuck as the host
-    /// class's default arrow; app becomes uninteractable).
+    /// the WebView and steals all mouse events.
     #[cfg(target_os = "windows")]
     pub(crate) fn apply_host_topmost(
         &self,

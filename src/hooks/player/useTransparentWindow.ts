@@ -1,13 +1,10 @@
 /**
  * Single owner of `body.player-transparent` for the native-mpv path.
  *
- * Why a hook (not inline body.style mutation across the player tree):
- * pre-prexu-r3l, three call sites wrote `document.body.style.background`
- * (Player.tsx useLayoutEffect on mount/unmount; usePlayerLifecycle
- * prepareNavAway; a parallel AppLayout mask system fighting the same
- * "don't flash desktop pixels" problem). The literal "#1a1a2e" was
- * duplicated in two of them, drifting from the CSS source of truth
- * (--bg-primary). One owner here, one CSS rule in styles.css.
+ * A dedicated hook (rather than inline body.style mutation) ensures a single
+ * CSS class (`--bg-primary` in styles.css) is the source of truth. Multiple
+ * call sites previously wrote `document.body.style.background` with the
+ * literal colour value, which drifted from the CSS variable.
  *
  * The class is added in useLayoutEffect (synchronous before paint) so
  * the first painted frame already has the transparent body. Cleanup

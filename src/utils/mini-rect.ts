@@ -1,5 +1,5 @@
 /**
- * Helpers for the in-window mini-player rect (prexu-7il.5 / prexu-7il.7).
+ * Helpers for the in-window mini-player rect.
  *
  * The mini player is parameterised by `MiniRect = { corner, width, height,
  * padding }`. These helpers convert the rect into:
@@ -31,8 +31,7 @@ export interface MiniRect {
   padding: number;
 }
 
-/** Default size + padding when nothing is persisted. Matches the previous
- *  hard-coded `MINIMIZE_DEFAULT_*` block in PlayerContext. */
+/** Default size + padding when nothing is persisted. */
 export const DEFAULT_MINI_RECT: MiniRect = {
   corner: "bottom-right",
   width: 360,

@@ -16,7 +16,7 @@ import { logger } from "../../services/logger";
 
 // ── Text-selection helpers ────────────────────────────────────────────────────
 
-/** Suppress browser marquee-selection while the user is dragging. (prexu-ois) */
+/** Suppress browser marquee-selection while the user is dragging. */
 function lockTextSelection(): void {
   if (typeof document === "undefined") return;
   document.body.style.userSelect = "none";

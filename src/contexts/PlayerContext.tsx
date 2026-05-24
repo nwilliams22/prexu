@@ -76,19 +76,18 @@ export interface PlayerContextValue {
    */
   updateSession: (changes: Partial<PlayerSession>) => void;
   /**
-   * True while the player is in in-window minimize mode (prexu-7il.2):
-   * the Tauri main window stays full size and only the mpv host shrinks
-   * to a small corner of the WebView, letting the user navigate the
-   * rest of the app while playback continues. Distinct from pop-out
-   * (`usePopOutPlayer().isPopOut`), which floats the entire window.
+   * True while the player is in in-window minimize mode: the Tauri main
+   * window stays full size and only the mpv host shrinks to a small corner
+   * of the WebView, letting the user navigate the rest of the app while
+   * playback continues. Distinct from pop-out (`usePopOutPlayer().isPopOut`),
+   * which floats the entire window.
    */
   isMinimized: boolean;
   /**
    * Enter in-window minimize mode. Drives the Rust `player_enter_minimize`
    * command (using the current `miniRect`) and flips `isMinimized` on
-   * success. Caller is responsible for coordinating with pop-out — the
-   * button-layer integration in 7il.4 exits pop-out first when both modes
-   * would otherwise overlap.
+   * success. Caller is responsible for coordinating with pop-out — exit
+   * pop-out first when both modes would otherwise overlap.
    */
   minimize: () => void;
   /** Exit in-window minimize mode and clear `isMinimized`. */
@@ -117,10 +116,10 @@ const PlayerContext = createContext<PlayerContextValue | null>(null);
 export function PlayerProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<PlayerSession | null>(null);
   const [isMinimized, setIsMinimized] = useState(false);
-  // prexu-7il.5 + 7il.7: load the persisted size + corner once on mount.
-  // The default branch in `loadPersistedMiniRect` covers first-run,
-  // corrupted-payload, and out-of-range values. Synchronous read at
-  // init time avoids the one-frame flash from a useEffect-driven hydrate.
+  // Load the persisted size + corner once on mount. The default branch in
+  // `loadPersistedMiniRect` covers first-run, corrupted-payload, and
+  // out-of-range values. Synchronous read at init time avoids the one-frame
+  // flash from a useEffect-driven hydrate.
   const [miniRect, setMiniRect] = useState<MiniRect>(() => loadPersistedMiniRect());
 
   // Keep a ref to the latest miniRect so `minimize()` always reads the
@@ -186,24 +185,22 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     // IPC fires from the useEffect below on the resulting commit.
   }, []);
 
-  // prexu-7cb: NO optimistic flip on restore. Symmetric reasoning to
-  // minimize is wrong here because Rust takes hundreds of ms to resize
-  // mpv from small back to full (Win32 SetWindowPos), while React
-  // would IMMEDIATELY swap AppLayout from corner-mask (mostly opaque)
-  // to full-viewport-mask (entirely invisible). During that gap mpv is
-  // still small in the corner; the rest of the WebView is transparent
-  // through to the desktop. The result is a visible transparent flash
-  // for the whole duration of Rust's resize.
+  // NO optimistic flip on restore. Rust takes hundreds of ms to resize mpv
+  // from small back to full (Win32 SetWindowPos), while React would
+  // IMMEDIATELY swap AppLayout from corner-mask (mostly opaque) to
+  // full-viewport-mask (entirely invisible). During that gap mpv is still
+  // small in the corner; the rest of the WebView is transparent through to
+  // the desktop.
   //
   // Waiting for the IPC means React stays in minimize-mode (corner mask
   // still opaque outside the corner) while Rust expands mpv. AppLayout
-  // opaque covers mpv as it expands behind. Once Rust is done AND
-  // React flips to full-player, AppLayout becomes invisible and mpv is
-  // already full size and visible everywhere — no transparent gap.
+  // opaque covers mpv as it expands behind. Once Rust is done AND React
+  // flips to full-player, AppLayout becomes invisible and mpv is already
+  // full size — no transparent gap.
   //
-  // (Minimize direction still flips optimistically because that gap is
-  // benign — the corner mask exposes a slice of the still-full mpv
-  // frame, no desktop transparency.)
+  // Minimize direction still flips optimistically because that gap is
+  // benign — the corner mask exposes a slice of the still-full mpv frame,
+  // not desktop transparency.
   const restoreFromMinimize = useCallback(() => {
     logger.info("player:minimize", "restoring");
     playerExitMinimize()

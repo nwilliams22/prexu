@@ -1,14 +1,10 @@
 /**
  * Native player IPC wrappers.
  *
- * Most player commands are still invoked directly from `useNativePlayer` and
- * `pages/Player.tsx` (legacy). New commands land here so we have one place
- * where the TS↔Rust contract is documented and logged consistently with
- * the project's logging conventions (see CLAUDE.md / `services/logger.ts`).
- *
- * The pop-out player commands (renamed from "mini-player" in prexu-7il.1)
- * are the first batch — `usePopOutPlayer` consumes these wrappers, not
- * invoke directly.
+ * A single module for all Tauri TS↔Rust IPC calls so the contract is
+ * documented and logged consistently with project logging conventions
+ * (see CLAUDE.md / `services/logger.ts`). `usePopOutPlayer` and
+ * `PlayerContext` consume these wrappers rather than invoking directly.
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -54,20 +50,18 @@ export async function playerExitPopOut(): Promise<void> {
 }
 
 /**
- * Enter in-window minimize mode (prexu-7il.2). The Tauri main window
- * stays at its current size; only the mpv host shrinks to a
- * `(width, height)` rect anchored to `corner` of the WebView client area,
- * with `padding` pixels of gutter. The host re-snaps to the corner on
- * every Resized event so it tracks the chosen corner as the user resizes
- * the main window.
+ * Enter in-window minimize mode. The Tauri main window stays at its current
+ * size; only the mpv host shrinks to a `(width, height)` rect anchored to
+ * `corner` of the WebView client area, with `padding` pixels of gutter.
+ * The host re-snaps to the corner on every Resized event so it tracks the
+ * chosen corner as the user resizes the main window.
  *
- * `corner` was added in prexu-7il.7 (anchor-drag). Omitting it preserves
- * the legacy bottom-right placement so existing call sites + first-time
- * entry paths continue working unchanged.
+ * Omitting `corner` preserves bottom-right placement so first-time entry
+ * and existing call sites continue working unchanged.
  *
  * Distinct from pop-out (which shrinks the entire Tauri window into a
  * floating always-on-top mini window). Mutual exclusion is handled at
- * the React button layer (7il.4), not in the Rust commands.
+ * the React button layer, not in the Rust commands.
  */
 export async function playerEnterMinimize(
   width: number,
