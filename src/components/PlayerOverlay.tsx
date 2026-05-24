@@ -15,11 +15,17 @@
 import { lazy, Suspense } from "react";
 import { usePlayerSession } from "../contexts/PlayerContext";
 import ErrorBoundary from "./ErrorBoundary";
+import { IS_NATIVE_PLAYER } from "../hooks/usePlayer";
+import { useTransparentWindow } from "../hooks/player/useTransparentWindow";
 
 const Player = lazy(() => import("../pages/Player"));
 
 export default function PlayerOverlay() {
   const { session } = usePlayerSession();
+  // Single owner of body.player-transparent — toggled whenever a session
+  // is active on the native-mpv (Windows) path so the Win32 host HWND
+  // shows through the WebView. Idempotent + no-op elsewhere.
+  useTransparentWindow(IS_NATIVE_PLAYER && session != null);
   if (!session) return null;
   return (
     <ErrorBoundary>

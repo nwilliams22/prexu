@@ -168,8 +168,10 @@ describe("usePlayerLifecycle", () => {
       });
 
       expect(popOut.togglePopOut).not.toHaveBeenCalled();
-      // Body-bg paint runs unconditionally now (HTML5 no-op against default styling).
-      expect(document.body.style.background).toBe("rgb(26, 26, 46)");
+      // Belt-and-suspenders: the transparent-body class must be cleared
+      // by prepareNavAway (called inside exit) one render-cycle before
+      // useTransparentWindow's unmount cleanup would otherwise handle it.
+      expect(document.body.classList.contains("player-transparent")).toBe(false);
       // Fullscreen not active → no setFullscreen call.
       expect(player.setFullscreen).not.toHaveBeenCalled();
       // unload always runs through the player contract.
@@ -238,15 +240,15 @@ describe("usePlayerLifecycle", () => {
   });
 
   describe("prepareNavAway", () => {
-    it("paints body navy AND exits fullscreen via player contract when active", async () => {
+    it("clears the transparent-body class AND exits fullscreen via player contract when active", async () => {
       const { result, player } = setup({ isFullscreen: true });
-      document.body.style.background = "transparent";
+      document.body.classList.add("player-transparent");
 
       await act(async () => {
         await result.current.lifecycle.prepareNavAway();
       });
 
-      expect(document.body.style.background).toBe("rgb(26, 26, 46)");
+      expect(document.body.classList.contains("player-transparent")).toBe(false);
       expect(player.setFullscreen).toHaveBeenCalledWith(false);
     });
 

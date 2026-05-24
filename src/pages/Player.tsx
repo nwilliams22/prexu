@@ -7,7 +7,7 @@
  * and instantly reveals it on stop.
  */
 
-import { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { usePlayerSession, type PlayerWatchTogether } from "../contexts/PlayerContext";
@@ -83,37 +83,11 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     player.applySubtitleStyle({ size: pb.subtitleSize, style: pb.subtitleStyle });
   }, [player, pb.subtitleSize, pb.subtitleStyle]);
 
-  // On the native player path, make body transparent while this route is
-  // mounted so the underlying mpv host HWND shows through. MUST be
-  // useLayoutEffect rather than useEffect: the Tauri window has
-  // `transparent: true`, so any frame where body is transparent AND the
-  // DOM is empty (e.g. between Player unmount and Dashboard first paint)
-  // shows whatever OS window is behind Prexu (Discord etc.) through the
-  // window. useLayoutEffect's cleanup fires synchronously BEFORE the
-  // browser paints the post-unmount frame, so the first such paint
-  // already has body painted navy (--bg-primary) rather than
-  // transparent. Restores to an explicit hex (matches the CSS fallback)
-  // instead of the empty-string captured value so we can't accidentally
-  // leave body set to an earlier "transparent" if anything else mutated
-  // it in between.
-  //
-  // prexu-s0f: body MUST stay transparent during minimize mode too.
-  // The mini region needs the WebView pixels to be truly transparent
-  // (alpha=0) so the OS composites the Win32 mpv host window behind
-  // through. The previous prexu-4k5 attempt to flip body to opaque
-  // navy in minimize mode covered the mpv host. With AppLayout now
-  // painted opaquely (prexu-ya6) but masked to have a 360x200 hole
-  // in the bottom-right (this fix's mate over in AppLayout.tsx), the
-  // hole reveals body (transparent) → WebView pixels transparent in
-  // that region → Win32 mpv host visible through. Everywhere else,
-  // AppLayout's opaque content covers body.
-  useLayoutEffect(() => {
-    if (!IS_NATIVE_PLAYER) return;
-    document.body.style.background = "transparent";
-    return () => {
-      document.body.style.background = "#1a1a2e";
-    };
-  }, []);
+  // Body-transparency for the native-mpv path is owned by
+  // useTransparentWindow inside PlayerOverlay (see hooks/player/
+  // useTransparentWindow.ts). The previous useLayoutEffect here was one
+  // of three call sites writing document.body.style.background; the new
+  // hook + CSS class consolidates all of them.
 
   // Audio enhancements — Web Audio API processing graph
   const audioEnhancements = useAudioEnhancements(

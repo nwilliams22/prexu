@@ -22,6 +22,7 @@ import { IS_NATIVE_PLAYER, type UsePlayerResult } from "../usePlayer";
 import type { UsePopOutPlayerResult } from "./usePopOutPlayer";
 import type { PlayerContextValue } from "../../contexts/PlayerContext";
 import { logger } from "../../services/logger";
+import { TRANSPARENT_BODY_CLASS } from "./useTransparentWindow";
 
 export interface UsePlayerLifecycleArgs {
   player: UsePlayerResult;
@@ -77,18 +78,19 @@ export function usePlayerLifecycle({
   // (Discord). Doing it here runs while Player is still mounted — the
   // Player container is fixed+transparent so mpv is still visible to
   // the user, but the next post-unmount paint has body already navy.
-  // Belt-and-suspenders: cleanup still runs, idempotent second write.
+  // Belt-and-suspenders: remove the player-transparent body class one
+  // render-cycle BEFORE the actual unmount runs useTransparentWindow's
+  // cleanup. WebView2 with `transparent: true` has been observed
+  // compositing a transparent frame during the Player→underneath swap
+  // even when the cleanup runs synchronously, leaking whatever OS window
+  // sits behind Prexu. Removing the class while Player is still mounted
+  // forces the post-paint frame opaque. The hook's unmount cleanup is
+  // idempotent — running classList.remove twice is a no-op.
   //
-  // The body-bg consolidation lives in prexu-r3l; keep this band-aid
-  // intact for now.
+  // No-op on HTML5: the class is never added there (useTransparentWindow
+  // is gated on IS_NATIVE_PLAYER inside PlayerOverlay).
   const prepareNavAway = useCallback(async () => {
-    // Paint body navy unconditionally. On HTML5 this is effectively a no-op
-    // (nothing made body transparent); on native it matches the Player.tsx
-    // useLayoutEffect cleanup that paints body navy on unmount. The body-bg
-    // consolidation lives in prexu-r3l — the IS_NATIVE_PLAYER guard that
-    // used to wrap this line is removed as part of prexu-ve9 (HTML5 path is
-    // idempotent against the default styling).
-    document.body.style.background = "#1a1a2e";
+    document.body.classList.remove(TRANSPARENT_BODY_CLASS);
     await exitFullscreenIfActive();
   }, [exitFullscreenIfActive]);
 
