@@ -81,9 +81,25 @@ function PosterCard({
   const height = Math.round(width * aspectRatio);
 
   return (
-    <button
+    // <div role="button"> — not a real <button>. The card contains
+    // nested action buttons (More options, Play, Expand) and the HTML
+    // spec forbids <button> inside <button>. Browsers DOM-fixup by
+    // hoisting the inner buttons out, breaking React's reconciler and
+    // (in WebView2) eventually crashing the renderer with OOM as React
+    // thrashes re-rendering. role + tabIndex + onKeyDown preserve
+    // keyboard activation and accessibility tree presence. (prexu-9l3)
+    <div
       className="card-enter"
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={(e) => {
+        // Match native <button> activation: Enter and Space fire onClick.
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick?.();
+        }
+      }}
       onContextMenu={(e) => {
         if (onContextMenu) {
           e.preventDefault();
@@ -97,6 +113,7 @@ function PosterCard({
       style={{
         ...styles.card,
         width,
+        cursor: "pointer",
         transform: active ? "scale(1.0)" : hovered ? "scale(1.04)" : "scale(1)",
         border: isExpanded
           ? "2px solid var(--accent)"
@@ -280,7 +297,7 @@ function PosterCard({
         <span style={styles.title}>{title}</span>
         {subtitle && <span style={styles.subtitle}>{subtitle}</span>}
       </div>
-    </button>
+    </div>
   );
 }
 
