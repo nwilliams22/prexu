@@ -79,9 +79,17 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   // via invoke + ready-gated retry; HTML5 maintains a <style id="prexu-
   // subtitle-style"> tag with ::cue CSS derived from prefs). Player.tsx
   // doesn't know which is active — the hook contract does.
+  //
+  // Depend on `applySubtitleStyle` (a stable useCallback) rather than the
+  // whole `player` object — `player` is a useMemo whose identity changes
+  // on every time-pos tick (currentTime is in its deps). Using `player`
+  // here would re-fire this effect ~4 times per second and pump the IPC
+  // on every tick, which mpv's gpu-next vo cannot keep up with on the
+  // main thread and the video stalls. (prexu-7tk)
+  const { applySubtitleStyle } = player;
   useEffect(() => {
-    player.applySubtitleStyle({ size: pb.subtitleSize, style: pb.subtitleStyle });
-  }, [player, pb.subtitleSize, pb.subtitleStyle]);
+    applySubtitleStyle({ size: pb.subtitleSize, style: pb.subtitleStyle });
+  }, [applySubtitleStyle, pb.subtitleSize, pb.subtitleStyle]);
 
   // Body-transparency for the native-mpv path is owned by
   // useTransparentWindow inside PlayerOverlay (see hooks/player/
