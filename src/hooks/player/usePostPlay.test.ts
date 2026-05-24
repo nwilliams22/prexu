@@ -50,10 +50,13 @@ vi.mock("../../services/plex-library", () => ({
   }),
 }));
 
-// Manual emitter for player://eof. vi.hoisted guarantees both the holder
-// object AND the mock factory are run BEFORE any import statements (whether
-// static or dynamic). The EOF effect dynamically imports
-// @tauri-apps/api/event; the mock factory captures the listener.
+// Manual emitter for the EOF subscription. The previous test version
+// mocked @tauri-apps/api/event.listen since usePostPlay called it
+// directly; under prexu-ve9, usePostPlay dispatches through
+// player.subscribeToEof, so we capture the handler at the player mock
+// level instead (see makePlayer below). vi.hoisted keeps the holder
+// available regardless of mock-vs-test ordering, matching the previous
+// shape so triggerEof() doesn't need to change.
 const { eofMock } = vi.hoisted(() => {
   const holder: {
     handler: ((evt: { payload: unknown }) => void) | null;
@@ -62,28 +65,7 @@ const { eofMock } = vi.hoisted(() => {
   return { eofMock: holder };
 });
 
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(
-    async (_name: string, h: (evt: { payload: unknown }) => void) => {
-      eofMock.handler = h;
-      const off = () => {
-        eofMock.handler = null;
-      };
-      eofMock.unlisten = off;
-      return off;
-    },
-  ),
-  // Stub the other named exports the real module ships so anything else
-  // that reaches for them gets a no-op instead of a transformCallback crash.
-  emit: vi.fn().mockResolvedValue(undefined),
-  emitTo: vi.fn().mockResolvedValue(undefined),
-  once: vi.fn().mockResolvedValue(() => {}),
-  TauriEvent: {},
-}));
-
 import { renderHook, act, waitFor } from "@testing-library/react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { usePostPlay, type UsePostPlayArgs } from "./usePostPlay";
 import type { UsePlayerResult } from "../usePlayer";
 import type { PlaybackQueue, QueueItem } from "../../types/queue";
@@ -101,22 +83,25 @@ beforeEach(() => {
   vi.clearAllMocks();
   eofMock.handler = null;
   eofMock.unlisten = null;
-  // restoreMocks: true in vitest.config.ts wipes vi.fn impls between
-  // tests; re-install the capturing impl so the EOF subscription effect
-  // (a dynamic import inside usePostPlay) keeps resolving to our stub.
-  vi.mocked(listen).mockImplementation(
-    async (_name: string, h: (evt: { payload: unknown }) => void) => {
-      eofMock.handler = h;
-      const off = () => {
-        eofMock.handler = null;
-      };
-      eofMock.unlisten = off;
-      return off;
-    },
-  );
+  // Each makePlayer() returns a fresh subscribeToEof that re-captures
+  // the EOF handler into eofMock, so no extra re-install is needed here.
 });
 
 function makePlayer(): UsePlayerResult {
+  // subscribeToEof captures the handler in eofMock so triggerEof() can
+  // fire it. Replaces the previous @tauri-apps/api/event listen() mock —
+  // usePostPlay now dispatches through the player contract instead of
+  // touching the Tauri bridge directly (prexu-ve9). The HTML5 backend
+  // would attach to video.ended; here we just capture the registration
+  // so tests can drive EOF synchronously.
+  const subscribeToEof = vi.fn((handler: () => void) => {
+    eofMock.handler = (_evt) => handler();
+    const off = () => {
+      eofMock.handler = null;
+    };
+    eofMock.unlisten = off;
+    return off;
+  });
   return {
     videoRef: { current: null },
     title: "Test",
@@ -147,6 +132,12 @@ function makePlayer(): UsePlayerResult {
     selectAudioTrack: vi.fn(),
     selectSubtitleTrack: vi.fn(),
     retry: vi.fn(),
+    pause: vi.fn(),
+    unload: vi.fn().mockResolvedValue(undefined),
+    setFullscreen: vi.fn().mockResolvedValue(undefined),
+    subscribeToEof,
+    applySubtitleStyle: vi.fn(),
+    applyAudioEnhancement: vi.fn(),
   } as UsePlayerResult;
 }
 
@@ -244,7 +235,7 @@ describe("usePostPlay", () => {
       expect(args.onExit).not.toHaveBeenCalled();
     });
 
-    it("invokes player_pause synchronously when PostPlay opens (native path)", async () => {
+    it("calls player.pause synchronously when PostPlay opens", async () => {
       const args = makeArgs({ hasNextItem: true, wtInSession: false });
       renderHook(() => usePostPlay(args));
 
@@ -254,7 +245,10 @@ describe("usePostPlay", () => {
         triggerEof();
       });
 
-      expect(invoke).toHaveBeenCalledWith("player_pause");
+      // Under prexu-ve9, usePostPlay dispatches the pause through the
+      // player contract. The native backend wraps invoke("player_pause"),
+      // HTML5 wraps video.pause(). The contract is what we're testing here.
+      expect(args.player.pause).toHaveBeenCalled();
     });
   });
 

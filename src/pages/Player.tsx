@@ -7,9 +7,8 @@
  * and instantly reveals it on stop.
  */
 
-import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react";
 import { Navigate } from "react-router-dom";
-import { invoke } from "@tauri-apps/api/core";
 import { useAuth } from "../hooks/useAuth";
 import { usePlayerSession, type PlayerWatchTogether } from "../contexts/PlayerContext";
 import { getImageUrl } from "../services/plex-library";
@@ -41,7 +40,6 @@ import PostPlayScreen from "../components/player/PostPlayScreen";
 import KeyboardShortcutsOverlay from "../components/player/KeyboardShortcutsOverlay";
 import MinimizedPlayer from "../components/player/MinimizedPlayer";
 import type { NormalizationPreset } from "../types/preferences";
-import { buildSubtitleCss } from "../utils/subtitle-css";
 import { logger } from "../services/logger";
 import { hasNextItem as computeHasNextItem } from "./player-postplay-gate";
 import { derivePostPlayDetailProps } from "./player-postplay-props";
@@ -74,45 +72,13 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   const { preferences, updatePreferences } = usePreferences();
   const pb = preferences.playback;
 
-  // Subtitle styling via ::cue CSS (HTML5 path only — native uses libass).
-  const subtitleCss = useMemo(() => buildSubtitleCss(pb.subtitleStyle), [pb.subtitleStyle]);
+  // Subtitle styling — dispatched to the active backend (native uses libass
+  // via invoke + ready-gated retry; HTML5 maintains a <style id="prexu-
+  // subtitle-style"> tag with ::cue CSS derived from prefs). Player.tsx
+  // doesn't know which is active — the hook contract does (prexu-ve9).
   useEffect(() => {
-    if (IS_NATIVE_PLAYER) return;
-    const id = "prexu-subtitle-style";
-    let styleEl = document.getElementById(id) as HTMLStyleElement | null;
-    if (!styleEl) {
-      styleEl = document.createElement("style");
-      styleEl.id = id;
-      document.head.appendChild(styleEl);
-    }
-    styleEl.textContent = subtitleCss;
-    return () => {
-      styleEl?.remove();
-    };
-  }, [subtitleCss]);
-
-  // Apply libass subtitle style on the native path. Re-fires on every
-  // pb.subtitleStyle / pb.subtitleSize change AND once mpv signals ready
-  // (player.isLoading false). The ready-trigger covers the initial load
-  // case where ensure_init creates mpv after this effect first runs.
-  useEffect(() => {
-    if (!IS_NATIVE_PLAYER) return;
-    if (player.isLoading) return;
-    const style = {
-      size: pb.subtitleSize,
-      fontFamily: pb.subtitleStyle.fontFamily,
-      textColor: pb.subtitleStyle.textColor,
-      backgroundColor: pb.subtitleStyle.backgroundColor,
-      backgroundOpacity: pb.subtitleStyle.backgroundOpacity,
-      outlineColor: pb.subtitleStyle.outlineColor,
-      outlineWidth: pb.subtitleStyle.outlineWidth,
-      shadowEnabled: pb.subtitleStyle.shadowEnabled,
-    };
-    logger.info("player", "player_apply_sub_style", style);
-    invoke("player_apply_sub_style", { style }).catch((err) =>
-      logger.error("player", "player_apply_sub_style failed", String(err)),
-    );
-  }, [player.isLoading, pb.subtitleSize, pb.subtitleStyle]);
+    player.applySubtitleStyle({ size: pb.subtitleSize, style: pb.subtitleStyle });
+  }, [player, pb.subtitleSize, pb.subtitleStyle]);
 
   // On the native player path, make body transparent while this route is
   // mounted so the underlying mpv host HWND shows through. MUST be
@@ -160,55 +126,39 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
       normalizationPreset?: NormalizationPreset;
       audioOffsetMs?: number;
     }) => {
+      // Web Audio side — authoritative for HTML5, additional layer on native.
       if (changes.volumeBoost !== undefined) {
         audioEnhancements.setVolumeBoost(changes.volumeBoost);
       }
       if (changes.normalizationPreset !== undefined) {
         audioEnhancements.setNormalizationPreset(changes.normalizationPreset);
-        if (IS_NATIVE_PLAYER) {
-          logger.info("player", "player_set_af_chain", { preset: changes.normalizationPreset });
-          invoke("player_set_af_chain", { preset: changes.normalizationPreset }).catch(
-            (err) => logger.error("player", "player_set_af_chain failed", String(err)),
-          );
-        }
       }
       if (changes.audioOffsetMs !== undefined) {
         audioEnhancements.setAudioOffsetMs(changes.audioOffsetMs);
-        if (IS_NATIVE_PLAYER) {
-          logger.info("player", "player_set_audio_delay_ms", { ms: changes.audioOffsetMs });
-          invoke("player_set_audio_delay_ms", { ms: changes.audioOffsetMs }).catch(
-            (err) => logger.error("player", "player_set_audio_delay_ms failed", String(err)),
-          );
-        }
       }
+      // Backend IPC bridge — native dispatches to mpv; HTML5 is a no-op.
+      player.applyAudioEnhancement({
+        normalizationPreset: changes.normalizationPreset,
+        audioOffsetMs: changes.audioOffsetMs,
+      });
       updatePreferences({ playback: changes });
     },
-    [audioEnhancements, updatePreferences],
+    [audioEnhancements, updatePreferences, player],
   );
 
-  // Apply persisted audio enhancements once mpv is ready on the native path.
-  // Web Audio path (HTML5) handles initial values via useAudioEnhancements
-  // constructor args; native path needs explicit invokes after mpv exists.
-  const initialAfAppliedRef = useRef(false);
+  // Prime the native backend with current audio-enhancement prefs once.
+  // useNativePlayer caches the latest applyAudioEnhancement call and
+  // flushes it on player://ready, so persisted normalization/delay settings
+  // survive cold start. HTML5's applyAudioEnhancement is a no-op (Web
+  // Audio constructor args already covered initial values). Only fires
+  // on mount — subsequent user changes go through handleAudioEnhancementChange.
   useEffect(() => {
-    if (!IS_NATIVE_PLAYER) return;
-    if (player.isLoading) {
-      initialAfAppliedRef.current = false;
-      return;
-    }
-    if (initialAfAppliedRef.current) return;
-    initialAfAppliedRef.current = true;
-    logger.info("player", "applying initial audio enhancements", {
-      preset: pb.normalizationPreset,
+    player.applyAudioEnhancement({
+      normalizationPreset: pb.normalizationPreset,
       audioOffsetMs: pb.audioOffsetMs,
     });
-    invoke("player_set_af_chain", { preset: pb.normalizationPreset }).catch(
-      (err) => logger.error("player", "initial player_set_af_chain failed", String(err)),
-    );
-    invoke("player_set_audio_delay_ms", { ms: pb.audioOffsetMs }).catch(
-      (err) => logger.error("player", "initial player_set_audio_delay_ms failed", String(err)),
-    );
-  }, [player.isLoading, pb.normalizationPreset, pb.audioOffsetMs]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only prime
+  }, []);
 
   // Sync main volume's above-1.0 boost to the audio graph's GainNode
   useEffect(() => {

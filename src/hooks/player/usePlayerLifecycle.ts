@@ -18,7 +18,6 @@
  */
 
 import { useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { IS_NATIVE_PLAYER, type UsePlayerResult } from "../usePlayer";
 import type { UsePopOutPlayerResult } from "./usePopOutPlayer";
 import type { PlayerContextValue } from "../../contexts/PlayerContext";
@@ -50,23 +49,25 @@ export interface UsePlayerLifecycleResult {
 }
 
 export function usePlayerLifecycle({
-  player: _player,
+  player,
   popOut,
   playerSession,
   isFullscreenRef,
 }: UsePlayerLifecycleArgs): UsePlayerLifecycleResult {
   // Single source of truth for "if we're currently fullscreen, drop it".
   // Used by all three callbacks. Swallows errors — the unload path's
-  // teardown is the safety net.
+  // teardown is the safety net. Dispatches through player.setFullscreen
+  // so the backend (native = mpv via invoke, HTML5 = document.exitFullscreen)
+  // owns the actual IPC. Skipped entirely when no fullscreen is active so
+  // neither backend has to handle an unnecessary transition.
   const exitFullscreenIfActive = useCallback(async () => {
-    if (!IS_NATIVE_PLAYER) return;
     if (!isFullscreenRef.current) return;
     try {
-      await invoke("player_set_fullscreen", { fullscreen: false });
+      await player.setFullscreen(false);
     } catch {
       // Swallow — cleanup path's fullscreen-exit safety net catches up.
     }
-  }, [isFullscreenRef]);
+  }, [isFullscreenRef, player]);
 
   // Pre-exit cleanup: paint body opaque + drop fullscreen before tearing
   // mpv down. The useLayoutEffect cleanup in Player.tsx SHOULD run sync
@@ -81,9 +82,13 @@ export function usePlayerLifecycle({
   // The body-bg consolidation lives in prexu-r3l; keep this band-aid
   // intact for now.
   const prepareNavAway = useCallback(async () => {
-    if (IS_NATIVE_PLAYER) {
-      document.body.style.background = "#1a1a2e";
-    }
+    // Paint body navy unconditionally. On HTML5 this is effectively a no-op
+    // (nothing made body transparent); on native it matches the Player.tsx
+    // useLayoutEffect cleanup that paints body navy on unmount. The body-bg
+    // consolidation lives in prexu-r3l — the IS_NATIVE_PLAYER guard that
+    // used to wrap this line is removed as part of prexu-ve9 (HTML5 path is
+    // idempotent against the default styling).
+    document.body.style.background = "#1a1a2e";
     await exitFullscreenIfActive();
   }, [exitFullscreenIfActive]);
 
@@ -108,15 +113,15 @@ export function usePlayerLifecycle({
       }
     }
     await prepareNavAway();
-    if (IS_NATIVE_PLAYER) {
-      try {
-        await invoke("player_unload");
-      } catch (err) {
-        logger.warn("player", "handleExit player_unload failed", String(err));
-      }
+    try {
+      // Dispatches to backend: native runs player_unload (silences audio
+      // synchronously); HTML5 is a no-op (unmount cleanup handles it).
+      await player.unload();
+    } catch (err) {
+      logger.warn("player", "handleExit player.unload failed", String(err));
     }
     playerSession.stop();
-  }, [prepareNavAway, playerSession, popOut]);
+  }, [prepareNavAway, playerSession, popOut, player]);
 
   // Previous = go to the prior episode/queue item. Mirrors handleNextEpisode
   // shape: queue first, then Plex episode-nav fallback. We deliberately do

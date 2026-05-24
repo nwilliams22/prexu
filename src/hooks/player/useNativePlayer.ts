@@ -29,6 +29,10 @@ import type {
   PlexChapter,
   PlexMarker,
 } from "../../types/library";
+import type {
+  NormalizationPreset,
+  SubtitleStylePreferences,
+} from "../../types/preferences";
 import type { UsePlayerResult } from "../usePlayer";
 import { logger } from "../../services/logger";
 
@@ -93,6 +97,32 @@ export function useNativePlayer(
   const offsetOverrideRef = useRef(offsetOverride);
   offsetOverrideRef.current = offsetOverride;
 
+  // ── Backend dispatch ref state (prexu-ve9) ──
+  // Track readiness so applySubtitleStyle / applyAudioEnhancement can defer
+  // IPC until mpv exists. isLoading starts true and flips false on
+  // player://ready; we mirror it in a ref so the callbacks stay stable.
+  const isReadyRef = useRef(false);
+  // Latest sub-style awaiting (re-)apply when mpv becomes ready. mpv only
+  // accepts sub-* property writes once it has a handle, so changes that
+  // arrive pre-ready are buffered here and flushed in the ready handler.
+  const pendingSubStyleRef = useRef<
+    { size: number; style: SubtitleStylePreferences } | null
+  >(null);
+  // Latest audio-enhancement state awaiting initial apply at ready time.
+  // Player.tsx populates this once via applyAudioEnhancement(prefs) before
+  // mpv exists, and we replay it on ready so persisted prefs survive
+  // restart. Subsequent user changes hit the live IPCs directly.
+  const pendingAfRef = useRef<{
+    normalizationPreset?: NormalizationPreset;
+    audioOffsetMs?: number;
+  } | null>(null);
+  // Subscriber slots for the public subscribeToEof contract. Kept separate
+  // from the bookkeeping listener below (which handles
+  // addPendingWatchSync + reportTimeline + setIsPlaying); these fire so
+  // consumers like usePostPlay can react to EOF without each backend re-
+  // implementing the trigger.
+  const eofSubscribersRef = useRef<Set<() => void>>(new Set());
+
   // Keep timeline refs in sync
   useEffect(() => {
     timeline.currentTimeRef.current = currentTime;
@@ -119,8 +149,64 @@ export function useNativePlayer(
         listen<number>("player://buffered", (e) => setBuffered(e.payload)),
         listen<null>("player://ready", () => {
           logger.info("player", "received ready event");
+          isReadyRef.current = true;
           setIsLoading(false);
           setIsBuffering(false);
+          // Flush any sub-style change that arrived before mpv existed.
+          // applySubtitleStyle stores the latest request in
+          // pendingSubStyleRef; we replay it here so the persisted prefs
+          // take effect on cold start without Player.tsx having to retry.
+          const subStyle = pendingSubStyleRef.current;
+          if (subStyle) {
+            const payload = {
+              size: subStyle.size,
+              fontFamily: subStyle.style.fontFamily,
+              textColor: subStyle.style.textColor,
+              backgroundColor: subStyle.style.backgroundColor,
+              backgroundOpacity: subStyle.style.backgroundOpacity,
+              outlineColor: subStyle.style.outlineColor,
+              outlineWidth: subStyle.style.outlineWidth,
+              shadowEnabled: subStyle.style.shadowEnabled,
+            };
+            logger.info("player", "ready-flush player_apply_sub_style", payload);
+            invoke("player_apply_sub_style", { style: payload }).catch((err) =>
+              logger.error("player", "ready-flush player_apply_sub_style failed", String(err)),
+            );
+          }
+          // Flush initial audio-enhancement state. Web Audio path handles
+          // its own initial values via constructor args; native needs an
+          // explicit IPC pair once mpv exists. Player.tsx primes
+          // pendingAfRef with the current prefs via applyAudioEnhancement
+          // before ready fires.
+          const af = pendingAfRef.current;
+          if (af) {
+            if (af.normalizationPreset !== undefined) {
+              logger.info("player", "ready-flush player_set_af_chain", {
+                preset: af.normalizationPreset,
+              });
+              invoke("player_set_af_chain", { preset: af.normalizationPreset }).catch(
+                (err) =>
+                  logger.error(
+                    "player",
+                    "ready-flush player_set_af_chain failed",
+                    String(err),
+                  ),
+              );
+            }
+            if (af.audioOffsetMs !== undefined) {
+              logger.info("player", "ready-flush player_set_audio_delay_ms", {
+                ms: af.audioOffsetMs,
+              });
+              invoke("player_set_audio_delay_ms", { ms: af.audioOffsetMs }).catch(
+                (err) =>
+                  logger.error(
+                    "player",
+                    "ready-flush player_set_audio_delay_ms failed",
+                    String(err),
+                  ),
+              );
+            }
+          }
         }),
         listen<null>("player://eof", () => {
           logger.info("player", "received eof event");
@@ -137,6 +223,15 @@ export function useNativePlayer(
               timeline.currentTimeRef.current * 1000,
               timeline.durationRef.current * 1000,
             );
+          }
+          // Notify public subscribeToEof consumers. Kept separate from the
+          // bookkeeping above so each side can evolve independently.
+          for (const fn of eofSubscribersRef.current) {
+            try {
+              fn();
+            } catch (err) {
+              logger.error("player", "eof subscriber threw", String(err));
+            }
           }
         }),
         listen<string>("player://error", (e) => {
@@ -173,6 +268,13 @@ export function useNativePlayer(
     timeline.ratingKeyRef.current = ratingKey;
     setIsLoading(true);
     setPlaybackError(null);
+    // isReadyRef intentionally NOT reset here: once mpv exists (after the
+    // first player://ready), it accepts sub-* and af property writes at
+    // any time, including while a new file is loading. Resetting on each
+    // initPlayback would re-defer subsequent applySubtitleStyle calls
+    // unnecessarily and races against the post-render dep-driven re-fire
+    // of this very effect. useRef(false) gives us the correct first-mount
+    // semantics for the genuine cold-start deferral case.
 
     try {
       const prepared = await prepareSource({
@@ -356,17 +458,29 @@ export function useNativePlayer(
 
   const isFullscreenRef = useRef(isFullscreen);
   isFullscreenRef.current = isFullscreen;
-  const toggleFullscreen = useCallback(() => {
-    const next = !isFullscreenRef.current;
-    logger.info("player", "toggleFullscreen", { current: isFullscreenRef.current, next });
-    setIsFullscreen(next);
-    invoke("player_set_fullscreen", { fullscreen: next })
-      .then(() => logger.debug("player", "fullscreen command completed"))
-      .catch((err) => {
-        logger.error("player", "fullscreen command failed", String(err));
-        setIsFullscreen(!next);
-      });
+
+  // Primitive setter — used by both toggleFullscreen and the public
+  // setFullscreen method on UsePlayerResult. Optimistically updates React
+  // state; on IPC failure we roll back so the controls match reality.
+  const setFullscreen = useCallback(async (fullscreen: boolean) => {
+    logger.info("player", "setFullscreen", {
+      current: isFullscreenRef.current,
+      next: fullscreen,
+    });
+    setIsFullscreen(fullscreen);
+    try {
+      await invoke("player_set_fullscreen", { fullscreen });
+      logger.debug("player", "fullscreen command completed");
+    } catch (err) {
+      logger.error("player", "fullscreen command failed", String(err));
+      setIsFullscreen(!fullscreen);
+      throw err;
+    }
   }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    void setFullscreen(!isFullscreenRef.current).catch(() => {});
+  }, [setFullscreen]);
 
   // Plex stream IDs are global Library IDs (e.g. 234567); mpv's aid/sid
   // expects 1-indexed positions in the file's track list. categorizeStreams
@@ -428,6 +542,108 @@ export function useNativePlayer(
     initPlayback();
   }, [initPlayback]);
 
+  // ── Public dispatch methods (prexu-ve9) ──────────────────────────────────
+
+  // Idempotent pause — invoked by usePostPlay when the overlay opens so audio
+  // doesn't leak under the post-play screen. mpv treats "set pause=true on
+  // already-paused" as a no-op.
+  const pause = useCallback(() => {
+    logger.debug("player", "pause (public)");
+    invoke("player_pause").catch((err) =>
+      logger.warn("player", "pause failed", String(err)),
+    );
+  }, []);
+
+  // Public unload — exposes the existing player_unload command so
+  // usePlayerLifecycle.exit can drive teardown without invoking directly.
+  // The unmount-time cleanup useEffect below still issues its own unload;
+  // calling this BEFORE unmount (current sequencing) ensures audio is
+  // silenced synchronously. mpv's player_unload is idempotent at the Rust
+  // layer (destroy() guards on the optional handle).
+  const unload = useCallback(async () => {
+    logger.info("player", "unload (public)");
+    await invoke("player_unload");
+  }, []);
+
+  // Public EOF subscription. The internal listener in the effect above
+  // handles bookkeeping (timeline report, watch-sync); this set is for
+  // consumer-side reactions (e.g. usePostPlay deciding whether to flip
+  // the PostPlay overlay open). Returns a stable unsubscribe.
+  const subscribeToEof = useCallback((handler: () => void) => {
+    eofSubscribersRef.current.add(handler);
+    return () => {
+      eofSubscribersRef.current.delete(handler);
+    };
+  }, []);
+
+  // Cache the latest sub-style request and apply it now if mpv is ready;
+  // otherwise the ready listener above will flush pendingSubStyleRef.
+  // This replaces the Player.tsx isLoading-gate + retry-on-ready pattern.
+  const applySubtitleStyle = useCallback(
+    ({ size, style }: { size: number; style: SubtitleStylePreferences }) => {
+      pendingSubStyleRef.current = { size, style };
+      if (!isReadyRef.current) {
+        logger.debug("player", "applySubtitleStyle deferred (mpv not ready)");
+        return;
+      }
+      const payload = {
+        size,
+        fontFamily: style.fontFamily,
+        textColor: style.textColor,
+        backgroundColor: style.backgroundColor,
+        backgroundOpacity: style.backgroundOpacity,
+        outlineColor: style.outlineColor,
+        outlineWidth: style.outlineWidth,
+        shadowEnabled: style.shadowEnabled,
+      };
+      logger.info("player", "player_apply_sub_style", payload);
+      invoke("player_apply_sub_style", { style: payload }).catch((err) =>
+        logger.error("player", "player_apply_sub_style failed", String(err)),
+      );
+    },
+    [],
+  );
+
+  // Audio enhancement IPC bridge. Before mpv is ready we buffer the desired
+  // state in pendingAfRef so the ready handler can flush it (covers cold
+  // start where persisted prefs need to be applied once). After ready we
+  // hit the IPCs directly so user-driven changes are immediate.
+  const applyAudioEnhancement = useCallback(
+    (changes: {
+      normalizationPreset?: NormalizationPreset;
+      audioOffsetMs?: number;
+    }) => {
+      // Merge the latest fields into the pending bag so a later ready
+      // flush sees the full state, even if changes arrived as separate
+      // partial calls.
+      pendingAfRef.current = {
+        ...(pendingAfRef.current ?? {}),
+        ...changes,
+      };
+      if (!isReadyRef.current) {
+        logger.debug("player", "applyAudioEnhancement deferred (mpv not ready)", changes);
+        return;
+      }
+      if (changes.normalizationPreset !== undefined) {
+        logger.info("player", "player_set_af_chain", {
+          preset: changes.normalizationPreset,
+        });
+        invoke("player_set_af_chain", { preset: changes.normalizationPreset }).catch(
+          (err) => logger.error("player", "player_set_af_chain failed", String(err)),
+        );
+      }
+      if (changes.audioOffsetMs !== undefined) {
+        logger.info("player", "player_set_audio_delay_ms", {
+          ms: changes.audioOffsetMs,
+        });
+        invoke("player_set_audio_delay_ms", { ms: changes.audioOffsetMs }).catch(
+          (err) => logger.error("player", "player_set_audio_delay_ms failed", String(err)),
+        );
+      }
+    },
+    [],
+  );
+
   return useMemo<UsePlayerResult>(
     () => ({
       videoRef,
@@ -459,6 +675,12 @@ export function useNativePlayer(
       selectAudioTrack,
       selectSubtitleTrack,
       retry,
+      pause,
+      unload,
+      setFullscreen,
+      subscribeToEof,
+      applySubtitleStyle,
+      applyAudioEnhancement,
     }),
     [
       title,
@@ -489,6 +711,12 @@ export function useNativePlayer(
       selectAudioTrack,
       selectSubtitleTrack,
       retry,
+      pause,
+      unload,
+      setFullscreen,
+      subscribeToEof,
+      applySubtitleStyle,
+      applyAudioEnhancement,
     ],
   );
 }

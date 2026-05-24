@@ -4,8 +4,9 @@
  * Extracted from Player.tsx (prexu-ps6). Owns:
  *   - `showPostPlay` + `postPlayShownRef` (overlay visibility latch).
  *   - `postPlayDetail` enriched-metadata state + the fetch effect.
- *   - The EOF subscription effect (mpv `player://eof` on native,
- *     `<video>.ended` on HTML5).
+ *   - The EOF subscription effect (dispatched through
+ *     `player.subscribeToEof` — the backend picks between mpv
+ *     `player://eof` and `<video>.ended`).
  *   - The ratingKey reset effect (clears showPostPlay + detail on swap).
  *   - The mini-mode PostPlay handoff (autoplay → fire next, else
  *     restore-from-minimize so the user can see the overlay).
@@ -15,14 +16,13 @@
  *   - EOF with `!hasNextItem && !wtInSession` → calls `onExit` so the
  *     user lands back on the dashboard instead of a paused-at-EOF black
  *     frame.
- *   - PostPlay open pauses the underlying player synchronously
- *     (native: `invoke("player_pause")`; HTML5: `videoRef.current.pause()`).
+ *   - PostPlay open pauses the underlying player synchronously via
+ *     `player.pause()` (backend dispatches to mpv or `<video>`).
  *   - WT-in-session never fires PostPlay; the host drives flow.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { IS_NATIVE_PLAYER, type UsePlayerResult } from "../usePlayer";
+import type { UsePlayerResult } from "../usePlayer";
 import type { PlexEpisode, PlexMediaItem } from "../../types/library";
 import type { PlaybackQueue, QueueItem } from "../../types/queue";
 import { getItemMetadata } from "../../services/plex-library";
@@ -96,16 +96,16 @@ export function usePostPlay({
   // Keep refs to the latest callbacks so the EOF effect doesn't need to
   // re-subscribe (and the listener doesn't capture a stale closure) on
   // every render. The EOF effect re-binds only when its true dependencies
-  // — videoRef, hasNextItem, wtInSession — actually change.
+  // — hasNextItem, wtInSession, itemType, queue fields — actually change.
   const onExitRef = useRef(onExit);
   onExitRef.current = onExit;
 
-  // videoRef is itself a stable ref but we re-capture it in a local ref so
-  // the EOF handler can read it without participating in the effect deps.
-  const videoRefRef = useRef(player.videoRef);
-  videoRefRef.current = player.videoRef;
-
   // ── EOF subscription ────────────────────────────────────────────────────
+  // Single path now — player.subscribeToEof dispatches to the correct
+  // backend (mpv player://eof on native, video.addEventListener("ended")
+  // on HTML5). The pause-on-PostPlay call below is similarly dispatched
+  // via player.pause(). usePostPlay no longer touches videoRef directly
+  // (prexu-ve9).
   useEffect(() => {
     const handleEnded = () => {
       // hasNextItem encodes "real successor exists":
@@ -130,13 +130,7 @@ export function usePostPlay({
         // re-issues loadfile) leaks audio/video under the overlay; (b) on
         // HTML5, browsers may fire `ended` then auto-restart on certain
         // codecs. Idempotent — pausing an already-paused player is a no-op.
-        if (IS_NATIVE_PLAYER) {
-          invoke("player_pause").catch((err) =>
-            logger.warn("player", "PostPlay pause failed", String(err)),
-          );
-        } else {
-          videoRefRef.current.current?.pause();
-        }
+        player.pause();
         setShowPostPlay(true);
         return;
       }
@@ -149,28 +143,9 @@ export function usePostPlay({
         onExitRef.current();
       }
     };
-    if (IS_NATIVE_PLAYER) {
-      // Native path: HTMLVideoElement is null, subscribe to mpv's EndFile via
-      // the Tauri bridge instead. Same trigger condition as the HTML5 path.
-      let unlisten: (() => void) | null = null;
-      let cancelled = false;
-      (async () => {
-        const { listen } = await import("@tauri-apps/api/event");
-        const off = await listen("player://eof", handleEnded);
-        if (cancelled) off();
-        else unlisten = off;
-      })();
-      return () => {
-        cancelled = true;
-        unlisten?.();
-      };
-    }
-    const video = player.videoRef.current;
-    if (!video) return;
-    video.addEventListener("ended", handleEnded);
-    return () => video.removeEventListener("ended", handleEnded);
+    return player.subscribeToEof(handleEnded);
   }, [
-    player.videoRef,
+    player,
     hasNextItem,
     wtInSession,
     itemType,

@@ -34,6 +34,12 @@ import type {
   PlexMarker,
   PlexStream,
 } from "../types/library";
+import type {
+  NormalizationPreset,
+  SubtitleStylePreferences,
+} from "../types/preferences";
+import { buildSubtitleCss } from "../utils/subtitle-css";
+import { logger } from "../services/logger";
 
 export const IS_NATIVE_PLAYER =
   typeof window !== "undefined" &&
@@ -85,6 +91,40 @@ export interface UsePlayerResult {
   selectAudioTrack: (streamId: number) => void;
   selectSubtitleTrack: (streamId: number | null) => void;
   retry: () => void;
+
+  // ── Backend dispatch methods (prexu-ve9) ─────────────────────────────────
+  // These let consumers drive platform-specific player IPC without
+  // branching on IS_NATIVE_PLAYER. Each backend implements them per its
+  // own semantics; the consumer just calls the method on `player`.
+
+  /** Pause playback. No-op if already paused. Idempotent. */
+  pause: () => void;
+  /** Tear down the player. Native: invoke("player_unload"). HTML5: no-op
+   *  (unmount cleanup handles it). Caller awaits before navigating away. */
+  unload: () => Promise<void>;
+  /** Set fullscreen explicitly. Native: invoke("player_set_fullscreen").
+   *  HTML5: document.requestFullscreen / exitFullscreen on documentElement.
+   *  Returns when the OS transition has been requested (not necessarily
+   *  settled). */
+  setFullscreen: (fullscreen: boolean) => Promise<void>;
+  /** Subscribe to end-of-file. Native: listen to player://eof. HTML5:
+   *  video.addEventListener("ended"). Returns an unsubscribe function. */
+  subscribeToEof: (handler: () => void) => () => void;
+  /** Apply a libass/CSS subtitle style. Native: caches latest and invokes
+   *  player_apply_sub_style once mpv is ready (re-applies on every change).
+   *  HTML5: maintains a <style id="prexu-subtitle-style"> tag with ::cue
+   *  CSS derived from the prefs via buildSubtitleCss. */
+  applySubtitleStyle: (args: { size: number; style: SubtitleStylePreferences }) => void;
+  /** Apply audio enhancement changes that require backend-specific IPC.
+   *  Native: invoke("player_set_af_chain") and/or "player_set_audio_delay_ms".
+   *  HTML5: no-op (the Web Audio graph from useAudioEnhancements is the
+   *  authoritative path on HTML5). The caller should still update the
+   *  React-side audioEnhancements state for the Web Audio path; this
+   *  method only handles the backend-side IPC. */
+  applyAudioEnhancement: (changes: {
+    normalizationPreset?: NormalizationPreset;
+    audioOffsetMs?: number;
+  }) => void;
 }
 
 export function usePlayer(ratingKey: string, offsetOverride?: number | null): UsePlayerResult {
@@ -452,6 +492,71 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
     initPlayback();
   }, [initPlayback]);
 
+  // ── Backend dispatch methods (prexu-ve9) ─────────────────────────────────
+  const pause = useCallback(() => {
+    videoRef.current?.pause();
+  }, []);
+
+  const unload = useCallback(async () => {
+    // HTML5 path: unmount cleanup tears down hls.js + timeline. Nothing
+    // synchronous needed here. Keep the Promise so callers can await without
+    // branching.
+    logger.debug("player", "html5 unload (no-op)");
+  }, []);
+
+  const setFullscreen = useCallback(async (fullscreen: boolean) => {
+    if (fullscreen) {
+      await document.documentElement.requestFullscreen().catch(() => {});
+    } else if (document.fullscreenElement) {
+      await document.exitFullscreen().catch(() => {});
+    }
+  }, []);
+
+  const subscribeToEof = useCallback((handler: () => void) => {
+    const video = videoRef.current;
+    if (!video) return () => {};
+    video.addEventListener("ended", handler);
+    return () => video.removeEventListener("ended", handler);
+  }, []);
+
+  // HTML5 sub-style: maintain a <style id="prexu-subtitle-style"> tag so
+  // ::cue rules style WebVTT/native text tracks rendered by the browser.
+  // The native path uses libass through invoke; here we own the DOM
+  // insertion ourselves so Player.tsx doesn't have to know which backend
+  // it's driving.
+  const applySubtitleStyle = useCallback(
+    ({ style }: { size: number; style: SubtitleStylePreferences }) => {
+      const id = "prexu-subtitle-style";
+      let styleEl = document.getElementById(id) as HTMLStyleElement | null;
+      if (!styleEl) {
+        styleEl = document.createElement("style");
+        styleEl.id = id;
+        document.head.appendChild(styleEl);
+      }
+      styleEl.textContent = buildSubtitleCss(style);
+    },
+    [],
+  );
+
+  // HTML5 path: audio enhancement runs through the Web Audio graph in
+  // useAudioEnhancements (volume boost, normalization, delay). No backend
+  // IPC needed — this method is a no-op so consumers can call it
+  // unconditionally. The Web Audio side is still updated by Player.tsx.
+  const applyAudioEnhancement = useCallback(
+    (_changes: { normalizationPreset?: NormalizationPreset; audioOffsetMs?: number }) => {
+      // intentional no-op — Web Audio path is the authoritative chain
+    },
+    [],
+  );
+
+  // Clean up the injected <style> tag on unmount so navigating away from
+  // the player doesn't leave global ::cue CSS in <head>.
+  useEffect(() => {
+    return () => {
+      document.getElementById("prexu-subtitle-style")?.remove();
+    };
+  }, []);
+
   return {
     videoRef,
     title,
@@ -482,5 +587,11 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
     selectAudioTrack: streams.selectAudioTrack,
     selectSubtitleTrack: streams.selectSubtitleTrack,
     retry,
+    pause,
+    unload,
+    setFullscreen,
+    subscribeToEof,
+    applySubtitleStyle,
+    applyAudioEnhancement,
   };
 }
