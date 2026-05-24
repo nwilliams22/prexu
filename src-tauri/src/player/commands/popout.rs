@@ -171,6 +171,59 @@ fn write_window_rect(
     }
 }
 
+/// Determine which work-area corner a window at `(x, y, w, h)` is nearest
+/// to, by summing the L1 distance between matching corners. Used on
+/// exit_popout to capture a user-dragged position back into the
+/// `MinimizeCorner` enum so the next entry reopens there.
+///
+/// We compare BOTH endpoints of the window's rect against the matching
+/// endpoints of each work-area corner (not just the top-left) so a window
+/// dragged near the bottom-right work-area corner picks BottomRight even
+/// if its own top-left happens to be closer to TopRight in absolute
+/// distance. This matches what a user means by "I dragged it to that
+/// corner."
+#[cfg(target_os = "windows")]
+fn nearest_corner(
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    wx: i32,
+    wy: i32,
+    ww: i32,
+    wh: i32,
+) -> MinimizeCorner {
+    let right = x + w;
+    let bottom = y + h;
+    let work_right = wx + ww;
+    let work_bottom = wy + wh;
+
+    let candidates = [
+        (
+            MinimizeCorner::TopLeft,
+            (x - wx).abs() + (y - wy).abs(),
+        ),
+        (
+            MinimizeCorner::TopRight,
+            (right - work_right).abs() + (y - wy).abs(),
+        ),
+        (
+            MinimizeCorner::BottomLeft,
+            (x - wx).abs() + (bottom - work_bottom).abs(),
+        ),
+        (
+            MinimizeCorner::BottomRight,
+            (right - work_right).abs() + (bottom - work_bottom).abs(),
+        ),
+    ];
+
+    candidates
+        .iter()
+        .min_by_key(|(_, d)| *d)
+        .map(|(c, _)| *c)
+        .unwrap_or(MinimizeCorner::BottomRight)
+}
+
 /// Compute the (x, y) origin for a `(width, height)` window snapped to
 /// `corner` of the work area `(wx, wy, ww, wh)`. Width/height are clamped
 /// against the work-area dimensions so a too-large request still fits.
@@ -362,27 +415,54 @@ pub async fn player_exit_popout(
         .get_webview_window("main")
         .ok_or_else(|| "main webview window not found".to_string())?;
 
-    // Capture the user's current size BEFORE restoring so any post-enter
-    // resize is preserved. Read via Win32 GetWindowRect so the stored value
-    // matches what SetWindowPos on a subsequent enter will receive.
+    // Capture the user's current size AND position BEFORE restoring so any
+    // post-enter resize and drag is preserved. Read via Win32 GetWindowRect
+    // so the stored value matches what SetWindowPos on a subsequent enter
+    // will receive.
+    //
+    // Position is derived back into a corner via nearest_corner so it round-
+    // trips through the existing `MinimizeCorner` enum the rest of the
+    // system speaks. The user's drag may have landed mid-screen rather than
+    // at a true corner — snapping to the nearest is the standard UX for
+    // corner-anchored pop-out windows and matches what Plex Web does.
     match read_window_rect(&main) {
-        Ok((_, _, rw, rh)) => match app.store(POPOUT_STORE_PATH) {
-            Ok(store) => {
-                store.set(
-                    POPOUT_KEY_SIZE,
-                    serde_json::json!({ "width": rw, "height": rh }),
-                );
-                if let Err(e) = store.save() {
-                    log::warn!("[player:popout] resize-on-exit save failed: {:?}", e);
-                } else {
-                    log::debug!(
-                        "[player:popout] persisted resized size {}x{} on exit",
-                        rw, rh
-                    );
+        Ok((rx, ry, rw, rh)) => {
+            let detected_corner = match current_work_area(&main) {
+                Ok((wx, wy, ww, wh)) => {
+                    Some(nearest_corner(rx, ry, rw, rh, wx, wy, ww, wh))
                 }
+                Err(e) => {
+                    log::warn!(
+                        "[player:popout] current_work_area failed on exit, corner persistence skipped: {}",
+                        e
+                    );
+                    None
+                }
+            };
+            match app.store(POPOUT_STORE_PATH) {
+                Ok(store) => {
+                    if let Some(corner) = detected_corner {
+                        let corner_str = serde_json::to_value(corner).unwrap_or_else(|_| {
+                            serde_json::Value::String(POPOUT_DEFAULT_CORNER.to_string())
+                        });
+                        store.set(POPOUT_KEY_CORNER, corner_str);
+                    }
+                    store.set(
+                        POPOUT_KEY_SIZE,
+                        serde_json::json!({ "width": rw, "height": rh }),
+                    );
+                    if let Err(e) = store.save() {
+                        log::warn!("[player:popout] resize-on-exit save failed: {:?}", e);
+                    } else {
+                        log::debug!(
+                            "[player:popout] persisted exit geometry corner={:?} size={}x{}",
+                            detected_corner, rw, rh
+                        );
+                    }
+                }
+                Err(e) => log::warn!("[player:popout] resize-on-exit store open failed: {:?}", e),
             }
-            Err(e) => log::warn!("[player:popout] resize-on-exit store open failed: {:?}", e),
-        },
+        }
         Err(e) => log::warn!("[player:popout] resize-on-exit read failed: {}", e),
     }
 
@@ -444,4 +524,82 @@ pub async fn player_enter_popout(
 pub async fn player_exit_popout() -> Result<(), String> {
     log::warn!("[player:cmd] exit_popout called on non-Windows platform");
     Err("pop-out mode is only supported on Windows in Phase 4".into())
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::*;
+
+    // Reference work area used by most cases — a typical 1920x1080 primary
+    // monitor with a 40-px taskbar at the bottom, origin at (0, 0).
+    const WX: i32 = 0;
+    const WY: i32 = 0;
+    const WW: i32 = 1920;
+    const WH: i32 = 1040;
+
+    #[test]
+    fn nearest_corner_top_left() {
+        // Window snug against (0, 0)
+        let c = nearest_corner(0, 0, 480, 270, WX, WY, WW, WH);
+        assert_eq!(c, MinimizeCorner::TopLeft);
+    }
+
+    #[test]
+    fn nearest_corner_top_right() {
+        // Window right edge at work-area right edge, top at 0
+        let c = nearest_corner(WW - 480, 0, 480, 270, WX, WY, WW, WH);
+        assert_eq!(c, MinimizeCorner::TopRight);
+    }
+
+    #[test]
+    fn nearest_corner_bottom_left() {
+        let c = nearest_corner(0, WH - 270, 480, 270, WX, WY, WW, WH);
+        assert_eq!(c, MinimizeCorner::BottomLeft);
+    }
+
+    #[test]
+    fn nearest_corner_bottom_right() {
+        let c = nearest_corner(WW - 480, WH - 270, 480, 270, WX, WY, WW, WH);
+        assert_eq!(c, MinimizeCorner::BottomRight);
+    }
+
+    #[test]
+    fn nearest_corner_drag_mid_screen_upper_left_quadrant_picks_top_left() {
+        // User dragged the popout into the upper-left quadrant but not
+        // pinned to the corner — UX expectation is snap to TopLeft on exit.
+        let c = nearest_corner(200, 150, 480, 270, WX, WY, WW, WH);
+        assert_eq!(c, MinimizeCorner::TopLeft);
+    }
+
+    #[test]
+    fn nearest_corner_drag_into_upper_right_quadrant_picks_top_right() {
+        // Halfway to the right edge in x, near top in y
+        let c = nearest_corner(1100, 100, 480, 270, WX, WY, WW, WH);
+        assert_eq!(c, MinimizeCorner::TopRight);
+    }
+
+    #[test]
+    fn nearest_corner_negative_work_area_origin() {
+        // Multi-monitor: secondary monitor positioned above the primary so
+        // its work area has a negative `wy`. Window in its bottom-right
+        // should still report BottomRight.
+        let (wx, wy, ww, wh) = (1602, -2160, 3840, 2160);
+        let c = nearest_corner(wx + ww - 800, wy + wh - 600, 800, 600, wx, wy, ww, wh);
+        assert_eq!(c, MinimizeCorner::BottomRight);
+    }
+
+    #[test]
+    fn nearest_corner_regression_logged_drag_picks_bottom_left() {
+        // From the bug logs (prexu-dhg, 2026-05-24): popout dragged to
+        // (1936, -884), size 800x600, work area (1602, -2160, 3840x2160).
+        // The work area covers a secondary monitor positioned above + right
+        // of primary, so y is negative. Work-area y-midpoint is -1080;
+        // window top -884 is below that (Win32 y grows downward), so the
+        // window is in the LOWER-LEFT quadrant. Pre-fix this still
+        // persisted as BottomRight (the enter-time corner). Post-fix it
+        // correctly snaps to BottomLeft, matching where the window actually
+        // sits on screen.
+        let c = nearest_corner(1936, -884, 800, 600, 1602, -2160, 3840, 2160);
+        assert_eq!(c, MinimizeCorner::BottomLeft);
+    }
 }
