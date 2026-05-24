@@ -50,7 +50,7 @@ export interface PlayOptions {
   watchTogether?: PlayerWatchTogether;
 }
 
-interface PlayerContextValue {
+export interface PlayerContextValue {
   /** Active session, or null when the player is closed. */
   session: PlayerSession | null;
   /**
