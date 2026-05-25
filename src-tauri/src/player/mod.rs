@@ -396,6 +396,54 @@ impl PlayerState {
         Ok(())
     }
 
+    /// Soft stop: clear mpv's current file but KEEP the mpv handle, host
+    /// window, and event pump alive. Used by `player_stop` (the Tauri
+    /// command driving the per-episode handoff path on the TS side) so a
+    /// subsequent `player_load_url` just runs `loadfile` on the existing
+    /// instance instead of paying for a full destroy + ensure_init +
+    /// hwdec probe + DXGI swap chain rebuild cycle (prexu-7fe).
+    ///
+    /// Synchronous, fast: mute property + mpv `stop` command. After it
+    /// returns, mpv has no active file and is ready for the next
+    /// `loadfile`. No background teardown thread, no event-pump join.
+    ///
+    /// Deliberately does NOT set `pause=true` (unlike `destroy()`).
+    /// `pause` persists across `loadfile replace`, so flipping it on
+    /// here would leave the next episode paused at start. The synchronous
+    /// `mute=true` is the audio-cut guarantee for the brief gap; TS
+    /// resets `mute=false` on the next load_url so audio resumes
+    /// immediately when the new file is ready.
+    ///
+    /// Other state across `loadfile replace`:
+    ///   - aid / sid: reset to mpv defaults → TS re-sets per episode
+    ///   - external sub-add tracks: cleared by mpv on loadfile → no work
+    ///   - volume, audio-delay, af, sub-style: persist → TS ready-flush
+    ///     re-applies them idempotently after each load
+    ///
+    /// No-op when mpv isn't initialised (e.g. called twice, or before
+    /// the first load) — returns Ok so callers don't need to gate.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn stop_playback(&self) -> Result<(), String> {
+        let guard = self.inner.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
+        let Some(inner) = guard.as_ref() else {
+            log::debug!("[player] stop_playback: not initialised, no-op");
+            return Ok(());
+        };
+        log::info!("[player] stop_playback: clearing current file (keep mpv alive)");
+        // Mute synchronously — audio cut guarantee for the gap until
+        // the next load_url. mpv's `mute` property accepts a bool.
+        if let Err(e) = inner.mpv.set_property("mute", true) {
+            log::warn!("[player] stop_playback: mute set failed: {:?}", e);
+        }
+        // Send mpv `stop` to clear the playlist + current file. Next
+        // loadfile starts fresh. `stop` is fast (~ms) — no thread join
+        // needed because we're not terminating mpv.
+        if let Err(e) = inner.mpv.command("stop", &[]) {
+            log::warn!("[player] stop_playback: stop command failed: {:?}", e);
+        }
+        Ok(())
+    }
+
     /// Synchronously stop playback and destroy the mpv handle + host window.
     ///
     /// The key invariant: when this function returns, mpv is fully terminated
@@ -1072,6 +1120,25 @@ mod tests {
         state.mark_focus_lost();
         assert!(state.consume_focus_reassert());
         assert!(!state.consume_focus_reassert());
+    }
+
+    // ---- Soft stop (prexu-7fe) -----------------------------------------
+    //
+    // `stop_playback` operates on an initialised mpv handle. The only
+    // purely-testable surface without a real mpv is the no-op return
+    // when inner is None. The mpv `stop` command + mute property set
+    // path is covered by manual repro (same convention as other
+    // mpv-bound tests in this module).
+
+    #[test]
+    fn stop_playback_is_noop_when_mpv_not_init() {
+        let state = PlayerState::new();
+        assert!(!state.is_initialised());
+        // Must return Ok (so TS doesn't need to gate before calling it
+        // during init-race scenarios) and must not panic on the missing
+        // inner.
+        assert!(state.stop_playback().is_ok());
+        assert!(!state.is_initialised());
     }
 
     #[test]

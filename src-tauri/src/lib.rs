@@ -416,6 +416,7 @@ pub fn run() {
             player::commands::player_set_af_chain,
             player::commands::player_apply_sub_style,
             player::commands::player_unload,
+            player::commands::player_stop,
             player::commands::player_set_fullscreen,
             player::commands::player_enter_popout,
             player::commands::player_exit_popout,

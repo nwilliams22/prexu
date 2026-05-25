@@ -379,23 +379,49 @@ export function useNativePlayer(
   // eslint-disable-next-line react-hooks/exhaustive-deps -- ref values are stable
   }, [server, ratingKey, timeline]);
 
-  // Init on mount / when ratingKey changes
+  // Init on mount / when ratingKey changes.
+  //
+  // Cleanup here runs on EVERY ratingKey change (autoplay handoff, manual
+  // next episode, etc) AND on true unmount. It uses `player_stop` (soft
+  // stop: mpv `stop` + mute, keeps mpv handle + host window alive) instead
+  // of `player_unload` (full destroy) so episode handoff doesn't pay for
+  // mpv terminate + DXGI swap chain rebuild + hwdec probe every time
+  // (prexu-7fe). The full destroy + fullscreen exit moves to the
+  // unmount-only effect below.
   useEffect(() => {
     directPlayFailedRef.current = false;
     initPlayback();
     return () => {
-      logger.info("player", "cleanup: stopping timeline, unloading");
+      logger.info("player", "cleanup: stopping timeline + soft-stop mpv");
       timeline.stopTimeline();
       timeline.reportStopped();
-      // Order: unload THEN fullscreen-exit. player_unload synchronously
-      // terminates mpv (see destroy() in player/mod.rs), so by the time
-      // it resolves, player_set_fullscreen hits its fast path (no mpv =>
-      // no transition wait, no geometry sync). Running them in parallel
-      // would let the mpv-aware fullscreen path race with mpv teardown.
+      invoke("player_stop").catch((err) =>
+        logger.error("player", "player_stop failed", String(err)),
+      );
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- timeline funcs are stable
+  }, [initPlayback]);
+
+  // True-unmount cleanup: full mpv destroy + fullscreen exit. Empty deps so
+  // this only fires when the Player route actually unmounts (back to
+  // dashboard, navigate away). Per-episode handoff stays soft (above).
+  //
+  // Why fullscreen exit lives here instead of the per-episode cleanup:
+  // exiting fullscreen between autoplayed episodes drops the user out of
+  // their chosen viewing mode mid-binge — never the intent.
+  //
+  // Order: unload THEN fullscreen-exit. player_unload's destroy()
+  // synchronously silences mpv before returning, so by the time the
+  // promise resolves, player_set_fullscreen hits its fast path (no mpv
+  // → no transition wait, no geometry sync). Running them in parallel
+  // would let the mpv-aware fullscreen path race with mpv teardown.
+  useEffect(() => {
+    return () => {
+      logger.info("player", "unmount: full unload + fullscreen exit");
       const wasFullscreen = isFullscreenRef.current;
       invoke("player_unload")
         .catch((err) =>
-          logger.error("player", "player_unload failed", String(err)),
+          logger.error("player", "player_unload (unmount) failed", String(err)),
         )
         .finally(() => {
           if (wasFullscreen) {
@@ -403,15 +429,14 @@ export function useNativePlayer(
               (err) =>
                 logger.error(
                   "player",
-                  "player_set_fullscreen(false) cleanup failed",
+                  "player_set_fullscreen(false) unmount failed",
                   String(err),
                 ),
             );
           }
         });
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- timeline funcs are stable
-  }, [initPlayback]);
+  }, []);
 
   // Note: ESC-to-exit-fullscreen via Tauri doesn't fire a JS event back, so
   // isFullscreen can drift if the user uses a chrome-side gesture. Phase 4
