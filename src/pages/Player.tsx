@@ -325,7 +325,28 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     // eof-reached property never flips and postplay autoplay never
     // fires. See clampSkipTarget docs for rationale.
     seek(clampSkipTarget(activeSegment.endTime, player.duration));
-  }, [activeSegment, seek, hasNextItem, wt.isInSession, lifecycle, player.duration]);
+    // Force-resume play on Skip Credits (prexu-7fe.2 follow-up): if
+    // the user paused mid-credits and then clicked Skip Credits, the
+    // clamp alone leaves playback parked at duration-0.5s with no
+    // forward motion, so eof-reached never fires and postplay never
+    // shows. Skip Credits is an explicit "I'm done with this ep, move
+    // on" gesture — resuming play matches that intent and lets the
+    // 0.5s tail roll naturally to EOF. Only applies to credits skips;
+    // intro skips leave the user's pause state alone (paused at intro
+    // is a "let me read this" gesture, not "advance me").
+    if (activeSegment.type === "credits" && !player.isPlaying) {
+      togglePlay();
+    }
+  }, [
+    activeSegment,
+    seek,
+    hasNextItem,
+    wt.isInSession,
+    lifecycle,
+    player.duration,
+    player.isPlaying,
+    togglePlay,
+  ]);
 
   // Next episode detection for Watch Together host
   const nextEp = useNextEpisodeDetection(
