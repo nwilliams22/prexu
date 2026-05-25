@@ -36,7 +36,17 @@ pub async fn player_load_url(
         // mpv to that offset on load (avoids a separate seek round-trip).
         let start_secs = start_offset_ms.map(|ms| ms as f64 / 1000.0).unwrap_or(0.0);
         let opts = format!("start={}", start_secs);
-        mpv.command("loadfile", &[url.as_str(), "replace", "0", opts.as_str()])
+        mpv.command("loadfile", &[url.as_str(), "replace", "0", opts.as_str()])?;
+        // Belt-and-braces unpause (prexu-7fe.1). stop_playback ALSO sets
+        // pause=false before its `stop` command, but in retest logs the
+        // first post-EOF handoff sometimes left mpv paused — the pre-stop
+        // pause-change either wasn't observed or got coalesced with the
+        // stop's state wipe, so the new file inherited pause=true and sat
+        // there until the user manually clicked play. Setting pause=false
+        // here, AFTER loadfile, applies to the new file's live playback
+        // engine context. Idempotent on cold start (pause is already
+        // false) and on autoplay handoff (pause was just cleared).
+        mpv.set_property("pause", false)
     })
 }
 
