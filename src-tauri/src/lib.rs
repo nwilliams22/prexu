@@ -545,6 +545,45 @@ pub fn run() {
                                     );
                                 }
                             }
+                            // Focus-restore host reassert (prexu-5l5). When
+                            // the main Tauri window regains focus after
+                            // another app fully occluded Prexu, the mpv
+                            // host HWND can be left below the WebView in
+                            // z-order or with a stale DXGI swap chain that
+                            // never re-Presents — the user sees the player
+                            // chrome but the video region is transparent
+                            // through to whatever is behind. Affects every
+                            // player mode (full, fullscreen, popout, mini).
+                            //
+                            // Gated on `consume_focus_reassert` so the
+                            // reassert only fires after an actual out-
+                            // and-back focus cycle. Tauri emits Focused
+                            // (true) on click / mouse-enter as well, and
+                            // running the SetWindowPos chain on each one
+                            // disrupts WebView2 mouse capture (cursor
+                            // sticks on the host edge resize glyph). The
+                            // latch is set on Focused(false) below.
+                            WindowEvent::Focused(false) => {
+                                state.mark_focus_lost();
+                            }
+                            WindowEvent::Focused(true) => {
+                                if !state.consume_focus_reassert() {
+                                    return;
+                                }
+                                if let (Ok(pos), Ok(size), Ok(parent)) = (
+                                    win_clone.inner_position(),
+                                    win_clone.inner_size(),
+                                    win_clone.hwnd(),
+                                ) {
+                                    state.reassert_host_on_focus(
+                                        parent,
+                                        pos.x,
+                                        pos.y,
+                                        size.width as i32,
+                                        size.height as i32,
+                                    );
+                                }
+                            }
                             // Tear down host window + mpv before Tauri's main
                             // window goes away so DestroyWindow runs cleanly.
                             WindowEvent::CloseRequested { .. }

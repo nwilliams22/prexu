@@ -80,6 +80,17 @@ pub struct PlayerState {
     /// instead of placing the host at the full WebView client rect, they
     /// place it at the inset corresponding to `corner`.
     pub(crate) minimize: Mutex<Option<MinimizeState>>,
+    /// Latched on `WindowEvent::Focused(false)`, consumed on the next
+    /// `WindowEvent::Focused(true)`. Gates `reassert_host_on_focus`
+    /// so the host SetWindowPos storm only fires on an actual
+    /// out-and-back focus cycle (alt+tab to another app and back),
+    /// not on every focus event Tauri emits during normal playback
+    /// (click in chrome, mouse enter, etc.). Without this gate, the
+    /// repeated set_topmost / anchor_below / SetWindowPos calls
+    /// disrupt WebView2 mouse capture and leave the cursor stuck on
+    /// the host's edge-hit-test resize glyph (prexu-5l5 follow-up).
+    #[cfg(target_os = "windows")]
+    pub(crate) pending_focus_reassert: AtomicBool,
     /// Last observed DPI scale factor of the main window. Used by
     /// `apply_minimize_inset` to convert the logical-px `MinimizeState`
     /// into physical-px host geometry on every sync.
@@ -162,6 +173,8 @@ impl PlayerState {
             pending_geometry: Mutex::new(None),
             trailing_scheduled: AtomicBool::new(false),
             pre_popout_geometry: Mutex::new(None),
+            #[cfg(target_os = "windows")]
+            pending_focus_reassert: AtomicBool::new(false),
             minimize: Mutex::new(None),
             // 1.0 is the safe default — single-monitor 100% DPI. The very
             // first `player_enter_minimize` overwrites this with the real
@@ -596,6 +609,116 @@ impl PlayerState {
         }
     }
 
+    /// Latch that the main window just lost focus. The next
+    /// `Focused(true)` consumes this and runs `reassert_host_on_focus`.
+    /// Called from the window-event handler's `Focused(false)` arm.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn mark_focus_lost(&self) {
+        self.pending_focus_reassert.store(true, Ordering::Release);
+    }
+
+    /// Atomically consume the focus-lost latch. Returns true exactly
+    /// once per out-and-back focus cycle, even if multiple
+    /// `Focused(true)` events fire in rapid succession (which Tauri
+    /// does emit during click/mouse-enter on top of the real
+    /// alt+tab restore). Used by the lib.rs focus handler to gate
+    /// the SetWindowPos reassert.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn consume_focus_reassert(&self) -> bool {
+        self.pending_focus_reassert.swap(false, Ordering::AcqRel)
+    }
+
+    /// True when the player is currently in pop-out mode. Used to decide
+    /// whether the focus-restore reassert also needs to re-flag the
+    /// host's WS_EX_TOPMOST (popout) or just nudge geometry + z-order
+    /// (full / fullscreen / minimize). Returns false when the lock is
+    /// poisoned — callers treat that as "not in popout" so they skip
+    /// the topmost reassert.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn is_in_popout(&self) -> bool {
+        self.pre_popout_geometry
+            .lock()
+            .map(|g| g.is_some())
+            .unwrap_or(false)
+    }
+
+    /// Reassert the mpv host window's geometry (and topmost flag,
+    /// when in popout) after the main Tauri window regains focus.
+    ///
+    /// Why this exists (prexu-5l5): when another app fully occludes
+    /// Prexu (any player mode — full, fullscreen, popout, mini) and
+    /// the user alt+tabs back, the mpv vo's D3D11 swap chain can be
+    /// left in `DXGI_STATUS_OCCLUDED` and never re-Present without a
+    /// kick. The visible result is the player chrome rendered
+    /// correctly but the video region showing through to whatever
+    /// was behind.
+    ///
+    /// Mode-split recovery:
+    /// - **Full / fullscreen / mini**: only `apply_host_geometry`.
+    ///   The forced `SetWindowPos` triggers WM_PAINT on the host;
+    ///   mpv's vo handles WM_PAINT by Presenting the next frame,
+    ///   which flushes the occluded swap chain. No z-order or
+    ///   topmost change, so WebView2 mouse capture is undisturbed.
+    /// - **Popout**: `apply_host_topmost(true, Some(parent))` first
+    ///   to re-flag WS_EX_TOPMOST + re-anchor below the WebView
+    ///   (the always-on-top group can shuffle the host out from
+    ///   under the WebView during the focus restore), then
+    ///   `apply_host_geometry` for the Present nudge.
+    ///
+    /// Why the split: in non-popout modes the host is already in
+    /// the normal z-order under the WebView; running
+    /// `apply_host_topmost(false, Some(parent))` issues a
+    /// `SetWindowPos(HWND_NOTOPMOST)` that briefly leaves the host
+    /// above sibling z-order before the follow-up `anchor_below`
+    /// re-seats it. During that micro-window Win32 re-evaluates
+    /// cursor ownership and the WebView2 cursor capture gets
+    /// stuck on the host's thick-frame edge hit-test (resize
+    /// glyph). Skipping the redundant topmost flip avoids the
+    /// flicker entirely.
+    ///
+    /// Early-returns when mpv isn't initialised so Focused events
+    /// during dashboard navigation pay nothing. Gated by
+    /// `consume_focus_reassert` in the caller so each out-and-back
+    /// focus cycle runs this exactly once.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn reassert_host_on_focus(
+        &self,
+        parent: windows::Win32::Foundation::HWND,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) {
+        if !self.is_initialised() {
+            return;
+        }
+        let in_popout = self.is_in_popout();
+        log::info!(
+            "[player:host] reassert_host_on_focus ({},{},{}x{}) popout={}",
+            x, y, width, height, in_popout
+        );
+        if in_popout {
+            // Popout: reassert topmost flag + anchor in one call.
+            // The always-on-top group can drop the host out from
+            // under the WebView during a focus shuffle, so we need
+            // BOTH the WS_EX_TOPMOST flip and the anchor.
+            self.apply_host_topmost(true, Some(parent));
+        } else {
+            // Non-popout: anchor-only reassert. Single SetWindowPos
+            // with insertAfter=parent triggers WM_WINDOWPOSCHANGED
+            // → mpv vo rebuilds the D3D11 swap chain (kicks the
+            // occluded state). Skips the HWND_NOTOPMOST flip that
+            // would briefly put the host above the WebView and
+            // disrupt WebView2 mouse capture (cursor stuck on host
+            // edge resize glyph — prexu-5l5 follow-up).
+            self.reassert_host_anchor(parent);
+        }
+        // Geometry nudge — forces SetWindowPos which triggers
+        // WM_PAINT and the next Present, flushing any occluded
+        // D3D11 swap chain.
+        self.apply_host_geometry(x, y, width, height);
+    }
+
     pub(crate) fn with_mpv<R>(
         &self,
         f: impl FnOnce(&Mpv) -> Result<R, libmpv2::Error>,
@@ -636,6 +759,35 @@ impl PlayerState {
                 }
                 if let Err(e) = host.set_geometry(ax, ay, aw, ah) {
                     log::warn!("[player] apply_host_geometry failed: {}", e);
+                }
+            }
+        }
+    }
+
+    /// Re-anchor the mpv host window directly below the WebView in
+    /// z-order without touching its WS_EX_TOPMOST flag. Single
+    /// `SetWindowPos(parent, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE)`
+    /// call — enough to trigger `WM_WINDOWPOSCHANGED` on the host
+    /// (which mpv's vo handles by rebuilding its D3D11 swap chain),
+    /// but cheap enough not to disturb WebView2 mouse capture.
+    ///
+    /// Used by the focus-restore reassert path in non-popout modes
+    /// (full / fullscreen / mini). Popout uses `apply_host_topmost`
+    /// instead because it also needs the topmost flag reasserted.
+    /// (prexu-5l5 follow-up)
+    #[cfg(target_os = "windows")]
+    pub(crate) fn reassert_host_anchor(
+        &self,
+        parent: windows::Win32::Foundation::HWND,
+    ) {
+        let Ok(guard) = self.inner.lock() else {
+            return;
+        };
+        if let Some(inner) = guard.as_ref() {
+            if let Some(host) = inner.host.as_ref() {
+                log::debug!("[player] reassert_host_anchor");
+                if let Err(e) = host.anchor_below(parent) {
+                    log::warn!("[player:host] reassert_host_anchor failed: {}", e);
                 }
             }
         }
@@ -852,6 +1004,88 @@ mod tests {
         let (_, _, w, h) =
             initial_host_geometry(Some(DEFAULT), 1.25, 0, 0, 2400, 1350);
         assert_eq!((w, h), (450, 250));
+    }
+
+    // ---- Focus-restore host reassert guard (prexu-5l5) -----------------
+    //
+    // `reassert_host_on_focus` fires in every player mode (full,
+    // fullscreen, popout, mini) — the gate is `is_initialised()`, not
+    // popout-specific, because the transparent-video-on-alt-tab-back
+    // bug repros in full player too. `is_in_popout()` is still used
+    // internally to decide whether to set WS_EX_TOPMOST (popout) or
+    // leave it clear (other modes). These tests exercise both
+    // predicates; the SetWindowPos path is covered by manual repro
+    // (same convention as the other Win32-bound geometry tests).
+
+    #[test]
+    fn is_in_popout_false_on_fresh_state() {
+        let state = PlayerState::new();
+        assert!(!state.is_in_popout());
+    }
+
+    #[test]
+    fn is_in_popout_true_after_pre_popout_geometry_set() {
+        let state = PlayerState::new();
+        {
+            let mut g = state.pre_popout_geometry.lock().unwrap();
+            *g = Some((100, 100, 800, 600));
+        }
+        assert!(state.is_in_popout());
+    }
+
+    #[test]
+    fn is_in_popout_false_after_pre_popout_geometry_cleared() {
+        let state = PlayerState::new();
+        {
+            let mut g = state.pre_popout_geometry.lock().unwrap();
+            *g = Some((100, 100, 800, 600));
+        }
+        {
+            let mut g = state.pre_popout_geometry.lock().unwrap();
+            *g = None;
+        }
+        assert!(!state.is_in_popout());
+    }
+
+    #[test]
+    fn focus_reassert_latch_starts_clear() {
+        let state = PlayerState::new();
+        assert!(!state.consume_focus_reassert());
+    }
+
+    #[test]
+    fn focus_reassert_latch_set_then_consume_once() {
+        let state = PlayerState::new();
+        state.mark_focus_lost();
+        assert!(state.consume_focus_reassert(), "first consume returns true");
+        assert!(!state.consume_focus_reassert(), "second consume returns false — latch cleared");
+    }
+
+    #[test]
+    fn focus_reassert_latch_multi_set_still_consumes_once() {
+        // Multiple Focused(false) events in a row (Tauri can emit
+        // these during rapid focus shuffles) must not produce
+        // multiple reassert runs on the eventual Focused(true).
+        let state = PlayerState::new();
+        state.mark_focus_lost();
+        state.mark_focus_lost();
+        state.mark_focus_lost();
+        assert!(state.consume_focus_reassert());
+        assert!(!state.consume_focus_reassert());
+    }
+
+    #[test]
+    fn reassert_host_on_focus_is_noop_when_mpv_not_init() {
+        // No mpv → method returns before touching inner mutex / Win32.
+        // Documents the contract: Focused events during dashboard
+        // navigation (before any playback) must not run the reassert
+        // path, otherwise every page focus event would pay three
+        // SetWindowPos calls for no reason.
+        let state = PlayerState::new();
+        assert!(!state.is_initialised());
+        let fake_parent = windows::Win32::Foundation::HWND(std::ptr::null_mut());
+        state.reassert_host_on_focus(fake_parent, 0, 0, 1920, 1080);
+        assert!(!state.is_initialised());
     }
 
     // ---- Trailing-edge geometry flush (prexu-hhx) ----------------------
