@@ -16,7 +16,7 @@ import { usePlayer, IS_NATIVE_PLAYER } from "../hooks/usePlayer";
 import { useWatchTogether } from "../hooks/useWatchTogether";
 import { useAudioEnhancements } from "../hooks/useAudioEnhancements";
 import { usePreferences } from "../hooks/usePreferences";
-import { useSkipSegments } from "../hooks/player/useSkipSegments";
+import { useSkipSegments, clampSkipTarget } from "../hooks/player/useSkipSegments";
 import { useShowCreditsLength } from "../hooks/player/useShowCreditsLength";
 import { usePlayerControlsVisibility } from "../hooks/player/usePlayerControlsVisibility";
 import { useVideoClickHandling } from "../hooks/player/useVideoClickHandling";
@@ -318,8 +318,14 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
       lifecycle.exit();
       return;
     }
-    seek(activeSegment.endTime);
-  }, [activeSegment, seek, hasNextItem, wt.isInSession, lifecycle]);
+    // Clamp seek target away from exact file end (prexu-7fe.2). When
+    // the synthetic credits segment is in play, activeSegment.endTime
+    // equals player.duration; seeking to duration parks the playhead
+    // at EOF without playback consuming the final frame, so mpv's
+    // eof-reached property never flips and postplay autoplay never
+    // fires. See clampSkipTarget docs for rationale.
+    seek(clampSkipTarget(activeSegment.endTime, player.duration));
+  }, [activeSegment, seek, hasNextItem, wt.isInSession, lifecycle, player.duration]);
 
   // Next episode detection for Watch Together host
   const nextEp = useNextEpisodeDetection(

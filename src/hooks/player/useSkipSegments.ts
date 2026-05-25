@@ -26,6 +26,26 @@ interface SegmentRange {
  *  `synthCreditsWindowMs` arg when callers can pass a per-show estimate. */
 const DEFAULT_SYNTH_CREDITS_WINDOW_MS = 90_000;
 
+/** How far before exact file end a skip-credits seek should land
+ *  (prexu-7fe.2). Seeking to duration parks the playhead at the EOF
+ *  boundary without playback consuming the final frame, so mpv's
+ *  eof-reached property never flips. Backing off 0.5s gives playback
+ *  room to roll to EOF naturally when the user resumes play, emitting
+ *  eof-reached the same way a normal end-of-episode does. */
+const EOF_CLAMP_BACKOFF_S = 0.5;
+
+/**
+ * Clamp a skip-segment seek target away from the exact file end so
+ * playback can roll to EOF naturally. Returns the input unchanged when
+ * duration is unknown (≤0) or when target is already comfortably
+ * inside the file. See prexu-7fe.2 for the bug this fixes.
+ */
+export function clampSkipTarget(target: number, duration: number): number {
+  if (duration <= 0) return target;
+  if (target < duration - EOF_CLAMP_BACKOFF_S) return target;
+  return Math.max(0, duration - EOF_CLAMP_BACKOFF_S);
+}
+
 /**
  * Detect whether playback is currently within an intro or credits segment.
  *
