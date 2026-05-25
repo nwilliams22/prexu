@@ -403,16 +403,21 @@ impl PlayerState {
     /// instance instead of paying for a full destroy + ensure_init +
     /// hwdec probe + DXGI swap chain rebuild cycle (prexu-7fe).
     ///
-    /// Synchronous, fast: mute property + mpv `stop` command. After it
+    /// Synchronous, fast: mute + pause=false + mpv `stop`. After it
     /// returns, mpv has no active file and is ready for the next
     /// `loadfile`. No background teardown thread, no event-pump join.
     ///
-    /// Deliberately does NOT set `pause=true` (unlike `destroy()`).
-    /// `pause` persists across `loadfile replace`, so flipping it on
-    /// here would leave the next episode paused at start. The synchronous
-    /// `mute=true` is the audio-cut guarantee for the brief gap; TS
-    /// resets `mute=false` on the next load_url so audio resumes
-    /// immediately when the new file is ready.
+    /// `pause=false` is critical (prexu-7fe.1): the TS EOF handler sets
+    /// `pause=true` before postplay shows. The `pause` property persists
+    /// across `loadfile replace`, so without clearing it here the next
+    /// episode would load and then sit paused waiting for the user to
+    /// click play. Clearing pause is idempotent — does nothing if mpv
+    /// was already unpaused. (`destroy()` sets pause=true because there
+    /// IS no next loadfile after it; here we always expect one.)
+    ///
+    /// The synchronous `mute=true` is the audio-cut guarantee for the
+    /// brief gap; TS resets `mute=false` on the next load_url so audio
+    /// resumes immediately when the new file is ready.
     ///
     /// Other state across `loadfile replace`:
     ///   - aid / sid: reset to mpv defaults → TS re-sets per episode
@@ -434,6 +439,11 @@ impl PlayerState {
         // the next load_url. mpv's `mute` property accepts a bool.
         if let Err(e) = inner.mpv.set_property("mute", true) {
             log::warn!("[player] stop_playback: mute set failed: {:?}", e);
+        }
+        // Clear any stale pause from the prior file's EOF flow before
+        // the next loadfile inherits it. See doc comment (prexu-7fe.1).
+        if let Err(e) = inner.mpv.set_property("pause", false) {
+            log::warn!("[player] stop_playback: pause=false set failed: {:?}", e);
         }
         // Send mpv `stop` to clear the playlist + current file. Next
         // loadfile starts fresh. `stop` is fast (~ms) — no thread join
