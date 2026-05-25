@@ -261,6 +261,22 @@ impl PlayerState {
             return Ok(());
         }
 
+        // Snapshot minimize state + DPI scale BEFORE the run_on_main_thread
+        // closure so the closure (which is 'static + Send) can compute the
+        // mini-inset rect without capturing &self. When `ensure_init` runs
+        // during an in-mini autoplay handoff (prexu-may), the new host MUST
+        // be sized to the mini inset on its FIRST set_geometry — otherwise
+        // mpv's vo computes its swapchain against the full WebView rect and
+        // the first frame renders black/clipped after the later sync_geometry
+        // shrinks the host. Pre-snapshotting here keeps the fix on a single
+        // code path (the initial set_geometry below) and avoids a second
+        // SetWindowPos that would also trigger a swapchain rebuild.
+        #[cfg(target_os = "windows")]
+        let (minimize_snapshot, scale_snapshot) = {
+            let snap = self.minimize.lock().ok().and_then(|g| *g);
+            (snap, self.current_scale_factor())
+        };
+
         // On Windows, create the native host window on the MAIN THREAD.
         // Win32 windows are thread-affine: a window's WndProc runs on the
         // thread that called CreateWindow. SetWindowPos from another thread
@@ -292,13 +308,20 @@ impl PlayerState {
                     log::info!("[player:host] created on main, parent={:?}", parent.0);
 
                     if let (Ok(pos), Ok(size)) = (main.inner_position(), main.inner_size()) {
-                        let _ = host.set_geometry(
+                        let (gx, gy, gw, gh) = initial_host_geometry(
+                            minimize_snapshot,
+                            scale_snapshot,
                             pos.x,
                             pos.y,
                             size.width as i32,
                             size.height as i32,
                         );
-                        log::debug!("[player] initial geometry sync to ({},{},{}x{})", pos.x, pos.y, size.width, size.height);
+                        let _ = host.set_geometry(gx, gy, gw, gh);
+                        log::debug!(
+                            "[player] initial geometry sync to ({},{},{}x{}){}",
+                            gx, gy, gw, gh,
+                            if minimize_snapshot.is_some() { " (mini-inset)" } else { "" }
+                        );
                     }
                     let _ = host.set_visible(true);
                     log::debug!("[player:host] set visible");
@@ -709,6 +732,34 @@ pub(crate) fn compute_minimize_inset(
     (x + off_x, y + off_y, mw, mh)
 }
 
+/// Pure helper: initial host geometry for `ensure_init`. Returns the
+/// mini-inset rect when a `MinimizeState` snapshot is present, otherwise
+/// passes the full client rect through. Pre-snapshotting + this helper
+/// let the (Send + 'static) `run_on_main_thread` closure produce the
+/// correct first-frame geometry without capturing `&self`.
+///
+/// Why this matters (prexu-may): when an in-mini autoplay handoff calls
+/// `unload` → `load_url`, `ensure_init` builds a fresh host_window + mpv.
+/// If the host were sized to the full WebView rect on its first
+/// `set_geometry`, mpv's vo would lock its D3D11 swapchain to that rect.
+/// The subsequent `sync_geometry` shrink to the mini inset rebuilds the
+/// HWND but leaves mpv rendering against the stale full-rect viewport,
+/// producing the black/clipped frame the bug reports.
+#[cfg(target_os = "windows")]
+pub(crate) fn initial_host_geometry(
+    snapshot: Option<MinimizeState>,
+    scale: f64,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> (i32, i32, i32, i32) {
+    match snapshot {
+        Some(state) => compute_minimize_inset(state, scale, x, y, width, height),
+        None => (x, y, width, height),
+    }
+}
+
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
     use super::*;
@@ -766,6 +817,41 @@ mod tests {
         let (x, y, _w, _h) =
             compute_minimize_inset(DEFAULT, 1.0, 0, 0, 100, 100);
         assert_eq!((x, y), (0, 0));
+    }
+
+    // ---- initial_host_geometry (prexu-may) -----------------------------
+    //
+    // `ensure_init` must size the host to the mini inset on its FIRST
+    // set_geometry when an autoplay handoff lands during in-mini playback.
+    // Otherwise mpv's vo locks its swapchain to a full-rect host and the
+    // subsequent shrink leaves the first frame black/clipped.
+
+    #[test]
+    fn initial_host_geometry_passthrough_when_no_minimize() {
+        // None snapshot → full client rect passes through untouched.
+        let (x, y, w, h) =
+            initial_host_geometry(None, 1.0, 100, 50, 1920, 1080);
+        assert_eq!((x, y, w, h), (100, 50, 1920, 1080));
+    }
+
+    #[test]
+    fn initial_host_geometry_applies_inset_when_minimize_present() {
+        // Some snapshot → result matches compute_minimize_inset for the
+        // same args, so the first host frame is the mini rect not the
+        // full WebView rect.
+        let snap = Some(DEFAULT);
+        let got = initial_host_geometry(snap, 1.0, 0, 0, 1920, 1080);
+        let expected = compute_minimize_inset(DEFAULT, 1.0, 0, 0, 1920, 1080);
+        assert_eq!(got, expected);
+        assert_eq!(got, (1544, 864, 360, 200));
+    }
+
+    #[test]
+    fn initial_host_geometry_inset_respects_dpi_scale() {
+        // 1.25× DPI snapshot → inset is scaled, not the logical-px values.
+        let (_, _, w, h) =
+            initial_host_geometry(Some(DEFAULT), 1.25, 0, 0, 2400, 1350);
+        assert_eq!((w, h), (450, 250));
     }
 
     // ---- Trailing-edge geometry flush (prexu-hhx) ----------------------
