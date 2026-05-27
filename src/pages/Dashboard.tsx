@@ -408,12 +408,13 @@ function Dashboard() {
         ) : (
           onDeck.length > 0 && (
             <HorizontalRow title="Continue Watching">
-              {onDeck.map((item) => {
+              {onDeck.map((item, index) => {
                 const isEpisode = item.type === "episode";
                 const ep = isEpisode ? (item as PlexEpisode) : null;
                 return (
                   <PosterCard
                     key={item.ratingKey}
+                    index={index}
                     ratingKey={item.ratingKey}
                     imageUrl={posterUrl(
                       ep?.grandparentThumb || item.thumb
@@ -462,9 +463,10 @@ function Dashboard() {
         ) : (
           recentMovies.length > 0 && (
             <HorizontalRow title="Recently Added in Movies">
-              {recentMovies.map((item) => (
+              {recentMovies.map((item, index) => (
                 <PosterCard
                   key={item.ratingKey}
+                  index={index}
                   ratingKey={item.ratingKey}
                   imageUrl={posterUrl(item.thumb)}
                   placeholderUrl={posterPlaceholder(item.thumb)}
@@ -506,7 +508,7 @@ function Dashboard() {
         ) : (
           recentShows.length > 0 && (
           <HorizontalRow title="Recently Added in TV Shows">
-            {recentShows.map((group) => {
+            {recentShows.map((group, index) => {
               const isShowGroup = group.kind === "show-group";
               const isActive = expandedGroupKey === group.groupKey;
 
@@ -516,6 +518,7 @@ function Dashboard() {
                   style={isActive ? styles.activeCardWrapper : undefined}
                 >
                   <PosterCard
+                    index={index}
                     ratingKey={group.groupKey}
                     imageUrl={posterUrl(group.thumb)}
                     placeholderUrl={posterPlaceholder(group.thumb)}

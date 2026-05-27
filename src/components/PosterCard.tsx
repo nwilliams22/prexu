@@ -39,7 +39,19 @@ interface PosterCardProps {
   ratingKey?: string;
   /** Media quality badges (4K, HDR, Atmos, etc.) shown at bottom-left */
   mediaBadges?: MediaBadge[];
+  /** Sibling index inside a shelf / grid. Drives a staggered fade-in
+   *  (prexu-yhg) — each tile's cardEnter animation is delayed by
+   *  `min(index, MAX_STAGGER_INDEX) * STAGGER_STEP_MS`. Omit at
+   *  call sites that aren't in a horizontal row (single-poster
+   *  contexts like hero) so the default 0ms delay is preserved. */
+  index?: number;
 }
+
+/** Stagger window for the cardEnter fade-in. Tiles beyond
+ *  MAX_STAGGER_INDEX all share the cap — keeps the last visible tile
+ *  on a long shelf from feeling perceptibly slower than the first. */
+const STAGGER_STEP_MS = 30;
+const MAX_STAGGER_INDEX = 8;
 
 function PosterCard({
   imageUrl,
@@ -63,7 +75,12 @@ function PosterCard({
   scanning: scanningProp,
   ratingKey,
   mediaBadges,
+  index,
 }: PosterCardProps) {
+  const staggerDelayMs =
+    index === undefined
+      ? 0
+      : Math.min(Math.max(0, index), MAX_STAGGER_INDEX) * STAGGER_STEP_MS;
   const { scanningIds } = useServerActivity();
   const scanning = scanningProp ?? (ratingKey ? scanningIds.has(ratingKey) : false);
   const {
@@ -120,6 +137,10 @@ function PosterCard({
           : onExpand
             ? "2px solid transparent"
             : undefined,
+        // animation-delay layers onto the .card-enter keyframe defined
+        // in styles.css. 0ms when no index given so legacy call sites
+        // are unchanged.
+        animationDelay: staggerDelayMs > 0 ? `${staggerDelayMs}ms` : undefined,
       }}
     >
       {/* Image container */}
