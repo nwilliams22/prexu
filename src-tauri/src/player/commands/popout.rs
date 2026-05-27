@@ -349,22 +349,16 @@ pub async fn player_enter_popout(
     // Resync the host immediately. The on_window_event listener will also
     // fire from the resize, but it goes through the throttle; an explicit
     // apply guarantees the video window is in place by the time the command
-    // returns.
-    if let (Ok(pos), Ok(size)) = (main.inner_position(), main.inner_size()) {
-        state.apply_host_geometry(pos.x, pos.y, size.width as i32, size.height as i32);
+    // returns. Child-relative origin (prexu-my6): host is a WS_CHILD of main.
+    if let Ok(size) = main.inner_size() {
+        state.apply_host_geometry(0, 0, size.width as i32, size.height as i32);
     }
 
-    // Mark the mpv host window topmost too. Tauri's set_always_on_top on
-    // the main window only flips that flag for the WebView's HWND — the
-    // host is a sibling top-level so it stays in the regular z-order,
-    // letting other apps render between the always-on-top WebView and
-    // the video underneath. Anchor below main inside the topmost group
-    // so the WebView still overlays the video region.
-    if let Ok(parent) = main.hwnd() {
-        state.apply_host_topmost(true, Some(parent));
-    } else {
-        state.apply_host_topmost(true, None);
-    }
+    // Topmost is propagated from the parent automatically post-prexu-my6
+    // (the host is now a WS_CHILD of main, so Tauri's set_always_on_top on
+    // the WebView's ancestor chain carries the host along for free). The
+    // call below is a no-op kept for symmetry with exit_popout.
+    state.apply_host_topmost(true, None);
 
     // Persist the chosen corner + size for next session. A failure here is
     // not fatal — the user can re-enter pop-out and we'll save again.
@@ -469,14 +463,10 @@ pub async fn player_exit_popout(
     main.set_always_on_top(false)
         .map_err(|e| format!("set_always_on_top(false) failed: {}", e))?;
 
-    // Clear topmost on the mpv host window AND re-anchor it below the
-    // WebView. Passing Some(parent) here is load-bearing:
-    // SetWindowPos(HWND_NOTOPMOST) alone leaves the host above normal-
-    // z-order siblings, so after exit the host floats over the WebView
-    // and the app becomes uninteractable. Anchoring below puts it back
-    // in its correct place underneath the WebView pixels.
-    let parent_hwnd = main.hwnd().ok();
-    state.apply_host_topmost(false, parent_hwnd);
+    // No-op post-prexu-my6 — kept for symmetry with enter_popout. The host
+    // is now a WS_CHILD of main so it inherits the parent's topmost
+    // behaviour automatically (set_always_on_top above clears it).
+    state.apply_host_topmost(false, None);
 
     let stash = state
         .pre_popout_geometry
@@ -497,8 +487,9 @@ pub async fn player_exit_popout(
         x, y, w, h
     );
 
-    if let (Ok(pos), Ok(size)) = (main.inner_position(), main.inner_size()) {
-        state.apply_host_geometry(pos.x, pos.y, size.width as i32, size.height as i32);
+    // Child-relative origin (prexu-my6).
+    if let Ok(size) = main.inner_size() {
+        state.apply_host_geometry(0, 0, size.width as i32, size.height as i32);
     }
 
     Ok(())

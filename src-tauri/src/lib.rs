@@ -490,29 +490,33 @@ pub fn run() {
                         use tauri::WindowEvent;
                         let state = app_handle.state::<player::PlayerState>();
                         match event {
-                            // Resized/Moved fire on drag, snap, restore, etc.
-                            // Cheap pre-check first — drag fires events at
-                            // ~60 Hz and the inner_position/inner_size
-                            // queries below are not free.
-                            WindowEvent::Resized(_) | WindowEvent::Moved(_) => {
-                                // Always read geometry and pass to sync_geometry
-                                // which handles throttling + trailing-edge pending
-                                // internally. The old pre-check skipped the
-                                // inner_position/inner_size queries when throttled,
-                                // but that prevented trailing-edge storage.
-                                if let (Ok(pos), Ok(size)) =
-                                    (win_clone.inner_position(), win_clone.inner_size())
-                                {
-                                    log::trace!("[window] Resized/Moved to ({},{},{}x{})", pos.x, pos.y, size.width, size.height);
+                            // After prexu-my6 the host is a WS_CHILD of
+                            // main, so Win32 moves it with the parent
+                            // for free — `WindowEvent::Moved` no longer
+                            // needs to do any work. Only Resized
+                            // changes the host's geometry (the client
+                            // area shrinks / grows).
+                            //
+                            // Coordinates passed are PARENT-CLIENT-RELATIVE:
+                            // `(0, 0, w, h)` for the full client area.
+                            // The mini-inset still works because
+                            // `apply_minimize_inset` computes offsets
+                            // relative to the (x, y) origin we pass.
+                            WindowEvent::Resized(_) => {
+                                if let Ok(size) = win_clone.inner_size() {
+                                    log::trace!(
+                                        "[window] Resized to {}x{}",
+                                        size.width, size.height
+                                    );
                                     state.sync_geometry(
-                                        pos.x,
-                                        pos.y,
+                                        0,
+                                        0,
                                         size.width as i32,
                                         size.height as i32,
                                     );
                                     // Schedule a trailing-edge flush on the first
                                     // event of a burst. A fast drag-resize whose
-                                    // final WM_SIZE lands inside the 50ms throttle
+                                    // final WM_SIZE lands inside the throttle
                                     // window leaves the host stuck at stale
                                     // geometry — sync_geometry stashes the final
                                     // rect in pending, but no further event arrives
@@ -571,14 +575,13 @@ pub fn run() {
                                     new_inner_size.height
                                 );
                                 state.set_scale_factor(*scale_factor);
-                                if let Ok(pos) = win_clone.inner_position() {
-                                    state.sync_geometry(
-                                        pos.x,
-                                        pos.y,
-                                        new_inner_size.width as i32,
-                                        new_inner_size.height as i32,
-                                    );
-                                }
+                                // Child-relative origin — see Resized arm.
+                                state.sync_geometry(
+                                    0,
+                                    0,
+                                    new_inner_size.width as i32,
+                                    new_inner_size.height as i32,
+                                );
                             }
                             // Focus-restore host reassert (prexu-5l5). When
                             // the main Tauri window regains focus after
@@ -605,15 +608,15 @@ pub fn run() {
                                 if !state.consume_focus_reassert() {
                                     return;
                                 }
-                                if let (Ok(pos), Ok(size), Ok(parent)) = (
-                                    win_clone.inner_position(),
+                                if let (Ok(size), Ok(parent)) = (
                                     win_clone.inner_size(),
                                     win_clone.hwnd(),
                                 ) {
+                                    // Child-relative origin — see Resized arm.
                                     state.reassert_host_on_focus(
                                         parent,
-                                        pos.x,
-                                        pos.y,
+                                        0,
+                                        0,
                                         size.width as i32,
                                         size.height as i32,
                                     );
