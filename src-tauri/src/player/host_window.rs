@@ -29,10 +29,10 @@ use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND};
 use windows::Win32::Graphics::Gdi::CreateSolidBrush;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindow, RegisterClassExW, SetWindowPos,
-    ShowWindow, CS_HREDRAW, CS_VREDRAW, GW_CHILD, HWND_BOTTOM, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNA, WNDCLASSEXW, WS_CHILD,
-    WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassExW, SetWindowPos, ShowWindow,
+    CS_HREDRAW, CS_VREDRAW, HWND_BOTTOM, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER,
+    SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNA, WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN,
+    WS_CLIPSIBLINGS,
 };
 
 const CLASS_NAME: PCWSTR = w!("PrexuMpvHost");
@@ -82,65 +82,20 @@ pub struct HostWindow {
 unsafe impl Send for HostWindow {}
 
 impl HostWindow {
-    /// Create the host window as a `WS_CHILD` of the WebView2 container HWND
-    /// inside the Tauri main window.
-    ///
-    /// The caller passes the Tauri main HWND. Empirically (verified on
-    /// 2026-05-27), parenting mpv as a SIBLING of WebView2 under the main
-    /// HWND leaves mpv invisible — WebView2 owns its compositor rectangle
-    /// and does not honour transparency-through-to-sibling-below in the
-    /// way DWM does for top-level windows. The visible chrome paints, the
-    /// video does not, even though mpv reports first-frame ready and
-    /// d3d11va is active.
-    ///
-    /// The fix: walk one level into the parent's child tree (`GetWindow(GW_CHILD)`),
-    /// which on Tauri v2 + wry returns the WebView2 container HWND, and
-    /// parent mpv inside that. mpv now lives INSIDE the WebView2 painting
-    /// hierarchy, so the standard z-order rules apply and the transparent
-    /// CSS area uncovers the video. If `GetWindow` returns null (unexpected),
-    /// fall back to the original main HWND parent and log a warning — at
-    /// worst we end up in the previous broken state, never in a crash.
-    ///
-    /// Initial geometry `(0,0,1280,720)` is in PARENT CLIENT-AREA
+    /// Create the host window as a `WS_CHILD` of `parent` (the Tauri main
+    /// HWND). Initial geometry `(0,0,1280,720)` is in PARENT CLIENT-AREA
     /// coordinates — the first `set_geometry` call from `ensure_init`
     /// resizes to the real client rect.
+    ///
+    /// After creation we push the host to `HWND_BOTTOM` of the parent's
+    /// child z-order so the WebView2 (also a child of main) renders on
+    /// top. Without this, the WebView's transparent pixels would composite
+    /// against whatever is *above* our host instead of through to it.
     pub fn create(parent: HWND) -> Result<Self, String> {
         ensure_class_registered();
 
-        // Resolve the actual parent: prefer the WebView2 inner child of
-        // the supplied main HWND so the mpv host lives INSIDE the WebView2
-        // compositor (see docblock above). Fall back to the main HWND if
-        // the walk fails so we never panic on an unexpected window layout.
-        let actual_parent = unsafe {
-            match GetWindow(parent, GW_CHILD) {
-                Ok(child) if !child.0.is_null() => {
-                    log::debug!(
-                        "[player:host] resolved WebView2 child HWND={:?} from main HWND={:?}",
-                        child.0,
-                        parent.0
-                    );
-                    child
-                }
-                Ok(_) => {
-                    log::warn!(
-                        "[player:host] GetWindow(GW_CHILD) returned null; falling back to main HWND={:?} (video may be invisible)",
-                        parent.0
-                    );
-                    parent
-                }
-                Err(e) => {
-                    log::warn!(
-                        "[player:host] GetWindow(GW_CHILD) failed: {:?} — falling back to main HWND",
-                        e
-                    );
-                    parent
-                }
-            }
-        };
-
         log::debug!(
-            "[player:host] CreateWindowExW WS_CHILD parent={:?} (main={:?}) initial=1280x720",
-            actual_parent.0,
+            "[player:host] CreateWindowExW WS_CHILD parent={:?} initial=1280x720",
             parent.0
         );
         let hwnd = unsafe {
@@ -159,7 +114,7 @@ impl HostWindow {
                 0,
                 1280,
                 720,
-                Some(actual_parent),
+                Some(parent),
                 None,
                 None,
                 None,
@@ -167,15 +122,11 @@ impl HostWindow {
         }
         .map_err(|e| format!("CreateWindowExW failed: {:?}", e))?;
 
-        log::info!(
-            "[player:host] HostWindow::create HWND={:?}, parent={:?} (main={:?})",
-            hwnd.0,
-            actual_parent.0,
-            parent.0
-        );
+        log::info!("[player:host] HostWindow::create HWND={:?}, parent={:?}", hwnd.0, parent.0);
 
-        // Push to bottom of child z-order so WebView2 siblings (if any
-        // inside the WebView2 container) render on top of the mpv video.
+        // Push to bottom of child z-order so WebView2 sibling renders on
+        // top. Without this the WebView's transparent pixels may composite
+        // against the desktop instead of our video.
         log::debug!(
             "[player:host] SetWindowPos HWND_BOTTOM HWND={:?}",
             hwnd.0
