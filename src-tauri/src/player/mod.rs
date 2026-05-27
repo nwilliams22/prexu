@@ -19,11 +19,16 @@ use tauri::{AppHandle, Manager};
 /// SetWindowPos which synchronously sends WM_WINDOWPOSCHANGING/CHANGED
 /// down the chain plus WM_SIZE to mpv's child window, where mpv rebuilds
 /// its D3D11 swapchain. At 60 Hz the Tauri main thread can't service the
-/// message queue between calls and the app hard-freezes (mpv's own
-/// threads keep playing audio/video, but UI input + paint stop).
-/// 20 Hz is smooth enough visually and gives mpv 50 ms to settle between
-/// swapchain rebuilds (empirically safe on Win11 with gpu-next + D3D11).
-pub(crate) const GEOMETRY_SYNC_MIN_INTERVAL: Duration = Duration::from_millis(50);
+/// message queue between calls and the app hard-freezes.
+///
+/// 50 ms (20 Hz) was the old value. After prexu-aqd split MOVE off this
+/// path (only resize hits sync_geometry now), the rate dropped — pure
+/// drag never enters here. Resize bursts are short (user grabs handle
+/// for seconds at a time), so 33 ms (30 Hz) is safe and visibly closes
+/// the gap between WebView chrome (no throttle) and mpv host (throttled),
+/// which at 50 ms produced visible mismatched-edge artifacts during
+/// resize (host extends past or stops short of chrome).
+pub(crate) const GEOMETRY_SYNC_MIN_INTERVAL: Duration = Duration::from_millis(33);
 
 /// Managed state container holding the mpv handle + (on Windows) the native
 /// HWND that mpv renders into. Created lazily on the first `ensure_init`.
