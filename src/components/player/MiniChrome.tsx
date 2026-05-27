@@ -36,8 +36,10 @@ import {
   type MiniCorner,
   type MiniRect,
 } from "../../utils/mini-rect";
+import { formatTime } from "../../utils/time-format";
 import { logger } from "../../services/logger";
 import { useDragGesture } from "../../hooks/player/useDragGesture";
+import type { ActiveSegment } from "../../hooks/player/useSkipSegments";
 
 interface MiniChromeProps {
   /** True when playback is unpaused; toggles the play vs pause icon. */
@@ -71,6 +73,21 @@ interface MiniChromeProps {
   /** Seek to an absolute time (seconds). Should be the WT-aware variant
    *  when in a session, matching `onTogglePlay`. */
   onSeek: (seconds: number) => void;
+  /** Active intro / credits segment from useSkipSegments. Drives the
+   *  Skip Intro / Skip Credits / Next Episode pill (prexu-0ru). null
+   *  when no segment is active. */
+  activeSegment?: ActiveSegment | null;
+  /** Skip past the active segment. Caller wires this to
+   *  Player.tsx's handleSkipSegment. */
+  onSkipSegment?: () => void;
+  /** True when there is a logical successor (episode / queue) to the
+   *  currently-playing item. When true AND segment.type === "credits",
+   *  the mini pill switches to "Next Episode" to match the full
+   *  player's SkipSegmentButton behaviour. */
+  hasNextItem?: boolean;
+  /** Advance to the next item. Used by the "Next Episode" variant of
+   *  the pill. */
+  onNextEpisode?: () => void;
 }
 
 /** Skip-back / skip-forward delta in seconds. */
@@ -86,6 +103,12 @@ const DRAG_THRESHOLD_PX = 4;
  *  to the corner on every Resized event; ~20 Hz balances perceived
  *  smoothness with sync_geometry's ~50 ms minimum interval. */
 const RESIZE_IPC_THROTTLE_MS = 50;
+
+/** Below this width the time labels flanking the scrub bar are hidden
+ *  so the scrub bar itself doesn't get squeezed. Default mini width is
+ *  360; threshold is set at 300 so the labels show at the default and
+ *  hide at the smallest user-resizable size (240 = MIN_MINI_WIDTH). */
+const TIME_LABEL_MIN_WIDTH = 300;
 
 const styles = {
   root: {
@@ -129,14 +152,47 @@ const styles = {
     right: 12,
     transition: "opacity 0.2s ease",
     zIndex: 2,
+    display: "flex" as const,
+    alignItems: "center" as const,
+    gap: 8,
   },
   scrubInput: {
-    width: "100%",
+    flex: 1 as const,
+    minWidth: 0,
     height: 4,
     cursor: "pointer",
     accentColor: "white",
     background: "transparent",
     margin: 0,
+  },
+  scrubLabel: {
+    color: "rgba(255, 255, 255, 0.85)",
+    fontSize: 11,
+    fontVariantNumeric: "tabular-nums" as const,
+    textShadow: "0 1px 2px rgba(0, 0, 0, 0.7)",
+    flexShrink: 0,
+    minWidth: 36,
+  },
+  skipPillWrap: {
+    position: "absolute" as const,
+    top: 8,
+    left: 8,
+    transition: "opacity 0.2s ease",
+    zIndex: 2,
+  },
+  skipPill: {
+    display: "flex" as const,
+    alignItems: "center" as const,
+    gap: 6,
+    background: "rgba(255, 255, 255, 0.92)",
+    color: "#000",
+    border: "none",
+    borderRadius: 999,
+    padding: "6px 12px",
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: "pointer",
+    boxShadow: "0 2px 8px rgba(0, 0, 0, 0.35)",
   },
   iconButton: {
     background: "rgba(0, 0, 0, 0.55)",
@@ -278,9 +334,35 @@ export default function MiniChrome({
   currentTime,
   duration,
   onSeek,
+  activeSegment,
+  onSkipSegment,
+  hasNextItem,
+  onNextEpisode,
 }: MiniChromeProps) {
   // Scrub + skip controls only meaningful once metadata has loaded.
-  const hasDuration = duration > 0;
+  const hasDuration = Number.isFinite(duration) && duration > 0;
+  const showTimeLabels = hasDuration && miniRect.width >= TIME_LABEL_MIN_WIDTH;
+  const remaining = hasDuration ? Math.max(0, duration - currentTime) : 0;
+
+  // prexu-0ru: pill mirrors PlayerControls/SkipSegmentButton logic.
+  // Credits + a real successor → "Next Episode" (advance); otherwise
+  // the primary skip label per segment type. Pill is suppressed if no
+  // skip handler was wired (defensive — Player.tsx always passes one
+  // when a segment is active).
+  const skipPill: { label: string; onClick: () => void } | null = (() => {
+    if (!activeSegment || !onSkipSegment) return null;
+    if (
+      activeSegment.type === "credits" &&
+      hasNextItem &&
+      onNextEpisode
+    ) {
+      return { label: "Next Episode", onClick: onNextEpisode };
+    }
+    return {
+      label: activeSegment.type === "credits" ? "Skip Credits" : "Skip Intro",
+      onClick: onSkipSegment,
+    };
+  })();
 
   const seekTo = useCallback(
     (target: number) => {
@@ -547,7 +629,10 @@ export default function MiniChrome({
 
         {/* Scrub bar — slim range above the bottom cluster. Hidden when
             duration hasn't been reported yet (e.g. pre-metadata). The
-            range input gets keyboard a11y for free. */}
+            range input gets keyboard a11y for free.
+            Time labels flank the bar when miniRect is wide enough
+            (prexu-oj5). Below TIME_LABEL_MIN_WIDTH the labels collapse
+            so the scrub bar itself stays usable. */}
         {hasDuration && (
           <div
             style={{
@@ -558,6 +643,15 @@ export default function MiniChrome({
             data-testid="mini-chrome-scrub-wrap"
             data-mini-no-drag="true"
           >
+            {showTimeLabels && (
+              <span
+                style={{ ...styles.scrubLabel, textAlign: "right" }}
+                data-testid="mini-chrome-time-current"
+                aria-hidden
+              >
+                {formatTime(currentTime)}
+              </span>
+            )}
             <input
               type="range"
               min={0}
@@ -570,6 +664,42 @@ export default function MiniChrome({
               aria-label="Seek"
               data-testid="mini-chrome-scrub"
             />
+            {showTimeLabels && (
+              <span
+                style={styles.scrubLabel}
+                data-testid="mini-chrome-time-remaining"
+                aria-hidden
+              >
+                {`-${formatTime(remaining)}`}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Skip Intro / Skip Credits / Next Episode pill (prexu-0ru).
+            Anchored top-left so it doesn't collide with the top-right
+            restore+close cluster. Renders only when useSkipSegments
+            has an active segment. data-mini-no-drag suppresses the
+            anchor-drag handler. */}
+        {skipPill && (
+          <div
+            style={{
+              ...styles.skipPillWrap,
+              opacity: visible ? 1 : 0,
+              pointerEvents: visible ? "auto" : "none",
+            }}
+            data-testid="mini-chrome-skip-pill-wrap"
+            data-mini-no-drag="true"
+          >
+            <button
+              type="button"
+              onClick={handleButtonClick(skipPill.onClick)}
+              style={styles.skipPill}
+              aria-label={skipPill.label}
+              data-testid="mini-chrome-skip-pill"
+            >
+              {skipPill.label}
+            </button>
           </div>
         )}
 

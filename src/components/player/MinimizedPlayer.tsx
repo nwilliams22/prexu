@@ -17,6 +17,7 @@ import MiniChrome from "./MiniChrome";
 import { miniRectToContainerStyle } from "../../utils/mini-rect";
 import type { UsePlayerResult } from "../../hooks/usePlayer";
 import type { PlayerMinimizeContextValue } from "../../contexts/PlayerContext";
+import type { ActiveSegment } from "../../hooks/player/useSkipSegments";
 
 interface MinimizedPlayerProps {
   player: UsePlayerResult;
@@ -30,6 +31,13 @@ interface MinimizedPlayerProps {
   controlsVisible: boolean;
   resetHideTimer: () => void;
   handleMouseMove: (e: React.MouseEvent) => void;
+  /** Skip-segment + next-episode plumbing for the mini chrome pill
+   *  (prexu-0ru). Sourced from Player.tsx's useSkipSegments + queue
+   *  state. All optional — MiniChrome no-ops the pill if not wired. */
+  activeSegment?: ActiveSegment | null;
+  onSkipSegment?: () => void;
+  hasNextItem?: boolean;
+  onNextEpisode?: () => void;
 }
 
 const containerBase: React.CSSProperties = {
@@ -54,6 +62,10 @@ export default function MinimizedPlayer({
   controlsVisible,
   resetHideTimer,
   handleMouseMove,
+  activeSegment,
+  onSkipSegment,
+  hasNextItem,
+  onNextEpisode,
 }: MinimizedPlayerProps) {
   const miniRect = playerMinimize.miniRect;
   return (
@@ -77,6 +89,10 @@ export default function MinimizedPlayer({
         currentTime={player.currentTime}
         duration={player.duration}
         onSeek={seek}
+        activeSegment={activeSegment}
+        onSkipSegment={onSkipSegment}
+        hasNextItem={hasNextItem}
+        onNextEpisode={onNextEpisode}
       />
     </div>
   );

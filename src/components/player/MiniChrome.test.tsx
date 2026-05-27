@@ -541,3 +541,170 @@ describe("MiniChrome scrub + skip", () => {
     expect(onActivity).toHaveBeenCalled();
   });
 });
+
+// ── Time labels (prexu-oj5) ─────────────────────────────────────────────────
+describe("MiniChrome time labels", () => {
+  it("renders current + remaining time around the scrub bar at default width", () => {
+    render(
+      <MiniChrome {...baseProps} currentTime={65} duration={185} />,
+    );
+    expect(screen.getByTestId("mini-chrome-time-current").textContent).toBe("1:05");
+    // remaining = 185 - 65 = 120, formatted as 2:00 with leading "-"
+    expect(screen.getByTestId("mini-chrome-time-remaining").textContent).toBe("-2:00");
+  });
+
+  it("hides time labels below the width threshold", () => {
+    render(
+      <MiniChrome
+        {...baseProps}
+        miniRect={{ ...defaultRect, width: 260 }}
+      />,
+    );
+    expect(screen.queryByTestId("mini-chrome-time-current")).toBeNull();
+    expect(screen.queryByTestId("mini-chrome-time-remaining")).toBeNull();
+    // Scrub bar itself stays present so the user can still seek.
+    expect(screen.getByTestId("mini-chrome-scrub")).toBeTruthy();
+  });
+
+  it("does NOT render time labels when duration is 0 (pre-metadata / live)", () => {
+    render(<MiniChrome {...baseProps} duration={0} />);
+    expect(screen.queryByTestId("mini-chrome-time-current")).toBeNull();
+    expect(screen.queryByTestId("mini-chrome-time-remaining")).toBeNull();
+  });
+
+  it("does NOT render time labels when duration is Infinity (live stream)", () => {
+    render(
+      <MiniChrome {...baseProps} duration={Number.POSITIVE_INFINITY} />,
+    );
+    expect(screen.queryByTestId("mini-chrome-time-current")).toBeNull();
+    expect(screen.queryByTestId("mini-chrome-time-remaining")).toBeNull();
+  });
+
+  it("clamps remaining at 0 when currentTime exceeds duration", () => {
+    render(
+      <MiniChrome {...baseProps} currentTime={1000} duration={600} />,
+    );
+    expect(screen.getByTestId("mini-chrome-time-remaining").textContent).toBe("-0:00");
+  });
+});
+
+// ── Skip Intro / Credits / Next Episode pill (prexu-0ru) ───────────────────
+describe("MiniChrome skip pill", () => {
+  it("renders 'Skip Intro' when activeSegment.type === 'intro'", () => {
+    render(
+      <MiniChrome
+        {...baseProps}
+        activeSegment={{ type: "intro", endTime: 90 }}
+        onSkipSegment={vi.fn()}
+      />,
+    );
+    const pill = screen.getByTestId("mini-chrome-skip-pill");
+    expect(pill.textContent).toBe("Skip Intro");
+  });
+
+  it("renders 'Skip Credits' when activeSegment.type === 'credits' AND hasNextItem=false", () => {
+    render(
+      <MiniChrome
+        {...baseProps}
+        activeSegment={{ type: "credits", endTime: 580 }}
+        onSkipSegment={vi.fn()}
+        hasNextItem={false}
+      />,
+    );
+    expect(screen.getByTestId("mini-chrome-skip-pill").textContent).toBe(
+      "Skip Credits",
+    );
+  });
+
+  it("renders 'Next Episode' when activeSegment.type === 'credits' AND hasNextItem=true", () => {
+    render(
+      <MiniChrome
+        {...baseProps}
+        activeSegment={{ type: "credits", endTime: 580 }}
+        onSkipSegment={vi.fn()}
+        hasNextItem={true}
+        onNextEpisode={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("mini-chrome-skip-pill").textContent).toBe(
+      "Next Episode",
+    );
+  });
+
+  it("clicking 'Skip Intro' calls onSkipSegment and onActivity", () => {
+    const onSkipSegment = vi.fn();
+    const onActivity = vi.fn();
+    render(
+      <MiniChrome
+        {...baseProps}
+        activeSegment={{ type: "intro", endTime: 90 }}
+        onSkipSegment={onSkipSegment}
+        onActivity={onActivity}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("mini-chrome-skip-pill"));
+    expect(onSkipSegment).toHaveBeenCalledTimes(1);
+    expect(onActivity).toHaveBeenCalledTimes(1);
+  });
+
+  it("clicking 'Next Episode' calls onNextEpisode (not onSkipSegment)", () => {
+    const onSkipSegment = vi.fn();
+    const onNextEpisode = vi.fn();
+    render(
+      <MiniChrome
+        {...baseProps}
+        activeSegment={{ type: "credits", endTime: 580 }}
+        onSkipSegment={onSkipSegment}
+        hasNextItem={true}
+        onNextEpisode={onNextEpisode}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("mini-chrome-skip-pill"));
+    expect(onNextEpisode).toHaveBeenCalledTimes(1);
+    expect(onSkipSegment).not.toHaveBeenCalled();
+  });
+
+  it("does NOT render the pill when activeSegment is null", () => {
+    render(<MiniChrome {...baseProps} activeSegment={null} />);
+    expect(screen.queryByTestId("mini-chrome-skip-pill")).toBeNull();
+  });
+
+  it("does NOT render the pill when onSkipSegment is absent (defensive)", () => {
+    render(
+      <MiniChrome
+        {...baseProps}
+        activeSegment={{ type: "intro", endTime: 90 }}
+      />,
+    );
+    expect(screen.queryByTestId("mini-chrome-skip-pill")).toBeNull();
+  });
+
+  it("pill wrapper carries data-mini-no-drag so it doesn't start an anchor drag", () => {
+    render(
+      <MiniChrome
+        {...baseProps}
+        activeSegment={{ type: "intro", endTime: 90 }}
+        onSkipSegment={vi.fn()}
+      />,
+    );
+    expect(
+      screen
+        .getByTestId("mini-chrome-skip-pill-wrap")
+        .getAttribute("data-mini-no-drag"),
+    ).toBe("true");
+  });
+
+  it("pill respects visible=false (opacity 0 + pointer-events none)", () => {
+    render(
+      <MiniChrome
+        {...baseProps}
+        visible={false}
+        activeSegment={{ type: "intro", endTime: 90 }}
+        onSkipSegment={vi.fn()}
+      />,
+    );
+    const wrap = screen.getByTestId("mini-chrome-skip-pill-wrap");
+    expect(wrap.style.opacity).toBe("0");
+    expect(wrap.style.pointerEvents).toBe("none");
+  });
+});

@@ -444,6 +444,10 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
         controlsVisible={controlsVisible}
         resetHideTimer={resetHideTimer}
         handleMouseMove={handleMouseMove}
+        activeSegment={activeSegment}
+        onSkipSegment={handleSkipSegment}
+        hasNextItem={hasNextItem}
+        onNextEpisode={handleNextEpisode}
       />
     );
   }
