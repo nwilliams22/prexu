@@ -100,9 +100,11 @@ const SKIP_SECONDS = 10;
 const DRAG_THRESHOLD_PX = 4;
 
 /** Throttle window for mid-drag IPC during resize. The mpv host re-snaps
- *  to the corner on every Resized event; ~20 Hz balances perceived
- *  smoothness with sync_geometry's ~50 ms minimum interval. */
-const RESIZE_IPC_THROTTLE_MS = 50;
+ *  to the corner on every Resized event; 30 Hz (33 ms) matches the
+ *  sync_geometry floor in src-tauri/src/player/mod.rs (prexu-8qk —
+ *  bumped from 50 ms 2026-05-27 after the window-drag throttle was
+ *  measured safe at 33 ms). */
+const RESIZE_IPC_THROTTLE_MS = 33;
 
 /** Below this width the time labels flanking the scrub bar are hidden
  *  so the scrub bar itself doesn't get squeezed. Default mini width is
