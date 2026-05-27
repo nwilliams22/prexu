@@ -38,6 +38,27 @@ function AppLayout() {
   const mainRef = useRef<HTMLElement>(null);
   const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Force a React commit on every window resize so WebView2 (which under
+  // Tauri's `transparent: true` defers paint after a window-resize)
+  // re-flows the dashboard content to fill the new client area
+  // immediately, instead of the user seeing a 1-2 second gap between
+  // the new window edge and the content (prexu-uzk). rAF-throttled so
+  // a continuous drag-resize doesn't fire more than one tick per
+  // browser frame.
+  const [, setResizeTick] = useState(0);
+  useEffect(() => {
+    let raf = 0;
+    const onResize = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => setResizeTick((t) => t + 1));
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      cancelAnimationFrame(raf);
+    };
+  }, []);
+
   const handleScroll = useCallback(() => {
     const el = mainRef.current;
     if (!el) return;
