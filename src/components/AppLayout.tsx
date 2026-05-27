@@ -68,6 +68,20 @@ function AppLayout() {
         // until the next idle, which leaves the dashboard content lagging
         // behind the new window size for ~1–2s during fast drag-resize.
         void document.body.offsetHeight;
+        // Layout alone is not enough — WebView2 with transparent: true
+        // can compute the new layout but STILL defer the paint commit,
+        // so the newly-uncovered area on a grow-resize stays navy
+        // (main HWND background) for up to a second. Reading
+        // documentElement.scrollLeft after writing it forces a paint
+        // commit on the next frame instead of waiting for idle. The
+        // write+read pair is the trick: a no-op scrollBy gets
+        // optimized away.
+        const root = document.documentElement;
+        const sx = root.scrollLeft;
+        root.scrollLeft = sx + 1;
+        // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+        root.scrollLeft;
+        root.scrollLeft = sx;
         setResizeTick((t) => t + 1);
       });
     };
