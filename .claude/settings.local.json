@@ -142,7 +142,8 @@
       "Bash(echo \"---RETEST---\")",
       "Bash(bd remember *)",
       "Bash(bd reopen *)",
-      "Bash(npx grep *)"
+      "Bash(npx grep *)",
+      "Bash(grep -n \"}\\);$\\\\|^describe\\\\|^  it\\(\" src/components/PosterCard.test.tsx)"
     ]
   }
 }
