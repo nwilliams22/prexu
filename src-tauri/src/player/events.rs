@@ -122,10 +122,13 @@ fn run_pump(mpv: Arc<Mpv>, app: AppHandle) {
                 let _ = app.emit("player://error", format!("{:?}", e));
             }
             None => {
-                // Timeout — log at info level occasionally so we can see
-                // whether the pump is stuck on wait_event after a quit
-                // should have fired Shutdown.
-                if loop_iterations % 3 == 0 {
+                // Timeout — kept as a diagnostic for the case where the
+                // pump fails to receive a Shutdown event after `quit` is
+                // sent (the pump would log forever instead of breaking).
+                // Throttled to ~once per minute (60 iters * 1.0s timeout)
+                // so an idle warmup mpv doesn't flood the dev console
+                // with thousands of lines.
+                if loop_iterations % 60 == 0 {
                     log::debug!(
                         "[player:events] wait_event timeout (iter #{})",
                         loop_iterations
