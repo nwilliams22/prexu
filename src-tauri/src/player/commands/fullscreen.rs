@@ -64,16 +64,13 @@ pub async fn player_set_fullscreen(
         if let Err(e) = app.run_on_main_thread(move || {
             log::debug!("[player:cmd] set_fullscreen: early sync closure entered");
             let st = app_for_sync.state::<PlayerState>();
-            // Child-relative origin (prexu-my6): host is a WS_CHILD of main,
-            // so coords are (0, 0, w, h) — the full client area is exactly
-            // the parent's inner_size with no screen offset.
-            match win_for_sync.inner_size() {
-                Ok(size) => {
-                    let (w, h) = (size.width as i32, size.height as i32);
-                    log::info!("[player:cmd] set_fullscreen: early sync geometry (0,0,{}x{})", w, h);
-                    st.apply_host_geometry(0, 0, w, h);
+            match (win_for_sync.inner_position(), win_for_sync.inner_size()) {
+                (Ok(pos), Ok(size)) => {
+                    let (x, y, w, h) = (pos.x, pos.y, size.width as i32, size.height as i32);
+                    log::info!("[player:cmd] set_fullscreen: early sync geometry ({},{},{}x{})", x, y, w, h);
+                    st.apply_host_geometry(x, y, w, h);
                 }
-                Err(_) => log::warn!("[player:cmd] set_fullscreen: failed to read geometry"),
+                _ => log::warn!("[player:cmd] set_fullscreen: failed to read geometry"),
             }
             let _ = win_for_sync.set_focus();
             log::debug!("[player:cmd] set_fullscreen: early sync closure done");

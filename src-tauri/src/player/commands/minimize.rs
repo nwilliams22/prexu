@@ -77,10 +77,8 @@ pub async fn player_enter_minimize(
 
     // Force resync now so the host shrinks immediately rather than waiting
     // for the next window event. apply_host_geometry honors the inset.
-    // Child-relative origin (prexu-my6): host is a WS_CHILD of main so we
-    // pass (0, 0, w, h); the minimize inset is computed against this origin.
-    if let Ok(size) = main.inner_size() {
-        state.apply_host_geometry(0, 0, size.width as i32, size.height as i32);
+    if let (Ok(pos), Ok(size)) = (main.inner_position(), main.inner_size()) {
+        state.apply_host_geometry(pos.x, pos.y, size.width as i32, size.height as i32);
     }
     Ok(())
 }
@@ -104,9 +102,8 @@ pub async fn player_exit_minimize(
         return Err("minimize lock poisoned".to_string());
     }
 
-    // Child-relative origin (prexu-my6): host is a WS_CHILD of main.
-    if let Ok(size) = main.inner_size() {
-        state.apply_host_geometry(0, 0, size.width as i32, size.height as i32);
+    if let (Ok(pos), Ok(size)) = (main.inner_position(), main.inner_size()) {
+        state.apply_host_geometry(pos.x, pos.y, size.width as i32, size.height as i32);
     }
     Ok(())
 }

@@ -14,19 +14,15 @@ use std::time::{Duration, Instant};
 use libmpv2::Mpv;
 use tauri::{AppHandle, Manager};
 
-/// Minimum interval between consecutive sync_geometry calls. After
-/// prexu-my6 the host is a `WS_CHILD` of the Tauri main window, so it
-/// moves with the parent for free — `WindowEvent::Moved` no longer
-/// triggers a SetWindowPos at all. Only `WindowEvent::Resized` reaches
-/// `sync_geometry`, and Resized fires far less often than Moved
-/// (snap-to-edge, maximize/restore, fullscreen toggle, drag-resize).
-///
-/// We keep the throttle because resize ANIMATIONS (Win11 maximize, snap
-/// preview) can still emit Resized in tight bursts. Each `SetWindowPos`
-/// on the child triggers WM_SIZE → mpv vo D3D11 swapchain rebuild, and
-/// 10+ rebuilds in ~300 ms can crash the gpu-next vo (the comment that
-/// originally justified the 50 ms value, when the host was a sibling
-/// top-level repositioned on every drag event).
+/// Minimum interval between consecutive sync_geometry calls. Drag-resize
+/// fires WM_SIZE at the OS event rate (~60 Hz). Each sync_geometry runs
+/// SetWindowPos which synchronously sends WM_WINDOWPOSCHANGING/CHANGED
+/// down the chain plus WM_SIZE to mpv's child window, where mpv rebuilds
+/// its D3D11 swapchain. At 60 Hz the Tauri main thread can't service the
+/// message queue between calls and the app hard-freezes (mpv's own
+/// threads keep playing audio/video, but UI input + paint stop).
+/// 20 Hz is smooth enough visually and gives mpv 50 ms to settle between
+/// swapchain rebuilds (empirically safe on Win11 with gpu-next + D3D11).
 pub(crate) const GEOMETRY_SYNC_MIN_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Managed state container holding the mpv handle + (on Windows) the native
@@ -309,12 +305,6 @@ impl PlayerState {
         //
         // Block on rx.recv: we're on a tokio worker (async command), main
         // thread is alive and will service the queued closure. Safe.
-        //
-        // The host is created as a WS_CHILD of `parent` (prexu-my6), so
-        // its position coords are PARENT-CLIENT-RELATIVE — `(0, 0)` for
-        // the full client area, or the mini-inset offset when minimized.
-        // Win32 then moves the host with the parent for free on every
-        // drag, eliminating per-frame `sync_geometry` IPC.
         #[cfg(target_os = "windows")]
         let host = {
             let app_for_spawn = app.clone();
@@ -330,32 +320,32 @@ impl PlayerState {
                     let host = host_window::HostWindow::create(parent)?;
                     log::info!("[player:host] created on main, parent={:?}", parent.0);
 
-                    if let Ok(size) = main.inner_size() {
-                        // Child-relative origin is always (0, 0). The
-                        // mini-inset helper computes its offsets against
-                        // this origin so a minimize-mode handoff still
-                        // produces the correct first-frame rect.
+                    if let (Ok(pos), Ok(size)) = (main.inner_position(), main.inner_size()) {
                         let (gx, gy, gw, gh) = initial_host_geometry(
                             minimize_snapshot,
                             scale_snapshot,
-                            0,
-                            0,
+                            pos.x,
+                            pos.y,
                             size.width as i32,
                             size.height as i32,
                         );
                         let _ = host.set_geometry(gx, gy, gw, gh);
                         log::debug!(
-                            "[player] initial geometry sync to ({},{},{}x{}) [client-relative]{}",
+                            "[player] initial geometry sync to ({},{},{}x{}){}",
                             gx, gy, gw, gh,
                             if minimize_snapshot.is_some() { " (mini-inset)" } else { "" }
                         );
                     }
-                    // Show AFTER sizing so the host never appears at its
-                    // 1280x720 creation placeholder. The HWND_BOTTOM anchor
-                    // inside `create` already placed us below the WebView2
-                    // sibling.
                     let _ = host.set_visible(true);
                     log::debug!("[player:host] set visible");
+                    // Re-anchor z-order below main. SW_SHOWNA shouldn't
+                    // raise it, but this is belt-and-suspenders to ensure
+                    // the host never covers the WebView.
+                    if let Err(e) = host.anchor_below(parent) {
+                        log::warn!("[player:host] anchor_below failed: {}", e);
+                    } else {
+                        log::debug!("[player:host] anchored below parent");
+                    }
                     Ok(host)
                 })();
                 let _ = tx.send(result);
@@ -569,18 +559,14 @@ impl PlayerState {
         Ok(())
     }
 
-    /// Resize the host window to match the Tauri main window's content
-    /// area. Coords are PARENT-CLIENT-RELATIVE since the host is a
-    /// WS_CHILD of main (prexu-my6) — callers pass `(0, 0, width, height)`
-    /// for the full client area; minimize mode adjusts the offset via
-    /// `apply_minimize_inset`. No-op when the player hasn't been
-    /// initialised yet — the Resized listener fires from app startup,
-    /// before any playback.
+    /// Resize/move the host window to match the Tauri main window's content
+    /// area. No-op when the player hasn't been initialised yet — the
+    /// listener fires from app startup, before any playback.
     ///
     /// Skipped while a fullscreen transition is in progress and
-    /// throttled on the regular path. When throttled, the geometry is
-    /// stored as pending and applied on the next event that passes the
-    /// throttle check (trailing-edge guarantee).
+    /// throttled to ~20 Hz on the regular path. When throttled, the
+    /// geometry is stored as pending and applied on the next event that
+    /// passes the throttle check (trailing-edge guarantee).
     #[cfg(target_os = "windows")]
     pub(crate) fn sync_geometry(&self, x: i32, y: i32, width: i32, height: i32) {
         log::trace!("[player] sync_geometry({},{},{}x{})", x, y, width, height);
@@ -700,13 +686,13 @@ impl PlayerState {
         self.pending_focus_reassert.swap(false, Ordering::AcqRel)
     }
 
-    /// True when the player is currently in pop-out mode. After prexu-my6
-    /// the focus-restore path no longer branches on this (child windows
-    /// propagate topmost from the parent automatically). Retained as a
-    /// state predicate for tests and future callers; returns false when
-    /// the lock is poisoned.
+    /// True when the player is currently in pop-out mode. Used to decide
+    /// whether the focus-restore reassert also needs to re-flag the
+    /// host's WS_EX_TOPMOST (popout) or just nudge geometry + z-order
+    /// (full / fullscreen / minimize). Returns false when the lock is
+    /// poisoned — callers treat that as "not in popout" so they skip
+    /// the topmost reassert.
     #[cfg(target_os = "windows")]
-    #[allow(dead_code)]
     pub(crate) fn is_in_popout(&self) -> bool {
         self.pre_popout_geometry
             .lock()
@@ -714,8 +700,8 @@ impl PlayerState {
             .unwrap_or(false)
     }
 
-    /// Reassert the mpv host window's geometry after the main Tauri
-    /// window regains focus.
+    /// Reassert the mpv host window's geometry (and topmost flag,
+    /// when in popout) after the main Tauri window regains focus.
     ///
     /// Why this exists (prexu-5l5): when another app fully occludes
     /// Prexu (any player mode — full, fullscreen, popout, mini) and
@@ -725,14 +711,28 @@ impl PlayerState {
     /// correctly but the video region showing through to whatever
     /// was behind.
     ///
-    /// Post-prexu-my6 the host is a WS_CHILD of main and its
-    /// topmost behaviour is propagated from the parent automatically,
-    /// so there's no more popout-specific WS_EX_TOPMOST reassert. The
-    /// only Win32 work needed is a forced SetWindowPos on the host
-    /// (via `apply_host_geometry`) — that triggers WM_PAINT, mpv vo
-    /// handles WM_PAINT by Presenting the next frame, and the
-    /// occluded DXGI swap chain unsticks. Coords are
-    /// parent-client-relative.
+    /// Mode-split recovery:
+    /// - **Full / fullscreen / mini**: only `apply_host_geometry`.
+    ///   The forced `SetWindowPos` triggers WM_PAINT on the host;
+    ///   mpv's vo handles WM_PAINT by Presenting the next frame,
+    ///   which flushes the occluded swap chain. No z-order or
+    ///   topmost change, so WebView2 mouse capture is undisturbed.
+    /// - **Popout**: `apply_host_topmost(true, Some(parent))` first
+    ///   to re-flag WS_EX_TOPMOST + re-anchor below the WebView
+    ///   (the always-on-top group can shuffle the host out from
+    ///   under the WebView during the focus restore), then
+    ///   `apply_host_geometry` for the Present nudge.
+    ///
+    /// Why the split: in non-popout modes the host is already in
+    /// the normal z-order under the WebView; running
+    /// `apply_host_topmost(false, Some(parent))` issues a
+    /// `SetWindowPos(HWND_NOTOPMOST)` that briefly leaves the host
+    /// above sibling z-order before the follow-up `anchor_below`
+    /// re-seats it. During that micro-window Win32 re-evaluates
+    /// cursor ownership and the WebView2 cursor capture gets
+    /// stuck on the host's thick-frame edge hit-test (resize
+    /// glyph). Skipping the redundant topmost flip avoids the
+    /// flicker entirely.
     ///
     /// Early-returns when mpv isn't initialised so Focused events
     /// during dashboard navigation pay nothing. Gated by
@@ -741,7 +741,7 @@ impl PlayerState {
     #[cfg(target_os = "windows")]
     pub(crate) fn reassert_host_on_focus(
         &self,
-        _parent: windows::Win32::Foundation::HWND,
+        parent: windows::Win32::Foundation::HWND,
         x: i32,
         y: i32,
         width: i32,
@@ -750,15 +750,30 @@ impl PlayerState {
         if !self.is_initialised() {
             return;
         }
+        let in_popout = self.is_in_popout();
         log::info!(
-            "[player:host] reassert_host_on_focus ({},{},{}x{})",
-            x, y, width, height
+            "[player:host] reassert_host_on_focus ({},{},{}x{}) popout={}",
+            x, y, width, height, in_popout
         );
+        if in_popout {
+            // Popout: reassert topmost flag + anchor in one call.
+            // The always-on-top group can drop the host out from
+            // under the WebView during a focus shuffle, so we need
+            // BOTH the WS_EX_TOPMOST flip and the anchor.
+            self.apply_host_topmost(true, Some(parent));
+        } else {
+            // Non-popout: anchor-only reassert. Single SetWindowPos
+            // with insertAfter=parent triggers WM_WINDOWPOSCHANGED
+            // → mpv vo rebuilds the D3D11 swap chain (kicks the
+            // occluded state). Skips the HWND_NOTOPMOST flip that
+            // would briefly put the host above the WebView and
+            // disrupt WebView2 mouse capture (cursor stuck on host
+            // edge resize glyph — prexu-5l5 follow-up).
+            self.reassert_host_anchor(parent);
+        }
         // Geometry nudge — forces SetWindowPos which triggers
         // WM_PAINT and the next Present, flushing any occluded
-        // D3D11 swap chain. With WS_CHILD this is the only thing
-        // needed; topmost is propagated from the parent so we no
-        // longer need a popout-specific reassert path.
+        // D3D11 swap chain.
         self.apply_host_geometry(x, y, width, height);
     }
 
@@ -774,14 +789,12 @@ impl PlayerState {
     }
 
     /// Apply host geometry directly, bypassing the fullscreen-transition
-    /// suppression flag and the throttle. Coords are PARENT-CLIENT-RELATIVE
-    /// (prexu-my6) — callers pass `(0, 0, width, height)` for the full
-    /// client area. Used from inside the fullscreen command's main-thread
-    /// closure to resize the host *immediately* after Tauri toggles
-    /// fullscreen, so the video catches up with the overlay within a
-    /// frame instead of waiting the full 350 ms transition delay. The
-    /// throttle and flag still apply to the normal on_window_event path
-    /// — this is a one-off forced apply.
+    /// suppression flag and the throttle. Used from inside the fullscreen
+    /// command's main-thread closure to resize the host *immediately* after
+    /// Tauri toggles fullscreen, so the video catches up with the overlay
+    /// within a frame instead of waiting the full 350 ms transition delay.
+    /// The throttle and flag still apply to the normal on_window_event
+    /// path — this is a one-off forced apply.
     #[cfg(target_os = "windows")]
     pub(crate) fn apply_host_geometry(&self, x: i32, y: i32, width: i32, height: i32) {
         let Ok(guard) = self.inner.lock() else {
@@ -809,24 +822,69 @@ impl PlayerState {
         }
     }
 
-    /// No-op since the host became a WS_CHILD of the main window (prexu-my6).
+    /// Re-anchor the mpv host window directly below the WebView in
+    /// z-order without touching its WS_EX_TOPMOST flag. Single
+    /// `SetWindowPos(parent, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE)`
+    /// call — enough to trigger `WM_WINDOWPOSCHANGED` on the host
+    /// (which mpv's vo handles by rebuilding its D3D11 swap chain),
+    /// but cheap enough not to disturb WebView2 mouse capture.
     ///
-    /// Previously the host was a sibling top-level so we had to flip
-    /// `WS_EX_TOPMOST` on it whenever the WebView went always-on-top for
-    /// pop-out. Now Win32 propagates topmost from parent to children
-    /// automatically: `main.set_always_on_top(true)` is sufficient.
-    /// Kept as a method so popout.rs / focus-restore call sites stay
-    /// symmetric without `#[cfg]` gates; the underlying call is a no-op.
+    /// Used by the focus-restore reassert path in non-popout modes
+    /// (full / fullscreen / mini). Popout uses `apply_host_topmost`
+    /// instead because it also needs the topmost flag reasserted.
+    /// (prexu-5l5 follow-up)
+    #[cfg(target_os = "windows")]
+    pub(crate) fn reassert_host_anchor(
+        &self,
+        parent: windows::Win32::Foundation::HWND,
+    ) {
+        let Ok(guard) = self.inner.lock() else {
+            return;
+        };
+        if let Some(inner) = guard.as_ref() {
+            if let Some(host) = inner.host.as_ref() {
+                log::debug!("[player] reassert_host_anchor");
+                if let Err(e) = host.anchor_below(parent) {
+                    log::warn!("[player:host] reassert_host_anchor failed: {}", e);
+                }
+            }
+        }
+    }
+
+    /// Toggle the mpv host window's topmost flag for pop-out mode so the
+    /// video floats above other apps the same way the WebView overlay does.
+    ///
+    /// Re-anchors below `parent` whenever a parent is provided, on BOTH
+    /// the topmost=true and topmost=false paths. SetWindowPos(HWND_NOTOPMOST)
+    /// only drops the host below other topmost windows — it does NOT put
+    /// it back below the WebView in the regular z-order group. Without the
+    /// anchor_below(parent) here, after exit_popout the host floats above
+    /// the WebView and steals all mouse events.
     #[cfg(target_os = "windows")]
     pub(crate) fn apply_host_topmost(
         &self,
         topmost: bool,
-        _parent: Option<windows::Win32::Foundation::HWND>,
+        parent: Option<windows::Win32::Foundation::HWND>,
     ) {
-        log::trace!(
-            "[player] apply_host_topmost({}) no-op (child propagates from parent)",
-            topmost
-        );
+        let Ok(guard) = self.inner.lock() else {
+            return;
+        };
+        if let Some(inner) = guard.as_ref() {
+            if let Some(host) = inner.host.as_ref() {
+                log::info!("[player] apply_host_topmost({})", topmost);
+                if let Err(e) = host.set_topmost(topmost) {
+                    log::warn!("[player] apply_host_topmost failed: {}", e);
+                }
+                if let Some(p) = parent {
+                    if let Err(e) = host.anchor_below(p) {
+                        log::warn!(
+                            "[player] apply_host_topmost: anchor_below failed: {}",
+                            e
+                        );
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1011,11 +1069,11 @@ mod tests {
     // `reassert_host_on_focus` fires in every player mode (full,
     // fullscreen, popout, mini) — the gate is `is_initialised()`, not
     // popout-specific, because the transparent-video-on-alt-tab-back
-    // bug repros in full player too. Post-prexu-my6 the host is a
-    // WS_CHILD of main so the popout-specific topmost reassert path
-    // is gone; `is_in_popout` remains here as a state predicate that
-    // tests exercise. The SetWindowPos path is covered by manual
-    // repro (same convention as the other Win32-bound geometry tests).
+    // bug repros in full player too. `is_in_popout()` is still used
+    // internally to decide whether to set WS_EX_TOPMOST (popout) or
+    // leave it clear (other modes). These tests exercise both
+    // predicates; the SetWindowPos path is covered by manual repro
+    // (same convention as the other Win32-bound geometry tests).
 
     #[test]
     fn is_in_popout_false_on_fresh_state() {
