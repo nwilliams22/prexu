@@ -141,7 +141,8 @@
       "Bash(rm -v .beads/dolt/prexu/.dolt/git-remote-cache/e1af7c6f17136f12ec92adda62ef7dacf6e4699c4032f5856b975d7d92b11c77/repo.git/objects/info/commit-graphs/commit-graph-chain .beads/dolt/prexu/.dolt/git-remote-cache/e1af7c6f17136f12ec92adda62ef7dacf6e4699c4032f5856b975d7d92b11c77/repo.git/objects/info/commit-graphs/graph-7e7ebb2f40ff1a867b2aee2bddfdcc4050a4b1f9.graph)",
       "Bash(echo \"---RETEST---\")",
       "Bash(bd remember *)",
-      "Bash(bd reopen *)"
+      "Bash(bd reopen *)",
+      "Bash(npx grep *)"
     ]
   }
 }

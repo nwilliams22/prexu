@@ -4,11 +4,16 @@ import { usePlayerLayerStyle } from "./usePlayerLayerStyle";
 
 vi.mock("../../contexts/PlayerContext", () => ({
   usePlayerSession: vi.fn(),
+  usePlayerMinimize: vi.fn(),
 }));
 
-import { usePlayerSession } from "../../contexts/PlayerContext";
+import {
+  usePlayerSession,
+  usePlayerMinimize,
+} from "../../contexts/PlayerContext";
 
 const mockUsePlayerSession = vi.mocked(usePlayerSession);
+const mockUsePlayerMinimize = vi.mocked(usePlayerMinimize);
 
 const BASE_MINI_RECT = {
   corner: "bottom-right" as const,
@@ -17,24 +22,34 @@ const BASE_MINI_RECT = {
   padding: 16,
 };
 
+function setupContext(args: {
+  session: { ratingKey: string } | null;
+  isMinimized: boolean;
+  miniRect?: typeof BASE_MINI_RECT;
+}) {
+  mockUsePlayerSession.mockReturnValue({
+    session: args.session,
+    play: vi.fn(),
+    stop: vi.fn(),
+    replaceRatingKey: vi.fn(),
+    updateSession: vi.fn(),
+  });
+  mockUsePlayerMinimize.mockReturnValue({
+    isMinimized: args.isMinimized,
+    miniRect: args.miniRect ?? BASE_MINI_RECT,
+    minimize: vi.fn(),
+    restoreFromMinimize: vi.fn(),
+    updateMiniRect: vi.fn(),
+  });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
 describe("usePlayerLayerStyle", () => {
   it("returns empty-baseline object when no session", () => {
-    mockUsePlayerSession.mockReturnValue({
-      session: null,
-      isMinimized: false,
-      miniRect: BASE_MINI_RECT,
-      play: vi.fn(),
-      stop: vi.fn(),
-      replaceRatingKey: vi.fn(),
-      updateSession: vi.fn(),
-      minimize: vi.fn(),
-      restoreFromMinimize: vi.fn(),
-      updateMiniRect: vi.fn(),
-    });
+    setupContext({ session: null, isMinimized: false });
 
     const { result } = renderHook(() => usePlayerLayerStyle());
 
@@ -49,18 +64,7 @@ describe("usePlayerLayerStyle", () => {
   });
 
   it("returns opacity:0 and pointerEvents:none in full-player mode (session present, not minimized)", () => {
-    mockUsePlayerSession.mockReturnValue({
-      session: { ratingKey: "42" },
-      isMinimized: false,
-      miniRect: BASE_MINI_RECT,
-      play: vi.fn(),
-      stop: vi.fn(),
-      replaceRatingKey: vi.fn(),
-      updateSession: vi.fn(),
-      minimize: vi.fn(),
-      restoreFromMinimize: vi.fn(),
-      updateMiniRect: vi.fn(),
-    });
+    setupContext({ session: { ratingKey: "42" }, isMinimized: false });
 
     const { result } = renderHook(() => usePlayerLayerStyle());
 
@@ -73,18 +77,7 @@ describe("usePlayerLayerStyle", () => {
   });
 
   it("returns opacity:1 and pointerEvents:auto in minimize mode (session present, isMinimized)", () => {
-    mockUsePlayerSession.mockReturnValue({
-      session: { ratingKey: "42" },
-      isMinimized: true,
-      miniRect: BASE_MINI_RECT,
-      play: vi.fn(),
-      stop: vi.fn(),
-      replaceRatingKey: vi.fn(),
-      updateSession: vi.fn(),
-      minimize: vi.fn(),
-      restoreFromMinimize: vi.fn(),
-      updateMiniRect: vi.fn(),
-    });
+    setupContext({ session: { ratingKey: "42" }, isMinimized: true });
 
     const { result } = renderHook(() => usePlayerLayerStyle());
 
@@ -96,17 +89,10 @@ describe("usePlayerLayerStyle", () => {
   });
 
   it("mask-position string reflects the miniRect corner (bottom-right at padding=16)", () => {
-    mockUsePlayerSession.mockReturnValue({
+    setupContext({
       session: { ratingKey: "42" },
       isMinimized: true,
       miniRect: { corner: "bottom-right", width: 360, height: 200, padding: 16 },
-      play: vi.fn(),
-      stop: vi.fn(),
-      replaceRatingKey: vi.fn(),
-      updateSession: vi.fn(),
-      minimize: vi.fn(),
-      restoreFromMinimize: vi.fn(),
-      updateMiniRect: vi.fn(),
     });
 
     const { result } = renderHook(() => usePlayerLayerStyle());
@@ -117,17 +103,10 @@ describe("usePlayerLayerStyle", () => {
   });
 
   it("mask-position string reflects the miniRect corner (top-left at padding=8)", () => {
-    mockUsePlayerSession.mockReturnValue({
+    setupContext({
       session: { ratingKey: "42" },
       isMinimized: true,
       miniRect: { corner: "top-left", width: 360, height: 200, padding: 8 },
-      play: vi.fn(),
-      stop: vi.fn(),
-      replaceRatingKey: vi.fn(),
-      updateSession: vi.fn(),
-      minimize: vi.fn(),
-      restoreFromMinimize: vi.fn(),
-      updateMiniRect: vi.fn(),
     });
 
     const { result } = renderHook(() => usePlayerLayerStyle());

@@ -1,5 +1,8 @@
 import type React from "react";
-import { usePlayerSession } from "../../contexts/PlayerContext";
+import {
+  usePlayerSession,
+  usePlayerMinimize,
+} from "../../contexts/PlayerContext";
 import { miniRectToMaskPosition } from "../../utils/mini-rect";
 
 /**
@@ -44,13 +47,12 @@ import { miniRectToMaskPosition } from "../../utils/mini-rect";
  * cut-out as soon as the user releases the mouse (and live during resize).
  */
 export function usePlayerLayerStyle(): React.CSSProperties {
-  const playerSession = usePlayerSession();
+  const { session } = usePlayerSession();
+  const { isMinimized, miniRect } = usePlayerMinimize();
 
-  const isFullPlayer =
-    playerSession.session != null && !playerSession.isMinimized;
-  const hasSession = playerSession.session != null;
+  const isFullPlayer = session != null && !isMinimized;
+  const hasSession = session != null;
 
-  const miniRect = playerSession.miniRect;
   const maskSize = `100% 100%, ${miniRect.width}px ${miniRect.height}px`;
   const maskPosition = `0 0, ${miniRectToMaskPosition(miniRect)}`;
 

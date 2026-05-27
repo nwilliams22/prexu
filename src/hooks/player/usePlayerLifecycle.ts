@@ -16,14 +16,16 @@
 import { useCallback } from "react";
 import { IS_NATIVE_PLAYER, type UsePlayerResult } from "../usePlayer";
 import type { UsePopOutPlayerResult } from "./usePopOutPlayer";
-import type { PlayerContextValue } from "../../contexts/PlayerContext";
+import type { PlayerSessionContextValue } from "../../contexts/PlayerContext";
 import { logger } from "../../services/logger";
 import { TRANSPARENT_BODY_CLASS } from "./useTransparentWindow";
 
 export interface UsePlayerLifecycleArgs {
   player: UsePlayerResult;
   popOut: UsePopOutPlayerResult;
-  playerSession: PlayerContextValue;
+  /** Only `.stop` is read — narrowed to the session slice now that
+   *  minimize lives on its own context (prexu-ii3). */
+  playerSession: Pick<PlayerSessionContextValue, "stop">;
   /**
    * Ref to the latest `player.isFullscreen`. Player.tsx owns the ref +
    * keeps it synced; this hook reads it from the ref so the exit

@@ -10,7 +10,11 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
-import { usePlayerSession, type PlayerWatchTogether } from "../contexts/PlayerContext";
+import {
+  usePlayerSession,
+  usePlayerMinimize,
+  type PlayerWatchTogether,
+} from "../contexts/PlayerContext";
 import { getImageUrl } from "../services/plex-library";
 import { usePlayer, IS_NATIVE_PLAYER } from "../hooks/usePlayer";
 import { useWatchTogether } from "../hooks/useWatchTogether";
@@ -59,6 +63,7 @@ interface PlayerProps {
 function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   const { isAuthenticated, serverSelected, server } = useAuth();
   const playerSession = usePlayerSession();
+  const playerMinimize = usePlayerMinimize();
 
   const player = usePlayer(ratingKey, offset);
 
@@ -168,14 +173,14 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     if (IS_NATIVE_PLAYER) {
       // Mutual exclusion with minimize: if currently minimized, restore
       // to full first, then pop out.
-      if (playerSession.isMinimized) {
-        playerSession.restoreFromMinimize();
+      if (playerMinimize.isMinimized) {
+        playerMinimize.restoreFromMinimize();
       }
       popOut.togglePopOut();
     } else {
       pip.togglePiP();
     }
-  }, [popOut, pip, playerSession]);
+  }, [popOut, pip, playerMinimize]);
 
   const handleMinimize = useCallback(() => {
     // Mutual exclusion with pop-out: if currently popped out, exit
@@ -183,8 +188,8 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     if (IS_NATIVE_PLAYER && popOut.isPopOut) {
       popOut.togglePopOut();
     }
-    playerSession.minimize();
-  }, [popOut, playerSession]);
+    playerMinimize.minimize();
+  }, [popOut, playerMinimize]);
 
   // Controls visibility (auto-hide on inactivity)
   const { controlsVisible, resetHideTimer, handleMouseMove } =
@@ -273,12 +278,12 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     itemType: player.itemType,
     hasNextItem,
     wtInSession: wt.isInSession,
-    isMinimized: playerSession.isMinimized,
+    isMinimized: playerMinimize.isMinimized,
     autoPlayEnabled: pb.autoPlayEnabled,
     server,
     onAdvanceNext: handleNextEpisode,
     onExit: lifecycle.exit,
-    onRestoreFromMinimize: playerSession.restoreFromMinimize,
+    onRestoreFromMinimize: playerMinimize.restoreFromMinimize,
   });
 
   // Skip intro/credits segments. ratingKey passed as the reset trigger so
@@ -428,11 +433,11 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   // remain interactive. The mpv host has already been shrunk by the
   // Rust-side player_enter_minimize call from PlayerContext.minimize();
   // this just makes the React chrome match.
-  if (playerSession.isMinimized) {
+  if (playerMinimize.isMinimized) {
     return (
       <MinimizedPlayer
         player={player}
-        playerSession={playerSession}
+        playerMinimize={playerMinimize}
         togglePlay={togglePlay}
         seek={seek}
         onExit={lifecycle.exit}
@@ -579,7 +584,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
           onTogglePiP={togglePiP}
           isPopOutMode={IS_NATIVE_PLAYER}
           isMinimizeSupported={IS_NATIVE_PLAYER}
-          isMinimizeActive={playerSession.isMinimized}
+          isMinimizeActive={playerMinimize.isMinimized}
           onMinimize={handleMinimize}
           queueCount={remainingCount}
           onToggleQueue={toggleQueuePanel}

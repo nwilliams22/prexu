@@ -50,7 +50,16 @@ export interface PlayOptions {
   watchTogether?: PlayerWatchTogether;
 }
 
-export interface PlayerContextValue {
+/**
+ * Session controls — opening, closing, and swapping the active item.
+ *
+ * Split out of the prior combined PlayerContext (prexu-ii3) so that
+ * isMinimized / miniRect changes don't cascade-invalidate every consumer
+ * of `play`. Dashboard et al. only need this slice; minimize-toggle now
+ * stays local to AppLayout + Player.tsx instead of repainting the Home
+ * route tree.
+ */
+export interface PlayerSessionContextValue {
   /** Active session, or null when the player is closed. */
   session: PlayerSession | null;
   /**
@@ -75,6 +84,16 @@ export interface PlayerContextValue {
    * ratingKey (e.g. host clicks "Leave Session"). No-op if no session.
    */
   updateSession: (changes: Partial<PlayerSession>) => void;
+}
+
+/**
+ * In-window minimize state + the persisted mini-player geometry.
+ *
+ * Kept on a separate context from the session controls so that the
+ * frequent isMinimized / miniRect updates (drag, resize, corner-snap)
+ * don't invalidate Dashboard's session consumers.
+ */
+export interface PlayerMinimizeContextValue {
   /**
    * True while the player is in in-window minimize mode: the Tauri main
    * window stays full size and only the mpv host shrinks to a small corner
@@ -111,7 +130,8 @@ export interface PlayerContextValue {
   updateMiniRect: (updates: Partial<MiniRect>) => void;
 }
 
-const PlayerContext = createContext<PlayerContextValue | null>(null);
+const PlayerSessionContext = createContext<PlayerSessionContextValue | null>(null);
+const PlayerMinimizeContext = createContext<PlayerMinimizeContextValue | null>(null);
 
 export function PlayerProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<PlayerSession | null>(null);
@@ -173,10 +193,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // host but the React tree is still showing full-chrome. The user sees
   // a transparent flash to desktop until React catches up.
   //
-  // flushSync blocks the event loop for the commit duration; on the
-  // Dashboard route that's ~1s. The structural fix is to split
-  // PlayerContext so isMinimized changes don't invalidate Dashboard's
-  // tree (prexu-ii3) — flushSync is the tactical bridge until then.
+  // The PlayerContext split (prexu-ii3) now keeps Dashboard out of the
+  // minimize re-render path, so flushSync only invalidates AppLayout +
+  // Player.tsx — orders of magnitude cheaper than the prior Dashboard
+  // cascade. Keeping it because the visual-flash rationale stands on
+  // its own.
   const minimize = useCallback(() => {
     logger.info("player:minimize", "entering", miniRectRef.current);
     flushSync(() => {
@@ -264,34 +285,39 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     });
   }, [isMinimized, miniRect]);
 
-  const value = useMemo<PlayerContextValue>(
+  // Memoize each slice independently. minimize-toggle invalidates only
+  // the minimize value; session consumers see stable identity and skip
+  // their re-render. play/stop reset isMinimized internally, so both
+  // slices change in that flow — expected.
+  const sessionValue = useMemo<PlayerSessionContextValue>(
     () => ({
       session,
       play,
       stop,
       replaceRatingKey,
       updateSession,
+    }),
+    [session, play, stop, replaceRatingKey, updateSession],
+  );
+
+  const minimizeValue = useMemo<PlayerMinimizeContextValue>(
+    () => ({
       isMinimized,
       minimize,
       restoreFromMinimize,
       miniRect,
       updateMiniRect,
     }),
-    [
-      session,
-      play,
-      stop,
-      replaceRatingKey,
-      updateSession,
-      isMinimized,
-      minimize,
-      restoreFromMinimize,
-      miniRect,
-      updateMiniRect,
-    ],
+    [isMinimized, minimize, restoreFromMinimize, miniRect, updateMiniRect],
   );
 
-  return <PlayerContext.Provider value={value}>{children}</PlayerContext.Provider>;
+  return (
+    <PlayerSessionContext.Provider value={sessionValue}>
+      <PlayerMinimizeContext.Provider value={minimizeValue}>
+        {children}
+      </PlayerMinimizeContext.Provider>
+    </PlayerSessionContext.Provider>
+  );
 }
 
 /**
@@ -301,11 +327,31 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
  * the existing playback-engine hook in src/hooks/usePlayer.ts. This hook
  * is for opening/closing the overlay; that hook is for driving libmpv
  * once the overlay is open.
+ *
+ * Consumers of this hook re-render only on session changes. Minimize /
+ * miniRect updates are isolated on a separate context — see
+ * `usePlayerMinimize`.
  */
-export function usePlayerSession(): PlayerContextValue {
-  const ctx = useContext(PlayerContext);
+export function usePlayerSession(): PlayerSessionContextValue {
+  const ctx = useContext(PlayerSessionContext);
   if (!ctx) {
     throw new Error("usePlayerSession must be used within a PlayerProvider");
+  }
+  return ctx;
+}
+
+/**
+ * Access in-window minimize state + mini-player geometry. Throws if used
+ * outside PlayerProvider.
+ *
+ * Kept on its own context so that frequent minimize toggles / drag-resize
+ * updates don't cascade-invalidate Dashboard or other session-only
+ * consumers (prexu-ii3).
+ */
+export function usePlayerMinimize(): PlayerMinimizeContextValue {
+  const ctx = useContext(PlayerMinimizeContext);
+  if (!ctx) {
+    throw new Error("usePlayerMinimize must be used within a PlayerProvider");
   }
   return ctx;
 }

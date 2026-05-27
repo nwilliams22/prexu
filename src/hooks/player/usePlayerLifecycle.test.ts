@@ -33,7 +33,7 @@ import { useRef } from "react";
 import { usePlayerLifecycle } from "./usePlayerLifecycle";
 import type { UsePlayerResult } from "../usePlayer";
 import type { UsePopOutPlayerResult } from "./usePopOutPlayer";
-import type { PlayerContextValue } from "../../contexts/PlayerContext";
+import type { PlayerSessionContextValue } from "../../contexts/PlayerContext";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn().mockResolvedValue(undefined),
@@ -106,23 +106,9 @@ function makePopOut(isPopOut = false): UsePopOutPlayerResult {
   };
 }
 
-function makePlayerSession(): PlayerContextValue {
+function makePlayerSession(): Pick<PlayerSessionContextValue, "stop"> {
   return {
-    session: { ratingKey: "1" },
-    play: vi.fn(),
     stop: vi.fn(),
-    replaceRatingKey: vi.fn(),
-    updateSession: vi.fn(),
-    isMinimized: false,
-    minimize: vi.fn(),
-    restoreFromMinimize: vi.fn(),
-    miniRect: {
-      corner: "bottom-right",
-      width: 360,
-      height: 200,
-      padding: 12,
-    },
-    updateMiniRect: vi.fn(),
   };
 }
 
@@ -134,7 +120,7 @@ function setup(opts: {
   player?: Partial<UsePlayerResult>;
   popOut?: UsePopOutPlayerResult;
   isFullscreen?: boolean;
-  playerSession?: PlayerContextValue;
+  playerSession?: Pick<PlayerSessionContextValue, "stop">;
 } = {}) {
   const player = makePlayer(opts.player);
   const popOut = opts.popOut ?? makePopOut();

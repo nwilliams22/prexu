@@ -16,11 +16,14 @@ import type React from "react";
 import MiniChrome from "./MiniChrome";
 import { miniRectToContainerStyle } from "../../utils/mini-rect";
 import type { UsePlayerResult } from "../../hooks/usePlayer";
-import type { PlayerContextValue } from "../../contexts/PlayerContext";
+import type { PlayerMinimizeContextValue } from "../../contexts/PlayerContext";
 
 interface MinimizedPlayerProps {
   player: UsePlayerResult;
-  playerSession: PlayerContextValue;
+  /** Narrow minimize-only slice — caller passes `usePlayerMinimize()`
+   *  (prexu-ii3 split). Reads `miniRect`, `restoreFromMinimize`, and
+   *  `updateMiniRect`. */
+  playerMinimize: PlayerMinimizeContextValue;
   togglePlay: () => void;
   seek: (seconds: number) => void;
   onExit: () => void;
@@ -44,7 +47,7 @@ const containerBase: React.CSSProperties = {
 
 export default function MinimizedPlayer({
   player,
-  playerSession,
+  playerMinimize,
   togglePlay,
   seek,
   onExit,
@@ -52,7 +55,7 @@ export default function MinimizedPlayer({
   resetHideTimer,
   handleMouseMove,
 }: MinimizedPlayerProps) {
-  const miniRect = playerSession.miniRect;
+  const miniRect = playerMinimize.miniRect;
   return (
     <div
       style={{
@@ -63,14 +66,14 @@ export default function MinimizedPlayer({
       <MiniChrome
         isPlaying={player.isPlaying}
         onTogglePlay={togglePlay}
-        onRestore={playerSession.restoreFromMinimize}
+        onRestore={playerMinimize.restoreFromMinimize}
         onClose={onExit}
         title={player.title ?? undefined}
         visible={controlsVisible}
         onActivity={resetHideTimer}
         onMouseMove={handleMouseMove}
         miniRect={miniRect}
-        onUpdateMiniRect={playerSession.updateMiniRect}
+        onUpdateMiniRect={playerMinimize.updateMiniRect}
         currentTime={player.currentTime}
         duration={player.duration}
         onSeek={seek}
