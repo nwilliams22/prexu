@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Outlet, Navigate, useNavigate, useLocation } from "react-router-dom";
+import { logger } from "../services/logger";
 import { useAuth } from "../hooks/useAuth";
 import { usePlayerLayerStyle } from "../hooks/player/usePlayerLayerStyle";
 import { usePreferences } from "../hooks/usePreferences";
@@ -42,20 +43,58 @@ function AppLayout() {
   // Tauri's `transparent: true` defers paint after a window-resize)
   // re-flows the dashboard content to fill the new client area
   // immediately, instead of the user seeing a 1-2 second gap between
-  // the new window edge and the content (prexu-uzk). rAF-throttled so
-  // a continuous drag-resize doesn't fire more than one tick per
-  // browser frame.
+  // the new window edge and the content (prexu-uzk).
+  //
+  // Two signals feed the tick:
+  //   1. `window.addEventListener('resize')` — browser-side, may be batched
+  //      by WebView2 under transparent-window mode.
+  //   2. Tauri 'window://resized' event emitted from the Rust
+  //      `WindowEvent::Resized` handler — fires on every OS-level WM_SIZE
+  //      so we always get a kick even when the browser swallows the resize.
+  //
+  // Inside the rAF callback we ALSO read `document.body.offsetHeight`
+  // before the setState. The read forces WebView2 to perform synchronous
+  // layout at this exact moment instead of deferring until the next idle.
+  // Reading the value is the side effect; the value itself is discarded.
+  // rAF-throttled so a continuous drag-resize doesn't fire more than one
+  // tick per browser frame.
   const [, setResizeTick] = useState(0);
   useEffect(() => {
     let raf = 0;
     const onResize = () => {
       cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => setResizeTick((t) => t + 1));
+      raf = requestAnimationFrame(() => {
+        // Force synchronous layout — WebView2 may otherwise defer reflow
+        // until the next idle, which leaves the dashboard content lagging
+        // behind the new window size for ~1–2s during fast drag-resize.
+        void document.body.offsetHeight;
+        setResizeTick((t) => t + 1);
+      });
     };
     window.addEventListener("resize", onResize);
+
+    // Tauri-side signal: the Rust window-event handler also fires this
+    // on every WM_SIZE so we don't depend on the browser's resize event
+    // alone. Webview-side `window.resize` can be batched under
+    // transparent-window mode; the Tauri event always lands.
+    let tauriUnlisten: (() => void) | undefined;
+    (async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        tauriUnlisten = await listen("window://resized", () => onResize());
+      } catch (err) {
+        logger.warn(
+          "layout",
+          "listen(window://resized) failed",
+          String(err),
+        );
+      }
+    })();
+
     return () => {
       window.removeEventListener("resize", onResize);
       cancelAnimationFrame(raf);
+      tauriUnlisten?.();
     };
   }, []);
 

@@ -528,6 +528,21 @@ pub fn run() {
                                     (win_clone.inner_position(), win_clone.inner_size())
                                 {
                                     log::trace!("[window] Resized to ({},{},{}x{})", pos.x, pos.y, size.width, size.height);
+                                    // Tell the frontend the OS-level WM_SIZE
+                                    // fired. AppLayout's resize hook listens
+                                    // for this and triggers a forced React
+                                    // commit + synchronous layout read, so
+                                    // dashboard content stays in lockstep
+                                    // with the new client area even when
+                                    // WebView2 batches its own resize event
+                                    // (prexu-uzk follow-up). Payload is the
+                                    // new (width, height) so the receiver
+                                    // can dedup against the last value.
+                                    use tauri::Emitter;
+                                    let _ = app_handle.emit(
+                                        "window://resized",
+                                        (size.width, size.height),
+                                    );
                                     state.sync_geometry(
                                         pos.x,
                                         pos.y,
