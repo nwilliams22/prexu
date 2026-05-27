@@ -37,6 +37,7 @@ vi.mock("../../services/logger", () => ({
 import {
   useTransparentWindow,
   TRANSPARENT_BODY_CLASS,
+  HOST_READY_FALLBACK_MS,
 } from "./useTransparentWindow";
 
 beforeEach(() => {
@@ -82,10 +83,15 @@ describe("useTransparentWindow", () => {
     renderHook(() => useTransparentWindow(true));
     expect(document.body.classList.contains(TRANSPARENT_BODY_CLASS)).toBe(false);
 
+    // Class must NOT flip a hair before the fallback window.
     act(() => {
-      vi.advanceTimersByTime(250);
+      vi.advanceTimersByTime(HOST_READY_FALLBACK_MS - 1);
     });
+    expect(document.body.classList.contains(TRANSPARENT_BODY_CLASS)).toBe(false);
 
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
     expect(document.body.classList.contains(TRANSPARENT_BODY_CLASS)).toBe(true);
   });
 
@@ -126,7 +132,7 @@ describe("useTransparentWindow", () => {
 
     // Subsequent timeout firing must not toggle the class off or thrash.
     act(() => {
-      vi.advanceTimersByTime(500);
+      vi.advanceTimersByTime(HOST_READY_FALLBACK_MS + 1);
     });
     expect(document.body.classList.contains(TRANSPARENT_BODY_CLASS)).toBe(true);
   });

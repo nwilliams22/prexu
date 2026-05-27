@@ -7,7 +7,7 @@
  * The class is DEFERRED until either:
  *   - Rust emits `player://host-window-ready` (mpv has decoded + composited
  *     its first frame on the new file), or
- *   - The safety-net timeout fires (HOST_READY_FALLBACK_MS, currently 250ms).
+ *   - The safety-net timeout fires (HOST_READY_FALLBACK_MS).
  *
  * Deferring fixes prexu-mto: previously the class was added synchronously on
  * mount, so on Resume-from-Beginning the body went transparent for the few
@@ -33,13 +33,24 @@ import { logger } from "../../services/logger";
 export const TRANSPARENT_BODY_CLASS = "player-transparent";
 
 /**
- * Safety-net for the host-ready event. Long enough to cover the common
- * mpv first-frame latency on warm starts (single-digit ms) and on cold
- * starts (typically <100ms once libmpv is initialised), short enough
- * that the user perceives an opaque window rather than a flash if the
- * event never fires.
+ * Safety-net for the host-ready event. Sized to be longer than the
+ * realistic mpv `loadfile → PlaybackRestart` window so the event wins
+ * the race in the common case. Empirically (2026-05-27 dev log) the
+ * sequence after a user click is:
+ *
+ *   t+0     useTransparentWindow mounts, starts deferring
+ *   t+~50   player_load_url IPC, ensure_init, mpv loadfile
+ *   t+~900  FileLoaded
+ *   t+~1000 PlaybackRestart → player://host-window-ready
+ *
+ * The original 250ms fallback fired well before the event, defeating
+ * the defer. 3000ms covers cold-start, hwdec probe re-runs, and slow
+ * network demuxer-open without making a stuck-opaque case visibly
+ * laggy if the event truly never arrives.
+ *
+ * Exported so tests can drive timers off the same value.
  */
-const HOST_READY_FALLBACK_MS = 250;
+export const HOST_READY_FALLBACK_MS = 3000;
 
 export function useTransparentWindow(active: boolean): void {
   useLayoutEffect(() => {
