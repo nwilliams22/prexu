@@ -378,6 +378,22 @@ impl PlayerState {
             // through the transparent webview alongside our custom seek bar.
             init.set_property("osd-level", 0_i64)?;
             init.set_property("osd-bar", "no")?;
+
+            // ── Playback perf tuning ──
+            // Bigger forward demuxer cache absorbs network hiccups on
+            // remote Plex / mediocre Wi-Fi without re-buffering. Plex
+            // direct-play streams over HTTP, so deeper read-ahead costs
+            // only RAM, not CPU.
+            //   - cache=yes              : explicit (default is already yes)
+            //   - demuxer-readahead-secs : read 20s of video ahead
+            //   - cache-secs             : keep 30s in the forward cache
+            //   - cache-pause=no         : don't yank playback to paused
+            //                              if the cache momentarily dips
+            init.set_property("cache", "yes")?;
+            init.set_property("demuxer-readahead-secs", 20_i64)?;
+            init.set_property("cache-secs", 30_i64)?;
+            init.set_property("cache-pause", "no")?;
+
             Ok(())
         })
         .map_err(|e| format!("mpv init failed: {:?}", e))?;
