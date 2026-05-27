@@ -6,7 +6,7 @@
 //! the main window full size but renders the player chrome in a small corner
 //! region of the WebView.
 
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 #[cfg(target_os = "windows")]
 use tauri_plugin_store::StoreExt;
 
@@ -411,6 +411,13 @@ pub async fn player_exit_popout(
     state: State<'_, PlayerState>,
 ) -> Result<(), String> {
     log::info!("[player:cmd] exit_popout");
+    // Tell useTransparentWindow to drop body.player-transparent for the
+    // duration of the transition (prexu-7d3). Without this, the WebView
+    // returns to full-main size while the underlying dashboard route has
+    // not yet painted, so the transparent body lets the desktop show
+    // through until React + WebView2 catch up. Re-applied at the end
+    // after the host geometry has settled.
+    let _ = app.emit("player://host-window-busy", ());
     let main = app
         .get_webview_window("main")
         .ok_or_else(|| "main webview window not found".to_string())?;
@@ -500,6 +507,12 @@ pub async fn player_exit_popout(
     if let (Ok(pos), Ok(size)) = (main.inner_position(), main.inner_size()) {
         state.apply_host_geometry(pos.x, pos.y, size.width as i32, size.height as i32);
     }
+
+    // Transition complete — re-arm the transparent body class. The TS hook
+    // defers the re-add by a rAF + sync layout read so WebView2 commits the
+    // dashboard paint before transparency comes back (prexu-7d3, same paint-
+    // commit trick as the prexu-uzk dashboard reflow fix).
+    let _ = app.emit("player://host-window-ready", ());
 
     Ok(())
 }

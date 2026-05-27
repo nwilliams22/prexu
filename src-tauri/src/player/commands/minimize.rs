@@ -5,7 +5,7 @@
 //! remains interactive so the user can browse the Library, check cast/crew,
 //! etc. while the small video region keeps playing in the corner.
 
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::player::{MinimizeCorner, MinimizeState, PlayerState};
 
@@ -39,6 +39,11 @@ pub async fn player_enter_minimize(
     app: AppHandle,
     state: State<'_, PlayerState>,
 ) -> Result<(), String> {
+    // Drop body.player-transparent for the transition (prexu-7d3). When
+    // chained after exit_popout (popout → minimize), the WebView has just
+    // restored to full-main size and the underlying route may still be
+    // painting. Re-armed after the host inset is applied.
+    let _ = app.emit("player://host-window-busy", ());
     let padding = padding.unwrap_or(MINIMIZE_DEFAULT_PADDING);
     let corner_enum = corner.unwrap_or(MinimizeCorner::BottomRight);
     let main = app
@@ -80,6 +85,9 @@ pub async fn player_enter_minimize(
     if let (Ok(pos), Ok(size)) = (main.inner_position(), main.inner_size()) {
         state.apply_host_geometry(pos.x, pos.y, size.width as i32, size.height as i32);
     }
+
+    // Transition complete — re-arm transparent body (prexu-7d3).
+    let _ = app.emit("player://host-window-ready", ());
     Ok(())
 }
 
