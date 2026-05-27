@@ -35,3 +35,8 @@ blob-report/
 .dolt/
 *.db
 .beads-credential-key
+# bd hooks export to the repo root during commit; the canonical store
+# lives at .beads/issues.jsonl, so ignore the root-level export to keep
+# it out of the tree.
+/issues.jsonl
+/events.jsonl
