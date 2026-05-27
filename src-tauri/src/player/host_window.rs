@@ -17,9 +17,9 @@ use windows::Win32::Foundation::{COLORREF, HWND};
 use windows::Win32::Graphics::Gdi::CreateSolidBrush;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassExW, SetWindowPos, ShowWindow,
-    CS_HREDRAW, CS_VREDRAW, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNA, WNDCLASSEXW, WS_CLIPCHILDREN,
-    WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_POPUP,
+    CS_HREDRAW, CS_VREDRAW, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOCOPYBITS,
+    SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNA, WNDCLASSEXW,
+    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_POPUP,
 };
 
 const CLASS_NAME: PCWSTR = w!("PrexuMpvHost");
@@ -137,6 +137,16 @@ impl HostWindow {
     /// Move + resize the host window in screen pixels (client-area coords).
     /// Skips the Win32 call when width or height is zero (e.g. minimized
     /// Tauri main window) — last good geometry is preserved instead.
+    ///
+    /// `SWP_NOCOPYBITS` instructs the system to discard the host's prior
+    /// client-area pixels on the resize instead of bit-blitting them
+    /// stretched into the new rect. Without this flag, width-resize
+    /// produces a visible ghost: Win32 stretches the old frame to the
+    /// new dimensions, mpv's vo overpaints on its next swap-chain
+    /// present (~display refresh), and the gap between the two is the
+    /// ghost the user sees (prexu-aqd follow-up 2026-05-27). With the
+    /// flag, mpv's present is the first paint at the new size; brief
+    /// blank possible but no ghost.
     pub fn set_geometry(&self, x: i32, y: i32, width: i32, height: i32) -> Result<(), String> {
         if width <= 0 || height <= 0 {
             log::trace!("[player:host] set_geometry skipped — zero dim ({}x{})", width, height);
@@ -151,7 +161,7 @@ impl HostWindow {
                 y,
                 width,
                 height,
-                SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER,
+                SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOCOPYBITS,
             )
         }
         .map_err(|e| format!("SetWindowPos failed: {:?}", e))
