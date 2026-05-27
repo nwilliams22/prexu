@@ -2,14 +2,21 @@
 //! and re-emits playback state changes to the frontend.
 //!
 //! Frontend event names:
-//! - `player://time-pos`   f64 seconds (throttled to 4 Hz)
-//! - `player://duration`   f64 seconds
-//! - `player://paused`     bool
-//! - `player://buffering`  bool
-//! - `player://buffered`   f64 absolute seconds the demuxer has cached up to
-//! - `player://eof`        () fired on end-of-file
-//! - `player://error`      String error message
-//! - `player://ready`      () fired once the file is loaded
+//! - `player://time-pos`           f64 seconds (throttled to 4 Hz)
+//! - `player://duration`           f64 seconds
+//! - `player://paused`             bool
+//! - `player://buffering`          bool
+//! - `player://buffered`           f64 absolute seconds the demuxer has cached up to
+//! - `player://eof`                () fired on end-of-file
+//! - `player://error`              String error message
+//! - `player://ready`              () fired once the file is loaded
+//! - `player://host-window-ready`  () fired once the decoder has finished
+//!                                 setup on a new file (post-PlaybackRestart),
+//!                                 meaning mpv has actually rendered a frame
+//!                                 into the host HWND. The frontend's
+//!                                 useTransparentWindow defers
+//!                                 body.player-transparent until this signal
+//!                                 to avoid the cold-start flash (prexu-mto).
 
 use std::sync::Arc;
 use std::thread;
@@ -165,11 +172,22 @@ fn dispatch(
             // setup on a new file. By this point hwdec-current reports the
             // selected backend ("d3d11va", "dxva2-copy", "no", etc.). Log
             // once per file so seeks don't spam.
+            //
+            // First PlaybackRestart per file is also our signal that mpv
+            // has actually composited a frame into the host HWND. Emit
+            // player://host-window-ready so the frontend's
+            // useTransparentWindow stops deferring and applies the
+            // transparent body class without exposing the OS desktop
+            // (prexu-mto). Subsequent PlaybackRestart events (e.g. after
+            // a seek) do not need to re-emit — the receiver only listens
+            // once per session.
             if !*hwdec_logged {
                 let hwdec = mpv.get_property::<String>("hwdec-current")
                     .unwrap_or_else(|_| "<unavailable>".into());
                 log::info!("[player:events] hwdec-current={} (playback-restart)", hwdec);
                 *hwdec_logged = true;
+                log::info!("[player:events] first frame ready → player://host-window-ready");
+                let _ = app.emit("player://host-window-ready", ());
             }
         }
         Event::EndFile(reason) => {
