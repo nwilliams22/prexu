@@ -575,6 +575,67 @@ impl PlayerState {
         Ok(())
     }
 
+    /// Fast-path sync for position-only changes (WM_MOVE / drag).
+    ///
+    /// Pure position changes do NOT trigger mpv's D3D11 swapchain
+    /// rebuild — that is gated on WM_SIZE. So we can skip the 50ms
+    /// throttle that `sync_geometry` enforces and dispatch SetWindowPos
+    /// (with SWP_NOSIZE) at the full event rate, eliminating the
+    /// visible mpv-lags-chrome lag during drag (prexu-aqd).
+    ///
+    /// Caller passes width+height too (not just x,y) because the
+    /// minimize-inset corner computation depends on the parent's
+    /// dimensions to anchor the mini region. width/height are NOT used
+    /// to resize the host — `SWP_NOSIZE` preserves the existing host
+    /// size — they only feed `apply_minimize_inset`.
+    ///
+    /// Still suppressed during fullscreen transitions, same as
+    /// `sync_geometry`, so the transition's burst of resize events
+    /// doesn't drive position resyncs through this path either.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn sync_geometry_move(&self, x: i32, y: i32, width: i32, height: i32) {
+        log::trace!("[player] sync_geometry_move({},{},{}x{})", x, y, width, height);
+        if self.fullscreen_transition.load(Ordering::Acquire) {
+            log::trace!("[player] sync_geometry_move suppressed — fullscreen transition");
+            return;
+        }
+        // Apply minimize inset to get the host's target position. When
+        // not minimized this is a pass-through of (x, y).
+        let (ax, ay, _aw, _ah) = self.apply_minimize_inset(x, y, width, height);
+
+        // Dedup: if position hasn't moved (and a prior apply has a
+        // recorded size), skip the syscall. Compare against just the
+        // x,y component of last_geometry so size-only-stale entries
+        // still allow a position update.
+        if let Ok(last_geom) = self.last_geometry.lock() {
+            if let Some((lx, ly, _, _)) = *last_geom {
+                if lx == ax && ly == ay {
+                    return;
+                }
+            }
+        }
+
+        // try_lock guards against re-entrancy: SetWindowPos fires
+        // WM_WINDOWPOSCHANGED synchronously on this thread, which can
+        // re-enter sync_geometry_move via the window-event handler.
+        let Ok(guard) = self.inner.try_lock() else { return };
+        if let Some(inner) = guard.as_ref() {
+            if let Some(host) = inner.host.as_ref() {
+                if let Err(e) = host.set_position(ax, ay) {
+                    log::warn!("[player] sync_geometry_move failed: {}", e);
+                    return;
+                }
+                // Keep last_geometry's (x, y) in sync so the next
+                // sync_geometry call (resize) dedup-compares correctly.
+                if let Ok(mut lg) = self.last_geometry.lock() {
+                    if let Some((_, _, lw, lh)) = *lg {
+                        *lg = Some((ax, ay, lw, lh));
+                    }
+                }
+            }
+        }
+    }
+
     /// Resize/move the host window to match the Tauri main window's content
     /// area. No-op when the player hasn't been initialised yet — the
     /// listener fires from app startup, before any playback.
@@ -583,6 +644,9 @@ impl PlayerState {
     /// throttled to ~20 Hz on the regular path. When throttled, the
     /// geometry is stored as pending and applied on the next event that
     /// passes the throttle check (trailing-edge guarantee).
+    ///
+    /// For pure position changes (drag without resize) prefer
+    /// `sync_geometry_move` which skips the throttle.
     #[cfg(target_os = "windows")]
     pub(crate) fn sync_geometry(&self, x: i32, y: i32, width: i32, height: i32) {
         log::trace!("[player] sync_geometry({},{},{}x{})", x, y, width, height);

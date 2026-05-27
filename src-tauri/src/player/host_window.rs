@@ -157,6 +157,29 @@ impl HostWindow {
         .map_err(|e| format!("SetWindowPos failed: {:?}", e))
     }
 
+    /// Move the host without touching its size. Used by the move-only
+    /// fast path in `PlayerState::sync_geometry_move` so that pure
+    /// WM_MOVE bursts (window drag) don't trigger mpv's D3D11 swapchain
+    /// rebuild — only WM_SIZE does (prexu-aqd). `SWP_NOSIZE` makes
+    /// SetWindowPos a position-only operation, materially cheaper than
+    /// a full set_geometry call and safe to dispatch at 60+ Hz without
+    /// starving the Win32 message queue.
+    pub fn set_position(&self, x: i32, y: i32) -> Result<(), String> {
+        log::trace!("[player:host] set_position({},{}) HWND={:?}", x, y, self.hwnd.0);
+        unsafe {
+            SetWindowPos(
+                self.hwnd,
+                None,
+                x,
+                y,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER,
+            )
+        }
+        .map_err(|e| format!("SetWindowPos (move-only) failed: {:?}", e))
+    }
+
     /// Toggle this window's WS_EX_TOPMOST flag via SetWindowPos.
     ///
     /// The host is a sibling top-level window of the Tauri main window, so

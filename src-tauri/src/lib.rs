@@ -490,20 +490,44 @@ pub fn run() {
                         use tauri::WindowEvent;
                         let state = app_handle.state::<player::PlayerState>();
                         match event {
-                            // Resized/Moved fire on drag, snap, restore, etc.
-                            // Cheap pre-check first — drag fires events at
-                            // ~60 Hz and the inner_position/inner_size
-                            // queries below are not free.
-                            WindowEvent::Resized(_) | WindowEvent::Moved(_) => {
-                                // Always read geometry and pass to sync_geometry
-                                // which handles throttling + trailing-edge pending
-                                // internally. The old pre-check skipped the
-                                // inner_position/inner_size queries when throttled,
-                                // but that prevented trailing-edge storage.
+                            // Pure move (WM_MOVE / drag without resize) —
+                            // fast-path through sync_geometry_move which
+                            // skips the 50ms throttle. Position-only
+                            // SetWindowPos with SWP_NOSIZE doesn't
+                            // trigger mpv's swapchain rebuild, so we can
+                            // run at the full event rate without the
+                            // freeze that necessitates the throttle for
+                            // size changes (prexu-aqd). The trailing-
+                            // edge flush is not needed here either — we
+                            // are not dropping any events.
+                            WindowEvent::Moved(_) => {
                                 if let (Ok(pos), Ok(size)) =
                                     (win_clone.inner_position(), win_clone.inner_size())
                                 {
-                                    log::trace!("[window] Resized/Moved to ({},{},{}x{})", pos.x, pos.y, size.width, size.height);
+                                    log::trace!(
+                                        "[window] Moved to ({},{}), size={}x{}",
+                                        pos.x, pos.y, size.width, size.height
+                                    );
+                                    state.sync_geometry_move(
+                                        pos.x,
+                                        pos.y,
+                                        size.width as i32,
+                                        size.height as i32,
+                                    );
+                                }
+                            }
+                            // Resize (WM_SIZE — drag-resize, snap,
+                            // maximize/restore, fullscreen toggle). Goes
+                            // through the throttled sync_geometry path
+                            // because each SetWindowPos with size change
+                            // rebuilds mpv's D3D11 swapchain; 60Hz
+                            // rebuild bursts crash gpu-next vo. Throttle
+                            // + trailing-edge flush preserved.
+                            WindowEvent::Resized(_) => {
+                                if let (Ok(pos), Ok(size)) =
+                                    (win_clone.inner_position(), win_clone.inner_size())
+                                {
+                                    log::trace!("[window] Resized to ({},{},{}x{})", pos.x, pos.y, size.width, size.height);
                                     state.sync_geometry(
                                         pos.x,
                                         pos.y,
