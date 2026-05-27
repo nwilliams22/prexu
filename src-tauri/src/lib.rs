@@ -40,6 +40,13 @@ impl ProxyState {
 /// has rendered, avoiding the "transparent window shows desktop pixels
 /// before chrome paints" flash (prexu-vs5). Idempotent — calling on an
 /// already-visible window is a no-op.
+///
+/// Also kicks off a one-shot mpv warmup (prexu-204): on first call, a
+/// background thread invokes `PlayerState::ensure_init` so the hwdec
+/// probe + DXGI swapchain build are paid here instead of on the user's
+/// first Play. Idempotent via the underlying ensure_init mutex — if the
+/// frontend ever invokes app_ready more than once, the second warmup
+/// call short-circuits at the `guard.is_some()` check.
 #[tauri::command]
 fn app_ready(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") {
@@ -47,6 +54,33 @@ fn app_ready(app: AppHandle) -> Result<(), String> {
         window.show().map_err(|e| format!("show failed: {e}"))?;
         let _ = window.set_focus();
     }
+
+    // Warmup: pre-create host window + libmpv handle on a background
+    // thread so the user's first Play skips the hwdec probe + VO
+    // selection (~12 s observed on a cold Win11 boot). The handle stays
+    // parked in PlayerState; player_load_url's ensure_init is a no-op
+    // when it runs after warmup completes.
+    #[cfg(target_os = "windows")]
+    {
+        let warmup_handle = app.clone();
+        std::thread::spawn(move || {
+            let start = std::time::Instant::now();
+            let state = warmup_handle.state::<player::PlayerState>();
+            log::info!("[player:warmup] starting (cold-start hwdec probe)");
+            match state.ensure_init(&warmup_handle) {
+                Ok(()) => log::info!(
+                    "[player:warmup] complete in {} ms",
+                    start.elapsed().as_millis()
+                ),
+                Err(e) => log::warn!(
+                    "[player:warmup] failed after {} ms: {} — first Play will pay the init cost",
+                    start.elapsed().as_millis(),
+                    e
+                ),
+            }
+        });
+    }
+
     Ok(())
 }
 
