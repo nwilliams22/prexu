@@ -85,13 +85,16 @@ function PosterCard({
   const scanning = scanningProp ?? (ratingKey ? scanningIds.has(ratingKey) : false);
   const {
     containerRef,
+    imgRef,
     shouldLoad,
+    isLoaded,
+    hasError: imgError,
     placeholderLoaded,
     onLoad: onLazyLoad,
     onError: onLazyError,
     onPlaceholderLoad,
   } = useLazyImage();
-  const [loaded, setLoaded] = useState(false);
+  const loaded = isLoaded || imgError;
   const [hovered, setHovered] = useState(false);
   const [active, setActive] = useState(false);
   const [playHovered, setPlayHovered] = useState(false);
@@ -166,12 +169,13 @@ function PosterCard({
 
         {shouldLoad && (
           <img
+            ref={imgRef}
             src={imageUrl}
             srcSet={srcSet || undefined}
             sizes={srcSet ? `${width}px` : undefined}
             alt=""
-            onLoad={() => { setLoaded(true); onLazyLoad(); }}
-            onError={() => { setLoaded(true); onLazyError(); }}
+            onLoad={onLazyLoad}
+            onError={onLazyError}
             style={{
               ...styles.image,
               opacity: loaded ? 1 : 0,

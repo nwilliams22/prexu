@@ -8,6 +8,8 @@ import { useState, useEffect, useRef, useCallback } from "react";
 interface UseLazyImageResult {
   /** Ref to attach to the image container element */
   containerRef: React.RefObject<HTMLDivElement | null>;
+  /** Ref to attach to the full-resolution <img> element */
+  imgRef: React.RefObject<HTMLImageElement | null>;
   /** Whether the image should be loaded (in or near viewport) */
   shouldLoad: boolean;
   /** Whether the image has finished loading */
@@ -26,6 +28,7 @@ interface UseLazyImageResult {
 
 export function useLazyImage(rootMargin = "200px"): UseLazyImageResult {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
   const [shouldLoad, setShouldLoad] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
   const [hasError, setHasError] = useState(false);
@@ -49,12 +52,32 @@ export function useLazyImage(rootMargin = "200px"): UseLazyImageResult {
     return () => observer.disconnect();
   }, [rootMargin]);
 
+  // After shouldLoad flips true the <img> is rendered and its src is set.
+  // If the image is already in the browser cache the browser fires the load
+  // event synchronously during element creation — before React commits the
+  // element and attaches the onLoad prop — so the swap never happens.
+  // After each render where shouldLoad is true we check img.complete and
+  // trigger the resolved state ourselves to handle that race.
+  useEffect(() => {
+    if (!shouldLoad) return;
+    const img = imgRef.current;
+    if (!img) return;
+    if (img.complete) {
+      if (img.naturalWidth > 0) {
+        setIsLoaded(true);
+      } else {
+        setHasError(true);
+      }
+    }
+  });
+
   const onLoad = useCallback(() => setIsLoaded(true), []);
   const onError = useCallback(() => setHasError(true), []);
   const onPlaceholderLoad = useCallback(() => setPlaceholderLoaded(true), []);
 
   return {
     containerRef,
+    imgRef,
     shouldLoad,
     isLoaded,
     hasError,
