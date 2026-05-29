@@ -364,4 +364,58 @@ describe("usePostPlay", () => {
       expect(result.current.nextQueueItem).toBeNull();
     });
   });
+
+  describe("mini-mode handoff does not fire on empty queue (BUG 1 regression)", () => {
+    it("does not call onAdvanceNext when isMinimized=true but nextQueueItem is null", async () => {
+      // Simulate session start with minimized player but empty queue
+      // (stale queue has been cleared by useQueueAutoPopulate before the
+      // new season fetch resolves). hasNextItem=false so PostPlay should
+      // not show and handoff should not fire.
+      const args = makeArgs({
+        hasNextItem: false,
+        isMinimized: true,
+        autoPlayEnabled: true,
+        queue: makeQueue({ items: [], currentIndex: -1 }),
+      });
+      renderHook(() => usePostPlay(args));
+
+      await waitFor(() => expect(eofMock.handler).not.toBeNull());
+      act(() => {
+        triggerEof();
+      });
+
+      // EOF with hasNextItem=false → onExit, NOT onAdvanceNext
+      await waitFor(() => {
+        expect(args.onExit).toHaveBeenCalledTimes(1);
+      });
+      expect(args.onAdvanceNext).not.toHaveBeenCalled();
+    });
+
+    it("fires fire-next when isMinimized=true and queue has cross-season next item", async () => {
+      // After BUG 2 fix, the next season episode is in the queue. Verify
+      // the mini-mode handoff correctly advances to it.
+      const crossSeasonItems: QueueItem[] = [
+        { ratingKey: "s1e5", title: "S1", subtitle: "", thumb: "", duration: 0, type: "episode" },
+        { ratingKey: "s2e1", title: "S2E1", subtitle: "", thumb: "", duration: 0, type: "episode" },
+      ];
+      const args = makeArgs({
+        hasNextItem: true,
+        isMinimized: true,
+        autoPlayEnabled: true,
+        queue: makeQueue({ items: crossSeasonItems, currentIndex: 0 }),
+        ratingKey: "s1e5",
+      });
+      renderHook(() => usePostPlay(args));
+
+      await waitFor(() => expect(eofMock.handler).not.toBeNull());
+      act(() => {
+        triggerEof();
+      });
+
+      await waitFor(() => {
+        expect(args.onAdvanceNext).toHaveBeenCalledTimes(1);
+      });
+      expect(args.onRestoreFromMinimize).not.toHaveBeenCalled();
+    });
+  });
 });
