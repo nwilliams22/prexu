@@ -196,11 +196,12 @@ export function useItemDetailData(): ItemDetailData {
         .catch(() => ({ name, items: [] as PlexMediaItem[] }))
     );
 
-    // Plex returns 404 for /similar on episodes; skip the network call for episodes
-    const relatedPromise =
-      item.type === "episode"
-        ? Promise.resolve([])
-        : getRelatedItems(server.uri, server.accessToken, ratingKey);
+    const relatedPromise = getRelatedItems(
+      server.uri,
+      server.accessToken,
+      ratingKey,
+      item.type
+    );
 
     Promise.allSettled([
       relatedPromise,
