@@ -456,6 +456,7 @@ pub fn run() {
             player::commands::player_exit_popout,
             player::commands::player_enter_minimize,
             player::commands::player_exit_minimize,
+            player::commands::player_update_mini_geometry,
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {

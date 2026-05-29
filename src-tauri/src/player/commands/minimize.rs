@@ -91,6 +91,62 @@ pub async fn player_enter_minimize(
     Ok(())
 }
 
+/// Geometry-only update while already in minimize mode.
+///
+/// Updates the stored inset (corner, width, height, padding) and forces
+/// an immediate host resync — identical geometry work to `enter_minimize`
+/// but WITHOUT emitting `player://host-window-busy` / `player://host-window-ready`.
+///
+/// The busy/ready pair was added (prexu-7d3) for genuine mode transitions
+/// (popout ↔ minimize) where the host window is recreated. Per-tick drag
+/// and resize updates are NOT transitions — the host is already minimized,
+/// only its inset rect is moving. Emitting busy/ready on every 33ms resize
+/// tick caused `useTransparentWindow` to drop and re-arm body transparency
+/// on each tick, producing the thrashing background visible during drag.
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub async fn player_update_mini_geometry(
+    width: u32,
+    height: u32,
+    padding: Option<u32>,
+    corner: Option<MinimizeCorner>,
+    app: AppHandle,
+    state: State<'_, PlayerState>,
+) -> Result<(), String> {
+    let padding = padding.unwrap_or(MINIMIZE_DEFAULT_PADDING);
+    let corner_enum = corner.unwrap_or(MinimizeCorner::BottomRight);
+    let main = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main webview window not found".to_string())?;
+
+    let scale = main.scale_factor().unwrap_or(1.0);
+    state.set_scale_factor(scale);
+    log::debug!(
+        "[player:cmd] update_mini_geometry size={}x{} padding={} corner={:?} scale={:.2}",
+        width, height, padding, corner_enum, scale
+    );
+
+    if let Ok(mut mz) = state.minimize.lock() {
+        *mz = Some(MinimizeState {
+            width,
+            height,
+            padding,
+            corner: corner_enum,
+        });
+    } else {
+        return Err("minimize lock poisoned".to_string());
+    }
+
+    if let (Ok(pos), Ok(size)) = (main.inner_position(), main.inner_size()) {
+        state.apply_host_geometry(pos.x, pos.y, size.width as i32, size.height as i32);
+    }
+
+    // Intentionally NO busy/ready emit here — this is a geometry-only
+    // update, not a mode transition. Emitting busy/ready on every drag
+    // tick causes useTransparentWindow to thrash body transparency.
+    Ok(())
+}
+
 /// Exit minimize mode: clear the inset and force a host resync so the
 /// mpv window expands back to the full WebView client area.
 #[cfg(target_os = "windows")]
@@ -120,6 +176,18 @@ pub async fn player_exit_minimize(
 // platform that hasn't been ported yet (macOS / Linux) returns a clear error
 // instead of failing at the IPC layer with "command not found". Keeps the
 // frontend code path uniform.
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+pub async fn player_update_mini_geometry(
+    _width: u32,
+    _height: u32,
+    _padding: Option<u32>,
+    _corner: Option<crate::player::MinimizeCorner>,
+) -> Result<(), String> {
+    log::warn!("[player:cmd] update_mini_geometry called on non-Windows platform");
+    Err("minimize mode is only supported on Windows in Phase 4".into())
+}
+
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
 pub async fn player_enter_minimize(

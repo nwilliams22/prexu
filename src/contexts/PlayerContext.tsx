@@ -10,7 +10,7 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import { logger } from "../services/logger";
-import { playerEnterMinimize, playerExitMinimize } from "../services/player";
+import { playerEnterMinimize, playerExitMinimize, playerUpdateMiniGeometry } from "../services/player";
 import {
   DEFAULT_MINI_RECT,
   loadPersistedMiniRect,
@@ -265,24 +265,58 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     saveMiniRect(miniRect);
   }, [miniRect]);
 
+  // Track the previous isMinimized value so the geometry effect below can
+  // distinguish the false→true transition from per-tick rect updates.
+  const prevIsMinimizedRef = useRef(false);
+
   // Sync the mpv host geometry whenever we are minimized. Covers both
   // (a) the false → true transition triggered by `minimize()` and
   // (b) rect updates while minimized (drag, resize handle, corner snap).
+  //
+  // (a) uses `playerEnterMinimize` which emits busy/ready so
+  // useTransparentWindow can shield the body during the mode change.
+  //
+  // (b) uses `playerUpdateMiniGeometry` — same geometry work but WITHOUT
+  // busy/ready. Per-tick drag/resize ticks are not mode transitions; emitting
+  // busy/ready on each 33ms tick caused body transparency to thrash (prexu-anp).
+  //
   // The exit IPC stays in `restoreFromMinimize` because it must await
   // before flipping `isMinimized` to false (see that callback's docblock
   // for the visual-flash rationale).
   useEffect(() => {
-    if (!isMinimized) return;
-    logger.debug("player:minimize", "applying mini rect via effect", miniRect);
-    playerEnterMinimize(
-      miniRect.width,
-      miniRect.height,
-      miniRect.padding,
-      miniRect.corner,
-    ).catch((err) => {
-      logger.error("player:minimize", "enter failed", String(err));
-      setIsMinimized(false);
-    });
+    if (!isMinimized) {
+      prevIsMinimizedRef.current = false;
+      return;
+    }
+    const isTransition = !prevIsMinimizedRef.current;
+    prevIsMinimizedRef.current = true;
+
+    if (isTransition) {
+      // false → true: genuine minimize entry. Use enter_minimize so the
+      // busy/ready transparency protocol runs (prexu-7d3).
+      logger.debug("player:minimize", "entering minimize via IPC", miniRect);
+      playerEnterMinimize(
+        miniRect.width,
+        miniRect.height,
+        miniRect.padding,
+        miniRect.corner,
+      ).catch((err) => {
+        logger.error("player:minimize", "enter failed", String(err));
+        setIsMinimized(false);
+      });
+    } else {
+      // Already minimized — geometry-only update (drag or resize tick).
+      // No busy/ready so body transparency is not disturbed.
+      logger.debug("player:minimize", "geometry update (already minimized)", miniRect);
+      playerUpdateMiniGeometry(
+        miniRect.width,
+        miniRect.height,
+        miniRect.padding,
+        miniRect.corner,
+      ).catch((err) => {
+        logger.warn("player:minimize", "geometry update failed", String(err));
+      });
+    }
   }, [isMinimized, miniRect]);
 
   // Memoize each slice independently. minimize-toggle invalidates only

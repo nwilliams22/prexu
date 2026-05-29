@@ -81,3 +81,23 @@ export async function playerExitMinimize(): Promise<void> {
   logger.info("player", "player_exit_minimize");
   await invoke("player_exit_minimize");
 }
+
+/**
+ * Geometry-only update while already in minimize mode.
+ *
+ * Identical geometry work to playerEnterMinimize (updates inset +
+ * resyncs host) but does NOT emit player://host-window-busy/ready.
+ * Use this for per-tick drag and resize updates to avoid triggering
+ * the useTransparentWindow busy/ready transparency protocol on every
+ * 33ms drag tick (prexu-anp). Reserve playerEnterMinimize for the
+ * initial false→true transition only.
+ */
+export async function playerUpdateMiniGeometry(
+  width: number,
+  height: number,
+  padding?: number,
+  corner?: MiniCorner,
+): Promise<void> {
+  logger.debug("player:minimize", "player_update_mini_geometry", { width, height, padding, corner });
+  await invoke("player_update_mini_geometry", { width, height, padding, corner });
+}

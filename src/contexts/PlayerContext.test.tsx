@@ -12,6 +12,7 @@ import { MINI_RECT_STORAGE_KEY } from "../utils/mini-rect";
 vi.mock("../services/player", () => ({
   playerEnterMinimize: vi.fn().mockResolvedValue(undefined),
   playerExitMinimize: vi.fn().mockResolvedValue(undefined),
+  playerUpdateMiniGeometry: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../services/logger", () => ({
@@ -194,22 +195,27 @@ describe("PlayerContext.miniRect", () => {
     expect(playerService.playerEnterMinimize).not.toHaveBeenCalled();
   });
 
-  it("updateMiniRect fires playerEnterMinimize with new rect when already minimized", async () => {
+  it("updateMiniRect uses playerUpdateMiniGeometry (not enter_minimize) when already minimized (prexu-anp)", async () => {
+    // The busy/ready transparency protocol must NOT fire on per-tick drag/resize
+    // updates — only the initial false→true transition warrants enter_minimize.
     const { result } = renderHook(useBoth, { wrapper });
     await act(async () => {
       result.current.minimize();
       await Promise.resolve();
     });
     expect(result.current.isMinimized).toBe(true);
+    // Only the initial transition uses enter_minimize.
     expect(playerService.playerEnterMinimize).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       result.current.updateMiniRect({ corner: "top-right", width: 480 });
       await Promise.resolve();
     });
-    // First call from minimize(), second from updateMiniRect.
-    expect(playerService.playerEnterMinimize).toHaveBeenCalledTimes(2);
-    expect(playerService.playerEnterMinimize).toHaveBeenLastCalledWith(
+    // enter_minimize must NOT be called again for a rect update while minimized.
+    expect(playerService.playerEnterMinimize).toHaveBeenCalledTimes(1);
+    // The geometry-only path must have been used instead.
+    expect(playerService.playerUpdateMiniGeometry).toHaveBeenCalledTimes(1);
+    expect(playerService.playerUpdateMiniGeometry).toHaveBeenCalledWith(
       480,
       200,
       16,
