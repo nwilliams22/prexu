@@ -54,10 +54,10 @@ export function useEpisodeNavigation(
   }, [server, ratingKey, itemType]);
 
   const handleNextEpisode = nextEp
-    ? () => navigate(`/player/${nextEp.ratingKey}`)
+    ? () => navigate(`/play/${nextEp.ratingKey}`)
     : undefined;
   const handlePrevEpisode = prevEp
-    ? () => navigate(`/player/${prevEp.ratingKey}`)
+    ? () => navigate(`/play/${prevEp.ratingKey}`)
     : undefined;
 
   return { handleNextEpisode, handlePrevEpisode };
