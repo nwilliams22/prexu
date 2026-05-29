@@ -159,10 +159,13 @@ export default function ItemHeroSection({
               fontSize: mobile ? "1.6rem" : bp === "large" ? "2.8rem" : "2.4rem",
               ...(mobile ? { textAlign: "center" } : {}),
             }}>{movie.title}</h1>
-            <div style={{
-              ...styles.metaRow,
-              ...(mobile ? { justifyContent: "center" } : {}),
-            }}>
+            <div
+              data-testid="hero-meta-row"
+              style={{
+                ...styles.metaRow,
+                ...(mobile ? { justifyContent: "center" } : {}),
+              }}
+            >
               {movie.year && <span>{String(movie.year)}</span>}
               {movie.contentRating && typeof movie.contentRating === "string" && (
                 <span style={styles.rating}>{movie.contentRating}</span>
@@ -177,7 +180,7 @@ export default function ItemHeroSection({
               )}
             </div>
             {movie.Genre && movie.Genre.length > 0 && (
-              <div style={styles.genreRow}>
+              <div data-testid="hero-genre-row" style={styles.genreRow}>
                 {movie.Genre.map((g) => (
                   <span key={g.tag} style={styles.genreTag}>{g.tag}</span>
                 ))}
@@ -346,10 +349,13 @@ export default function ItemHeroSection({
               fontSize: mobile ? "1.6rem" : bp === "large" ? "2.8rem" : "2.4rem",
               ...(mobile ? { textAlign: "center" } : {}),
             }}>{show.title}</h1>
-            <div style={{
-              ...styles.metaRow,
-              ...(mobile ? { justifyContent: "center" } : {}),
-            }}>
+            <div
+              data-testid="hero-meta-row"
+              style={{
+                ...styles.metaRow,
+                ...(mobile ? { justifyContent: "center" } : {}),
+              }}
+            >
               {show.year && <span>{String(show.year)}</span>}
               {show.contentRating && typeof show.contentRating === "string" && (
                 <span style={styles.rating}>{show.contentRating}</span>
@@ -367,7 +373,7 @@ export default function ItemHeroSection({
               )}
             </div>
             {show.Genre && show.Genre.length > 0 && (
-              <div style={styles.genreRow}>
+              <div data-testid="hero-genre-row" style={styles.genreRow}>
                 {show.Genre.map((g) => (
                   <span key={g.tag} style={styles.genreTag}>{g.tag}</span>
                 ))}

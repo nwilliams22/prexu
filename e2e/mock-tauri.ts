@@ -7,18 +7,19 @@
  */
 
 export const tauriStubScript = `
-  // Prevent Tauri runtime errors
-  window.__TAURI_INTERNALS__ = window.__TAURI_INTERNALS__ || {
-    invoke: () => Promise.resolve(null),
-    transformCallback: () => 0,
-  };
+  // Do NOT set window.__TAURI_INTERNALS__ — its presence is used by
+  // isTauriRuntime() checks in backends.ts, downloads.ts, etc. to decide
+  // whether to use tauri-plugin-store (which cannot work in a plain browser).
+  // Leaving it absent causes those guards to fall through to localStorage,
+  // which is seeded by setupAuthenticatedState via page.addInitScript().
 
-  // Stub @tauri-apps/plugin-shell open()
+  // Stub @tauri-apps/plugin-shell open() in case any import-path resolves it
   window.__TAURI_PLUGIN_SHELL__ = {
     open: () => Promise.resolve(),
   };
 
-  // Stub @tauri-apps/plugin-log
+  // Stub @tauri-apps/plugin-log (logger.ts does a dynamic import;
+  // these globals are a belt-and-suspenders fallback only)
   window.__TAURI_PLUGIN_LOG__ = {
     info: () => {},
     warn: () => {},
@@ -527,6 +528,60 @@ export const mockPlexData = {
     MediaContainer: {
       size: 0,
       Hub: [],
+    },
+  },
+
+  similarItems: {
+    MediaContainer: {
+      size: 2,
+      Metadata: [
+        {
+          ratingKey: "500",
+          key: "/library/metadata/500",
+          type: "movie",
+          title: "Similar Movie A",
+          year: 2023,
+          thumb: "/library/metadata/500/thumb",
+          art: "/library/metadata/500/art",
+          addedAt: 1700000010,
+          updatedAt: 1700000010,
+          viewCount: 0,
+        },
+        {
+          ratingKey: "501",
+          key: "/library/metadata/501",
+          type: "movie",
+          title: "Similar Movie B",
+          year: 2022,
+          thumb: "/library/metadata/501/thumb",
+          art: "/library/metadata/501/art",
+          addedAt: 1700000011,
+          updatedAt: 1700000011,
+          viewCount: 0,
+        },
+      ],
+    },
+  },
+
+  similarShows: {
+    MediaContainer: {
+      size: 1,
+      Metadata: [
+        {
+          ratingKey: "600",
+          key: "/library/metadata/600",
+          type: "show",
+          title: "Similar Show A",
+          year: 2023,
+          thumb: "/library/metadata/600/thumb",
+          art: "/library/metadata/600/art",
+          addedAt: 1700000020,
+          updatedAt: 1700000020,
+          leafCount: 8,
+          childCount: 1,
+          viewedLeafCount: 0,
+        },
+      ],
     },
   },
 };
