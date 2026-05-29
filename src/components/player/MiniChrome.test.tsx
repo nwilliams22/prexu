@@ -515,12 +515,40 @@ describe("MiniChrome scrub + skip", () => {
     expect(onSeek).toHaveBeenCalledWith(600);
   });
 
-  it("scrubbing the range input calls onSeek with the new value", () => {
+  it("scrubbing via pointerdown calls onSeek with fraction of duration from track rect", () => {
     const onSeek = vi.fn();
     render(<MiniChrome {...baseProps} onSeek={onSeek} duration={600} />);
-    const scrub = screen.getByTestId("mini-chrome-scrub") as HTMLInputElement;
-    fireEvent.change(scrub, { target: { value: "123" } });
-    expect(onSeek).toHaveBeenCalledWith(123);
+    const scrub = screen.getByTestId("mini-chrome-scrub");
+    // The scrubTrackRef is on the first child div of the hit area. Mock its
+    // getBoundingClientRect: 300px wide starting at x=50 so pointer at
+    // x=200 → fraction=(200-50)/300=0.5 → seek to 300s.
+    const trackDiv = scrub.firstElementChild as HTMLElement | null;
+    if (trackDiv) {
+      vi.spyOn(trackDiv, "getBoundingClientRect").mockReturnValue({
+        left: 50, right: 350, width: 300, top: 0, bottom: 4, height: 4,
+        x: 50, y: 0, toJSON: () => ({}),
+      } as DOMRect);
+    }
+    fireEvent.pointerDown(scrub, { button: 0, clientX: 200, pointerId: 1 });
+    fireEvent.pointerUp(scrub, { button: 0, clientX: 200, pointerId: 1 });
+    expect(onSeek).toHaveBeenCalledWith(300);
+  });
+
+  it("scrub seek is clamped to [0, duration] when pointer is outside track bounds", () => {
+    const onSeek = vi.fn();
+    render(<MiniChrome {...baseProps} onSeek={onSeek} duration={600} />);
+    const scrub = screen.getByTestId("mini-chrome-scrub");
+    const trackDiv = scrub.firstElementChild as HTMLElement | null;
+    if (trackDiv) {
+      vi.spyOn(trackDiv, "getBoundingClientRect").mockReturnValue({
+        left: 50, right: 350, width: 300, top: 0, bottom: 4, height: 4,
+        x: 50, y: 0, toJSON: () => ({}),
+      } as DOMRect);
+    }
+    // Pointer far to the right → fraction > 1 → clamped to duration (600).
+    fireEvent.pointerDown(scrub, { button: 0, clientX: 900, pointerId: 1 });
+    fireEvent.pointerUp(scrub, { button: 0, clientX: 900, pointerId: 1 });
+    expect(onSeek).toHaveBeenCalledWith(600);
   });
 
   it("skip + scrub controls all carry data-mini-no-drag so they don't start an anchor drag", () => {
@@ -616,7 +644,7 @@ describe("MiniChrome skip pill", () => {
     );
   });
 
-  it("renders 'Next Episode' when activeSegment.type === 'credits' AND hasNextItem=true", () => {
+  it("renders BOTH 'Skip Credits' (primary) and 'Next Episode' (secondary) when credits + hasNextItem=true", () => {
     render(
       <MiniChrome
         {...baseProps}
@@ -626,9 +654,10 @@ describe("MiniChrome skip pill", () => {
         onNextEpisode={vi.fn()}
       />,
     );
-    expect(screen.getByTestId("mini-chrome-skip-pill").textContent).toBe(
-      "Next Episode",
-    );
+    // Primary pill is still "Skip Credits" so users can watch post-credits scenes.
+    expect(screen.getByTestId("mini-chrome-skip-pill").textContent).toBe("Skip Credits");
+    // Secondary pill is "Next Episode".
+    expect(screen.getByTestId("mini-chrome-skip-pill-next").textContent).toBe("Next Episode");
   });
 
   it("clicking 'Skip Intro' calls onSkipSegment and onActivity", () => {
@@ -647,7 +676,24 @@ describe("MiniChrome skip pill", () => {
     expect(onActivity).toHaveBeenCalledTimes(1);
   });
 
-  it("clicking 'Next Episode' calls onNextEpisode (not onSkipSegment)", () => {
+  it("clicking the secondary 'Next Episode' pill calls onNextEpisode (not onSkipSegment)", () => {
+    const onSkipSegment = vi.fn();
+    const onNextEpisode = vi.fn();
+    render(
+      <MiniChrome
+        {...baseProps}
+        activeSegment={{ type: "credits", endTime: 580 }}
+        onSkipSegment={onSkipSegment}
+        hasNextItem={true}
+        onNextEpisode={onNextEpisode}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("mini-chrome-skip-pill-next"));
+    expect(onNextEpisode).toHaveBeenCalledTimes(1);
+    expect(onSkipSegment).not.toHaveBeenCalled();
+  });
+
+  it("clicking the primary 'Skip Credits' pill calls onSkipSegment (not onNextEpisode)", () => {
     const onSkipSegment = vi.fn();
     const onNextEpisode = vi.fn();
     render(
@@ -660,8 +706,8 @@ describe("MiniChrome skip pill", () => {
       />,
     );
     fireEvent.click(screen.getByTestId("mini-chrome-skip-pill"));
-    expect(onNextEpisode).toHaveBeenCalledTimes(1);
-    expect(onSkipSegment).not.toHaveBeenCalled();
+    expect(onSkipSegment).toHaveBeenCalledTimes(1);
+    expect(onNextEpisode).not.toHaveBeenCalled();
   });
 
   it("does NOT render the pill when activeSegment is null", () => {

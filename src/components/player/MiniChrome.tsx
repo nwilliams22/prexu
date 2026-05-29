@@ -158,14 +158,48 @@ const styles = {
     alignItems: "center" as const,
     gap: 8,
   },
-  scrubInput: {
+  // Transparent hit-area wrapper: 20px tall so the user can grab from any
+  // vertical position in a generous band, regardless of the 4px visible track.
+  scrubHitArea: {
     flex: 1 as const,
     minWidth: 0,
-    height: 4,
+    position: "relative" as const,
+    height: 20,
     cursor: "pointer",
-    accentColor: "white",
-    background: "transparent",
-    margin: 0,
+    display: "flex" as const,
+    alignItems: "center" as const,
+  },
+  scrubTrack: {
+    position: "absolute" as const,
+    left: 0,
+    right: 0,
+    top: "50%" as const,
+    height: 4,
+    marginTop: -2,
+    background: "rgba(255, 255, 255, 0.30)",
+    borderRadius: 2,
+    overflow: "hidden" as const,
+    pointerEvents: "none" as const,
+  },
+  scrubFill: {
+    position: "absolute" as const,
+    left: 0,
+    top: 0,
+    bottom: 0,
+    background: "white",
+    pointerEvents: "none" as const,
+  },
+  scrubThumb: {
+    position: "absolute" as const,
+    top: "50%" as const,
+    width: 12,
+    height: 12,
+    marginTop: -6,
+    marginLeft: -6,
+    background: "white",
+    borderRadius: "50%" as const,
+    pointerEvents: "none" as const,
+    boxShadow: "0 1px 4px rgba(0,0,0,0.4)",
   },
   scrubLabel: {
     color: "rgba(255, 255, 255, 0.85)",
@@ -175,12 +209,17 @@ const styles = {
     flexShrink: 0,
     minWidth: 36,
   },
+  // Pill stack sits above the scrub bar so controls cluster stays coherent.
   skipPillWrap: {
     position: "absolute" as const,
-    top: 8,
-    left: 8,
+    bottom: 104,
+    left: 12,
     transition: "opacity 0.2s ease",
     zIndex: 2,
+    display: "flex" as const,
+    flexDirection: "column" as const,
+    gap: 6,
+    alignItems: "flex-start" as const,
   },
   skipPill: {
     display: "flex" as const,
@@ -193,6 +232,20 @@ const styles = {
     padding: "6px 12px",
     fontSize: 12,
     fontWeight: 600,
+    cursor: "pointer",
+    boxShadow: "0 2px 8px rgba(0, 0, 0, 0.35)",
+  },
+  skipPillSecondary: {
+    display: "flex" as const,
+    alignItems: "center" as const,
+    gap: 6,
+    background: "rgba(0, 0, 0, 0.70)",
+    color: "#fff",
+    border: "1px solid rgba(255,255,255,0.25)",
+    borderRadius: 999,
+    padding: "5px 12px",
+    fontSize: 12,
+    fontWeight: 500,
     cursor: "pointer",
     boxShadow: "0 2px 8px rgba(0, 0, 0, 0.35)",
   },
@@ -346,24 +399,25 @@ export default function MiniChrome({
   const showTimeLabels = hasDuration && miniRect.width >= TIME_LABEL_MIN_WIDTH;
   const remaining = hasDuration ? Math.max(0, duration - currentTime) : 0;
 
-  // prexu-0ru: pill mirrors PlayerControls/SkipSegmentButton logic.
-  // Credits + a real successor → "Next Episode" (advance); otherwise
-  // the primary skip label per segment type. Pill is suppressed if no
-  // skip handler was wired (defensive — Player.tsx always passes one
-  // when a segment is active).
-  const skipPill: { label: string; onClick: () => void } | null = (() => {
+  // prexu-0ru / prexu-6mi: pill mirrors SkipSegmentButton logic.
+  // Intro → single "Skip Intro" button.
+  // Credits, no next item → single "Skip Credits" button.
+  // Credits + next item → two stacked buttons: primary "Skip Credits" +
+  //   secondary "Next Episode", matching the full-player two-button layout
+  //   so users can still skip past credits to watch post-credits scenes.
+  // Pill is suppressed entirely if no skip handler was wired (defensive).
+  const skipPillPrimary: { label: string; onClick: () => void } | null = (() => {
     if (!activeSegment || !onSkipSegment) return null;
-    if (
-      activeSegment.type === "credits" &&
-      hasNextItem &&
-      onNextEpisode
-    ) {
-      return { label: "Next Episode", onClick: onNextEpisode };
-    }
     return {
       label: activeSegment.type === "credits" ? "Skip Credits" : "Skip Intro",
       onClick: onSkipSegment,
     };
+  })();
+
+  const skipPillNextEpisode: { label: string; onClick: () => void } | null = (() => {
+    if (!activeSegment || activeSegment.type !== "credits") return null;
+    if (!hasNextItem || !onNextEpisode) return null;
+    return { label: "Next Episode", onClick: onNextEpisode };
   })();
 
   const seekTo = useCallback(
@@ -387,14 +441,63 @@ export default function MiniChrome({
     [currentTime, seekTo],
   );
 
-  const handleScrubChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      onActivity();
-      const v = Number(e.target.value);
-      if (!Number.isFinite(v)) return;
-      seekTo(v);
+  // ── Custom scrub bar (prexu-acc fix) ────────────────────────────────────
+  // Using a div-based scrub bar so we can:
+  //   1. Widen the hit area to a 20px-tall transparent band (vs the 4px
+  //      native range track that was the primary source of miss-grabs).
+  //   2. Compute the seek fraction from the TRACK element's own bounding
+  //      rect via getBoundingClientRect() — the native <input type=range>
+  //      computed its value from a wider layout region in some configurations
+  //      causing the non-monotonic seek jumps seen in the dev log.
+  //   3. Use setPointerCapture so the drag stays reliable if the pointer
+  //      leaves the hit area.
+  const scrubTrackRef = useRef<HTMLDivElement | null>(null);
+  const scrubDraggingRef = useRef(false);
+
+  const seekFromPointer = useCallback(
+    (clientX: number) => {
+      const track = scrubTrackRef.current;
+      if (!track || !hasDuration) return;
+      const rect = track.getBoundingClientRect();
+      const fraction = (clientX - rect.left) / rect.width;
+      const clamped = Math.max(0, Math.min(1, fraction));
+      seekTo(clamped * duration);
     },
-    [onActivity, seekTo],
+    [hasDuration, duration, seekTo],
+  );
+
+  const handleScrubPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      onActivity();
+      scrubDraggingRef.current = true;
+      // setPointerCapture keeps the drag live when the pointer leaves the hit
+      // area. Guard for environments (jsdom) that don't implement it.
+      const target = e.currentTarget as HTMLDivElement;
+      if (typeof target.setPointerCapture === "function") {
+        target.setPointerCapture(e.pointerId);
+      }
+      seekFromPointer(e.clientX);
+    },
+    [onActivity, seekFromPointer],
+  );
+
+  const handleScrubPointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!scrubDraggingRef.current) return;
+      seekFromPointer(e.clientX);
+    },
+    [seekFromPointer],
+  );
+
+  const handleScrubPointerUp = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!scrubDraggingRef.current) return;
+      scrubDraggingRef.current = false;
+      seekFromPointer(e.clientX);
+    },
+    [seekFromPointer],
   );
   // Visible ghost overlay state — only set once we've crossed the drag
   // threshold so sub-threshold mousedowns produce no visual artifact.
@@ -629,12 +732,16 @@ export default function MiniChrome({
           </button>
         </div>
 
-        {/* Scrub bar — slim range above the bottom cluster. Hidden when
-            duration hasn't been reported yet (e.g. pre-metadata). The
-            range input gets keyboard a11y for free.
-            Time labels flank the bar when miniRect is wide enough
-            (prexu-oj5). Below TIME_LABEL_MIN_WIDTH the labels collapse
-            so the scrub bar itself stays usable. */}
+        {/* Scrub bar — custom div-based track above the bottom cluster.
+            Hidden when duration hasn't been reported yet (e.g. pre-metadata).
+            The hit area is 20px tall (transparent) so the user can grab from
+            anywhere in that band; the visible track is 4px centred inside it.
+            Seek fraction is computed from the track's getBoundingClientRect()
+            so it is always bounded to the mini player's actual track width,
+            not the broader layout region (prexu-acc fix for erratic seeks).
+            Pointer capture keeps the drag live if the cursor leaves the hit
+            area. data-mini-no-drag suppresses the anchor-drag handler.
+            Time labels flank the bar when miniRect is wide enough (prexu-oj5). */}
         {hasDuration && (
           <div
             style={{
@@ -654,18 +761,37 @@ export default function MiniChrome({
                 {formatTime(currentTime)}
               </span>
             )}
-            <input
-              type="range"
-              min={0}
-              max={duration}
-              step={0.1}
-              value={Math.min(currentTime, duration)}
-              onChange={handleScrubChange}
-              onMouseDown={(e) => e.stopPropagation()}
-              style={styles.scrubInput}
+            {/* Padded hit area: 20px tall so grab is reliable. */}
+            <div
+              style={styles.scrubHitArea}
+              role="slider"
               aria-label="Seek"
+              aria-valuemin={0}
+              aria-valuemax={Math.floor(duration)}
+              aria-valuenow={Math.floor(Math.min(currentTime, duration))}
+              aria-valuetext={formatTime(Math.min(currentTime, duration))}
+              tabIndex={0}
+              onPointerDown={handleScrubPointerDown}
+              onPointerMove={handleScrubPointerMove}
+              onPointerUp={handleScrubPointerUp}
               data-testid="mini-chrome-scrub"
-            />
+            >
+              {/* Visible 4px track — only used for rendering, not hit-testing. */}
+              <div style={styles.scrubTrack} ref={scrubTrackRef}>
+                <div
+                  style={{
+                    ...styles.scrubFill,
+                    width: `${Math.min(100, (Math.min(currentTime, duration) / duration) * 100)}%`,
+                  }}
+                />
+              </div>
+              <div
+                style={{
+                  ...styles.scrubThumb,
+                  left: `${Math.min(100, (Math.min(currentTime, duration) / duration) * 100)}%`,
+                }}
+              />
+            </div>
             {showTimeLabels && (
               <span
                 style={styles.scrubLabel}
@@ -678,12 +804,14 @@ export default function MiniChrome({
           </div>
         )}
 
-        {/* Skip Intro / Skip Credits / Next Episode pill (prexu-0ru).
-            Anchored top-left so it doesn't collide with the top-right
-            restore+close cluster. Renders only when useSkipSegments
-            has an active segment. data-mini-no-drag suppresses the
-            anchor-drag handler. */}
-        {skipPill && (
+        {/* Skip Intro / Skip Credits / Next Episode pill(s) (prexu-0ru / prexu-6mi).
+            Positioned above the scrub bar so it clusters with the controls
+            rather than the top-left corner. For credits with a next item,
+            two stacked pills are shown: primary "Skip Credits" (to let users
+            watch post-credits scenes) + secondary "Next Episode", matching
+            SkipSegmentButton's two-button layout. data-mini-no-drag suppresses
+            the anchor-drag handler. */}
+        {skipPillPrimary && (
           <div
             style={{
               ...styles.skipPillWrap,
@@ -695,13 +823,24 @@ export default function MiniChrome({
           >
             <button
               type="button"
-              onClick={handleButtonClick(skipPill.onClick)}
+              onClick={handleButtonClick(skipPillPrimary.onClick)}
               style={styles.skipPill}
-              aria-label={skipPill.label}
+              aria-label={skipPillPrimary.label}
               data-testid="mini-chrome-skip-pill"
             >
-              {skipPill.label}
+              {skipPillPrimary.label}
             </button>
+            {skipPillNextEpisode && (
+              <button
+                type="button"
+                onClick={handleButtonClick(skipPillNextEpisode.onClick)}
+                style={styles.skipPillSecondary}
+                aria-label={skipPillNextEpisode.label}
+                data-testid="mini-chrome-skip-pill-next"
+              >
+                {skipPillNextEpisode.label}
+              </button>
+            )}
           </div>
         )}
 
