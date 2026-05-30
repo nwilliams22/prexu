@@ -1,0 +1,23 @@
+[tools]
+node = "22"
+
+[tasks.tsc]
+description = "Run TypeScript type check"
+run = "npx tsc --noEmit"
+
+[tasks.test]
+description = "Run unit tests"
+run = "npx vitest run"
+
+[tasks.cargo-check]
+description = "Check relay server compilation"
+dir = "relay-server"
+run = "cargo check"
+
+[tasks.e2e]
+description = "Install Playwright browsers and run E2E tests"
+run = "npx playwright install --with-deps chromium && npm run test:e2e"
+
+[tasks.ci]
+description = "Run full CI pipeline (type check, unit tests, cargo check, E2E tests)"
+depends = ["tsc", "test", "cargo-check", "e2e"]
