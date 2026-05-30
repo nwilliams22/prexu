@@ -46,19 +46,15 @@ jobs:
   headless-mpv:
     name: Headless mpv integration (Windows)
     runs-on: windows-latest
-    # This job exercises the signal chain (init → FileLoaded → duration →
-    # eof-reached) that production queue advancement depends on.  It is
+    # Exercises the signal chain (init → FileLoaded → duration → eof-reached)
+    # that production queue advancement (prexu-0cs / prexu-ta9) depends on.
     # Windows-only because libmpv-2.dll is a Windows binary.
     #
-    # NOT YET VALIDATED ON A REAL RUNNER (prexu-fbk.2). The integration test
-    # itself passes locally on Windows, but this CI harness is a first attempt:
-    # the mpv.lib generation below is unproven on GitHub's windows-latest image,
-    # and libmpv2-sys also needs the mpv C headers (MPV_SOURCE\64\include\mpv)
-    # which are NOT provided here. The robust fix is to fetch the official mpv
-    # dev kit (ships mpv.lib + headers) instead of hand-building the import lib.
-    # continue-on-error keeps this job from falsely gating merges until it is
-    # proven green; see the follow-up issue before marking it a required check.
-    continue-on-error: true
+    # Build inputs come entirely from the repo (no network fetch, per prexu-r8o):
+    #   - src-tauri/ci/mpv/64/{mpv.lib, include/mpv/*.h} — vendored ISC dev kit
+    #   - src-tauri/bin/libmpv-2.dll                      — committed runtime DLL
+    # The MPV_SOURCE layout libmpv2-sys/build.rs expects is assembled below by
+    # copying the DLL next to the vendored import lib + headers.
 
     steps:
       - uses: actions/checkout@v4
@@ -66,68 +62,37 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # Build an mpv import library (mpv.lib) from the committed DLL so the
-      # Rust linker can resolve libmpv2-sys's `cargo:rustc-link-lib=mpv`.
-      # lib.exe is available on windows-latest via the pre-installed MSVC toolchain.
-      - name: Generate mpv.lib from committed DLL
+      # Assemble the MPV_SOURCE/64 dir libmpv2-sys + build.rs expect: vendored
+      # mpv.lib + headers are already at src-tauri/ci/mpv/64; drop the committed
+      # runtime DLL in beside them so build.rs copies it to target at build time.
+      - name: Assemble MPV_SOURCE from vendored dev kit
         shell: pwsh
         run: |
-          $dllPath = "src-tauri\bin\libmpv-2.dll"
-          $outDir  = "C:\libmpv\64"
-          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          Copy-Item "src-tauri\bin\libmpv-2.dll" "src-tauri\ci\mpv\64\libmpv-2.dll" -Force
+          Write-Host "MPV_SOURCE assembled at src-tauri\ci\mpv:"
+          Get-ChildItem -Recurse "src-tauri\ci\mpv\64" | ForEach-Object { Write-Host "  $($_.FullName)" }
 
-          # Copy the DLL into the MPV_SOURCE layout so build.rs copies it to
-          # target\debug\ at build time (same path it uses locally).
-          Copy-Item $dllPath "$outDir\libmpv-2.dll"
-
-          # Generate a .def from the DLL's export table, then build the import lib.
-          # dumpbin + lib.exe are both in the VS2022 toolchain on windows-latest.
-          $vsDir = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
-                     -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
-                     -property installationPath
-          $vcDir = Get-ChildItem "$vsDir\VC\Tools\MSVC" | Sort-Object Name -Descending | Select-Object -First 1
-          $toolsDir = "$($vcDir.FullName)\bin\HostX64\x64"
-
-          & "$toolsDir\dumpbin.exe" /EXPORTS "$outDir\libmpv-2.dll" /OUT:"$outDir\exports.txt"
-
-          # Parse dumpbin output → .def file
-          $exports = Get-Content "$outDir\exports.txt" |
-                     Where-Object { $_ -match '^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(\S+)' } |
-                     ForEach-Object { $matches[1] }
-          "EXPORTS" | Out-File "$outDir\mpv.def" -Encoding utf8
-          $exports | Out-File "$outDir\mpv.def" -Append -Encoding utf8
-
-          & "$toolsDir\lib.exe" /DEF:"$outDir\mpv.def" /OUT:"$outDir\mpv.lib" /MACHINE:X64
-          Write-Host "Generated $outDir\mpv.lib ($($(Get-Item "$outDir\mpv.lib").Length) bytes)"
-
-      # Build the integration test binary.  MPV_SOURCE tells the libmpv2-sys
-      # build script where to find mpv.lib; build.rs will also copy the DLL to
-      # target\debug\ so the test binary can load it at runtime.
+      # MPV_SOURCE points libmpv2-sys's build script at the vendored mpv.lib +
+      # headers; build.rs also copies libmpv-2.dll to target\debug\ for runtime.
       - name: Build headless_mpv test binary
         working-directory: src-tauri
         env:
-          MPV_SOURCE: C:\libmpv
+          MPV_SOURCE: ${{ github.workspace }}\src-tauri\ci\mpv
         run: cargo test --test headless_mpv --no-run
 
-      # libmpv-2.dll must be next to (or on PATH for) the test binary.
-      # build.rs copies it to target\debug\ during the build above, which is
-      # the directory Cargo searches when the test exe runs.  The extra copy
-      # below ensures it is also in target\debug\deps\ where the test binary
-      # actually lives.
+      # The test binary lives in target\debug\deps\; ensure libmpv-2.dll is in
+      # that dir so the Windows loader resolves the delay-loaded DLL at runtime.
       - name: Ensure libmpv-2.dll is beside the test binary
         shell: pwsh
         run: |
           $deps = "src-tauri\target\debug\deps"
-          if (-not (Test-Path "$deps\libmpv-2.dll")) {
-            Copy-Item "C:\libmpv\64\libmpv-2.dll" "$deps\libmpv-2.dll"
-            Write-Host "Copied libmpv-2.dll to $deps"
-          } else {
-            Write-Host "libmpv-2.dll already present in $deps"
-          }
+          New-Item -ItemType Directory -Force -Path $deps | Out-Null
+          Copy-Item "src-tauri\bin\libmpv-2.dll" "$deps\libmpv-2.dll" -Force
+          Write-Host "Copied libmpv-2.dll to $deps"
 
       - name: Run headless_mpv integration test
         working-directory: src-tauri
         env:
-          MPV_SOURCE: C:\libmpv
+          MPV_SOURCE: ${{ github.workspace }}\src-tauri\ci\mpv
           RUST_LOG: debug
         run: cargo test --test headless_mpv -- --nocapture --ignored
