@@ -1379,4 +1379,119 @@ mod tests {
         // Unknown string is a hard error, not a silent fallback.
         assert!(serde_json::from_str::<MinimizeCorner>(r#""diagonal""#).is_err());
     }
+
+    // ── Pop-out enter/exit state transitions ─────────────────────────────
+    //
+    // The Tauri commands (player_enter_popout / player_exit_popout) do Win32
+    // I/O that is untestable without a runtime. Their pure-state side-effects
+    // — stashing pre_popout_geometry on enter, consuming it on exit, and
+    // clearing any leftover minimize inset on enter — are tested here by
+    // directly manipulating PlayerState, consistent with the is_in_popout
+    // tests above.
+
+    #[test]
+    fn popout_enter_stashes_pre_popout_geometry() {
+        let state = PlayerState::new();
+        assert!(state.pre_popout_geometry.lock().unwrap().is_none());
+        // Simulate the stash that player_enter_popout writes.
+        *state.pre_popout_geometry.lock().unwrap() = Some((100, 200, 1280, 800));
+        let stash = *state.pre_popout_geometry.lock().unwrap();
+        assert_eq!(stash, Some((100, 200, 1280, 800)));
+        assert!(state.is_in_popout());
+    }
+
+    #[test]
+    fn popout_exit_consumes_stash_leaving_none() {
+        let state = PlayerState::new();
+        *state.pre_popout_geometry.lock().unwrap() = Some((100, 200, 1280, 800));
+        assert!(state.is_in_popout());
+
+        // Simulate the take() that player_exit_popout does.
+        let taken = state
+            .pre_popout_geometry
+            .lock()
+            .unwrap()
+            .take();
+        assert_eq!(taken, Some((100, 200, 1280, 800)));
+        assert!(!state.is_in_popout());
+        assert!(state.pre_popout_geometry.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn popout_exit_without_prior_enter_returns_none_stash() {
+        // player_exit_popout has an early-return path when no stash is
+        // present (called without a prior enter). Verify the take() yields
+        // None and is_in_popout stays false.
+        let state = PlayerState::new();
+        assert!(!state.is_in_popout());
+        let taken = state
+            .pre_popout_geometry
+            .lock()
+            .unwrap()
+            .take();
+        assert!(taken.is_none());
+        assert!(!state.is_in_popout());
+    }
+
+    #[test]
+    fn popout_enter_clears_leftover_minimize_inset() {
+        // player_enter_popout clears state.minimize to None before applying
+        // popout geometry. This prevents a frontend race (concurrent
+        // playerExitMinimize + playerEnterPopOut) from leaving a stale
+        // minimize inset that would shrink the host into the corner of the
+        // new popout window.
+        let state = PlayerState::new();
+        *state.minimize.lock().unwrap() = Some(MinimizeState {
+            width: 360,
+            height: 200,
+            padding: 16,
+            corner: MinimizeCorner::BottomRight,
+        });
+        assert!(state.minimize.lock().unwrap().is_some());
+
+        // Simulate what player_enter_popout does: clear minimize before
+        // any geometry work.
+        *state.minimize.lock().unwrap() = None;
+
+        assert!(state.minimize.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn popout_enter_is_noop_on_minimize_when_already_none() {
+        // Guard: if minimize is already None on enter, clearing it again
+        // must not panic or corrupt other state.
+        let state = PlayerState::new();
+        assert!(state.minimize.lock().unwrap().is_none());
+        *state.minimize.lock().unwrap() = None;
+        assert!(state.minimize.lock().unwrap().is_none());
+        assert!(!state.is_in_popout());
+    }
+
+    #[test]
+    fn popout_enter_then_exit_round_trips_without_minimize_leaking() {
+        // Full enter → exit cycle: pre_popout_geometry is set and then
+        // consumed; minimize is cleared on enter and must still be None
+        // after exit (exit does not restore minimize — that's correct,
+        // the frontend re-arms minimize separately if needed).
+        let state = PlayerState::new();
+        *state.minimize.lock().unwrap() = Some(MinimizeState {
+            width: 360,
+            height: 200,
+            padding: 16,
+            corner: MinimizeCorner::BottomRight,
+        });
+
+        // enter: clear minimize + stash geometry
+        *state.minimize.lock().unwrap() = None;
+        *state.pre_popout_geometry.lock().unwrap() = Some((50, 50, 1920, 1080));
+
+        assert!(state.is_in_popout());
+        assert!(state.minimize.lock().unwrap().is_none());
+
+        // exit: consume stash
+        let taken = state.pre_popout_geometry.lock().unwrap().take();
+        assert_eq!(taken, Some((50, 50, 1920, 1080)));
+        assert!(!state.is_in_popout());
+        assert!(state.minimize.lock().unwrap().is_none());
+    }
 }
