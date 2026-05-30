@@ -11,12 +11,10 @@
 //! - `player://error`              String error message
 //! - `player://ready`              () fired once the file is loaded
 //! - `player://host-window-ready`  () fired once the decoder has finished
-//!                                 setup on a new file (post-PlaybackRestart),
-//!                                 meaning mpv has actually rendered a frame
-//!                                 into the host HWND. The frontend's
-//!                                 useTransparentWindow defers
-//!                                 body.player-transparent until this signal
-//!                                 to avoid the cold-start flash (prexu-mto).
+//!   setup on a new file (post-PlaybackRestart), meaning mpv has actually
+//!   rendered a frame into the host HWND. The frontend's
+//!   useTransparentWindow defers body.player-transparent until this signal
+//!   to avoid the cold-start flash (prexu-mto).
 
 use std::sync::Arc;
 use std::thread;
@@ -38,6 +36,59 @@ const TIME_POS_THROTTLE: Duration = Duration::from_millis(250); // 4 Hz
 // `demuxer-cache-time` updates often during streaming; throttle to keep the
 // SeekBar buffered indicator smooth without flooding the IPC channel.
 const BUFFERED_THROTTLE: Duration = Duration::from_millis(500); // 2 Hz
+
+// ── Pure decision helpers (no AppHandle / Mpv / emit dependency) ────────────
+
+/// Returns `true` when enough time has elapsed since `last` to allow the next
+/// throttled emit. Used for both time-pos (250 ms / 4 Hz) and buffered
+/// (500 ms / 2 Hz). The caller is responsible for updating `last` on `true`.
+fn should_emit_throttled(now: Instant, last: Instant, throttle: Duration) -> bool {
+    now.duration_since(last) >= throttle
+}
+
+/// Returns `true` on the first PlaybackRestart per file — i.e. when
+/// `hwdec_logged` is still `false`, meaning we have not yet emitted
+/// `player://host-window-ready` for this file load. Subsequent PlaybackRestart
+/// events (seeks) return `false` so the frontend only receives one
+/// host-window-ready signal per file.
+///
+/// The caller sets `hwdec_logged = true` immediately after acting on `true`.
+fn is_first_frame(hwdec_logged: bool) -> bool {
+    !hwdec_logged
+}
+
+/// Returns `true` when the duration property should be logged at `info` level
+/// (first non-zero arrival per file — the cold-start checkpoint) and the
+/// `duration_logged` flag should be set. Subsequent arrivals are `debug`.
+///
+/// The caller sets `duration_logged = true` immediately after acting on `true`.
+fn is_first_duration(duration_logged: bool, d: f64) -> bool {
+    !duration_logged && d > 0.0
+}
+
+/// Returns `true` when the EOF true-edge should be forwarded to the frontend.
+/// mpv emits both edges (false → true and true → false); only the rising edge
+/// (reached == true) triggers `player://eof`.
+fn should_emit_eof(reached: bool) -> bool {
+    reached
+}
+
+/// Map an `EndFile` reason code to a human-readable label. Used for
+/// diagnostic logging only. Matches libmpv's `mpv_end_file_reason` enum:
+/// 0=EOF, 2=STOP, 3=QUIT, 4=ERROR, 5=REDIRECT.
+fn end_file_reason_label(reason: u32) -> &'static str {
+    match reason {
+        0 => "EOF",
+        2 => "STOP",
+        3 => "QUIT",
+        4 => "ERROR",
+        5 => "REDIRECT",
+        _ => "unknown",
+    }
+}
+
+
+// ── Event pump ───────────────────────────────────────────────────────────────
 
 pub(crate) fn spawn_event_pump(
     mpv: Arc<Mpv>,
@@ -184,7 +235,7 @@ fn dispatch(
             // (prexu-mto). Subsequent PlaybackRestart events (e.g. after
             // a seek) do not need to re-emit — the receiver only listens
             // once per session.
-            if !*hwdec_logged {
+            if is_first_frame(*hwdec_logged) {
                 let hwdec = mpv.get_property::<String>("hwdec-current")
                     .unwrap_or_else(|_| "<unavailable>".into());
                 log::info!("[player:events] hwdec-current={} (playback-restart)", hwdec);
@@ -201,20 +252,23 @@ fn dispatch(
             // player://eof signal off that property (REPLY_EOF_REACHED)
             // which is fully deterministic. EndFile reason values: 0=EOF,
             // 2=STOP, 3=QUIT, 4=ERROR, 5=REDIRECT.
-            let r: u32 = reason as u32;
-            log::debug!("[player:events] EndFile(reason={}) — diagnostic only", r);
+            log::debug!(
+                "[player:events] EndFile(reason={}/{}) — diagnostic only",
+                reason,
+                end_file_reason_label(reason)
+            );
         }
         Event::PropertyChange { change, reply_userdata, .. } => match (reply_userdata, change) {
             (REPLY_TIME_POS, PropertyData::Double(t)) => {
                 let now = Instant::now();
-                if now.duration_since(*last_time_pos) >= TIME_POS_THROTTLE {
+                if should_emit_throttled(now, *last_time_pos, TIME_POS_THROTTLE) {
                     *last_time_pos = now;
                     log::trace!("[player:events] time-pos={:.1}", t);
                     let _ = app.emit("player://time-pos", t);
                 }
             }
             (REPLY_DURATION, PropertyData::Double(d)) => {
-                if !*duration_logged && d > 0.0 {
+                if is_first_duration(*duration_logged, d) {
                     // First non-zero duration = demuxer parsed the stream
                     // headers. Useful for attributing cold-start latency.
                     log::info!("[player:events] first duration={:.1} (stream opened)", d);
@@ -234,7 +288,7 @@ fn dispatch(
             }
             (REPLY_BUFFERED, PropertyData::Double(b)) => {
                 let now = Instant::now();
-                if now.duration_since(*last_buffered) >= BUFFERED_THROTTLE {
+                if should_emit_throttled(now, *last_buffered, BUFFERED_THROTTLE) {
                     *last_buffered = now;
                     log::trace!("[player:events] buffered={:.1}", b);
                     let _ = app.emit("player://buffered", b);
@@ -246,7 +300,7 @@ fn dispatch(
                 // emits both edges; we only forward the true edge. mpv resets
                 // eof-reached to false on a successful seek-back or new file
                 // load, so the next playback can fire it again.
-                if reached {
+                if should_emit_eof(reached) {
                     log::debug!("[player:events] eof-reached=true → player://eof");
                     let _ = app.emit("player://eof", ());
                 } else {
@@ -258,4 +312,246 @@ fn dispatch(
         _ => {}
     }
     false
+}
+
+// ── Unit tests ───────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Map a REPLY_* user-data id to the corresponding frontend event name.
+    /// Used to verify the routing table in tests without exposing the helper
+    /// in the production binary (only tests need to enumerate it).
+    fn reply_id_to_event_name(reply_userdata: u64) -> Option<&'static str> {
+        match reply_userdata {
+            REPLY_TIME_POS => Some("player://time-pos"),
+            REPLY_DURATION => Some("player://duration"),
+            REPLY_PAUSE => Some("player://paused"),
+            REPLY_BUFFERING => Some("player://buffering"),
+            REPLY_BUFFERED => Some("player://buffered"),
+            REPLY_EOF_REACHED => Some("player://eof"),
+            _ => None,
+        }
+    }
+
+    // ── should_emit_throttled ────────────────────────────────────────────────
+
+    #[test]
+    fn throttle_gate_passes_when_elapsed_equals_throttle() {
+        let throttle = TIME_POS_THROTTLE;
+        let last = Instant::now()
+            .checked_sub(throttle)
+            .expect("checked_sub should not underflow");
+        let now = last + throttle;
+        assert!(should_emit_throttled(now, last, throttle));
+    }
+
+    #[test]
+    fn throttle_gate_passes_when_elapsed_exceeds_throttle() {
+        let throttle = TIME_POS_THROTTLE;
+        let last = Instant::now()
+            .checked_sub(throttle * 2)
+            .expect("checked_sub should not underflow");
+        let now = last + throttle * 2;
+        assert!(should_emit_throttled(now, last, throttle));
+    }
+
+    #[test]
+    fn throttle_gate_blocks_when_elapsed_just_under_throttle() {
+        let throttle = TIME_POS_THROTTLE;
+        let last = Instant::now()
+            .checked_sub(throttle - Duration::from_millis(1))
+            .expect("checked_sub should not underflow");
+        let now = last + throttle - Duration::from_millis(1);
+        assert!(!should_emit_throttled(now, last, throttle));
+    }
+
+    #[test]
+    fn throttle_gate_blocks_when_elapsed_is_zero() {
+        let now = Instant::now();
+        assert!(!should_emit_throttled(now, now, TIME_POS_THROTTLE));
+    }
+
+    #[test]
+    fn buffered_throttle_boundary_just_over() {
+        let throttle = BUFFERED_THROTTLE;
+        let last = Instant::now()
+            .checked_sub(throttle + Duration::from_millis(1))
+            .expect("checked_sub should not underflow");
+        let now = last + throttle + Duration::from_millis(1);
+        assert!(should_emit_throttled(now, last, throttle));
+    }
+
+    #[test]
+    fn buffered_throttle_boundary_just_under() {
+        let throttle = BUFFERED_THROTTLE;
+        let last = Instant::now()
+            .checked_sub(throttle - Duration::from_millis(1))
+            .expect("checked_sub should not underflow");
+        let now = last + throttle - Duration::from_millis(1);
+        assert!(!should_emit_throttled(now, last, throttle));
+    }
+
+    // ── is_first_frame ───────────────────────────────────────────────────────
+
+    #[test]
+    fn first_frame_gate_true_when_hwdec_not_logged() {
+        assert!(is_first_frame(false));
+    }
+
+    #[test]
+    fn first_frame_gate_false_when_hwdec_already_logged() {
+        assert!(!is_first_frame(true));
+    }
+
+    #[test]
+    fn first_frame_gate_simulates_file_lifecycle() {
+        // Simulate: FileLoaded resets flag → false, first PlaybackRestart →
+        // true, subsequent PlaybackRestart (seek) → false.
+        let mut hwdec_logged = false; // after FileLoaded reset
+        assert!(is_first_frame(hwdec_logged), "first PlaybackRestart should pass");
+        hwdec_logged = true;           // caller sets it after acting on true
+        assert!(!is_first_frame(hwdec_logged), "seek PlaybackRestart should not pass");
+    }
+
+    // ── is_first_duration ────────────────────────────────────────────────────
+
+    #[test]
+    fn first_duration_false_when_d_is_zero() {
+        assert!(!is_first_duration(false, 0.0));
+    }
+
+    #[test]
+    fn first_duration_false_when_d_is_negative() {
+        assert!(!is_first_duration(false, -1.0));
+    }
+
+    #[test]
+    fn first_duration_true_on_first_positive_value() {
+        assert!(is_first_duration(false, 3600.0));
+    }
+
+    #[test]
+    fn first_duration_false_after_already_logged() {
+        // Even with a positive d, once the flag is set the gate is closed.
+        assert!(!is_first_duration(true, 3600.0));
+    }
+
+    #[test]
+    fn first_duration_simulates_lifecycle() {
+        let mut duration_logged = false;
+        // d=0 arrives first (property observable before demuxer is ready)
+        assert!(!is_first_duration(duration_logged, 0.0));
+        // real duration arrives
+        assert!(is_first_duration(duration_logged, 7200.0));
+        duration_logged = true;
+        // subsequent update (rare on VOD, but possible)
+        assert!(!is_first_duration(duration_logged, 7201.0));
+    }
+
+    // ── should_emit_eof ──────────────────────────────────────────────────────
+
+    #[test]
+    fn eof_true_edge_emits() {
+        assert!(should_emit_eof(true));
+    }
+
+    #[test]
+    fn eof_false_edge_does_not_emit() {
+        assert!(!should_emit_eof(false));
+    }
+
+    // ── end_file_reason_label ────────────────────────────────────────────────
+
+    #[test]
+    fn end_file_reason_known_codes() {
+        assert_eq!(end_file_reason_label(0), "EOF");
+        assert_eq!(end_file_reason_label(2), "STOP");
+        assert_eq!(end_file_reason_label(3), "QUIT");
+        assert_eq!(end_file_reason_label(4), "ERROR");
+        assert_eq!(end_file_reason_label(5), "REDIRECT");
+    }
+
+    #[test]
+    fn end_file_reason_unknown_code_returns_unknown() {
+        assert_eq!(end_file_reason_label(99), "unknown");
+        assert_eq!(end_file_reason_label(1), "unknown"); // gap in libmpv enum
+    }
+
+    // ── reply_id_to_event_name ───────────────────────────────────────────────
+
+    #[test]
+    fn reply_id_time_pos_maps_correctly() {
+        assert_eq!(
+            reply_id_to_event_name(REPLY_TIME_POS),
+            Some("player://time-pos")
+        );
+    }
+
+    #[test]
+    fn reply_id_duration_maps_correctly() {
+        assert_eq!(
+            reply_id_to_event_name(REPLY_DURATION),
+            Some("player://duration")
+        );
+    }
+
+    #[test]
+    fn reply_id_pause_maps_correctly() {
+        assert_eq!(
+            reply_id_to_event_name(REPLY_PAUSE),
+            Some("player://paused")
+        );
+    }
+
+    #[test]
+    fn reply_id_buffering_maps_correctly() {
+        assert_eq!(
+            reply_id_to_event_name(REPLY_BUFFERING),
+            Some("player://buffering")
+        );
+    }
+
+    #[test]
+    fn reply_id_buffered_maps_correctly() {
+        assert_eq!(
+            reply_id_to_event_name(REPLY_BUFFERED),
+            Some("player://buffered")
+        );
+    }
+
+    #[test]
+    fn reply_id_eof_reached_maps_correctly() {
+        assert_eq!(
+            reply_id_to_event_name(REPLY_EOF_REACHED),
+            Some("player://eof")
+        );
+    }
+
+    #[test]
+    fn reply_id_unknown_returns_none() {
+        assert_eq!(reply_id_to_event_name(0), None);
+        assert_eq!(reply_id_to_event_name(99), None);
+        assert_eq!(reply_id_to_event_name(u64::MAX), None);
+    }
+
+    #[test]
+    fn reply_id_all_six_known_ids_return_some() {
+        let known = [
+            REPLY_TIME_POS,
+            REPLY_DURATION,
+            REPLY_PAUSE,
+            REPLY_BUFFERING,
+            REPLY_BUFFERED,
+            REPLY_EOF_REACHED,
+        ];
+        for id in known {
+            assert!(
+                reply_id_to_event_name(id).is_some(),
+                "REPLY id {} should map to Some",
+                id
+            );
+        }
+    }
 }
