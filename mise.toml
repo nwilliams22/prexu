@@ -16,7 +16,7 @@ run = "cargo check"
 
 [tasks.e2e]
 description = "Install Playwright browsers and run E2E tests"
-run = "npx playwright install --with-deps chromium && npm run test:e2e"
+run = "npx playwright install --with-deps chromium && npm run test:e2e -- --project=chromium"
 
 [tasks.ci]
 description = "Run full CI pipeline (type check, unit tests, cargo check, E2E tests)"

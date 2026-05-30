@@ -12,9 +12,14 @@ on a CI runner that does not have a full mpv install.
   include/mpv/*.h      # client API headers: client, render, render_gl, stream_cb
 ```
 
-The runtime `libmpv-2.dll` is **not** duplicated here — it already lives in
-`src-tauri/bin/libmpv-2.dll` and the CI job copies it into this layout at build
-time so `MPV_SOURCE` resolves a complete `64/` directory.
+The runtime `libmpv-2.dll` (~119 MB) is **not** stored here — it exceeds
+GitHub's 100 MB/file limit. The CI job fetches it from a pinned,
+SHA256-checksummed mpv dev release and extracts it into `64/` so `MPV_SOURCE`
+resolves a complete directory (see `.github/workflows/ci.yml`, the
+"Fetch libmpv runtime DLL" step). `64/libmpv-2.dll` is git-ignored.
+
+Only `mpv.lib` + headers are vendored because the mpv dev archive ships a
+MinGW import lib (`libmpv.dll.a`), not the MSVC `mpv.lib` the toolchain links.
 
 ## Provenance
 
@@ -28,9 +33,10 @@ The mpv client API headers are **ISC-licensed** (see the copyright banner in
 `64/include/mpv/client.h`) specifically to allow redistribution. `mpv.lib`
 contains only export symbol stubs generated from the DLL, no mpv source.
 
-## Why vendored instead of downloaded in CI
+## Why vendor the lib + headers but fetch the DLL
 
-Fetching a dev kit over the network in CI is a supply-chain risk and a flake
-source (unpinned URLs, mirror outages). These artifacts are tiny, license-clean,
-and pinned to the exact DLL we ship, so vendoring keeps the CI job deterministic
-and offline. See `prexu-r8o`.
+The link inputs (`mpv.lib`, headers) are tiny and license-clean, so vendoring
+them keeps what we compile/link against pinned and in-repo — no network surface
+for the build itself. The 119 MB runtime DLL can't be committed, so it is the
+one fetched artifact, and it is pinned by release tag **and** SHA256 so it can't
+drift or be swapped. See `prexu-r8o`.

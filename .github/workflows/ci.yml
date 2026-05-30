@@ -40,8 +40,11 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
+      # Chromium only: the app ships on WebView2 (Chromium-based), so chromium
+      # is the representative runtime. webkit/firefox aren't shipping targets
+      # and add CI flake + browser-dep overhead on Linux.
       - name: E2E tests
-        run: npm run test:e2e
+        run: npm run test:e2e -- --project=chromium
 
   headless-mpv:
     name: Headless mpv integration (Windows)
@@ -50,11 +53,13 @@ jobs:
     # that production queue advancement (prexu-0cs / prexu-ta9) depends on.
     # Windows-only because libmpv-2.dll is a Windows binary.
     #
-    # Build inputs come entirely from the repo (no network fetch, per prexu-r8o):
-    #   - src-tauri/ci/mpv/64/{mpv.lib, include/mpv/*.h} — vendored ISC dev kit
-    #   - src-tauri/bin/libmpv-2.dll                      — committed runtime DLL
-    # The MPV_SOURCE layout libmpv2-sys/build.rs expects is assembled below by
-    # copying the DLL next to the vendored import lib + headers.
+    # Build inputs (prexu-r8o):
+    #   - src-tauri/ci/mpv/64/{mpv.lib, include/mpv/*.h} — vendored in-repo: the
+    #     MSVC import lib + ISC headers we LINK against (pinned, verified).
+    #   - libmpv-2.dll (119 MB runtime) — too large to commit (>GitHub 100 MB
+    #     limit), so fetched from a pinned, SHA256-checksummed release below.
+    #     The mpv dev archive ships only a MinGW .dll.a, not an MSVC mpv.lib,
+    #     which is why the import lib stays vendored.
 
     steps:
       - uses: actions/checkout@v4
@@ -62,14 +67,32 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # Assemble the MPV_SOURCE/64 dir libmpv2-sys + build.rs expect: vendored
-      # mpv.lib + headers are already at src-tauri/ci/mpv/64; drop the committed
-      # runtime DLL in beside them so build.rs copies it to target at build time.
-      - name: Assemble MPV_SOURCE from vendored dev kit
+      # Fetch ONLY the runtime DLL from a pinned, checksummed mpv dev release and
+      # drop it beside the vendored mpv.lib + headers to complete MPV_SOURCE/64.
+      # Pin both the release tag and the SHA256 so the binary can't change under
+      # us; mismatches fail the job (supply-chain guard, per prexu-r8o).
+      - name: Fetch libmpv runtime DLL (pinned + checksummed)
         shell: pwsh
         run: |
-          Copy-Item "src-tauri\bin\libmpv-2.dll" "src-tauri\ci\mpv\64\libmpv-2.dll" -Force
-          Write-Host "MPV_SOURCE assembled at src-tauri\ci\mpv:"
+          $tag    = "2026-05-29-13a3e3ad0e"
+          $asset  = "mpv-dev-x86_64-20260529-git-13a3e3ad0e.7z"
+          $sha256 = "2c4883c8836b53465796aca61e16f7ce6c3adda818baadc850b9f2a39bd2ce5d"
+          $url    = "https://github.com/zhongfly/mpv-winbuild/releases/download/$tag/$asset"
+          Write-Host "Downloading $url"
+          Invoke-WebRequest -Uri $url -OutFile $asset
+          $actual = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLower()
+          if ($actual -ne $sha256) {
+            Write-Error "SHA256 mismatch: expected $sha256 got $actual"
+            exit 1
+          }
+          Write-Host "SHA256 verified: $actual"
+          # 7-Zip is preinstalled on windows-latest. -r finds libmpv-2.dll
+          # regardless of its path inside the archive (it is at the root).
+          7z e -y -r "$asset" "-osrc-tauri\ci\mpv\64" libmpv-2.dll
+          if (-not (Test-Path "src-tauri\ci\mpv\64\libmpv-2.dll")) {
+            Write-Error "libmpv-2.dll was not extracted from $asset"
+            exit 1
+          }
           Get-ChildItem -Recurse "src-tauri\ci\mpv\64" | ForEach-Object { Write-Host "  $($_.FullName)" }
 
       # MPV_SOURCE points libmpv2-sys's build script at the vendored mpv.lib +
@@ -87,7 +110,7 @@ jobs:
         run: |
           $deps = "src-tauri\target\debug\deps"
           New-Item -ItemType Directory -Force -Path $deps | Out-Null
-          Copy-Item "src-tauri\bin\libmpv-2.dll" "$deps\libmpv-2.dll" -Force
+          Copy-Item "src-tauri\ci\mpv\64\libmpv-2.dll" "$deps\libmpv-2.dll" -Force
           Write-Host "Copied libmpv-2.dll to $deps"
 
       - name: Run headless_mpv integration test
