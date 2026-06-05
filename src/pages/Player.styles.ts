@@ -18,6 +18,11 @@ export const playerStyles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
+    // Promote to its own compositor layer so inset: 0 re-resolves against
+    // the new WebView viewport immediately after a tao window resize, without
+    // waiting for the next opacity transition or mouse-move repaint (prexu-0p3).
+    transform: "translateZ(0)",
+    willChange: "transform",
   },
   video: {
     width: "100%",
