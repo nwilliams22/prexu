@@ -23,6 +23,16 @@ const POPOUT_STORE_PATH: &str = "popout-player.json";
 const POPOUT_KEY_CORNER: &str = "popout.corner";
 #[cfg(target_os = "windows")]
 const POPOUT_KEY_SIZE: &str = "popout.size";
+/// Persists the monitor the user last had the popout on.
+/// Schema: `{ "device_name": "\\\\.\\DISPLAY1", "work_area": [x, y, w, h] }`
+///
+/// Stored on `player_exit_popout` using the monitor the popout window is
+/// actually on at exit time (via `MonitorFromWindow` before restoring main).
+/// Loaded on `player_enter_popout` to find the same monitor via
+/// `EnumDisplayMonitors` + device-name match; falls back to
+/// `MonitorFromWindow(main)` when not found (first run, disconnected monitor).
+#[cfg(target_os = "windows")]
+const POPOUT_KEY_MONITOR: &str = "popout.monitor";
 
 #[cfg(target_os = "windows")]
 const POPOUT_DEFAULT_CORNER: &str = "bottom-right";
@@ -30,6 +40,19 @@ const POPOUT_DEFAULT_CORNER: &str = "bottom-right";
 const POPOUT_DEFAULT_WIDTH: u32 = 480;
 #[cfg(target_os = "windows")]
 const POPOUT_DEFAULT_HEIGHT: u32 = 270;
+
+/// A monitor's device name and work area captured at pop-out exit time.
+/// Used to find the same monitor on re-entry via `EnumDisplayMonitors`.
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone)]
+pub(crate) struct MonitorRecord {
+    /// Win32 `MONITORINFOEXW::szDevice` decoded as a UTF-16 string.
+    /// Example: `"\\\\.\\DISPLAY1"`. Stable across reboots for the same
+    /// physical monitor in the same port; may change if ports are swapped.
+    pub device_name: String,
+    /// Work area in virtual-screen physical pixels: (left, top, width, height).
+    pub work_area: (i32, i32, i32, i32),
+}
 
 /// Query the WORK AREA (desktop rect minus taskbar/docked toolbars) in
 /// physical pixels for the monitor the given window currently lives on.
@@ -48,6 +71,11 @@ fn current_work_area(
         .map_err(|e| format!("get main hwnd failed: {}", e))?;
     unsafe {
         let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        log::debug!(
+            "[player:popout] MonitorFromWindow HWND={:?} -> HMONITOR={:?}",
+            hwnd.0,
+            monitor.0
+        );
         let mut info = MONITORINFO {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
             ..Default::default()
@@ -66,6 +94,192 @@ fn current_work_area(
         );
         Ok((x, y, w, h))
     }
+}
+
+/// Capture the monitor record (device name + work area) for the monitor the
+/// given window currently lives on. Uses `MONITORINFOEXW` so we get the
+/// device name, which is stable enough to identify the same physical monitor
+/// across sessions (unlike HMONITOR which changes on reboot/reconnect).
+///
+/// Called from `player_exit_popout` BEFORE restoring the main window to its
+/// pre-popout geometry, so `MonitorFromWindow` correctly identifies the
+/// monitor the pop-out was dragged to rather than the monitor main will
+/// return to after restore.
+///
+/// # DPI note
+/// `MONITORINFOEXW::rcWork` is in virtual-screen physical pixels — the same
+/// coordinate space as `GetWindowRect` and `SetWindowPos`. No DPI conversion
+/// is needed here. The device_name + work_area tuple is safe to persist and
+/// re-use across DPI changes because `find_monitor_by_name` re-reads the
+/// LIVE `rcWork` from `EnumDisplayMonitors` at enter time, so taskbar moves
+/// and resolution changes are automatically reflected.
+#[cfg(target_os = "windows")]
+fn capture_monitor_record(
+    main: &tauri::WebviewWindow,
+) -> Result<MonitorRecord, String> {
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFOEXW, MONITOR_DEFAULTTONEAREST,
+    };
+    let hwnd = main
+        .hwnd()
+        .map_err(|e| format!("get main hwnd failed: {}", e))?;
+    unsafe {
+        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        log::debug!(
+            "[player:popout] capture_monitor_record MonitorFromWindow HWND={:?} -> HMONITOR={:?}",
+            hwnd.0,
+            monitor.0
+        );
+        // Initialise with cbSize = sizeof(MONITORINFOEXW). The Win32 contract
+        // for GetMonitorInfoW is: if cbSize equals sizeof(MONITORINFOEXW),
+        // the function fills szDevice in addition to the MONITORINFO fields.
+        // This is the standard "Ex" variant pattern — no separate
+        // GetMonitorInfoExW function exists; the size discriminates the call.
+        let mut info = MONITORINFOEXW {
+            monitorInfo: windows::Win32::Graphics::Gdi::MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFOEXW>() as u32,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        if !GetMonitorInfoW(
+            monitor,
+            &mut info.monitorInfo as *mut _,
+        )
+        .as_bool()
+        {
+            return Err("GetMonitorInfoW (MONITORINFOEXW) failed".to_string());
+        }
+        let r = info.monitorInfo.rcWork;
+        let work_area = (r.left, r.top, r.right - r.left, r.bottom - r.top);
+
+        // Decode szDevice (null-terminated UTF-16 array).
+        let nul = info
+            .szDevice
+            .iter()
+            .position(|&c| c == 0)
+            .unwrap_or(info.szDevice.len());
+        let device_name =
+            String::from_utf16_lossy(&info.szDevice[..nul]).to_string();
+
+        log::info!(
+            "[player:popout] captured monitor device_name={:?} work_area=({},{},{}x{})",
+            device_name,
+            work_area.0,
+            work_area.1,
+            work_area.2,
+            work_area.3
+        );
+        Ok(MonitorRecord {
+            device_name,
+            work_area,
+        })
+    }
+}
+
+/// Enumerate all connected monitors and return the work area of the one
+/// whose device name matches `target_name`. Returns `None` if no match is
+/// found (e.g. the monitor was disconnected since the last session).
+///
+/// Always returns the LIVE work area from `EnumDisplayMonitors`, so taskbar
+/// moves and resolution changes since the last session are handled
+/// transparently — we only use the stored work_area as a fallback hint, not
+/// the returned value here.
+///
+/// # DPI note
+/// `rcWork` from `GetMonitorInfoW` inside the callback is in virtual-screen
+/// physical pixels, consistent with `GetWindowRect` / `SetWindowPos`.
+/// No conversion is needed.
+#[cfg(target_os = "windows")]
+pub(crate) fn find_monitor_by_name(target_name: &str) -> Option<(i32, i32, i32, i32)> {
+    use windows::Win32::Foundation::LPARAM;
+    use windows::Win32::Graphics::Gdi::{
+        EnumDisplayMonitors, GetMonitorInfoW, MONITORINFOEXW,
+    };
+
+    /// State passed through the EnumDisplayMonitors callback via LPARAM.
+    struct SearchState<'a> {
+        target: &'a str,
+        found: Option<(i32, i32, i32, i32)>,
+    }
+
+    unsafe extern "system" fn enum_callback(
+        hmonitor: windows::Win32::Graphics::Gdi::HMONITOR,
+        _hdc: windows::Win32::Graphics::Gdi::HDC,
+        _lprect: *mut windows::Win32::Foundation::RECT,
+        lparam: LPARAM,
+    ) -> windows::core::BOOL {
+        // SAFETY: lparam is a `*mut SearchState` set in find_monitor_by_name;
+        // it lives on the stack for the duration of EnumDisplayMonitors.
+        let state = &mut *(lparam.0 as *mut SearchState);
+
+        let mut info = MONITORINFOEXW {
+            monitorInfo: windows::Win32::Graphics::Gdi::MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFOEXW>() as u32,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        if !GetMonitorInfoW(hmonitor, &mut info.monitorInfo as *mut _).as_bool() {
+            // Continue enumeration even if one monitor fails.
+            return windows::core::BOOL(1);
+        }
+
+        let nul = info
+            .szDevice
+            .iter()
+            .position(|&c| c == 0)
+            .unwrap_or(info.szDevice.len());
+        let name = String::from_utf16_lossy(&info.szDevice[..nul]);
+
+        log::debug!(
+            "[player:popout] EnumDisplayMonitors: device={:?} HMONITOR={:?}",
+            name.as_str(),
+            hmonitor.0
+        );
+
+        if name == state.target {
+            let r = info.monitorInfo.rcWork;
+            state.found = Some((r.left, r.top, r.right - r.left, r.bottom - r.top));
+            // Stop enumeration — found what we needed.
+            return windows::core::BOOL(0);
+        }
+        windows::core::BOOL(1) // continue
+    }
+
+    let mut search = SearchState {
+        target: target_name,
+        found: None,
+    };
+
+    unsafe {
+        // hdc = None  -> enumerate all monitors on virtual screen
+        // lprcclip = None  -> no clipping rectangle
+        let _ = EnumDisplayMonitors(
+            None,
+            None,
+            Some(enum_callback),
+            LPARAM(&mut search as *mut SearchState as isize),
+        );
+    }
+
+    if let Some(wa) = search.found {
+        log::info!(
+            "[player:popout] find_monitor_by_name matched {:?} work_area=({},{},{}x{})",
+            target_name,
+            wa.0,
+            wa.1,
+            wa.2,
+            wa.3
+        );
+    } else {
+        log::warn!(
+            "[player:popout] find_monitor_by_name: no monitor named {:?} found (disconnected?), will fall back",
+            target_name
+        );
+    }
+
+    search.found
 }
 
 /// Load the persisted pop-out corner + size from the store, falling back to
@@ -108,6 +322,37 @@ fn load_persisted_popout(app: &AppHandle) -> (MinimizeCorner, u32, u32) {
     (corner, width, height)
 }
 
+/// Load the persisted monitor record from the store.
+/// Returns `None` when no entry exists (first run) or the entry is malformed.
+#[cfg(target_os = "windows")]
+fn load_persisted_monitor(app: &AppHandle) -> Option<(String, (i32, i32, i32, i32))> {
+    let store = app.store(POPOUT_STORE_PATH).ok()?;
+    let v = store.get(POPOUT_KEY_MONITOR)?;
+    let device_name = v.get("device_name")?.as_str()?.to_string();
+    let wa = v.get("work_area")?;
+    let arr = wa.as_array()?;
+    if arr.len() != 4 {
+        return None;
+    }
+    let coords: Option<Vec<i64>> = arr.iter().map(|x| x.as_i64()).collect();
+    let coords = coords?;
+    let work_area = (
+        coords[0] as i32,
+        coords[1] as i32,
+        coords[2] as i32,
+        coords[3] as i32,
+    );
+    log::debug!(
+        "[player:popout] loaded persisted monitor device_name={:?} work_area=({},{},{}x{})",
+        device_name,
+        work_area.0,
+        work_area.1,
+        work_area.2,
+        work_area.3
+    );
+    Some((device_name, work_area))
+}
+
 /// Read the Tauri main window's outer rect via Win32 `GetWindowRect` and
 /// return `(x, y, width, height)`. Stashed on `enter_popout` and restored
 /// on `exit_popout` so the window snaps back to exactly where it started.
@@ -133,12 +378,18 @@ fn read_window_rect(
         GetWindowRect(hwnd, &mut rect as *mut _)
             .map_err(|e| format!("GetWindowRect failed: {:?}", e))?;
     }
-    Ok((
+    let (x, y, w, h) = (
         rect.left,
         rect.top,
         rect.right - rect.left,
         rect.bottom - rect.top,
-    ))
+    );
+    log::debug!(
+        "[player:popout] GetWindowRect HWND={:?} -> ({},{},{}x{})",
+        hwnd.0,
+        x, y, w, h
+    );
+    Ok((x, y, w, h))
 }
 
 /// Apply an outer rect to the Tauri main window via Win32 `SetWindowPos`.
@@ -157,6 +408,11 @@ fn write_window_rect(
     let hwnd = main
         .hwnd()
         .map_err(|e| format!("get main hwnd failed: {}", e))?;
+    log::debug!(
+        "[player:popout] SetWindowPos HWND={:?} -> ({},{},{}x{})",
+        hwnd.0,
+        x, y, width, height
+    );
     unsafe {
         SetWindowPos(
             hwnd,
@@ -260,6 +516,62 @@ fn corner_origin(
     (x, y, w, h)
 }
 
+/// Resolve the work area to use for a new pop-out entry. (prexu-ajn fix)
+///
+/// Strategy:
+/// 1. Load the persisted monitor device name from the store.
+/// 2. Call `find_monitor_by_name` (EnumDisplayMonitors) to find that monitor
+///    by its current device name and get ITS LIVE work area.
+/// 3. If found, use that work area -- this is the monitor the user last
+///    dragged the popout to, regardless of where main currently is.
+/// 4. If not found (first run, disconnected monitor), fall back to
+///    `MonitorFromWindow(main)` -- the original behaviour.
+///
+/// This decouples the popout target monitor from the main window's current
+/// monitor. Before this fix, `exit_popout` restores main to its pre-popout
+/// position (monitor 1), so on re-entry `MonitorFromWindow(main)` returned
+/// monitor 1 even though the user had dragged the popout to monitor 2.
+///
+/// # DPI note
+/// The returned work area is in virtual-screen physical pixels from
+/// `GetMonitorInfoW::rcWork`. `corner_origin` and `SetWindowPos` downstream
+/// also work in physical pixels -- the coordinate space is uniform throughout.
+/// Heterogeneous DPI is therefore handled transparently: each monitor's
+/// work area uses that monitor's own physical pixel scale, and the popout
+/// window is placed in those same physical coordinates. Windows DWM handles
+/// any per-monitor DPI scaling of the window contents.
+#[cfg(target_os = "windows")]
+fn resolve_enter_work_area(
+    main: &tauri::WebviewWindow,
+    app: &AppHandle,
+) -> Result<(i32, i32, i32, i32), String> {
+    if let Some((device_name, _stored_wa)) = load_persisted_monitor(app) {
+        // Attempt live lookup: even if the stored work_area is stale (taskbar
+        // moved, resolution changed), EnumDisplayMonitors returns the current
+        // work area for the live monitor, which is what we want.
+        if let Some(live_wa) = find_monitor_by_name(&device_name) {
+            log::info!(
+                "[player:popout] enter: using persisted monitor {:?} live work_area=({},{},{}x{})",
+                device_name,
+                live_wa.0,
+                live_wa.1,
+                live_wa.2,
+                live_wa.3
+            );
+            return Ok(live_wa);
+        }
+        // Monitor not found -- disconnected since last session.
+        log::warn!(
+            "[player:popout] enter: persisted monitor {:?} not found, falling back to MonitorFromWindow(main)",
+            device_name
+        );
+    } else {
+        log::debug!("[player:popout] enter: no persisted monitor, using MonitorFromWindow(main)");
+    }
+    // Fallback: first run or disconnected monitor -- original behaviour.
+    current_work_area(main)
+}
+
 /// Enter pop-out mode: resize+reposition the Tauri main window to a corner
 /// of the current display's work area, set always-on-top, and resync the
 /// mpv host window. The pre-pop-out outer geometry of the main window is
@@ -307,7 +619,13 @@ pub async fn player_enter_popout(
         *mz = None;
     }
 
-    let (wx, wy, ww, wh) = current_work_area(&main)?;
+    // prexu-ajn: resolve the target work area from the persisted monitor
+    // (if any) rather than always using MonitorFromWindow(main). After
+    // exit_popout restores main to its original monitor, the main window
+    // is back on monitor 1 -- but the user may have dragged the popout to
+    // monitor 2 before exiting. We now persist the monitor at exit and look
+    // it up by device name here, so re-entry opens on monitor 2.
+    let (wx, wy, ww, wh) = resolve_enter_work_area(&main, &app)?;
     let (x, y, w, h) = corner_origin(corner, width, height, wx, wy, ww, wh);
 
     // Stash the current OUTER rect via Win32 GetWindowRect. Captured +
@@ -434,9 +752,17 @@ pub async fn player_exit_popout(
     // corner-anchored pop-out windows and matches what Plex Web does.
     match read_window_rect(&main) {
         Ok((rx, ry, rw, rh)) => {
-            let detected_corner = match current_work_area(&main) {
+            // Determine which work area the popout is CURRENTLY on, BEFORE
+            // restoring main. Both current_work_area and capture_monitor_record
+            // call MonitorFromWindow on the main HWND which, at this point,
+            // is still at the popout position -- so they return the monitor
+            // the user last dragged it to. After write_window_rect restores
+            // main to its original position, MonitorFromWindow would return
+            // the original monitor instead (too late for our purposes).
+            let current_wa = current_work_area(&main);
+            let detected_corner = match &current_wa {
                 Ok((wx, wy, ww, wh)) => {
-                    Some(nearest_corner(rx, ry, rw, rh, wx, wy, ww, wh))
+                    Some(nearest_corner(rx, ry, rw, rh, *wx, *wy, *ww, *wh))
                 }
                 Err(e) => {
                     log::warn!(
@@ -446,6 +772,19 @@ pub async fn player_exit_popout(
                     None
                 }
             };
+
+            // prexu-ajn: capture the monitor record BEFORE restoring main.
+            let monitor_record = match capture_monitor_record(&main) {
+                Ok(r) => Some(r),
+                Err(e) => {
+                    log::warn!(
+                        "[player:popout] capture_monitor_record failed, monitor persistence skipped: {}",
+                        e
+                    );
+                    None
+                }
+            };
+
             match app.store(POPOUT_STORE_PATH) {
                 Ok(store) => {
                     if let Some(corner) = detected_corner {
@@ -458,12 +797,28 @@ pub async fn player_exit_popout(
                         POPOUT_KEY_SIZE,
                         serde_json::json!({ "width": rw, "height": rh }),
                     );
+                    // prexu-ajn: persist the monitor record so re-entry can
+                    // target the correct monitor even after main has been
+                    // restored to a different one.
+                    if let Some(ref rec) = monitor_record {
+                        let wa = &rec.work_area;
+                        store.set(
+                            POPOUT_KEY_MONITOR,
+                            serde_json::json!({
+                                "device_name": rec.device_name,
+                                "work_area": [wa.0, wa.1, wa.2, wa.3]
+                            }),
+                        );
+                    }
                     if let Err(e) = store.save() {
                         log::warn!("[player:popout] resize-on-exit save failed: {:?}", e);
                     } else {
-                        log::debug!(
-                            "[player:popout] persisted exit geometry corner={:?} size={}x{}",
-                            detected_corner, rw, rh
+                        log::info!(
+                            "[player:popout] persisted exit geometry corner={:?} size={}x{} monitor={:?}",
+                            detected_corner,
+                            rw,
+                            rh,
+                            monitor_record.as_ref().map(|r| r.device_name.as_str())
                         );
                     }
                 }
@@ -614,5 +969,154 @@ mod tests {
         // sits on screen.
         let c = nearest_corner(1936, -884, 800, 600, 1602, -2160, 3840, 2160);
         assert_eq!(c, MinimizeCorner::BottomLeft);
+    }
+
+    // ---- prexu-ajn: monitor record JSON schema --------------------------
+    //
+    // The pure serialisation/deserialisation logic for POPOUT_KEY_MONITOR
+    // is testable without Win32. find_monitor_by_name and
+    // capture_monitor_record exercise live Win32 APIs (EnumDisplayMonitors,
+    // MonitorFromWindow, GetMonitorInfoW) and are covered by manual repro
+    // per the prexu-ajn test plan.
+
+    #[test]
+    fn monitor_record_json_schema_round_trips() {
+        // The store schema is:
+        //   { "device_name": "\\\\.\\DISPLAY1", "work_area": [x, y, w, h] }
+        // Verify that the JSON written in player_exit_popout can be parsed
+        // back by load_persisted_monitor's parsing logic.
+        let device_name = r"\\.\DISPLAY2".to_string();
+        let work_area = (1920_i32, 0_i32, 1920_i32, 1080_i32);
+
+        // Mimic the serialisation in player_exit_popout.
+        let written = serde_json::json!({
+            "device_name": device_name,
+            "work_area": [work_area.0, work_area.1, work_area.2, work_area.3]
+        });
+
+        // Mimic the parsing in load_persisted_monitor.
+        let parsed_name = written["device_name"].as_str().unwrap().to_string();
+        let wa = &written["work_area"];
+        let arr = wa.as_array().unwrap();
+        assert_eq!(arr.len(), 4);
+        let parsed_wa = (
+            arr[0].as_i64().unwrap() as i32,
+            arr[1].as_i64().unwrap() as i32,
+            arr[2].as_i64().unwrap() as i32,
+            arr[3].as_i64().unwrap() as i32,
+        );
+
+        assert_eq!(parsed_name, device_name);
+        assert_eq!(parsed_wa, work_area);
+    }
+
+    #[test]
+    fn monitor_record_json_schema_handles_negative_coords() {
+        // Monitors above/left of primary have negative virtual-screen coords.
+        // The schema uses i64 JSON numbers which round-trip negative i32s cleanly.
+        let work_area = (-3840_i32, -2160_i32, 3840_i32, 2160_i32);
+        let written = serde_json::json!({
+            "device_name": r"\\.\DISPLAY1",
+            "work_area": [work_area.0, work_area.1, work_area.2, work_area.3]
+        });
+        let wa = &written["work_area"];
+        let arr = wa.as_array().unwrap();
+        let parsed = (
+            arr[0].as_i64().unwrap() as i32,
+            arr[1].as_i64().unwrap() as i32,
+            arr[2].as_i64().unwrap() as i32,
+            arr[3].as_i64().unwrap() as i32,
+        );
+        assert_eq!(parsed, work_area);
+    }
+
+    #[test]
+    fn monitor_record_json_schema_rejects_wrong_array_length() {
+        // load_persisted_monitor requires exactly 4 elements in work_area.
+        let bad = serde_json::json!({
+            "device_name": r"\\.\DISPLAY1",
+            "work_area": [0, 0, 1920]  // only 3 elements
+        });
+        let wa = &bad["work_area"];
+        let arr = wa.as_array().unwrap();
+        // Simulates the arr.len() != 4 guard in load_persisted_monitor.
+        assert_ne!(arr.len(), 4);
+    }
+
+    #[test]
+    fn monitor_record_json_schema_rejects_missing_device_name() {
+        let bad = serde_json::json!({
+            "work_area": [0, 0, 1920, 1080]
+            // no "device_name" field
+        });
+        // Simulates the v.get("device_name")? guard in load_persisted_monitor.
+        assert!(bad.get("device_name").is_none());
+    }
+
+    // ---- corner_origin on secondary / above-primary monitor coords ------
+
+    #[test]
+    fn corner_origin_on_secondary_monitor_to_the_right() {
+        // Secondary monitor to the right: work area (1920, 0, 1920, 1080).
+        // BottomRight snap of a 480x270 window:
+        //   x = 1920 + 1920 - 480 = 3360
+        //   y = 0    + 1080 - 270 =  810
+        let (x, y, w, h) = corner_origin(
+            MinimizeCorner::BottomRight,
+            480,
+            270,
+            1920, 0, 1920, 1080,
+        );
+        assert_eq!((x, y, w, h), (3360, 810, 480, 270));
+    }
+
+    #[test]
+    fn corner_origin_on_monitor_above_primary_negative_y() {
+        // Monitor positioned above primary: work area (0, -1080, 1920, 1080).
+        // TopLeft snap: (0, -1080, 480, 270).
+        let (x, y, w, h) = corner_origin(
+            MinimizeCorner::TopLeft,
+            480,
+            270,
+            0, -1080, 1920, 1080,
+        );
+        assert_eq!((x, y, w, h), (0, -1080, 480, 270));
+    }
+
+    #[test]
+    fn corner_origin_clamps_oversized_window_to_work_area() {
+        // Saved size (800x600) larger than a small monitor's work area
+        // (640x480) -- clamps to work area dimensions without panicking.
+        let (_, _, w, h) = corner_origin(
+            MinimizeCorner::BottomRight,
+            800, 600,
+            0, 0, 640, 480,
+        );
+        assert_eq!((w, h), (640, 480));
+    }
+
+    // ---- nearest_corner coordinate-space consistency (mhn DPI review) ---
+    //
+    // All inputs to nearest_corner are in virtual-screen physical pixels:
+    //   (x, y, w, h) from GetWindowRect (physical)
+    //   (wx, wy, ww, wh) from GetMonitorInfoW::rcWork (physical)
+    // Both are queried in the same coordinate space so no DPI scaling is
+    // needed. These tests verify correct behaviour with realistic multi-
+    // monitor coordinates including negative origins (above-primary layout).
+
+    #[test]
+    fn nearest_corner_physical_coords_left_monitor_negative_origin() {
+        // Monitor to the left of primary: work area (-1920, 0, 1920, 1040).
+        // Window snapped at bottom-left of that monitor.
+        let c = nearest_corner(-1920, 1040 - 270, 480, 270, -1920, 0, 1920, 1040);
+        assert_eq!(c, MinimizeCorner::BottomLeft);
+    }
+
+    #[test]
+    fn nearest_corner_physical_coords_right_monitor_positive_origin() {
+        // Monitor to the right of primary: work area (1920, 0, 2560, 1440).
+        // Window snapped at top-right.
+        let c = nearest_corner(1920 + 2560 - 480, 0, 480, 270, 1920, 0, 2560, 1440);
+        assert_eq!(c, MinimizeCorner::TopRight);
     }
 }
