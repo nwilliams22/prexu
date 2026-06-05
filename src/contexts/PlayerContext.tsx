@@ -181,15 +181,6 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   const replaceRatingKey = useCallback((ratingKey: string) => {
     setSession((prev) => (prev ? { ...prev, ratingKey, offset: undefined } : prev));
-    // Advancing to the next item (fire-next, prev/next buttons) always
-    // starts the incoming session in full player. Without this reset,
-    // a minimized session that advances via replaceRatingKey carries
-    // isMinimized=true into the new item and renders it directly in mini
-    // mode (prexu-ta9). The Rust-side mpv host is already full-size at
-    // this point because the new ratingKey triggers ensure_init which
-    // re-applies the full inner rect; the React flag must mirror that.
-    logger.info("player", "replaceRatingKey — resetting minimize state", { ratingKey });
-    setIsMinimized(false);
   }, []);
 
   const updateSession = useCallback((changes: Partial<PlayerSession>) => {

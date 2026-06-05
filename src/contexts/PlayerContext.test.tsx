@@ -141,44 +141,6 @@ describe("PlayerContext", () => {
     expect(result.current.session?.ratingKey).toBe("22203");
     expect(result.current.isMinimized).toBe(false);
   });
-
-  // prexu-ta9: replaceRatingKey (fire-next / prev-next buttons) must reset
-  // isMinimized so the incoming item always starts in full player.
-  it("replaceRatingKey() resets isMinimized (prexu-ta9 — fire-next path)", async () => {
-    const { result } = renderHook(useBoth, { wrapper });
-    act(() => result.current.play("11102"));
-
-    await act(async () => {
-      result.current.minimize();
-      await Promise.resolve();
-    });
-    expect(result.current.isMinimized).toBe(true);
-
-    act(() => result.current.replaceRatingKey("22203"));
-    expect(result.current.session?.ratingKey).toBe("22203");
-    expect(result.current.isMinimized).toBe(false);
-  });
-
-  // prexu-ta9: exit-while-minimized → new play via replaceRatingKey
-  // (simulates "fire-next" after postplay gate fires while minimized).
-  it("replaceRatingKey() after minimize leaves player in full mode, not mini (prexu-ta9)", async () => {
-    const { result } = renderHook(useBoth, { wrapper });
-    // Establish a session and minimize it.
-    act(() => result.current.play("ep01"));
-
-    await act(async () => {
-      result.current.minimize();
-      await Promise.resolve();
-    });
-    expect(result.current.isMinimized).toBe(true);
-
-    // Simulate postplay "fire-next": replaceRatingKey swaps to next episode.
-    act(() => result.current.replaceRatingKey("ep02"));
-
-    // New session must start in full player.
-    expect(result.current.isMinimized).toBe(false);
-    expect(result.current.session?.ratingKey).toBe("ep02");
-  });
 });
 
 describe("PlayerContext.miniRect", () => {
