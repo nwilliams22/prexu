@@ -252,6 +252,26 @@ impl PlayerState {
         compute_minimize_inset(state, scale, x, y, width, height)
     }
 
+    /// Drop the in-window minimize snapshot so the next `ensure_init` builds
+    /// the mpv host at full geometry rather than the leftover mini inset.
+    /// Called from `destroy` on player teardown (prexu-ta9). Returns whether a
+    /// snapshot was actually present (for logging / test assertions). The
+    /// snapshot lives on `PlayerState` (per-process), so an exit-while-minimized
+    /// would otherwise leak the mini rect into the following session.
+    pub(crate) fn clear_minimize_snapshot(&self) -> bool {
+        match self.minimize.lock() {
+            Ok(mut mz) => {
+                let had = mz.is_some();
+                if had {
+                    log::info!("[player] clearing leftover minimize snapshot on teardown");
+                    *mz = None;
+                }
+                had
+            }
+            Err(_) => false,
+        }
+    }
+
     /// True when `ensure_init` has run and `destroy` has not. Used by
     /// `player_set_fullscreen` to skip all mpv-aware work when there's no
     /// mpv to sync — e.g. during unmount cleanup after `player_unload`.
@@ -503,6 +523,13 @@ impl PlayerState {
     pub(crate) fn destroy(&self, app: &AppHandle) -> Result<(), String> {
         let t0 = Instant::now();
         log::info!("[player] destroy: entered");
+
+        // Clear the in-window minimize snapshot on teardown (prexu-ta9). See
+        // `clear_minimize_snapshot` — without this a fresh ensure_init after
+        // exit-while-minimized re-creates the mpv host at the stale mini inset,
+        // so a replay launches in mini even though the React isMinimized flag
+        // was reset on exit. Cleared even on the "nothing to destroy" path.
+        self.clear_minimize_snapshot();
 
         let inner = self
             .inner
@@ -1431,6 +1458,35 @@ mod tests {
             .take();
         assert!(taken.is_none());
         assert!(!state.is_in_popout());
+    }
+
+    #[test]
+    fn clear_minimize_snapshot_drops_leftover_inset_on_teardown() {
+        // prexu-ta9: after exit-while-minimized, destroy() must clear the
+        // per-process minimize snapshot so a fresh ensure_init builds the host
+        // at full geometry instead of the stale mini inset (which made replays
+        // launch in mini). clear_minimize_snapshot is the teardown hook destroy
+        // calls; verify it nulls a present snapshot and reports it was present.
+        let state = PlayerState::new();
+        *state.minimize.lock().unwrap() = Some(MinimizeState {
+            width: 959,
+            height: 720,
+            padding: 16,
+            corner: MinimizeCorner::BottomLeft,
+        });
+        assert!(state.minimize.lock().unwrap().is_some());
+
+        let had = state.clear_minimize_snapshot();
+        assert!(had, "snapshot should have been present before teardown");
+        assert!(
+            state.minimize.lock().unwrap().is_none(),
+            "minimize snapshot must be cleared so next session starts full"
+        );
+
+        // Idempotent: a second teardown (e.g. the redundant unload on replay)
+        // is a no-op and reports no snapshot was present.
+        assert!(!state.clear_minimize_snapshot());
+        assert!(state.minimize.lock().unwrap().is_none());
     }
 
     #[test]

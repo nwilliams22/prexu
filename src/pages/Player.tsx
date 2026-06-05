@@ -195,6 +195,30 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   const { controlsVisible, resetHideTimer, handleMouseMove } =
     usePlayerControlsVisibility(player.isPlaying);
 
+  // Force chrome reflow when the WebView viewport changes (e.g. popout-exit,
+  // fullscreen-enter). WebView2 + tao resize → CSS reflow is lazy; the fixed/
+  // absolute chrome stays stale until the next repaint. A ResizeObserver on the
+  // document root fires synchronously after layout, so bumping a counter here
+  // triggers React to re-render the container, which forces the browser to
+  // recalculate inset: 0 against the new viewport dimensions (prexu-0p3).
+  const [renderTick, setRenderTick] = useState(0);
+  useEffect(() => {
+    const el = document.documentElement;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const { width, height } = entry.contentRect;
+      logger.debug("player", "viewport resize — nudging chrome reflow", { width, height });
+      setRenderTick((t) => t + 1);
+    });
+    observer.observe(el);
+    logger.debug("player", "chrome reflow observer attached");
+    return () => {
+      observer.disconnect();
+      logger.debug("player", "chrome reflow observer detached");
+    };
+  }, []);
+
   // Sync-aware play/seek
   const togglePlay = wt.isInSession ? wt.syncTogglePlay : player.togglePlay;
   const seek = wt.isInSession ? wt.syncSeek : player.seek;
@@ -454,6 +478,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
 
   return (
     <div
+      data-render-tick={renderTick}
       style={{
         ...styles.container,
         // On the native player path the actual video lives in a sibling
