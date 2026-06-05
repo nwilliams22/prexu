@@ -654,6 +654,13 @@ pub async fn player_enter_popout(
     // window resizable (tauri.conf.json `resizable: true`) so the user can
     // grab the top-left corner of the floating window; the new size is
     // persisted in `player_exit_popout` so the next entry restores it.
+    // Borderless floating mini-player: strip the OS title bar so the popout
+    // reads as a clean video window, not a shrunk app (prexu-6qz). Decorations
+    // are restored on exit. Applied BEFORE write_window_rect so the SetWindowPos
+    // below authoritatively places the now-frameless window.
+    if let Err(e) = main.set_decorations(false) {
+        log::warn!("[player:popout] set_decorations(false) failed: {}", e);
+    }
     main.set_always_on_top(true)
         .map_err(|e| format!("set_always_on_top failed: {}", e))?;
     write_window_rect(&main, x, y, w as i32, h as i32)
@@ -830,6 +837,13 @@ pub async fn player_exit_popout(
 
     main.set_always_on_top(false)
         .map_err(|e| format!("set_always_on_top(false) failed: {}", e))?;
+
+    // Restore the OS title bar (prexu-6qz). Done BEFORE the stash is reapplied
+    // via write_window_rect so the decorated frame is back when the original
+    // pre-popout outer rect (captured WITH decorations) is restored.
+    if let Err(e) = main.set_decorations(true) {
+        log::warn!("[player:popout] set_decorations(true) failed: {}", e);
+    }
 
     // Clear topmost on the mpv host window AND re-anchor it below the
     // WebView. Passing Some(parent) here is load-bearing:
