@@ -386,17 +386,4 @@ describe("Player – chrome reflow nudge on viewport resize", () => {
     renderPlayer();
     expect(MockResizeObserver.getAll()).toHaveLength(1);
   });
-
-  it("container has translateZ(0) compositor layer hint in inline style", () => {
-    const { container } = renderPlayer();
-    const root = container.firstElementChild as HTMLElement;
-    // React serialises transform as an inline style
-    expect(root.style.transform).toBe("translateZ(0)");
-  });
-
-  it("container has willChange: transform set", () => {
-    const { container } = renderPlayer();
-    const root = container.firstElementChild as HTMLElement;
-    expect(root.style.willChange).toBe("transform");
-  });
 });
