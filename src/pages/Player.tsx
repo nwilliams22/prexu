@@ -38,6 +38,7 @@ import ParticipantOverlay from "../components/ParticipantOverlay";
 import SyncIndicator from "../components/SyncIndicator";
 import NextEpisodePrompt from "../components/NextEpisodePrompt";
 import ErrorOverlay from "../components/player/ErrorOverlay";
+import PopoutDragStrip from "../components/player/PopoutDragStrip";
 import SkipSegmentButton from "../components/player/SkipSegmentButton";
 import QueuePanel from "../components/player/QueuePanel";
 import PostPlayScreen from "../components/player/PostPlayScreen";
@@ -218,6 +219,47 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
       logger.debug("player", "chrome reflow observer detached");
     };
   }, []);
+
+  // Hide the player chrome (controls + gradient) WHILE the window is actively
+  // being resized. The mpv host (a native Win32 HWND) tracks the new size
+  // instantly, but the WebView2-composited chrome repaints a frame or more
+  // behind during a fast drag, so any *visible* controls appear to lag the
+  // video edge. Dragging the window edge isn't a controls interaction, so
+  // hiding the chrome for the duration removes the only thing that can look
+  // out-of-sync — the video resizes natively-smooth. (This is also why a
+  // resize with controls already auto-hidden looked perfect: nothing on top
+  // to lag.) Does NOT touch the reflow effect above.
+  //
+  // Drag-START is detected from the browser `resize` event. Drag-END is the
+  // tricky part: under a heavy 4K resize the webview saturates and any
+  // resize-derived "it stopped" signal (ResizeObserver, Tauri window://resized)
+  // arrives SECONDS late and backlogs, which made the controls take seconds to
+  // return. Instead we clear on the first real pointer interaction — the user
+  // moving the mouse to reach for the controls is a signal the webview delivers
+  // promptly — with a timeout fallback so the chrome never stays stuck hidden.
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const endResize = useCallback(() => {
+    if (resizeFallbackRef.current) {
+      clearTimeout(resizeFallbackRef.current);
+      resizeFallbackRef.current = null;
+    }
+    setIsResizing((r) => (r ? false : r));
+  }, []);
+  useEffect(() => {
+    const onResize = () => {
+      setIsResizing(true);
+      if (resizeFallbackRef.current) clearTimeout(resizeFallbackRef.current);
+      // Safety net: if the user never moves the mouse after the drag, reveal
+      // the chrome anyway shortly after resize events stop.
+      resizeFallbackRef.current = setTimeout(endResize, 400);
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      if (resizeFallbackRef.current) clearTimeout(resizeFallbackRef.current);
+    };
+  }, [endResize]);
 
   // Sync-aware play/seek
   const togglePlay = wt.isInSession ? wt.syncTogglePlay : player.togglePlay;
@@ -488,7 +530,12 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
         background: IS_NATIVE_PLAYER ? "transparent" : styles.container.background,
         cursor: controlsVisible ? "default" : "none",
       }}
-      onMouseMove={handleMouseMove}
+      onMouseMove={() => {
+        // A real pointer move means the drag-resize is over and the user is
+        // reaching for the chrome — reveal it immediately (see isResizing).
+        endResize();
+        handleMouseMove();
+      }}
     >
       {/* Video element — only used on the HTML5 path. On native path
           videoRef is never populated, so we hide the element entirely so
@@ -508,6 +555,13 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
           playsInline
           onClick={handleVideoClick}
         />
+      )}
+
+      {/* Pop-out drag strip (prexu-6qz): hover-reveal handle for the
+          borderless floating window. Native popout path only; follows the
+          controls auto-hide state. See PopoutDragStrip for the rationale. */}
+      {IS_NATIVE_PLAYER && popOut.isPopOut && (
+        <PopoutDragStrip visible={controlsVisible} />
       )}
 
       {/* Loading overlay */}
@@ -600,7 +654,8 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
           player={player}
           onExit={lifecycle.exit}
           onPrevious={hasPrevious ? handlePreviousFromTopBar : undefined}
-          visible={controlsVisible}
+          visible={controlsVisible && !isResizing}
+          suppressTransition={isResizing}
           chapters={player.chapters}
           onSeek={seek}
           onActivity={resetHideTimer}

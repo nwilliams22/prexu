@@ -22,6 +22,10 @@ interface PlayerControlsProps {
    *  top-left). Omit when no previous item exists; the button is hidden. */
   onPrevious?: () => void;
   visible: boolean;
+  /** Skip the opacity fade transition. Set while the window is actively
+   *  resizing so the chrome (and its dark gradient) disappears instantly
+   *  rather than lingering through a 300ms fade over the resizing video. */
+  suppressTransition?: boolean;
   syncIndicator?: React.ReactNode;
   chapters?: PlexChapter[];
   onSeek?: (time: number) => void;
@@ -56,7 +60,7 @@ interface PlayerControlsProps {
   onSubtitleDownloaded?: () => void;
 }
 
-function PlayerControls({ player, onExit, onPrevious, visible, syncIndicator, chapters, onSeek, onActivity, onNextEpisode, onPrevEpisode, audioEnhancements, onAudioEnhancementChange, isPiPActive, isPiPSupported, onTogglePiP, isPopOutMode, isMinimizeSupported, isMinimizeActive, onMinimize, queueCount, onToggleQueue, serverUri, serverToken, ratingKey, onSubtitleDownloaded }: PlayerControlsProps) {
+function PlayerControls({ player, onExit, onPrevious, visible, suppressTransition, syncIndicator, chapters, onSeek, onActivity, onNextEpisode, onPrevEpisode, audioEnhancements, onAudioEnhancementChange, isPiPActive, isPiPSupported, onTogglePiP, isPopOutMode, isMinimizeSupported, isMinimizeActive, onMinimize, queueCount, onToggleQueue, serverUri, serverToken, ratingKey, onSubtitleDownloaded }: PlayerControlsProps) {
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
   const [previousHovered, setPreviousHovered] = useState(false);
@@ -77,6 +81,7 @@ function PlayerControls({ player, onExit, onPrevious, visible, syncIndicator, ch
       style={{
         ...styles.container,
         opacity: visible || seekBar.isDragging ? 1 : 0,
+        ...(suppressTransition ? { transition: "none" } : {}),
       }}
     >
       {/* Top gradient + title bar */}

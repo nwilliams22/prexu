@@ -656,6 +656,18 @@ pub async fn player_enter_popout(
     // persisted in `player_exit_popout` so the next entry restores it.
     main.set_always_on_top(true)
         .map_err(|e| format!("set_always_on_top failed: {}", e))?;
+    // Drop the OS title bar so the floating window reads as a clean mini-
+    // player, not a shrunk app (prexu-6qz). Use tao's set_decorations rather
+    // than a raw Win32 SetWindowLongPtr(GWL_STYLE): doing it behind tao's
+    // back desynced tao's cached window size from the WebView2 client area
+    // (the mpv host and the React chrome ended up different sizes on
+    // drag/resize — the visible seam) and tao re-applied WS_CAPTION on the
+    // next window event, so the borderless state didn't stick. tao retains
+    // the WS_THICKFRAME sizing border for a resizable window, so the user can
+    // still drag the edges to resize; the body is dragged via the frontend
+    // data-tauri-drag-region strip.
+    main.set_decorations(false)
+        .map_err(|e| format!("popout set_decorations(false) failed: {}", e))?;
     write_window_rect(&main, x, y, w as i32, h as i32)
         .map_err(|e| format!("popout geometry apply failed: {}", e))?;
 
@@ -851,6 +863,12 @@ pub async fn player_exit_popout(
         return Ok(());
     };
 
+    // Restore the OS title bar. The host-window-busy / host-window-ready
+    // events emitted around this command defer the WebView2 transparent
+    // re-arm past tao's frame change, so the decoration restore doesn't black
+    // the window on exit (the regression that sank prexu-6qz attempt 1).
+    main.set_decorations(true)
+        .map_err(|e| format!("popout set_decorations(true) failed: {}", e))?;
     write_window_rect(&main, x, y, w as i32, h as i32)
         .map_err(|e| format!("popout restore apply failed: {}", e))?;
 
@@ -1119,4 +1137,5 @@ mod tests {
         let c = nearest_corner(1920 + 2560 - 480, 0, 480, 270, 1920, 0, 2560, 1440);
         assert_eq!(c, MinimizeCorner::TopRight);
     }
+
 }
