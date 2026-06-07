@@ -35,6 +35,33 @@ export const playerStyles: Record<string, React.CSSProperties> = {
     // auto-show and click-to-pause work.
     background: "rgba(0,0,0,0.05)",
   },
+  // prexu-6qz: hover-reveal drag handle for the borderless popout window.
+  // Sits above the click target; transparent until the controls layer shows.
+  popoutDragStrip: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    height: "28px",
+    zIndex: 30,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    background:
+      "linear-gradient(to bottom, rgba(0,0,0,0.55) 0%, transparent 100%)",
+    transition: "opacity 0.2s ease",
+    cursor: "grab",
+    userSelect: "none",
+  },
+  // Visual affordance (grip pill). pointerEvents:none so drags land on the
+  // parent strip's data-tauri-drag-region, not this child.
+  popoutDragGrip: {
+    width: "36px",
+    height: "4px",
+    borderRadius: "2px",
+    background: "rgba(255,255,255,0.5)",
+    pointerEvents: "none",
+  },
   centerOverlay: {
     position: "absolute",
     inset: 0,
