@@ -6,6 +6,7 @@ use tauri::{AppHandle, Manager};
 use std::io::{BufRead, BufReader, Read as StdRead, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -487,6 +488,18 @@ pub fn run() {
                 {
                     let app_handle = app.handle().clone();
                     let win_clone = window.clone();
+                    // prexu-w9j: Windows leaves WINDOWPLACEMENT.rcNormalPosition
+                    // at the PRE-snap rect while a window is Aero-Snapped, so a
+                    // maximize→restore cycle on a snapped window restores to the
+                    // wrong (pre-snap) size — and tao doesn't track the snapped
+                    // rect as its restore target either. We remember the last
+                    // non-maximized / non-fullscreen / non-minimized rect and
+                    // re-apply it when the window is restored from maximize.
+                    let last_normal_rect: Arc<
+                        Mutex<Option<(tauri::PhysicalPosition<i32>, tauri::PhysicalSize<u32>)>>,
+                    > = Arc::new(Mutex::new(None));
+                    let was_maximized = Arc::new(AtomicBool::new(false));
+                    let reapplying_rect = Arc::new(AtomicBool::new(false));
                     window.on_window_event(move |event| {
                         use tauri::WindowEvent;
                         let state = app_handle.state::<player::PlayerState>();
@@ -525,6 +538,45 @@ pub fn run() {
                             // rebuild bursts crash gpu-next vo. Throttle
                             // + trailing-edge flush preserved.
                             WindowEvent::Resized(_) => {
+                                // prexu-w9j: keep the snapped/normal rect as the
+                                // restore target so maximize→restore returns to it
+                                // instead of the OS's stale pre-snap rect. Guarded
+                                // by `reapplying_rect` so our own set_size/
+                                // set_position re-entrant WM_SIZE doesn't recurse.
+                                if !reapplying_rect.load(Ordering::Relaxed) {
+                                    let maxed = win_clone.is_maximized().unwrap_or(false);
+                                    let fs = win_clone.is_fullscreen().unwrap_or(false);
+                                    let min = win_clone.is_minimized().unwrap_or(false);
+                                    let was_max = was_maximized.swap(maxed, Ordering::Relaxed);
+                                    if was_max && !maxed && !fs && !min {
+                                        // Just un-maximized — the OS restored to the
+                                        // stale pre-snap rect. Re-apply our captured
+                                        // snapped/normal rect.
+                                        let target = *last_normal_rect.lock().unwrap();
+                                        if let Some((opos, isize)) = target {
+                                            reapplying_rect.store(true, Ordering::Relaxed);
+                                            let _ = win_clone
+                                                .set_size(tauri::Size::Physical(isize));
+                                            let _ = win_clone
+                                                .set_position(tauri::Position::Physical(opos));
+                                            reapplying_rect.store(false, Ordering::Relaxed);
+                                            log::info!(
+                                                "[window] restore-from-maximize: reapplied snapped rect ({},{} {}x{})",
+                                                opos.x, opos.y, isize.width, isize.height
+                                            );
+                                        }
+                                    } else if !maxed && !fs && !min {
+                                        // Normal drag-resize or Aero-Snap — this is
+                                        // the size a future restore should return to.
+                                        if let (Ok(opos), Ok(isize)) = (
+                                            win_clone.outer_position(),
+                                            win_clone.inner_size(),
+                                        ) {
+                                            *last_normal_rect.lock().unwrap() =
+                                                Some((opos, isize));
+                                        }
+                                    }
+                                }
                                 if let (Ok(pos), Ok(size)) =
                                     (win_clone.inner_position(), win_clone.inner_size())
                                 {
