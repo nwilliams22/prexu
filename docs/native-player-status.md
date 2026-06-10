@@ -185,10 +185,126 @@ and in-window minimize (small corner region inside the WebView,
 resizable, drag-snap to corners). Sub-tasks prexu-7il.1–.7 carry the
 remaining work.
 
-### ⬜ Phase 5 — Cross-platform research (deferred)
+### 🟦 Phase 5 — Cross-platform research (complete)
 Tracked as epic `prexu-efy` (single research issue). ADR-style decision
 on whether to extend native player to macOS (NSView + VideoToolbox) and
-Linux (X11/Wayland). Output goes back into this doc.
+Linux (X11/Wayland). Full decision record:
+`docs/adr-native-player-cross-platform.md`. Findings summary below.
+
+The Windows architecture (a sibling top-level window whose handle is
+handed to mpv as `wid`, composited under a transparent WebView) is a
+**foreign-window-embedding** design. The portability question reduces to:
+"on which platforms can mpv embed into a foreign window handle, and can
+Tauri hand us that handle?"
+
+#### Key finding — `wid` embedding is NOT available on every platform
+
+Per the mpv project's own libmpv guidance, mpv's `--wid` foreign-window
+embedding is supported on **x11, win32, and cocoa (macOS)** — and is
+**not** available on **Wayland**. The mpv docs further state that, because
+of platform-specific behaviour and problems (called out specifically for
+macOS), the **render API** (`libmpv/render.h`, OpenGL/Vulkan/Metal into a
+caller-owned surface) is *recommended over* raw window embedding. Sources:
+mpv-examples libmpv README; mpv issues #1242 / #9654 (Wayland embedding);
+mpv #10189 (win32 detached-window quirk). This means the current Windows
+`wid` approach is a conceptual match for macOS + X11 but a **dead end on
+Wayland**, which is the default session on current GNOME/KDE.
+
+#### macOS
+
+- **Embedding:** mpv accepts an `NSView` pointer as `wid` (analogous to
+  the Windows HWND). Tauri v2 (`2.10.2` here) exposes the main window's
+  `NSWindow` via `WebviewWindow::ns_window()` and deeper webview access via
+  `with_webview()` → `PlatformWebview`; the `NSView` would be derived from
+  the `NSWindow`'s `contentView`. *Needs verification:* exact handle
+  plumbing (whether to host a sibling `NSWindow` mirroring the Windows
+  sibling-HWND design, or add a child `NSView` into Tauri's view tree —
+  the latter avoids a second window to geometry-sync but couples us to
+  wry's view hierarchy).
+- **Layer-hosting risk:** modern macOS views are layer-backed; mpv's cocoa
+  output and a layer-backed/transparent WebView over it is the macOS
+  analogue of the Windows transparent-overlay composition and is the most
+  likely source of *needs-verification* compositing bugs (transparent-
+  window focus-change glitches are a known Tauri macOS issue, #8255).
+- **HW decode:** mpv supports VideoToolbox hardware decoding on Apple
+  platforms (the same HEVC-10bit problem that motivated this whole effort
+  is what VideoToolbox solves on Mac). *Needs verification* against a real
+  Apple-Silicon device — no Mac hardware was available for this research.
+- **Alternative:** the mpv-recommended **render API** (Metal/OpenGL) avoids
+  foreign-window embedding entirely but is a materially different
+  integration from the Windows code (no `wid`, no sibling window; mpv
+  renders into a caller-supplied GL/Metal context and we drive frame
+  callbacks ourselves). It would not share the `host_window.rs` design.
+
+#### Linux
+
+- **X11:** `wid` embedding is supported. Tauri exposes `gtk_window()` and
+  `default_vbox()` on Linux, so an X11 child/foreign window is reachable.
+  The mpv docs note X11 focus-policy mismatches with modern UI toolkits as
+  a known rough edge for raw embedding.
+- **Wayland:** `wid` embedding is **not supported** by mpv (above). On a
+  Wayland session the only viable path is the **render API** (mpv renders
+  into a surface/subsurface or an offscreen FBO the app composites). This
+  is a substantially larger build than the Windows port and shares little
+  with the existing code.
+- **Fragmentation:** X11-vs-Wayland is a per-session split (same distro can
+  run either), GPU drivers vary (Mesa/NVIDIA), and Tauri's own Linux story
+  is the least mature of the three (webview is webkit2gtk, child-webview
+  embedding is "X11 only" per wry). Net: Linux is the highest-effort,
+  highest-variance target.
+
+#### libmpv distribution & licensing (LGPL)
+
+- libmpv is **LGPL** (an LGPL-configured build; some prebuilt binaries are
+  GPL — e.g. lachs0r/lachs0r-style builds — and must be avoided to keep
+  dynamic-linking rights). *Needs verification* of the exact LGPL version
+  for any specific binary we ship.
+- **Dynamic linking** (the current Windows model: ship `libmpv-2.dll`
+  beside the exe) is the LGPL-clean, low-friction path and the same model
+  ports to macOS (ship `libmpv.dylib` inside the `.app`, fix install names)
+  and Linux (bundle `libmpv.so` in the AppImage; or declare a `.deb`
+  dependency on the distro's `libmpv` package).
+- **macOS sourcing:** Homebrew can build `libmpv.*.dylib` + its dependency
+  chain; community projects (e.g. MPVKit, karelrooted/libmpv) publish
+  Apple-platform builds. *Needs verification* of which produces an
+  LGPL-clean, codesign-able, notarizable dylib set.
+- **Linux sourcing:** AppImage bundles `libmpv.so` (portable, large); `.deb`
+  can instead depend on the distro `libmpv` package (smaller, but
+  version-fragile). Static linking is possible but complicates LGPL
+  compliance (must provide relink materials) — prefer dynamic.
+
+#### CI cost (GitHub-hosted runners)
+
+- Multipliers: **Linux 1×, Windows 2×, macOS 10×** of base per-minute cost.
+  *Needs verification* of current absolute rates — public figures cited
+  during this research (~$0.008/min Linux, ~$0.016 Windows, ~$0.08 macOS,
+  with a price cut on 2026-01-01) should be re-checked against GitHub's
+  billing docs before budgeting.
+- `release.yml` **already declares** the macOS (aarch64 + x86_64) and Linux
+  matrix legs — they build the WebView app today but have **no libmpv
+  install/bundle steps** (only the Windows leg fetches libmpv and generates
+  `mpv.lib`). Enabling either platform means adding per-OS libmpv
+  provisioning steps mirroring the existing Windows block, plus macOS
+  codesigning/notarization of the bundled dylib.
+- macOS is the cost driver (10× + two arch legs); Linux is nearly free by
+  comparison.
+
+#### Recommendation (full rationale in the ADR)
+
+- **macOS — DEFER (revisit when Mac hardware + demand exist).** Technically
+  the most viable port (`wid`/NSView mirrors the Windows design) but needs
+  real Apple-Silicon hardware to verify VideoToolbox + layer compositing,
+  carries 10× CI cost, and adds codesign/notarization work.
+- **Linux — NO-GO for the Windows-style port; DEFER any native player.**
+  Wayland (the modern default) has no `wid` embedding, forcing a
+  render-API rewrite that shares little with the shipped code; X11-only
+  support would strand Wayland users. Cheapest CI, highest engineering
+  variance.
+- **Windows remains the only supported native-player target** until the
+  above blockers clear. The HEVC-10bit motivation is Windows/WebView2
+  specific; macOS Safari/WebKit and many Linux WebKitGTK builds already
+  decode HEVC via system codecs, *needs verification* per platform — which
+  weakens the urgency of porting at all.
 
 ### ⬜ Phase 6 — Release/CI for bundled libmpv
 Tracked as epic `prexu-2zo` with steps 6.1–6.4. Without this, Phase 2–4
