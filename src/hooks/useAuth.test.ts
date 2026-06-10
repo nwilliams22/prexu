@@ -22,6 +22,24 @@ vi.mock("../services/plex-api", () => ({
   validateToken: vi.fn(),
   getPlexUser: vi.fn(),
   onAuthInvalid: vi.fn().mockReturnValue(() => {}),
+  discoverServers: vi.fn().mockResolvedValue([]),
+}));
+
+// Mock server-reachability so background probe doesn't touch Tauri in tests
+vi.mock("../services/server-reachability", () => ({
+  probeServerReachability: vi.fn().mockResolvedValue(true),
+  resolveServerFromDiscovery: vi.fn().mockReturnValue(null),
+  logServerResolve: vi.fn(),
+}));
+
+// Mock logger to avoid Tauri IPC calls in test environment
+vi.mock("../services/logger", () => ({
+  logger: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
 }));
 
 import * as storage from "../services/storage";

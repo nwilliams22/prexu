@@ -61,6 +61,60 @@ function ServerRoute({ children }: { children: React.ReactNode }) {
  *  walking back through every auto-advanced episode in history. */
 export const LAST_NON_PLAYER_ROUTE_KEY = "prexu.lastNonPlayerRoute";
 
+function ServerUnreachableBanner() {
+  const { serverUnreachable, changeServer } = useAuth();
+
+  if (!serverUnreachable) return null;
+
+  return (
+    <div style={bannerStyles.banner} role="alert" aria-live="assertive">
+      <span style={bannerStyles.message}>
+        Server unreachable — could not connect to your Plex server.
+      </span>
+      <button
+        style={bannerStyles.button}
+        onClick={() => void changeServer()}
+      >
+        Change Server
+      </button>
+    </div>
+  );
+}
+
+const bannerStyles: Record<string, React.CSSProperties> = {
+  banner: {
+    position: "fixed",
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 2000,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "1rem",
+    padding: "0.75rem 1.5rem",
+    background: "var(--error, #c0392b)",
+    color: "#fff",
+    fontSize: "0.9rem",
+    fontWeight: 500,
+  },
+  message: {
+    flex: 1,
+    textAlign: "center" as const,
+  },
+  button: {
+    background: "rgba(255,255,255,0.2)",
+    color: "#fff",
+    fontWeight: 600,
+    padding: "0.4rem 1rem",
+    borderRadius: "6px",
+    fontSize: "0.85rem",
+    border: "1px solid rgba(255,255,255,0.4)",
+    flexShrink: 0,
+    cursor: "pointer",
+  },
+};
+
 function AppRoutes() {
   const { isLoading, isAuthenticated, serverSelected, server } = useAuth();
   const { installing: updaterInstalling, downloadProgress: updaterProgress } = useAutoUpdate();
@@ -176,6 +230,7 @@ function AppRoutes() {
   return (
     <>
       <SplashScreen ready={appReady} updating={updaterInstalling} updateProgress={updaterProgress} />
+      <ServerUnreachableBanner />
       <Suspense fallback={<LoadingScreen />}>
         {isLoading ? null : <Routes>
         {/* Unauthenticated */}

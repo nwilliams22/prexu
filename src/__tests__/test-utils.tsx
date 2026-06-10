@@ -23,6 +23,7 @@ export function createMockAuth(
     isLoading: false,
     isAuthenticated: true,
     serverSelected: true,
+    serverUnreachable: false,
     authToken: "test-auth-token",
     server: createServerData(),
     activeUser: createActiveUser({ isAdmin: true }),
