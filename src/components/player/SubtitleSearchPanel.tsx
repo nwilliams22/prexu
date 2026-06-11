@@ -14,6 +14,8 @@ interface SubtitleSearchPanelProps {
   selectedSubtitleId: number | null;
   onSubtitleDownloaded: () => void;
   onClose: () => void;
+  /** "side" — right-anchored overlay (player); "modal" — fills a centered dialog container (detail pages) */
+  variant?: "side" | "modal";
 }
 
 type Tab = "embedded" | "search";
@@ -27,6 +29,7 @@ export default function SubtitleSearchPanel({
   selectedSubtitleId,
   onSubtitleDownloaded,
   onClose,
+  variant = "side",
 }: SubtitleSearchPanelProps) {
   const [activeTab, setActiveTab] = useState<Tab>("embedded");
   const panelRef = useRef<HTMLDivElement>(null);
@@ -43,6 +46,7 @@ export default function SubtitleSearchPanel({
   const [searchError, setSearchError] = useState<string | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [downloadSuccess, setDownloadSuccess] = useState<string | null>(null);
+  const [hasSearched, setHasSearched] = useState(false);
 
   // Close on Escape
   useEffect(() => {
@@ -67,6 +71,7 @@ export default function SubtitleSearchPanel({
     try {
       const results = await searchSubtitles(serverUri, serverToken, ratingKey, searchLang);
       setSearchResults(results);
+      setHasSearched(true);
     } catch (err) {
       setSearchError(err instanceof Error ? err.message : "Search failed");
     } finally {
@@ -90,8 +95,13 @@ export default function SubtitleSearchPanel({
 
   return (
     <>
-      <div style={styles.backdrop} onClick={onClose} />
-      <div ref={panelRef} style={styles.panel} role="dialog" aria-label="Subtitle search">
+      {variant === "side" && <div style={styles.backdrop} onClick={onClose} />}
+      <div
+        ref={panelRef}
+        style={variant === "modal" ? styles.panelModal : styles.panel}
+        role="dialog"
+        aria-label="Subtitle search"
+      >
         <div style={styles.header}>
           <h3 style={styles.title}>Subtitles</h3>
           <button onClick={onClose} style={styles.closeButton} aria-label="Close">
@@ -253,7 +263,9 @@ export default function SubtitleSearchPanel({
                 ))}
                 {searchResults.length === 0 && !isSearching && !searchError && (
                   <div style={styles.emptyState}>
-                    Select a language and click Search to find subtitles
+                    {hasSearched
+                      ? "No subtitles found for this language"
+                      : "Select a language and click Search to find subtitles"}
                   </div>
                 )}
                 {isSearching && (
@@ -288,6 +300,12 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     animation: "slideLeft 0.2s ease-out",
+  },
+  panelModal: {
+    display: "flex",
+    flexDirection: "column",
+    maxHeight: "80vh",
+    minHeight: "320px",
   },
   header: {
     display: "flex",
@@ -328,7 +346,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   tabActive: {
     color: "var(--accent)",
-    borderBottomColor: "var(--accent)",
+    borderBottom: "2px solid var(--accent)",
   },
   content: {
     flex: 1,

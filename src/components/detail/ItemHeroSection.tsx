@@ -6,6 +6,8 @@ import WatchTogetherButton from "../WatchTogetherButton";
 import WatchedToggleButton from "../WatchedToggleButton";
 import DownloadButton from "./DownloadButton";
 import SubtitleSearchPanel from "../player/SubtitleSearchPanel";
+import { setSelectedSubtitleStream } from "../../services/subtitle-search";
+import { logger } from "../../services/logger";
 import { formatResumeTime, decodeHtmlEntities } from "../../utils/media-helpers";
 import { detailStyles } from "../../utils/detail-styles";
 import {
@@ -65,6 +67,28 @@ export default function ItemHeroSection({
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
   const [showSubtitleSearch, setShowSubtitleSearch] = useState(false);
+
+  /** Persist the chosen subtitle track as the part's default on the server,
+   *  then refetch so Stream.selected reflects the change. */
+  const handleSelectSubtitleTrack = async (
+    partId: number | undefined,
+    streamId: number | null,
+  ) => {
+    if (!serverUri || !serverToken || partId === undefined) {
+      logger.warn("api", "subtitle select skipped — missing server or partId", { partId });
+      return;
+    }
+    try {
+      await setSelectedSubtitleStream(serverUri, serverToken, partId, streamId);
+      refreshItem();
+    } catch (err) {
+      logger.error("api", "subtitle select failed", {
+        partId,
+        streamId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
 
   const formatDuration = (ms: number): string => {
     const mins = Math.round(ms / 60000);
@@ -293,12 +317,13 @@ export default function ItemHeroSection({
               <div style={styles.subtitlePanelOverlay} onClick={() => setShowSubtitleSearch(false)}>
                 <div style={styles.subtitlePanelContainer} onClick={(e) => e.stopPropagation()}>
                   <SubtitleSearchPanel
+                    variant="modal"
                     serverUri={serverUri}
                     serverToken={serverToken}
                     ratingKey={movie.ratingKey}
                     subtitleTracks={movie.Media?.[0]?.Part?.[0]?.Stream?.filter((s) => s.streamType === 3) ?? []}
-                    onSelectTrack={() => {}}
-                    selectedSubtitleId={null}
+                    onSelectTrack={(id) => handleSelectSubtitleTrack(movie.Media?.[0]?.Part?.[0]?.id, id)}
+                    selectedSubtitleId={movie.Media?.[0]?.Part?.[0]?.Stream?.find((s) => s.streamType === 3 && s.selected)?.id ?? null}
                     onSubtitleDownloaded={() => {
                       setShowSubtitleSearch(false);
                       refreshItem();
@@ -691,12 +716,13 @@ export default function ItemHeroSection({
               <div style={styles.subtitlePanelOverlay} onClick={() => setShowSubtitleSearch(false)}>
                 <div style={styles.subtitlePanelContainer} onClick={(e) => e.stopPropagation()}>
                   <SubtitleSearchPanel
+                    variant="modal"
                     serverUri={serverUri}
                     serverToken={serverToken}
                     ratingKey={ep.ratingKey}
                     subtitleTracks={ep.Media?.[0]?.Part?.[0]?.Stream?.filter((s) => s.streamType === 3) ?? []}
-                    onSelectTrack={() => {}}
-                    selectedSubtitleId={null}
+                    onSelectTrack={(id) => handleSelectSubtitleTrack(ep.Media?.[0]?.Part?.[0]?.id, id)}
+                    selectedSubtitleId={ep.Media?.[0]?.Part?.[0]?.Stream?.find((s) => s.streamType === 3 && s.selected)?.id ?? null}
                     onSubtitleDownloaded={() => {
                       setShowSubtitleSearch(false);
                       refreshItem();
