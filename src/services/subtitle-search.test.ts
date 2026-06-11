@@ -38,6 +38,7 @@ describe("searchSubtitles", () => {
             codec: "srt",
             providerTitle: "OpenSubtitles",
             score: 92,
+            title: "Movie.2026.1080p.WEBRip.srt",
             displayTitle: "English (SRT)",
             language: "English",
             languageCode: "en",
@@ -63,20 +64,21 @@ describe("searchSubtitles", () => {
     expect(results[0]).toEqual({
       id: "101",
       key: "/library/streams/101",
-      fileName: "English (SRT)",
+      fileName: "Movie.2026.1080p.WEBRip.srt",
       language: "English",
       format: "srt",
       hearingImpaired: true,
       matchConfidence: 0.92,
       provider: "OpenSubtitles",
     });
-    // Fallbacks: title for fileName, srt format, score absent → 0 confidence
+    // title (source filename) preferred for fileName; srt fallback format;
+    // score absent → null confidence so the UI hides the match percentage
     expect(results[1]).toMatchObject({
       id: "102",
       fileName: "fallback-title.srt",
       format: "srt",
       hearingImpaired: false,
-      matchConfidence: 0,
+      matchConfidence: null,
       provider: "unknown",
     });
   });
@@ -105,6 +107,22 @@ describe("searchSubtitles", () => {
       SERVER,
       TOKEN,
       "/library/metadata/1/subtitles?language=pt-BR",
+    );
+  });
+
+  it("maps ISO 639-2 codes to 639-1 (Plex agent 500s on three-letter codes)", async () => {
+    mockFetchJson.mockResolvedValue({ MediaContainer: { size: 0 } });
+    await searchSubtitles(SERVER, TOKEN, "1", "deu");
+    expect(mockFetchJson).toHaveBeenCalledWith(
+      SERVER,
+      TOKEN,
+      "/library/metadata/1/subtitles?language=de",
+    );
+    await searchSubtitles(SERVER, TOKEN, "1", "eng");
+    expect(mockFetchJson).toHaveBeenLastCalledWith(
+      SERVER,
+      TOKEN,
+      "/library/metadata/1/subtitles?language=en",
     );
   });
 });

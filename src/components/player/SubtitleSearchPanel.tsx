@@ -239,9 +239,11 @@ export default function SubtitleSearchPanel({
                     <div style={styles.resultInfo}>
                       <span style={styles.trackTitle}>{sub.fileName}</span>
                       <span style={styles.trackMeta}>
-                        {sub.format.toUpperCase()}
+                        {sub.language}
+                        {" \u00b7 "}{sub.format.toUpperCase()}
                         {sub.hearingImpaired && " \u00b7 HI"}
-                        {" \u00b7 "}{Math.round(sub.matchConfidence * 100)}% match
+                        {sub.matchConfidence !== null &&
+                          ` \u00b7 ${Math.round(sub.matchConfidence * 100)}% match`}
                         {" \u00b7 "}{sub.provider}
                       </span>
                     </div>

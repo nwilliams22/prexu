@@ -68,9 +68,26 @@ export default function ItemHeroSection({
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
   const [showSubtitleSearch, setShowSubtitleSearch] = useState(false);
+  // Optimistic selection while the subtitle modal is open. refreshItem()
+  // remounts the whole detail page (setItem(null)), which would close the
+  // modal — so selection is tracked locally and the page refreshes only
+  // when the modal closes.
+  const [subtitleOverride, setSubtitleOverride] = useState<
+    number | null | undefined
+  >(undefined);
 
-  /** Persist the chosen subtitle track as the part's default on the server,
-   *  then refetch so Stream.selected reflects the change. */
+  const openSubtitleSearch = () => {
+    setSubtitleOverride(undefined);
+    setShowSubtitleSearch(true);
+  };
+
+  const closeSubtitleSearch = () => {
+    setShowSubtitleSearch(false);
+    setSubtitleOverride(undefined);
+    refreshItem();
+  };
+
+  /** Persist the chosen subtitle track as the part's default on the server. */
   const handleSelectSubtitleTrack = async (
     partId: number | undefined,
     streamId: number | null,
@@ -79,10 +96,11 @@ export default function ItemHeroSection({
       logger.warn("api", "subtitle select skipped — missing server or partId", { partId });
       return;
     }
+    setSubtitleOverride(streamId);
     try {
       await setSelectedSubtitleStream(serverUri, serverToken, partId, streamId);
-      refreshItem();
     } catch (err) {
+      setSubtitleOverride(undefined);
       logger.error("api", "subtitle select failed", {
         partId,
         streamId,
@@ -90,6 +108,13 @@ export default function ItemHeroSection({
       });
     }
   };
+
+  const resolveSelectedSubtitleId = (
+    tracks: { id: number; selected?: boolean }[],
+  ): number | null =>
+    subtitleOverride !== undefined
+      ? subtitleOverride
+      : tracks.find((t) => t.selected)?.id ?? null;
 
   const formatDuration = (ms: number): string => {
     const mins = Math.round(ms / 60000);
@@ -304,7 +329,7 @@ export default function ItemHeroSection({
             )}
             {serverUri && serverToken && (
               <button
-                onClick={() => setShowSubtitleSearch(true)}
+                onClick={openSubtitleSearch}
                 style={styles.subtitleSearchButton}
               >
                 <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
@@ -315,7 +340,7 @@ export default function ItemHeroSection({
               </button>
             )}
             {showSubtitleSearch && serverUri && serverToken && createPortal(
-              <div style={styles.subtitlePanelOverlay} onClick={() => setShowSubtitleSearch(false)}>
+              <div style={styles.subtitlePanelOverlay} onClick={closeSubtitleSearch}>
                 <div style={styles.subtitlePanelContainer} onClick={(e) => e.stopPropagation()}>
                   <SubtitleSearchPanel
                     variant="modal"
@@ -324,12 +349,9 @@ export default function ItemHeroSection({
                     ratingKey={movie.ratingKey}
                     subtitleTracks={movie.Media?.[0]?.Part?.[0]?.Stream?.filter((s) => s.streamType === 3) ?? []}
                     onSelectTrack={(id) => handleSelectSubtitleTrack(movie.Media?.[0]?.Part?.[0]?.id, id)}
-                    selectedSubtitleId={movie.Media?.[0]?.Part?.[0]?.Stream?.find((s) => s.streamType === 3 && s.selected)?.id ?? null}
-                    onSubtitleDownloaded={() => {
-                      setShowSubtitleSearch(false);
-                      refreshItem();
-                    }}
-                    onClose={() => setShowSubtitleSearch(false)}
+                    selectedSubtitleId={resolveSelectedSubtitleId(movie.Media?.[0]?.Part?.[0]?.Stream?.filter((s) => s.streamType === 3) ?? [])}
+                    onSubtitleDownloaded={() => {}}
+                    onClose={closeSubtitleSearch}
                   />
                 </div>
               </div>,
@@ -704,7 +726,7 @@ export default function ItemHeroSection({
             )}
             {serverUri && serverToken && (
               <button
-                onClick={() => setShowSubtitleSearch(true)}
+                onClick={openSubtitleSearch}
                 style={styles.subtitleSearchButton}
               >
                 <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
@@ -715,7 +737,7 @@ export default function ItemHeroSection({
               </button>
             )}
             {showSubtitleSearch && serverUri && serverToken && createPortal(
-              <div style={styles.subtitlePanelOverlay} onClick={() => setShowSubtitleSearch(false)}>
+              <div style={styles.subtitlePanelOverlay} onClick={closeSubtitleSearch}>
                 <div style={styles.subtitlePanelContainer} onClick={(e) => e.stopPropagation()}>
                   <SubtitleSearchPanel
                     variant="modal"
@@ -724,12 +746,9 @@ export default function ItemHeroSection({
                     ratingKey={ep.ratingKey}
                     subtitleTracks={ep.Media?.[0]?.Part?.[0]?.Stream?.filter((s) => s.streamType === 3) ?? []}
                     onSelectTrack={(id) => handleSelectSubtitleTrack(ep.Media?.[0]?.Part?.[0]?.id, id)}
-                    selectedSubtitleId={ep.Media?.[0]?.Part?.[0]?.Stream?.find((s) => s.streamType === 3 && s.selected)?.id ?? null}
-                    onSubtitleDownloaded={() => {
-                      setShowSubtitleSearch(false);
-                      refreshItem();
-                    }}
-                    onClose={() => setShowSubtitleSearch(false)}
+                    selectedSubtitleId={resolveSelectedSubtitleId(ep.Media?.[0]?.Part?.[0]?.Stream?.filter((s) => s.streamType === 3) ?? [])}
+                    onSubtitleDownloaded={() => {}}
+                    onClose={closeSubtitleSearch}
                   />
                 </div>
               </div>,

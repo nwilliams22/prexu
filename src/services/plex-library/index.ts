@@ -28,6 +28,7 @@ export { getFilterOptions } from "./filter";
 export {
   getItemMetadata,
   getItemChildren,
+  getAllShowEpisodes,
 } from "./detail";
 export { getNextEpisode, getPreviousEpisode } from "./episodes";
 export { getWatchHistory } from "./history";

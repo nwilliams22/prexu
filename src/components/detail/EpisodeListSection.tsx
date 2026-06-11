@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate, type NavigateFunction } from "react-router-dom";
 import { useBreakpoint, isMobile } from "../../hooks/useBreakpoint";
 import { usePlayAction } from "../../hooks/usePlayAction";
+import { useMediaContextMenu } from "../../hooks/useMediaContextMenu";
 import { decodeHtmlEntities } from "../../utils/media-helpers";
 import { logger } from "../../services/logger";
 import type { PlexEpisode } from "../../types/library";
@@ -11,6 +12,8 @@ interface EpisodeListSectionProps {
   seasonFading: boolean;
   episodeThumbUrl: (path: string) => string;
   formatDuration: (ms: number) => string;
+  /** Refetch after context-menu actions (watched toggle, fix match) */
+  onRefresh?: () => void;
 }
 
 export default function EpisodeListSection({
@@ -18,11 +21,13 @@ export default function EpisodeListSection({
   seasonFading,
   episodeThumbUrl,
   formatDuration,
+  onRefresh,
 }: EpisodeListSectionProps) {
   const navigate = useNavigate();
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
   const { getPlayHandler, playOverlay } = usePlayAction();
+  const { openContextMenu, overlays } = useMediaContextMenu({ onRefresh });
 
   return (
     <>
@@ -54,11 +59,16 @@ export default function EpisodeListSection({
               formatDuration={formatDuration}
               navigate={navigate}
               getPlayHandler={getPlayHandler}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                openContextMenu(e, ep);
+              }}
             />
           ))}
         </div>
       </div>
       {playOverlay}
+      {overlays}
     </>
   );
 }
@@ -70,6 +80,7 @@ interface EpisodeRowProps {
   formatDuration: (ms: number) => string;
   navigate: NavigateFunction;
   getPlayHandler: ReturnType<typeof usePlayAction>["getPlayHandler"];
+  onContextMenu: (e: React.MouseEvent) => void;
 }
 
 function EpisodeRow({
@@ -79,6 +90,7 @@ function EpisodeRow({
   formatDuration,
   navigate,
   getPlayHandler,
+  onContextMenu,
 }: EpisodeRowProps) {
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -119,6 +131,7 @@ function EpisodeRow({
 
   return (
     <div
+      onContextMenu={onContextMenu}
       style={{
         ...styles.episodeRow,
         ...(mobile ? { flexDirection: "column" as const } : {}),

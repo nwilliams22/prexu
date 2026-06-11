@@ -35,6 +35,18 @@ interface PlexSubtitleResponse {
 }
 
 /**
+ * The Plex subtitle agent only accepts ISO 639-1 two-letter codes; the
+ * three-letter 639-2 codes used elsewhere in the app (embedded stream
+ * languageCode) make it return HTTP 500.
+ */
+const ISO_639_2_TO_1: Record<string, string> = {
+  eng: "en", spa: "es", fra: "fr", deu: "de", ita: "it",
+  por: "pt", rus: "ru", jpn: "ja", kor: "ko", zho: "zh",
+  ara: "ar", hin: "hi", nld: "nl", pol: "pl", swe: "sv",
+  nor: "no", dan: "da", fin: "fi", tur: "tr",
+};
+
+/**
  * Search for subtitles via the Plex server's subtitle agent.
  * Uses the endpoint: GET /library/metadata/{ratingKey}/subtitles?language={lang}
  */
@@ -44,11 +56,12 @@ export async function searchSubtitles(
   ratingKey: string,
   language: string
 ): Promise<ExternalSubtitle[]> {
-  logger.debug("api", "searchSubtitles", { ratingKey, language });
+  const lang = ISO_639_2_TO_1[language] ?? language;
+  logger.debug("api", "searchSubtitles", { ratingKey, language: lang });
   const data = await fetchJson<PlexSubtitleResponse>(
     serverUri,
     serverToken,
-    `/library/metadata/${ratingKey}/subtitles?language=${encodeURIComponent(language)}`
+    `/library/metadata/${ratingKey}/subtitles?language=${encodeURIComponent(lang)}`
   );
 
   const results = data.MediaContainer.Stream ?? [];
@@ -57,12 +70,14 @@ export async function searchSubtitles(
   return results.map((r) => ({
     id: String(r.id),
     key: r.key,
-    fileName: r.displayTitle ?? r.title ?? `Subtitle (${r.languageCode ?? language})`,
+    // `title` carries the provider's source file name (what the official
+    // Plex app shows); displayTitle is just the language label.
+    fileName: r.title ?? r.displayTitle ?? `Subtitle (${r.languageCode ?? language})`,
     language: r.language ?? language,
     format: r.codec ?? "srt",
     hearingImpaired: Boolean(r.hearingImpaired),
     matchConfidence:
-      typeof r.score === "number" ? Math.min(r.score / 100, 1) : 0,
+      typeof r.score === "number" ? Math.min(r.score / 100, 1) : null,
     provider: r.providerTitle ?? "unknown",
   }));
 }

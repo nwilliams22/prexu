@@ -7,7 +7,8 @@ import { useToast } from "../hooks/useToast";
 import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
 import { useItemDetailData } from "../hooks/useItemDetailData";
 import { useSeasonSwitch } from "../hooks/useSeasonSwitch";
-import { getImageUrl, getPlaceholderUrl, getImageSrcSet } from "../services/plex-library";
+import { getImageUrl, getPlaceholderUrl, getImageSrcSet, getAllShowEpisodes } from "../services/plex-library";
+import BulkDownloadButton from "../components/detail/BulkDownloadButton";
 import HorizontalRow from "../components/HorizontalRow";
 import PosterCard from "../components/PosterCard";
 import ErrorState from "../components/ErrorState";
@@ -323,7 +324,22 @@ function ItemDetail() {
         {/* Seasons grid */}
         {seasons.length > 0 && (
           <div style={styles.section}>
-            <h2 style={styles.sectionTitle}>Seasons</h2>
+            <div style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "1rem",
+            }}>
+              <h2 style={styles.sectionTitle}>Seasons</h2>
+              <BulkDownloadButton
+                label="Download Series"
+                noun="series"
+                serverUri={server.uri}
+                getEpisodes={() =>
+                  getAllShowEpisodes<PlexEpisode>(server.uri, server.accessToken, show.ratingKey)
+                }
+              />
+            </div>
             <div style={{
               display: "flex",
               flexWrap: "wrap",
@@ -489,11 +505,24 @@ function ItemDetail() {
           </div>
         )}
 
+        <div style={{
+          display: "flex",
+          justifyContent: "flex-end",
+          padding: "0 1.5rem",
+        }}>
+          <BulkDownloadButton
+            label="Download Season"
+            noun="season"
+            serverUri={server.uri}
+            getEpisodes={async () => episodes}
+          />
+        </div>
         <EpisodeListSection
           episodes={episodes}
           seasonFading={seasonFading}
           episodeThumbUrl={episodeThumbUrl}
           formatDuration={formatDuration}
+          onRefresh={refreshItem}
         />
         {(() => {
           // Aggregate cast from episodes for season-specific cast (e.g. anthology shows)
