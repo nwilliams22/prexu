@@ -231,6 +231,35 @@ pub async fn delete_download(
     Ok(())
 }
 
+/// Reveal the downloads directory in the OS file manager.
+#[tauri::command]
+pub async fn open_downloads_dir(
+    state: tauri::State<'_, DownloadManager>,
+) -> Result<(), String> {
+    let dir = {
+        let cached = state.downloads_dir.lock().await;
+        match &*cached {
+            Some(dir) => dir.clone(),
+            None => resolve_downloads_dir().await?,
+        }
+    };
+    log::info!("[Download] open_downloads_dir: {:?}", dir);
+
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("explorer").arg(&dir).spawn();
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open").arg(&dir).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let result = std::process::Command::new("xdg-open").arg(&dir).spawn();
+
+    result
+        .map(|_| ())
+        .map_err(|e| {
+            log::error!("[Download] open_downloads_dir failed: {:?}", e);
+            format!("Failed to open downloads folder: {}", e)
+        })
+}
+
 /// Check if a local file exists for a given ratingKey and return its path.
 #[tauri::command]
 pub async fn get_local_file_path(

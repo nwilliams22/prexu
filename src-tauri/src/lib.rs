@@ -434,6 +434,7 @@ pub fn run() {
             start_proxy,
             app_ready,
             downloads::get_downloads_dir,
+            downloads::open_downloads_dir,
             downloads::download_media,
             downloads::cancel_download,
             downloads::delete_download,
