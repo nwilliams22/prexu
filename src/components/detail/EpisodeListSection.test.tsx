@@ -36,6 +36,26 @@ beforeEach(() => {
   mockOpenContextMenu.mockClear();
 });
 
+describe("EpisodeListSection header action", () => {
+  it("renders the headerAction beside the episode-count heading", () => {
+    render(
+      <MemoryRouter>
+        <EpisodeListSection
+          episodes={[EPISODE]}
+          seasonFading={false}
+          episodeThumbUrl={(p) => p}
+          formatDuration={() => "24m"}
+          headerAction={<button>Download Season</button>}
+        />
+      </MemoryRouter>,
+    );
+    const heading = screen.getByText("1 Episode");
+    const action = screen.getByRole("button", { name: "Download Season" });
+    // Same header row container
+    expect(heading.parentElement).toBe(action.parentElement);
+  });
+});
+
 describe("EpisodeListSection context menu", () => {
   it("right-clicking an episode row opens the media context menu", () => {
     render(

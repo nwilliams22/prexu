@@ -14,6 +14,8 @@ interface EpisodeListSectionProps {
   formatDuration: (ms: number) => string;
   /** Refetch after context-menu actions (watched toggle, fix match) */
   onRefresh?: () => void;
+  /** Rendered beside the "N Episodes" heading (e.g. Download Season) */
+  headerAction?: React.ReactNode;
 }
 
 export default function EpisodeListSection({
@@ -22,6 +24,7 @@ export default function EpisodeListSection({
   episodeThumbUrl,
   formatDuration,
   onRefresh,
+  headerAction,
 }: EpisodeListSectionProps) {
   const navigate = useNavigate();
   const bp = useBreakpoint();
@@ -38,9 +41,12 @@ export default function EpisodeListSection({
           transition: "opacity 0.15s ease",
         }}
       >
-        <h2 style={styles.sectionTitle}>
-          {episodes.length} Episode{episodes.length !== 1 ? "s" : ""}
-        </h2>
+        <div style={styles.sectionHeader}>
+          <h2 style={styles.sectionTitle}>
+            {episodes.length} Episode{episodes.length !== 1 ? "s" : ""}
+          </h2>
+          {headerAction}
+        </div>
 
         <div
           style={{
@@ -221,10 +227,16 @@ const styles: Record<string, React.CSSProperties> = {
     zIndex: 1,
     padding: "1rem 1.5rem",
   },
+  sectionHeader: {
+    display: "flex",
+    alignItems: "center",
+    gap: "1rem",
+    marginBottom: "0.75rem",
+  },
   sectionTitle: {
     fontSize: "1.15rem",
     fontWeight: 600,
-    marginBottom: "0.75rem",
+    margin: 0,
   },
   episodeRow: {
     display: "flex",

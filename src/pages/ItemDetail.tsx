@@ -327,10 +327,10 @@ function ItemDetail() {
             <div style={{
               display: "flex",
               alignItems: "center",
-              justifyContent: "space-between",
               gap: "1rem",
+              marginBottom: "0.75rem",
             }}>
-              <h2 style={styles.sectionTitle}>Seasons</h2>
+              <h2 style={{ ...styles.sectionTitle, margin: 0 }}>Seasons</h2>
               <BulkDownloadButton
                 label="Download Series"
                 noun="series"
@@ -505,24 +505,20 @@ function ItemDetail() {
           </div>
         )}
 
-        <div style={{
-          display: "flex",
-          justifyContent: "flex-end",
-          padding: "0 1.5rem",
-        }}>
-          <BulkDownloadButton
-            label="Download Season"
-            noun="season"
-            serverUri={server.uri}
-            getEpisodes={async () => episodes}
-          />
-        </div>
         <EpisodeListSection
           episodes={episodes}
           seasonFading={seasonFading}
           episodeThumbUrl={episodeThumbUrl}
           formatDuration={formatDuration}
           onRefresh={refreshItem}
+          headerAction={
+            <BulkDownloadButton
+              label="Download Season"
+              noun="season"
+              serverUri={server.uri}
+              getEpisodes={async () => episodes}
+            />
+          }
         />
         {(() => {
           // Aggregate cast from episodes for season-specific cast (e.g. anthology shows)
