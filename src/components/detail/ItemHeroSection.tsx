@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { useBreakpoint, isMobile } from "../../hooks/useBreakpoint";
 import { usePlayerSession } from "../../contexts/PlayerContext";
@@ -313,7 +314,7 @@ export default function ItemHeroSection({
                 Search &amp; Download Subtitles
               </button>
             )}
-            {showSubtitleSearch && serverUri && serverToken && (
+            {showSubtitleSearch && serverUri && serverToken && createPortal(
               <div style={styles.subtitlePanelOverlay} onClick={() => setShowSubtitleSearch(false)}>
                 <div style={styles.subtitlePanelContainer} onClick={(e) => e.stopPropagation()}>
                   <SubtitleSearchPanel
@@ -331,7 +332,8 @@ export default function ItemHeroSection({
                     onClose={() => setShowSubtitleSearch(false)}
                   />
                 </div>
-              </div>
+              </div>,
+              document.body,
             )}
           </div>
         </div>
@@ -712,7 +714,7 @@ export default function ItemHeroSection({
                 Search &amp; Download Subtitles
               </button>
             )}
-            {showSubtitleSearch && serverUri && serverToken && (
+            {showSubtitleSearch && serverUri && serverToken && createPortal(
               <div style={styles.subtitlePanelOverlay} onClick={() => setShowSubtitleSearch(false)}>
                 <div style={styles.subtitlePanelContainer} onClick={(e) => e.stopPropagation()}>
                   <SubtitleSearchPanel
@@ -730,7 +732,8 @@ export default function ItemHeroSection({
                     onClose={() => setShowSubtitleSearch(false)}
                   />
                 </div>
-              </div>
+              </div>,
+              document.body,
             )}
           </div>
         </div>

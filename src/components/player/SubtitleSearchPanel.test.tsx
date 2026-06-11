@@ -111,13 +111,22 @@ describe("SubtitleSearchPanel", () => {
     });
   });
 
-  it("side variant renders its own backdrop and right-anchored panel", () => {
+  it("side variant renders its own backdrop and a compact anchored panel", () => {
     const { container } = renderPanel();
     const dialog = screen.getByRole("dialog");
     expect(dialog.style.position).toBe("absolute");
+    expect(dialog.style.maxHeight).not.toBe("");
     // backdrop is the dialog's previous sibling
     expect(container.querySelectorAll("div").length).toBeGreaterThan(0);
     expect(dialog.previousElementSibling).not.toBeNull();
+  });
+
+  it("side variant opts back into pointer events (player layer is pointerEvents:none)", () => {
+    renderPanel();
+    const dialog = screen.getByRole("dialog");
+    const backdrop = dialog.previousElementSibling as HTMLElement;
+    expect(dialog.style.pointerEvents).toBe("auto");
+    expect(backdrop.style.pointerEvents).toBe("auto");
   });
 
   it("modal variant renders no backdrop and no absolute positioning", () => {
