@@ -13,9 +13,11 @@ import {
   deleteDownload as deleteDownloadService,
 } from "../services/downloads";
 import { getDownloadItems, saveDownloadItems } from "../services/storage";
+import { logger } from "../services/logger";
 import type { DownloadItem, DownloadProgressEvent } from "../types/downloads";
 
 const MAX_CONCURRENT = 2;
+const MAX_AUTO_RETRIES = 1;
 
 export interface DownloadsContextValue {
   downloads: DownloadItem[];
@@ -49,6 +51,7 @@ export function useDownloadsState(
 ): DownloadsContextValue {
   const [downloads, setDownloads] = useState<DownloadItem[]>([]);
   const processingRef = useRef(new Set<string>());
+  const autoRetriesRef = useRef(new Map<string, number>());
   const serverRef = useRef(server);
   serverRef.current = server;
 
@@ -65,13 +68,16 @@ export function useDownloadsState(
     });
   }, []);
 
-  // Persist downloads to storage on change
-  const downloadsRef = useRef(downloads);
-  downloadsRef.current = downloads;
+  // Persist downloads to storage when membership or status changes.
+  // Progress events mutate bytesDownloaded many times per second — writing
+  // storage on every tick is wasted I/O, and interrupted "downloading" items
+  // are reset on restart anyway, so byte counts only matter at completion.
+  const persistSigRef = useRef("");
   useEffect(() => {
-    if (downloads.length > 0 || downloadsRef.current.length > 0) {
-      saveDownloadItems(downloads);
-    }
+    const sig = downloads.map((d) => `${d.ratingKey}:${d.status}`).join("|");
+    if (sig === persistSigRef.current) return;
+    persistSigRef.current = sig;
+    saveDownloadItems(downloads);
   }, [downloads]);
 
   // Listen for Tauri download-progress events
@@ -110,6 +116,9 @@ export function useDownloadsState(
           ) {
             processingRef.current.delete(ratingKey);
           }
+          if (status === "complete") {
+            autoRetriesRef.current.delete(ratingKey);
+          }
         },
       );
     })();
@@ -145,6 +154,10 @@ export function useDownloadsState(
         ),
       );
 
+      logger.info("downloads", "starting download", {
+        ratingKey: item.ratingKey,
+        fileName: item.fileName,
+      });
       startDownload(
         item.serverUri,
         server.accessToken,
@@ -153,18 +166,47 @@ export function useDownloadsState(
         item.fileName,
         item.fileSize,
       ).catch((err) => {
+        processingRef.current.delete(item.ratingKey);
+        const message = err instanceof Error ? err.message : String(err);
+        const attempts = autoRetriesRef.current.get(item.ratingKey) ?? 0;
+        // Transient stream errors (connection reset, bad response body) are
+        // common mid-download; requeue once before surfacing a failure.
+        if (attempts < MAX_AUTO_RETRIES) {
+          autoRetriesRef.current.set(item.ratingKey, attempts + 1);
+          logger.warn("downloads", "download failed — auto-retrying", {
+            ratingKey: item.ratingKey,
+            attempt: attempts + 1,
+            error: message,
+          });
+          setDownloads((prev) =>
+            prev.map((d) =>
+              d.ratingKey === item.ratingKey
+                ? {
+                    ...d,
+                    status: "queued" as const,
+                    bytesDownloaded: 0,
+                    errorMessage: undefined,
+                  }
+                : d,
+            ),
+          );
+          return;
+        }
+        logger.error("downloads", "download failed", {
+          ratingKey: item.ratingKey,
+          error: message,
+        });
         setDownloads((prev) =>
           prev.map((d) =>
             d.ratingKey === item.ratingKey
               ? {
                   ...d,
                   status: "error" as const,
-                  errorMessage: err instanceof Error ? err.message : String(err),
+                  errorMessage: message,
                 }
               : d,
           ),
         );
-        processingRef.current.delete(item.ratingKey);
       });
     }
   }, [downloads, server]);
@@ -193,6 +235,7 @@ export function useDownloadsState(
   );
 
   const queueDownload = useCallback((item: DownloadItem) => {
+    autoRetriesRef.current.delete(item.ratingKey);
     setDownloads((prev) => {
       // Don't add duplicates
       if (prev.some((d) => d.ratingKey === item.ratingKey)) return prev;
@@ -219,6 +262,7 @@ export function useDownloadsState(
   }, []);
 
   const retryDownload = useCallback((ratingKey: string) => {
+    autoRetriesRef.current.delete(ratingKey);
     setDownloads((prev) =>
       prev.map((d) =>
         d.ratingKey === ratingKey
