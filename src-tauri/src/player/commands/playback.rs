@@ -6,6 +6,16 @@ use tauri::{AppHandle, State};
 
 use crate::player::PlayerState;
 
+/// Quote one argument for libmpv2's `command()`. The crate joins args with
+/// spaces into a single flat command string (mpv_command_string), so a file
+/// path containing spaces gets split into bogus extra arguments and mpv
+/// rejects the command with MPV_ERROR_INVALID_PARAMETER (-4). mpv's flat
+/// syntax accepts double-quoted arguments with JSON/C-style escaping.
+fn mpv_quote(arg: &str) -> String {
+    let escaped = arg.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{}\"", escaped)
+}
+
 #[tauri::command]
 pub async fn player_load_url(
     url: String,
@@ -36,7 +46,7 @@ pub async fn player_load_url(
         // mpv to that offset on load (avoids a separate seek round-trip).
         let start_secs = start_offset_ms.map(|ms| ms as f64 / 1000.0).unwrap_or(0.0);
         let opts = format!("start={}", start_secs);
-        mpv.command("loadfile", &[url.as_str(), "replace", "0", opts.as_str()])?;
+        mpv.command("loadfile", &[mpv_quote(&url).as_str(), "replace", "0", opts.as_str()])?;
         // Belt-and-braces unpause (prexu-7fe.1). stop_playback ALSO sets
         // pause=false before its `stop` command, but in retest logs the
         // first post-EOF handoff sometimes left mpv paused — the pre-stop
@@ -130,7 +140,7 @@ pub async fn player_load_external_sub(
 ) -> Result<(), String> {
     let preview = &url[..url.len().min(80)];
     log::info!("[player:cmd] load_external_sub url={}", preview);
-    state.with_mpv(|mpv| mpv.command("sub-add", &[url.as_str(), "select"]))
+    state.with_mpv(|mpv| mpv.command("sub-add", &[mpv_quote(&url).as_str(), "select"]))
 }
 
 #[tauri::command]
@@ -247,4 +257,30 @@ pub async fn player_stop(state: State<'_, PlayerState>) -> Result<(), String> {
 pub async fn player_stop() -> Result<(), String> {
     log::warn!("[player:cmd] stop called on non-Windows platform");
     Err("native player not supported on this platform".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mpv_quote;
+
+    #[test]
+    fn quotes_paths_with_spaces() {
+        assert_eq!(
+            mpv_quote(r"C:\Videos\A Good Girls Guide S02E06.mkv"),
+            r#""C:\\Videos\\A Good Girls Guide S02E06.mkv""#
+        );
+    }
+
+    #[test]
+    fn escapes_embedded_quotes() {
+        assert_eq!(mpv_quote(r#"a"b"#), r#""a\"b""#);
+    }
+
+    #[test]
+    fn leaves_urls_intact_inside_quotes() {
+        assert_eq!(
+            mpv_quote("https://example.com/library/parts/1/file.mkv?X-Plex-Token=t"),
+            "\"https://example.com/library/parts/1/file.mkv?X-Plex-Token=t\""
+        );
+    }
 }
