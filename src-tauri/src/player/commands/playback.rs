@@ -173,6 +173,24 @@ pub struct SubStyle {
     pub shadow_enabled: bool,
 }
 
+/// libass wants a single font family name, but the frontend sends a CSS
+/// font-family list ("'Courier New', monospace") shared with the HTML5
+/// ::cue path. A list (or a quoted name) fails libass's DirectWrite lookup
+/// and silently falls back to the default font — take the first entry,
+/// strip quotes, and map the CSS generic families to fonts that actually
+/// exist on Windows.
+fn css_font_to_family(css: &str) -> String {
+    let first = css.split(',').next().unwrap_or(css).trim();
+    let name = first.trim_matches(|c| c == '\'' || c == '"').trim();
+    match name.to_ascii_lowercase().as_str() {
+        // mpv's own sub-font default — reproduces the stock look.
+        "sans-serif" => "sans-serif".to_string(),
+        "serif" => "Times New Roman".to_string(),
+        "monospace" => "Consolas".to_string(),
+        _ => name.to_string(),
+    }
+}
+
 #[tauri::command]
 pub async fn player_apply_sub_style(
     style: SubStyle,
@@ -185,8 +203,10 @@ pub async fn player_apply_sub_style(
     // percentage so 100% matches mpv's out-of-the-box appearance.
     let font_size = 55.0_f64 * (style.size / 100.0);
     let shadow_offset = if style.shadow_enabled { 2.0 } else { 0.0 };
+    let font = css_font_to_family(&style.font_family);
+    log::debug!("[player:cmd] sub-font resolved '{}' -> '{}'", style.font_family, font);
     state.with_mpv(|mpv| {
-        mpv.set_property("sub-font", style.font_family.as_str())?;
+        mpv.set_property("sub-font", font.as_str())?;
         mpv.set_property("sub-font-size", font_size)?;
         mpv.set_property("sub-color", style.text_color.as_str())?;
         mpv.set_property("sub-border-color", style.outline_color.as_str())?;
@@ -261,7 +281,28 @@ pub async fn player_stop() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::mpv_quote;
+    use super::{css_font_to_family, mpv_quote};
+
+    #[test]
+    fn takes_first_family_and_strips_quotes() {
+        assert_eq!(css_font_to_family("'Courier New', monospace"), "Courier New");
+        assert_eq!(css_font_to_family("\"Georgia\", serif"), "Georgia");
+        assert_eq!(css_font_to_family("Verdana, sans-serif"), "Verdana");
+        assert_eq!(css_font_to_family("Arial, sans-serif"), "Arial");
+    }
+
+    #[test]
+    fn maps_css_generics_to_windows_fonts() {
+        assert_eq!(css_font_to_family("sans-serif"), "sans-serif");
+        assert_eq!(css_font_to_family("serif"), "Times New Roman");
+        assert_eq!(css_font_to_family("monospace"), "Consolas");
+    }
+
+    #[test]
+    fn passes_plain_names_through() {
+        assert_eq!(css_font_to_family("Verdana"), "Verdana");
+        assert_eq!(css_font_to_family("  Segoe UI  "), "Segoe UI");
+    }
 
     #[test]
     fn quotes_paths_with_spaces() {
