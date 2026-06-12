@@ -2,9 +2,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const mockFetchJson = vi.fn();
 const mockFetch = vi.fn();
+const mockGetItemMetadata = vi.fn();
 
 vi.mock("./plex-library/base", () => ({
   fetchJson: (...args: unknown[]) => mockFetchJson(...args),
+}));
+
+vi.mock("./plex-library", () => ({
+  getItemMetadata: (...args: unknown[]) => mockGetItemMetadata(...args),
 }));
 
 vi.mock("./plex-api", () => ({
@@ -16,6 +21,7 @@ import {
   searchSubtitles,
   downloadSubtitle,
   setSelectedSubtitleStream,
+  waitForDownloadedSubtitle,
 } from "./subtitle-search";
 
 const SERVER = "https://server.example:32400";
@@ -24,6 +30,7 @@ const TOKEN = "tok";
 beforeEach(() => {
   mockFetchJson.mockReset();
   mockFetch.mockReset();
+  mockGetItemMetadata.mockReset();
 });
 
 describe("searchSubtitles", () => {
@@ -169,5 +176,88 @@ describe("setSelectedSubtitleStream", () => {
     await expect(
       setSelectedSubtitleStream(SERVER, TOKEN, 5523, 101),
     ).rejects.toThrow("Failed to set subtitle stream: 403");
+  });
+});
+
+describe("waitForDownloadedSubtitle", () => {
+  const metaWithSubs = (streams: object[]) => ({
+    ratingKey: "67632",
+    Media: [
+      {
+        id: 1,
+        Part: [{ id: 5523, key: "/library/parts/5523", Stream: streams }],
+      },
+    ],
+  });
+
+  it("returns the new stream and full track list once it appears", async () => {
+    mockGetItemMetadata.mockResolvedValue(
+      metaWithSubs([
+        { id: 7, streamType: 3, codec: "srt", displayTitle: "English" },
+        { id: 8, streamType: 3, codec: "srt", displayTitle: "Spanish", title: "Movie.spa.srt" },
+        { id: 1, streamType: 1, codec: "h264" },
+      ]),
+    );
+
+    const result = await waitForDownloadedSubtitle(SERVER, TOKEN, "67632", 5523, [7], 3, 0);
+
+    expect(result).not.toBeNull();
+    expect(result!.added.id).toBe(8);
+    expect(result!.tracks.map((t) => t.id)).toEqual([7, 8]);
+  });
+
+  it("polls until the stream appears", async () => {
+    mockGetItemMetadata
+      .mockResolvedValueOnce(metaWithSubs([{ id: 7, streamType: 3, codec: "srt", displayTitle: "English" }]))
+      .mockResolvedValueOnce(
+        metaWithSubs([
+          { id: 7, streamType: 3, codec: "srt", displayTitle: "English" },
+          { id: 8, streamType: 3, codec: "srt", displayTitle: "Spanish" },
+        ]),
+      );
+
+    const result = await waitForDownloadedSubtitle(SERVER, TOKEN, "67632", 5523, [7], 3, 0);
+
+    expect(mockGetItemMetadata).toHaveBeenCalledTimes(2);
+    expect(result!.added.id).toBe(8);
+  });
+
+  it("returns null when no new stream appears within the attempt budget", async () => {
+    mockGetItemMetadata.mockResolvedValue(
+      metaWithSubs([{ id: 7, streamType: 3, codec: "srt", displayTitle: "English" }]),
+    );
+
+    const result = await waitForDownloadedSubtitle(SERVER, TOKEN, "67632", 5523, [7], 2, 0);
+
+    expect(result).toBeNull();
+    expect(mockGetItemMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it("survives poll errors and keeps retrying", async () => {
+    mockGetItemMetadata
+      .mockRejectedValueOnce(new Error("Plex API error: 500"))
+      .mockResolvedValueOnce(
+        metaWithSubs([
+          { id: 7, streamType: 3, codec: "srt", displayTitle: "English" },
+          { id: 9, streamType: 3, codec: "srt", displayTitle: "Spanish" },
+        ]),
+      );
+
+    const result = await waitForDownloadedSubtitle(SERVER, TOKEN, "67632", 5523, [7], 3, 0);
+
+    expect(result!.added.id).toBe(9);
+  });
+
+  it("falls back to the first part when partId does not match", async () => {
+    mockGetItemMetadata.mockResolvedValue(
+      metaWithSubs([
+        { id: 7, streamType: 3, codec: "srt", displayTitle: "English" },
+        { id: 8, streamType: 3, codec: "srt", displayTitle: "Spanish" },
+      ]),
+    );
+
+    const result = await waitForDownloadedSubtitle(SERVER, TOKEN, "67632", undefined, [7], 1, 0);
+
+    expect(result!.added.id).toBe(8);
   });
 });

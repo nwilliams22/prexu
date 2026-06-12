@@ -4,9 +4,11 @@
  */
 
 import { fetchJson } from "./plex-library/base";
+import { getItemMetadata } from "./plex-library";
 import { getServerHeaders, timedFetch } from "./plex-api";
 import { logger } from "./logger";
 import type { ExternalSubtitle } from "../types/subtitles";
+import type { PlexMediaItem, PlexMovie, PlexStream } from "../types/library";
 
 /**
  * Search results come back as SubtitleStream elements (`Stream`, not `Metadata`)
@@ -104,6 +106,59 @@ export async function downloadSubtitle(
   if (!response.ok) {
     throw new Error(`Failed to download subtitle: ${response.status}`);
   }
+}
+
+export interface DownloadedSubtitleResult {
+  /** All subtitle streams of the part after the download landed. */
+  tracks: PlexStream[];
+  /** The newly added stream. */
+  added: PlexStream;
+}
+
+/**
+ * Poll item metadata until a newly downloaded subtitle stream appears.
+ * The download PUT returns before the server has fetched the file from the
+ * provider, so the new stream shows up in the part's metadata asynchronously.
+ * Returns null if it never appears within the attempt budget.
+ */
+export async function waitForDownloadedSubtitle(
+  serverUri: string,
+  serverToken: string,
+  ratingKey: string,
+  partId: number | undefined,
+  prevTrackIds: number[],
+  attempts = 6,
+  delayMs = 1000,
+): Promise<DownloadedSubtitleResult | null> {
+  const prevIds = new Set(prevTrackIds);
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const fresh = await getItemMetadata<PlexMediaItem>(serverUri, serverToken, ratingKey);
+      const media = (fresh as PlexMovie).Media?.[0];
+      const part = media?.Part?.find((p) => p.id === partId) ?? media?.Part?.[0];
+      const tracks = part?.Stream?.filter((s) => s.streamType === 3) ?? [];
+      const added = tracks.find((t) => !prevIds.has(t.id));
+      if (added) {
+        logger.info("api", "downloaded subtitle appeared in metadata", {
+          ratingKey,
+          streamId: added.id,
+          attempt,
+        });
+        return { tracks, added };
+      }
+      logger.debug("api", "downloaded subtitle not in metadata yet", { attempt });
+    } catch (err) {
+      logger.warn("api", "subtitle metadata poll failed", {
+        attempt,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    if (attempt < attempts) {
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  logger.warn("api", "downloaded subtitle never appeared in metadata", { ratingKey, partId });
+  return null;
 }
 
 /**

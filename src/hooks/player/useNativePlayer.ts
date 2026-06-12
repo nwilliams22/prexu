@@ -23,6 +23,10 @@ import {
   getSavedVolume,
   saveVolume,
 } from "../../services/plex-playback";
+import {
+  setSelectedSubtitleStream,
+  waitForDownloadedSubtitle,
+} from "../../services/subtitle-search";
 import type {
   PlexEpisode,
   PlexStream,
@@ -90,6 +94,13 @@ export function useNativePlayer(
   // Refs that don't trigger re-init
   const directPlayFailedRef = useRef(false);
   const isLocalPlaybackRef = useRef(false);
+  // Media part id of the currently playing file — needed to persist subtitle
+  // selection on the server after an on-demand download.
+  const partIdRef = useRef<number | undefined>(undefined);
+  // External default sub URL awaiting sub-add. mpv rejects sub-add before the
+  // file has loaded (MPV_ERROR_COMMAND), so the initial external subtitle is
+  // buffered here and flushed in the player://ready handler.
+  const pendingExternalSubRef = useRef<string | null>(null);
   const volumeRef = useRef(volume);
   volumeRef.current = volume;
   const isMutedRef = useRef(isMuted);
@@ -151,6 +162,19 @@ export function useNativePlayer(
           isReadyRef.current = true;
           setIsLoading(false);
           setIsBuffering(false);
+          // Flush the initial external default subtitle. sub-add only works
+          // once mpv has an active file; initPlayback buffers the URL here
+          // instead of firing it pre-load (which failed with Raw(-12)).
+          const externalSub = pendingExternalSubRef.current;
+          if (externalSub) {
+            pendingExternalSubRef.current = null;
+            logger.info("player", "ready-flush player_load_external_sub", {
+              url: externalSub.substring(0, 80),
+            });
+            invoke("player_load_external_sub", { url: externalSub }).catch((err) =>
+              logger.error("player", "ready-flush player_load_external_sub failed", String(err)),
+            );
+          }
           // Flush any sub-style change that arrived before mpv existed.
           // applySubtitleStyle stores the latest request in pendingSubStyleRef;
           // we replay it here so persisted prefs take effect on cold start.
@@ -288,6 +312,7 @@ export function useNativePlayer(
       setSubtitle(s);
 
       setChapters(prepared.part.Chapter ?? []);
+      partIdRef.current = prepared.part.id;
       setMarkers(prepared.playable.Marker ?? []);
       setItemType(prepared.item.type);
       setParentRatingKey(
@@ -309,6 +334,12 @@ export function useNativePlayer(
       // mpv handle. Volume/mute commands assume an initialised handle, so
       // they MUST come after load_url, not before.
       logger.info("player", "loading URL", { url: prepared.url.substring(0, 80), startOffsetMs: prepared.viewOffset });
+      // Buffer the external default sub BEFORE loadfile: the ready event can
+      // fire before the post-load_url code below runs (fast reloads), and
+      // the ready handler is what flushes this ref via sub-add.
+      pendingExternalSubRef.current = prepared.defaultSub?.key
+        ? `${server.uri}${prepared.defaultSub.key}?X-Plex-Token=${server.accessToken}`
+        : null;
       await invoke("player_load_url", {
         url: prepared.url,
         headers: {} as Record<string, string>,
@@ -342,10 +373,12 @@ export function useNativePlayer(
       }
       if (defaultSub) {
         if (defaultSub.key) {
-          const subUrl = `${server.uri}${defaultSub.key}?X-Plex-Token=${server.accessToken}`;
-          await invoke("player_load_external_sub", { url: subUrl }).catch((err) =>
-            logger.warn("player", "initial player_load_external_sub failed", String(err)),
-          );
+          // External default sub: handled by the ready-flush of
+          // pendingExternalSubRef (set above, before loadfile) — sub-add
+          // fails with MPV_ERROR_COMMAND before the file is loaded.
+          logger.debug("player", "external default sub deferred to ready", {
+            key: defaultSub.key,
+          });
         } else {
           const embedded = categorized.subtitles.filter((s) => !s.key);
           const sidIdx = embedded.findIndex((s) => s.id === defaultSub!.id);
@@ -562,6 +595,41 @@ export function useNativePlayer(
     initPlayback();
   }, [initPlayback]);
 
+  // After an on-demand subtitle download: poll metadata for the new stream,
+  // persist it as the part default (Plex deletes an unselected on-demand
+  // download), and sub-add it into the running mpv instance. No reload —
+  // playback continues uninterrupted.
+  const refreshSubtitlesAfterDownload = useCallback(async () => {
+    if (!server) return;
+    const prevIds = subtitleTracksRef.current.map((t) => t.id);
+    const result = await waitForDownloadedSubtitle(
+      server.uri,
+      server.accessToken,
+      ratingKey,
+      partIdRef.current,
+      prevIds,
+    );
+    if (!result) return;
+    // Sync the ref immediately — selectSubtitleTrack below resolves the
+    // stream's `key` through it before the state update lands.
+    subtitleTracksRef.current = result.tracks;
+    setSubtitleTracks(result.tracks);
+    if (partIdRef.current !== undefined) {
+      try {
+        await setSelectedSubtitleStream(
+          server.uri,
+          server.accessToken,
+          partIdRef.current,
+          result.added.id,
+        );
+      } catch (err) {
+        logger.error("player", "persist downloaded subtitle failed", String(err));
+      }
+    }
+    logger.info("player", "applying downloaded subtitle", { streamId: result.added.id });
+    selectSubtitleTrack(result.added.id);
+  }, [server, ratingKey, selectSubtitleTrack]);
+
   // ── Public dispatch methods ──────────────────────────────────────────────
 
   // Idempotent pause — invoked by usePostPlay when the overlay opens so audio
@@ -693,6 +761,7 @@ export function useNativePlayer(
       selectAudioTrack,
       selectSubtitleTrack,
       retry,
+      refreshSubtitlesAfterDownload,
       pause,
       unload,
       setFullscreen,
@@ -729,6 +798,7 @@ export function useNativePlayer(
       selectAudioTrack,
       selectSubtitleTrack,
       retry,
+      refreshSubtitlesAfterDownload,
       pause,
       unload,
       setFullscreen,

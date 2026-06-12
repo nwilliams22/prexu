@@ -29,6 +29,10 @@ import {
   getSavedVolume,
   saveVolume,
 } from "../services/plex-playback";
+import {
+  setSelectedSubtitleStream,
+  waitForDownloadedSubtitle,
+} from "../services/subtitle-search";
 import type {
   PlexChapter,
   PlexMarker,
@@ -91,6 +95,12 @@ export interface UsePlayerResult {
   selectAudioTrack: (streamId: number) => void;
   selectSubtitleTrack: (streamId: number | null) => void;
   retry: () => void;
+  /** After an on-demand subtitle download: poll metadata for the new stream,
+   *  persist it as the part default on the server (Plex deletes unselected
+   *  on-demand downloads), and start showing it without restarting playback.
+   *  Native: mpv sub-add into the running instance. HTML5: HLS rebuild at the
+   *  current position via selectSubtitleTrack. */
+  refreshSubtitlesAfterDownload: () => Promise<void>;
 
   // ── Backend dispatch methods ──────────────────────────────────────────────
   // These let consumers drive platform-specific player IPC without
@@ -183,6 +193,9 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
   const directPlayFailedRef = useRef(false);
   // Track if current playback is from a local download (for offline watch sync)
   const isLocalPlaybackRef = useRef(false);
+  // Media part id of the current file — needed to persist subtitle selection
+  // on the server after an on-demand download.
+  const partIdRef = useRef<number | undefined>(undefined);
 
   // Refs for values used in initPlayback but that shouldn't trigger re-init
   const volumeRef = useRef(volume);
@@ -224,6 +237,7 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
       setSubtitle(s);
 
       setChapters(prepared.part.Chapter ?? []);
+      partIdRef.current = prepared.part.id;
       setMarkers(prepared.playable.Marker ?? []);
       setItemType(prepared.item.type);
       setParentRatingKey(
@@ -492,6 +506,38 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
     initPlayback();
   }, [initPlayback]);
 
+  // After an on-demand subtitle download: poll metadata for the new stream,
+  // persist it as the part default (Plex deletes an unselected on-demand
+  // download), then select it. selectSubtitleTrack rebuilds the HLS session
+  // at the current position, so playback resumes where it was.
+  const refreshSubtitlesAfterDownload = useCallback(async () => {
+    if (!server) return;
+    const prevIds = streams.subtitleTracks.map((t) => t.id);
+    const result = await waitForDownloadedSubtitle(
+      server.uri,
+      server.accessToken,
+      ratingKey,
+      partIdRef.current,
+      prevIds,
+    );
+    if (!result) return;
+    streams.setSubtitleTracks(result.tracks);
+    if (partIdRef.current !== undefined) {
+      try {
+        await setSelectedSubtitleStream(
+          server.uri,
+          server.accessToken,
+          partIdRef.current,
+          result.added.id,
+        );
+      } catch (err) {
+        logger.error("player", "persist downloaded subtitle failed", String(err));
+      }
+    }
+    logger.info("player", "applying downloaded subtitle", { streamId: result.added.id });
+    await streams.selectSubtitleTrack(result.added.id);
+  }, [server, ratingKey, streams]);
+
   // ── Backend dispatch methods ──────────────────────────────────────────────
   const pause = useCallback(() => {
     videoRef.current?.pause();
@@ -587,6 +633,7 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
     selectAudioTrack: streams.selectAudioTrack,
     selectSubtitleTrack: streams.selectSubtitleTrack,
     retry,
+    refreshSubtitlesAfterDownload,
     pause,
     unload,
     setFullscreen,

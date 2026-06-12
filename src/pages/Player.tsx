@@ -675,7 +675,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
           serverUri={server?.uri}
           serverToken={server?.accessToken}
           ratingKey={ratingKey}
-          onSubtitleDownloaded={player.retry}
+          onSubtitleDownloaded={() => void player.refreshSubtitlesAfterDownload()}
           syncIndicator={
             wt.isInSession ? (
               <SyncIndicator
