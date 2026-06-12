@@ -193,8 +193,12 @@ export default function SubtitleSearchPanel({
                     role="option"
                     aria-selected={selectedSubtitleId === track.id}
                   >
-                    <span style={styles.trackTitle}>{track.displayTitle}</span>
+                    {/* External/downloaded streams carry the source file name in
+                        `title` \u2014 show it like the search tab; embedded streams
+                        only have the language displayTitle. */}
+                    <span style={styles.trackTitle}>{track.title || track.displayTitle}</span>
                     <span style={styles.trackMeta}>
+                      {track.title && track.language && `${track.language} \u00b7 `}
                       {track.codec?.toUpperCase()}
                       {track.forced && " \u00b7 Forced"}
                       {track.hearingImpaired && " \u00b7 HI"}

@@ -56,6 +56,30 @@ describe("SubtitleSearchPanel", () => {
     expect(props.onSelectTrack).toHaveBeenCalledWith(null);
   });
 
+  it("shows the source file name and language for downloaded external tracks", () => {
+    renderPanel({
+      subtitleTracks: [
+        ...TRACKS,
+        {
+          id: 99,
+          streamType: 3,
+          codec: "srt",
+          index: 1,
+          displayTitle: "Spanish",
+          title: "Movie.2026.spa.srt",
+          language: "Spanish",
+        },
+      ],
+    });
+    expect(screen.getByText("Movie.2026.spa.srt")).toBeInTheDocument();
+    expect(screen.getByText(/Spanish · SRT/)).toBeInTheDocument();
+  });
+
+  it("falls back to displayTitle for embedded tracks without a title", () => {
+    renderPanel();
+    expect(screen.getByText("Unknown")).toBeInTheDocument();
+  });
+
   it("marks the selected track via aria-selected", () => {
     renderPanel({ selectedSubtitleId: 7 });
     expect(screen.getByRole("option", { name: /Unknown/ })).toHaveAttribute(

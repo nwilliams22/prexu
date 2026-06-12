@@ -8,6 +8,7 @@ import WatchedToggleButton from "../WatchedToggleButton";
 import DownloadButton from "./DownloadButton";
 import SubtitleSearchPanel from "../player/SubtitleSearchPanel";
 import { setSelectedSubtitleStream } from "../../services/subtitle-search";
+import { getItemMetadata } from "../../services/plex-library";
 import { logger } from "../../services/logger";
 import { formatResumeTime, decodeHtmlEntities } from "../../utils/media-helpers";
 import { detailStyles } from "../../utils/detail-styles";
@@ -24,6 +25,7 @@ import type {
   PlexSeason,
   PlexEpisode,
   PlexRating,
+  PlexStream,
 } from "../../types/library";
 import {
   getResolutionBadge,
@@ -75,16 +77,78 @@ export default function ItemHeroSection({
   const [subtitleOverride, setSubtitleOverride] = useState<
     number | null | undefined
   >(undefined);
+  // Fresh subtitle streams fetched after an on-demand download. The item prop
+  // is stale until the page refetches, which only happens on modal close.
+  const [tracksOverride, setTracksOverride] = useState<PlexStream[] | null>(null);
 
   const openSubtitleSearch = () => {
     setSubtitleOverride(undefined);
+    setTracksOverride(null);
     setShowSubtitleSearch(true);
   };
 
   const closeSubtitleSearch = () => {
     setShowSubtitleSearch(false);
     setSubtitleOverride(undefined);
+    setTracksOverride(null);
     refreshItem();
+  };
+
+  const displayedSubtitleTracks = (itemTracks: PlexStream[]): PlexStream[] =>
+    tracksOverride ?? itemTracks;
+
+  /**
+   * After the server downloads an on-demand subtitle, poll metadata until the
+   * new stream appears, then select it. Selection is mandatory, not cosmetic:
+   * Plex deletes an on-demand downloaded subtitle as soon as a different
+   * stream (or None) is selected, so an unselected download silently vanishes.
+   * Plex Web applies the download immediately for the same reason.
+   */
+  const handleSubtitleDownloaded = async (
+    ratingKey: string,
+    partId: number | undefined,
+    prevTracks: PlexStream[],
+  ) => {
+    if (!serverUri || !serverToken || partId === undefined) {
+      logger.warn("api", "subtitle refresh skipped — missing server or partId", { partId });
+      return;
+    }
+    const prevIds = new Set(prevTracks.map((t) => t.id));
+    for (let attempt = 1; attempt <= 6; attempt++) {
+      try {
+        const fresh = await getItemMetadata<PlexMovie | PlexEpisode>(
+          serverUri,
+          serverToken,
+          ratingKey,
+        );
+        const part =
+          fresh.Media?.[0]?.Part?.find((p) => p.id === partId) ??
+          fresh.Media?.[0]?.Part?.[0];
+        const tracks = part?.Stream?.filter((s) => s.streamType === 3) ?? [];
+        const added = tracks.find((t) => !prevIds.has(t.id));
+        if (added) {
+          setTracksOverride(tracks);
+          setSubtitleOverride(added.id);
+          await setSelectedSubtitleStream(serverUri, serverToken, partId, added.id);
+          logger.info("api", "downloaded subtitle applied", {
+            ratingKey,
+            streamId: added.id,
+          });
+          return;
+        }
+        logger.debug("api", "downloaded subtitle not in metadata yet", { attempt });
+      } catch (err) {
+        logger.warn("api", "subtitle refresh poll failed", {
+          attempt,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    logger.warn("api", "downloaded subtitle never appeared in metadata", {
+      ratingKey,
+      partId,
+    });
   };
 
   /** Persist the chosen subtitle track as the part's default on the server. */
@@ -347,10 +411,10 @@ export default function ItemHeroSection({
                     serverUri={serverUri}
                     serverToken={serverToken}
                     ratingKey={movie.ratingKey}
-                    subtitleTracks={movie.Media?.[0]?.Part?.[0]?.Stream?.filter((s) => s.streamType === 3) ?? []}
+                    subtitleTracks={displayedSubtitleTracks(movie.Media?.[0]?.Part?.[0]?.Stream?.filter((s) => s.streamType === 3) ?? [])}
                     onSelectTrack={(id) => handleSelectSubtitleTrack(movie.Media?.[0]?.Part?.[0]?.id, id)}
-                    selectedSubtitleId={resolveSelectedSubtitleId(movie.Media?.[0]?.Part?.[0]?.Stream?.filter((s) => s.streamType === 3) ?? [])}
-                    onSubtitleDownloaded={() => {}}
+                    selectedSubtitleId={resolveSelectedSubtitleId(displayedSubtitleTracks(movie.Media?.[0]?.Part?.[0]?.Stream?.filter((s) => s.streamType === 3) ?? []))}
+                    onSubtitleDownloaded={() => handleSubtitleDownloaded(movie.ratingKey, movie.Media?.[0]?.Part?.[0]?.id, displayedSubtitleTracks(movie.Media?.[0]?.Part?.[0]?.Stream?.filter((s) => s.streamType === 3) ?? []))}
                     onClose={closeSubtitleSearch}
                   />
                 </div>
@@ -744,10 +808,10 @@ export default function ItemHeroSection({
                     serverUri={serverUri}
                     serverToken={serverToken}
                     ratingKey={ep.ratingKey}
-                    subtitleTracks={ep.Media?.[0]?.Part?.[0]?.Stream?.filter((s) => s.streamType === 3) ?? []}
+                    subtitleTracks={displayedSubtitleTracks(ep.Media?.[0]?.Part?.[0]?.Stream?.filter((s) => s.streamType === 3) ?? [])}
                     onSelectTrack={(id) => handleSelectSubtitleTrack(ep.Media?.[0]?.Part?.[0]?.id, id)}
-                    selectedSubtitleId={resolveSelectedSubtitleId(ep.Media?.[0]?.Part?.[0]?.Stream?.filter((s) => s.streamType === 3) ?? [])}
-                    onSubtitleDownloaded={() => {}}
+                    selectedSubtitleId={resolveSelectedSubtitleId(displayedSubtitleTracks(ep.Media?.[0]?.Part?.[0]?.Stream?.filter((s) => s.streamType === 3) ?? []))}
+                    onSubtitleDownloaded={() => handleSubtitleDownloaded(ep.ratingKey, ep.Media?.[0]?.Part?.[0]?.id, displayedSubtitleTracks(ep.Media?.[0]?.Part?.[0]?.Stream?.filter((s) => s.streamType === 3) ?? []))}
                     onClose={closeSubtitleSearch}
                   />
                 </div>
