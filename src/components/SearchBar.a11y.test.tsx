@@ -1,6 +1,11 @@
 import { render, screen } from "@testing-library/react";
 import { BrowserRouter } from "react-router-dom";
 import { axe } from "vitest-axe";
+
+vi.mock("../hooks/useAuth", () => ({
+  useAuth: () => ({ server: null, authToken: null, activeUser: null }),
+}));
+
 import SearchBar from "./SearchBar";
 
 function renderSearchBar() {

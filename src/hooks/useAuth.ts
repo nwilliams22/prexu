@@ -44,13 +44,11 @@ export interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 export const AuthProvider = AuthContext.Provider;
 
-/** Hook to access auth state from any component */
+/** Hook to access auth state; must be rendered within an AuthProvider */
 export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext);
-  if (ctx) return ctx;
-
-  // Fallback: standalone hook (used at the App level before context is set up)
-  return useAuthState();
+  if (!ctx) throw new Error("useAuth must be used within an AuthProvider");
+  return ctx;
 }
 
 /** Core auth state management hook */

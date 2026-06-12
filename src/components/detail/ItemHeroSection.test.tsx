@@ -6,6 +6,10 @@ vi.mock("../../contexts/PlayerContext", () => ({
   usePlayerSession: () => ({ play: vi.fn() }),
 }));
 
+vi.mock("../../hooks/useAuth", () => ({
+  useAuth: () => ({ server: null, authToken: null, activeUser: null }),
+}));
+
 vi.mock("../../hooks/useToast", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../hooks/useToast")>()),
   useToast: () => ({ toast: vi.fn() }),
