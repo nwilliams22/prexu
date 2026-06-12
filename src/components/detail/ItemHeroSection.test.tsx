@@ -15,6 +15,26 @@ vi.mock("./DownloadButton", () => ({
   default: () => null,
 }));
 
+vi.mock("../../hooks/usePreferences", () => ({
+  usePreferences: () => ({
+    preferences: {
+      playback: {
+        subtitleSize: 100,
+        subtitleStyle: {
+          fontFamily: "sans-serif",
+          textColor: "#FFFFFF",
+          backgroundColor: "#000000",
+          backgroundOpacity: 0.75,
+          outlineColor: "#000000",
+          outlineWidth: 2,
+          shadowEnabled: true,
+        },
+      },
+    },
+    updatePreferences: vi.fn(),
+  }),
+}));
+
 const mockSearchSubtitles = vi.fn();
 const mockDownloadSubtitle = vi.fn();
 const mockSetSelectedSubtitleStream = vi.fn();

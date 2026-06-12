@@ -2,8 +2,11 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { LANGUAGES } from "../../constants/languages";
 import { searchSubtitles, downloadSubtitle } from "../../services/subtitle-search";
 import { filterSubtitleTracks } from "../../utils/subtitle-filter";
+import { usePreferences } from "../../hooks/usePreferences";
+import { SubtitleStylePanel } from "../settings/SubtitleStylePanel";
 import type { PlexStream } from "../../types/library";
 import type { ExternalSubtitle } from "../../types/subtitles";
+import type { SubtitleStylePreferences } from "../../types/preferences";
 
 interface SubtitleSearchPanelProps {
   serverUri: string;
@@ -18,7 +21,7 @@ interface SubtitleSearchPanelProps {
   variant?: "side" | "modal";
 }
 
-type Tab = "embedded" | "search";
+type Tab = "embedded" | "search" | "style";
 
 export default function SubtitleSearchPanel({
   serverUri,
@@ -33,6 +36,21 @@ export default function SubtitleSearchPanel({
 }: SubtitleSearchPanelProps) {
   const [activeTab, setActiveTab] = useState<Tab>("embedded");
   const panelRef = useRef<HTMLDivElement>(null);
+
+  // Style tab (player variant only) — edits flow through the preferences
+  // context; Player.tsx re-applies them to the running video on change, so
+  // every tweak is a live preview.
+  const { preferences, updatePreferences } = usePreferences();
+  const pb = preferences.playback;
+  const updateSubtitleStyle = useCallback(
+    (partial: Partial<SubtitleStylePreferences>) => {
+      updatePreferences({
+        playback: { subtitleStyle: { ...pb.subtitleStyle, ...partial } },
+      });
+    },
+    [pb.subtitleStyle, updatePreferences],
+  );
+  const showStyleTab = variant === "side";
 
   // Embedded tab state
   const [filterQuery, setFilterQuery] = useState("");
@@ -132,6 +150,17 @@ export default function SubtitleSearchPanel({
           >
             Search Online
           </button>
+          {showStyleTab && (
+            <button
+              onClick={() => setActiveTab("style")}
+              style={{
+                ...styles.tab,
+                ...(activeTab === "style" ? styles.tabActive : {}),
+              }}
+            >
+              Style
+            </button>
+          )}
         </div>
 
         <div style={styles.content}>
@@ -210,7 +239,7 @@ export default function SubtitleSearchPanel({
                 )}
               </div>
             </>
-          ) : (
+          ) : activeTab === "search" ? (
             <>
               {/* Search controls */}
               <div style={styles.searchRow}>
@@ -278,6 +307,35 @@ export default function SubtitleSearchPanel({
                   <div style={styles.emptyState}>Searching for subtitles...</div>
                 )}
               </div>
+            </>
+          ) : (
+            <>
+              {/* Size lives in playback prefs (drives libass scale / ::cue
+                  font-size); the rest of the style fields live in
+                  subtitleStyle. Both apply live via Player's style effect. */}
+              <div style={styles.sizeField}>
+                <label style={styles.sizeLabel}>
+                  Subtitle Size: {pb.subtitleSize}%
+                </label>
+                <input
+                  type="range"
+                  min={50}
+                  max={200}
+                  step={10}
+                  value={pb.subtitleSize}
+                  onChange={(e) =>
+                    updatePreferences({
+                      playback: { subtitleSize: Number(e.target.value) },
+                    })
+                  }
+                  style={styles.sizeSlider}
+                  aria-label="Subtitle size"
+                />
+              </div>
+              <SubtitleStylePanel
+                subtitleStyle={pb.subtitleStyle}
+                updateSubtitleStyle={updateSubtitleStyle}
+              />
             </>
           )}
         </div>
@@ -480,6 +538,20 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "0.85rem",
     textAlign: "center",
     padding: "1.5rem 1rem",
+  },
+  sizeField: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "0.4rem",
+    padding: "0.25rem 0.25rem 0.5rem",
+  },
+  sizeLabel: {
+    fontSize: "0.85rem",
+    color: "var(--text-secondary)",
+  },
+  sizeSlider: {
+    width: "100%",
+    accentColor: "var(--accent)",
   },
   error: {
     color: "#f44",

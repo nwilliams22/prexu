@@ -10,6 +10,27 @@ vi.mock("../../services/subtitle-search", () => ({
   setSelectedSubtitleStream: vi.fn(),
 }));
 
+const mockUpdatePreferences = vi.fn();
+vi.mock("../../hooks/usePreferences", () => ({
+  usePreferences: () => ({
+    preferences: {
+      playback: {
+        subtitleSize: 100,
+        subtitleStyle: {
+          fontFamily: "sans-serif",
+          textColor: "#FFFFFF",
+          backgroundColor: "#000000",
+          backgroundOpacity: 0.75,
+          outlineColor: "#000000",
+          outlineWidth: 2,
+          shadowEnabled: true,
+        },
+      },
+    },
+    updatePreferences: mockUpdatePreferences,
+  }),
+}));
+
 import SubtitleSearchPanel from "./SubtitleSearchPanel";
 import type { PlexStream } from "../../types/library";
 
@@ -41,6 +62,7 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof SubtitleSear
 beforeEach(() => {
   mockSearchSubtitles.mockReset();
   mockDownloadSubtitle.mockReset();
+  mockUpdatePreferences.mockReset();
 });
 
 describe("SubtitleSearchPanel", () => {
@@ -158,6 +180,34 @@ describe("SubtitleSearchPanel", () => {
     const dialog = screen.getByRole("dialog");
     expect(dialog.style.position).toBe("");
     expect(dialog.previousElementSibling).toBeNull();
+  });
+
+  it("shows the Style tab in the player (side) variant with live style controls", () => {
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Style" }));
+    expect(screen.getByText("Subtitle Style")).toBeInTheDocument();
+    expect(screen.getByText(/Subtitle Size: 100%/)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Subtitle size"), {
+      target: { value: "150" },
+    });
+    expect(mockUpdatePreferences).toHaveBeenCalledWith({
+      playback: { subtitleSize: 150 },
+    });
+
+    fireEvent.change(screen.getByLabelText("Subtitle text color"), {
+      target: { value: "#ffff00" },
+    });
+    expect(mockUpdatePreferences).toHaveBeenCalledWith({
+      playback: {
+        subtitleStyle: expect.objectContaining({ textColor: "#ffff00" }),
+      },
+    });
+  });
+
+  it("hides the Style tab in the modal (detail page) variant", () => {
+    renderPanel({ variant: "modal" });
+    expect(screen.queryByRole("button", { name: "Style" })).toBeNull();
   });
 
   it("does not mix borderBottom shorthand with borderBottomColor on the active tab", () => {
