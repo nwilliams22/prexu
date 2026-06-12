@@ -10,12 +10,15 @@ permissions:
 
 # Windows libmpv dev archive URL. Use the **baseline** (non-v3) build — the
 # AVX2 v3 build fails LoadLibrary with ERROR_NOACCESS on Windows 11 (see
-# docs/native-player-status.md). Recommended: vendor the .7z under this repo's
-# Releases (e.g. tag `libmpv-vendor-<date>`) to avoid SourceForge churn.
-# Override per-run via the `LIBMPV_URL` repository variable; falls back to the
-# value below. Cache invalidates automatically when this URL changes.
+# docs/native-player-status.md). Same pinned release + SHA256 as ci.yml; keep
+# the two workflows in lockstep when bumping. Override per-run via the
+# `LIBMPV_URL`/`LIBMPV_SHA256` repository variables (e.g. to point at a
+# vendored copy under this repo's Releases). The SHA256 is verified after
+# download and a mismatch fails the build; cache invalidates automatically
+# when the URL or SHA256 changes.
 env:
-  LIBMPV_URL: ${{ vars.LIBMPV_URL || 'https://github.com/nwilliams22/prexu/releases/download/libmpv-vendor/mpv-dev-x86_64-baseline.7z' }}
+  LIBMPV_URL: ${{ vars.LIBMPV_URL || 'https://github.com/zhongfly/mpv-winbuild/releases/download/2026-05-29-13a3e3ad0e/mpv-dev-x86_64-20260529-git-13a3e3ad0e.7z' }}
+  LIBMPV_SHA256: ${{ vars.LIBMPV_SHA256 || '2c4883c8836b53465796aca61e16f7ce6c3adda818baadc850b9f2a39bd2ce5d' }}
 
 jobs:
   build:
@@ -64,7 +67,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\libmpv
-          key: libmpv-${{ hashFiles('.github/workflows/release.yml') }}-${{ env.LIBMPV_URL }}
+          key: libmpv-${{ hashFiles('.github/workflows/release.yml') }}-${{ env.LIBMPV_URL }}-${{ env.LIBMPV_SHA256 }}
 
       - name: Setup MSVC dev environment (Windows)
         if: runner.os == 'Windows'
@@ -80,6 +83,12 @@ jobs:
           New-Item -ItemType Directory -Force -Path C:\libmpv\64 | Out-Null
           Write-Host "Downloading libmpv from $env:LIBMPV_URL"
           Invoke-WebRequest -Uri $env:LIBMPV_URL -OutFile mpv-dev.7z -UseBasicParsing
+          $actual = (Get-FileHash mpv-dev.7z -Algorithm SHA256).Hash.ToLower()
+          if ($actual -ne $env:LIBMPV_SHA256.ToLower()) {
+            Write-Error "SHA256 mismatch: expected $env:LIBMPV_SHA256 got $actual"
+            exit 1
+          }
+          Write-Host "SHA256 verified: $actual"
           Write-Host "Extracting to C:\libmpv\64"
           7z x mpv-dev.7z -oC:\libmpv\64 -y | Out-Null
           if (-not (Test-Path C:\libmpv\64\libmpv-2.dll)) {
