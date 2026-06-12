@@ -231,8 +231,17 @@ export async function reportTimeline(
 }
 
 /**
- * Fire-and-forget timeline report using sendBeacon (for page unload).
- * Falls back to synchronous approach.
+ * Final "stopped" timeline report on player exit.
+ *
+ * This report is what clears a stale resume point: the server only drops an
+ * in-progress marker when it receives `state=stopped` with time < 60s. It
+ * must go through the same GET/timedFetch path as the periodic reports —
+ * sendBeacon issues a POST that `/:/timeline` does not accept, so the old
+ * beacon-first implementation silently dropped every exit report and the
+ * dashboard kept the previous resume offset. Player exit is an SPA route
+ * change (the webview survives), so an awaited fetch is reliable here;
+ * sendBeacon remains only as a long-shot fallback when fetch itself throws
+ * (genuine page teardown).
  */
 export async function reportTimelineBeacon(
   serverUri: string,
@@ -254,16 +263,20 @@ export async function reportTimelineBeacon(
   });
 
   const url = `${serverUri}/:/timeline?${params.toString()}`;
+  logger.info("playback", "reportTimelineBeacon stopped", {
+    ratingKey,
+    timeMs: Math.round(timeMs),
+  });
 
-  if (navigator.sendBeacon) {
-    navigator.sendBeacon(url);
-  } else {
-    // Fallback
-    try {
-      const headers = await getServerHeaders(serverToken);
-      await timedFetch(url, { headers, keepalive: true });
-    } catch {
-      // Best effort
+  try {
+    const headers = await getServerHeaders(serverToken);
+    await timedFetch(url, { headers, keepalive: true });
+  } catch (err) {
+    logger.warn("playback", "stopped report fetch failed, trying sendBeacon", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon(url);
     }
   }
 }
