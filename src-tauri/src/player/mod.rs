@@ -96,6 +96,13 @@ pub struct PlayerState {
     /// the host's edge-hit-test resize glyph (prexu-5l5 follow-up).
     #[cfg(target_os = "windows")]
     pub(crate) pending_focus_reassert: AtomicBool,
+    /// Report context for the final `state=stopped` timeline GET fired
+    /// from Rust when the window closes mid-playback (prexu-50f). The JS
+    /// unmount cleanup cannot be relied on during webview teardown, so the
+    /// frontend registers this once per playback and clears it after its
+    /// own route-exit report; `report_stopped_on_close` takes it (one-shot)
+    /// and reads the live position from mpv.
+    timeline_ctx: Mutex<Option<TimelineCtx>>,
     /// Last observed DPI scale factor of the main window. Used by
     /// `apply_minimize_inset` to convert the logical-px `MinimizeState`
     /// into physical-px host geometry on every sync.
@@ -110,6 +117,20 @@ pub struct PlayerState {
     ///    host placement uses the new scale and the mini region remains
     ///    visually correct at its anchor corner.
     pub(crate) scale_factor: Mutex<f64>,
+}
+
+/// Connection + item details for the Rust-side close-time timeline report.
+/// Mirrors the params the TS `reportTimeline` sends; the position comes from
+/// mpv's `time-pos` at close time. The token is held in memory only and is
+/// never logged.
+#[derive(Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineCtx {
+    pub server_uri: String,
+    pub token: String,
+    pub rating_key: String,
+    pub duration_ms: u64,
+    pub client_id: String,
 }
 
 /// Which of the four corners the mini player anchors to. Mirrors the
@@ -181,6 +202,7 @@ impl PlayerState {
             #[cfg(target_os = "windows")]
             pending_focus_reassert: AtomicBool::new(false),
             minimize: Mutex::new(None),
+            timeline_ctx: Mutex::new(None),
             // 1.0 is the safe default — single-monitor 100% DPI. The very
             // first `player_enter_minimize` overwrites this with the real
             // scale before applying the inset; `WindowEvent::ScaleFactorChanged`
@@ -900,6 +922,70 @@ impl PlayerState {
         f(&inner.mpv).map_err(|e| format!("mpv error: {:?}", e))
     }
 
+    /// Store (or clear, with `None`) the close-time timeline report context.
+    pub fn set_timeline_ctx(&self, ctx: Option<TimelineCtx>) {
+        if let Ok(mut guard) = self.timeline_ctx.lock() {
+            *guard = ctx;
+        }
+    }
+
+    /// One-shot take of the report context. A `CloseRequested` is typically
+    /// followed by `Destroyed`; taking ensures only the first event reports.
+    pub(crate) fn take_timeline_ctx(&self) -> Option<TimelineCtx> {
+        self.timeline_ctx.lock().ok().and_then(|mut g| g.take())
+    }
+
+    /// Fire the final `state=stopped` timeline report when the window is
+    /// closing mid-playback (prexu-50f). Runs on the main thread during
+    /// shutdown with a hard 1.5s network timeout; mpv is still alive here
+    /// (CloseRequested fires before `destroy()`), so the position is read
+    /// straight from `time-pos`. No-op when no playback registered a
+    /// context or the frontend already cleared it after its own report.
+    pub fn report_stopped_on_close(&self) {
+        let Some(ctx) = self.take_timeline_ctx() else {
+            return;
+        };
+        let pos_ms = match self.with_mpv(|mpv| mpv.get_property::<f64>("time-pos")) {
+            Ok(secs) => (secs * 1000.0).max(0.0).round() as u64,
+            Err(e) => {
+                log::warn!("[player] close report skipped — time-pos unavailable: {}", e);
+                return;
+            }
+        };
+        log::info!(
+            "[player] close report: state=stopped time={}ms ratingKey={}",
+            pos_ms,
+            ctx.rating_key
+        );
+        let client = match reqwest::blocking::Client::builder()
+            .timeout(Duration::from_millis(1500))
+            .build()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                log::error!("[player] close report client build failed: {}", e);
+                return;
+            }
+        };
+        let result = client
+            .get(format!("{}/:/timeline", ctx.server_uri))
+            .query(&[
+                ("ratingKey", ctx.rating_key.clone()),
+                ("key", format!("/library/metadata/{}", ctx.rating_key)),
+                ("state", "stopped".to_string()),
+                ("time", pos_ms.to_string()),
+                ("duration", ctx.duration_ms.to_string()),
+                ("X-Plex-Client-Identifier", ctx.client_id.clone()),
+                ("X-Plex-Token", ctx.token.clone()),
+            ])
+            .header("Accept", "application/json")
+            .send();
+        match result {
+            Ok(resp) => log::info!("[player] close report sent, status {}", resp.status()),
+            Err(e) => log::warn!("[player] close report failed: {}", e),
+        }
+    }
+
     /// Apply host geometry directly, bypassing the fullscreen-transition
     /// suppression flag and the throttle. Used from inside the fullscreen
     /// command's main-thread closure to resize the host *immediately* after
@@ -1085,6 +1171,44 @@ pub(crate) fn initial_host_geometry(
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
     use super::*;
+
+    fn timeline_ctx() -> TimelineCtx {
+        TimelineCtx {
+            server_uri: "https://server.example:32400".into(),
+            token: "tok".into(),
+            rating_key: "66324".into(),
+            duration_ms: 1_244_200,
+            client_id: "client-id".into(),
+        }
+    }
+
+    #[test]
+    fn timeline_ctx_take_is_one_shot() {
+        let state = PlayerState::new();
+        state.set_timeline_ctx(Some(timeline_ctx()));
+        assert!(state.take_timeline_ctx().is_some());
+        assert!(state.take_timeline_ctx().is_none());
+    }
+
+    #[test]
+    fn close_report_is_noop_without_ctx_or_mpv() {
+        let state = PlayerState::new();
+        // No ctx — returns immediately.
+        state.report_stopped_on_close();
+        // Ctx but no mpv — bails before any network call and consumes the
+        // ctx so a follow-up Destroyed event cannot fire a stale report.
+        state.set_timeline_ctx(Some(timeline_ctx()));
+        state.report_stopped_on_close();
+        assert!(state.take_timeline_ctx().is_none());
+    }
+
+    #[test]
+    fn clear_timeline_ctx_removes_pending_report() {
+        let state = PlayerState::new();
+        state.set_timeline_ctx(Some(timeline_ctx()));
+        state.set_timeline_ctx(None);
+        assert!(state.take_timeline_ctx().is_none());
+    }
 
     /// 360×200 mini-rect at 16 px padding, bottom-right corner. Mirrors
     /// `DEFAULT_MINI_RECT` from `src/utils/mini-rect.ts`.

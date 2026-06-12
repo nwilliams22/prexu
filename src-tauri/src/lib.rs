@@ -451,6 +451,8 @@ pub fn run() {
             player::commands::player_set_audio_delay_ms,
             player::commands::player_set_af_chain,
             player::commands::player_apply_sub_style,
+            player::commands::player_set_timeline_context,
+            player::commands::player_clear_timeline_context,
             player::commands::player_unload,
             player::commands::player_stop,
             player::commands::player_set_fullscreen,
@@ -717,6 +719,12 @@ pub fn run() {
                             WindowEvent::CloseRequested { .. }
                             | WindowEvent::Destroyed => {
                                 log::info!("[window] CloseRequested/Destroyed — destroying player");
+                                // Final stopped timeline report BEFORE destroy —
+                                // needs the live mpv time-pos, and the JS
+                                // cleanup can't be relied on during webview
+                                // teardown (prexu-50f). One-shot: the ctx is
+                                // taken so the follow-up Destroyed is a no-op.
+                                state.report_stopped_on_close();
                                 let _ = state.destroy(&app_handle);
                             }
                             _ => {}

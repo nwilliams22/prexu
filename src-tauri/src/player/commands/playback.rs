@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use tauri::{AppHandle, State};
 
-use crate::player::PlayerState;
+use crate::player::{PlayerState, TimelineCtx};
 
 /// Quote one argument for libmpv2's `command()`. The crate joins args with
 /// spaces into a single flat command string (mpv_command_string), so a file
@@ -215,6 +215,36 @@ pub async fn player_apply_sub_style(
         mpv.set_property("sub-shadow-offset", shadow_offset)?;
         Ok(())
     })
+}
+
+/// Register the close-time timeline report context for the current playback
+/// (prexu-50f). Rust fires the final `state=stopped` report from this if the
+/// window closes before the JS cleanup can run. Token intentionally not
+/// logged.
+#[tauri::command]
+pub async fn player_set_timeline_context(
+    ctx: TimelineCtx,
+    state: State<'_, PlayerState>,
+) -> Result<(), String> {
+    log::info!(
+        "[player:cmd] set_timeline_context ratingKey={} durationMs={}",
+        ctx.rating_key,
+        ctx.duration_ms
+    );
+    state.set_timeline_ctx(Some(ctx));
+    Ok(())
+}
+
+/// Clear the close-time report context — called after the frontend has sent
+/// its own route-exit stopped report so Rust doesn't send a stale duplicate
+/// at a later window close.
+#[tauri::command]
+pub async fn player_clear_timeline_context(
+    state: State<'_, PlayerState>,
+) -> Result<(), String> {
+    log::debug!("[player:cmd] clear_timeline_context");
+    state.set_timeline_ctx(None);
+    Ok(())
 }
 
 /// Audio filter-chain preset. Valid values: `"off"`, `"light"`, `"night"`.

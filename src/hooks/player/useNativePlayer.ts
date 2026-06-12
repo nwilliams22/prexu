@@ -15,7 +15,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useAuth } from "../useAuth";
 import { usePreferences } from "../usePreferences";
 import { useTimelineReporting } from "./useTimelineReporting";
-import { addPendingWatchSync } from "../../services/storage";
+import { addPendingWatchSync, getClientIdentifier } from "../../services/storage";
 import {
   prepareSource,
   deriveDisplayTitles,
@@ -328,6 +328,26 @@ export function useNativePlayer(
 
       isLocalPlaybackRef.current = prepared.isLocal;
 
+      // Register the Rust-side close report context (prexu-50f): if the
+      // window closes mid-playback the JS cleanup can't run, so Rust fires
+      // the final stopped timeline report using mpv's live position.
+      void (async () => {
+        try {
+          const clientId = await getClientIdentifier();
+          await invoke("player_set_timeline_context", {
+            ctx: {
+              serverUri: server.uri,
+              token: server.accessToken,
+              ratingKey,
+              durationMs: prepared.playable.duration ?? 0,
+              clientId,
+            },
+          });
+        } catch (err) {
+          logger.warn("player", "set_timeline_context failed", String(err));
+        }
+      })();
+
       logger.debug("player", "URL chosen", { kind: prepared.sourceKind, url: prepared.url.substring(0, 80) });
 
       // load_url runs ensure_init server-side which actually creates the
@@ -428,6 +448,10 @@ export function useNativePlayer(
       logger.info("player", "cleanup: stopping timeline + soft-stop mpv");
       timeline.stopTimeline();
       timeline.reportStopped();
+      // JS just sent the stopped report — clear the Rust-side close report
+      // context so a later window close doesn't replay a stale position.
+      // The next initPlayback (episode handoff) registers a fresh one.
+      invoke("player_clear_timeline_context").catch(() => {});
       invoke("player_stop").catch((err) =>
         logger.error("player", "player_stop failed", String(err)),
       );
