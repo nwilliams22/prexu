@@ -22,6 +22,7 @@ import {
   ServerActivityProvider,
 } from "../hooks/useServerActivity";
 import { QueueProvider } from "./QueueContext";
+import { PlayerProvider } from "./PlayerContext";
 import {
   useDownloadsState,
   DownloadsProvider,
@@ -65,7 +66,9 @@ export default function AppProviders({ children }: AppProvidersProps) {
               <ContentRequestProvider value={contentRequestState}>
                 <DownloadsProvider value={downloadsState}>
                   <QueueProvider>
-                    {children}
+                    <PlayerProvider>
+                      {children}
+                    </PlayerProvider>
                   </QueueProvider>
                 </DownloadsProvider>
               </ContentRequestProvider>

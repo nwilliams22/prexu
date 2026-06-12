@@ -4,6 +4,7 @@
 
 import { useEffect } from "react";
 import type { NormalizationPreset } from "../../types/preferences";
+import { logger } from "../../services/logger";
 
 export interface KeyboardShortcutDeps {
   /** Toggle play/pause (sync-aware) */
@@ -57,6 +58,7 @@ export function usePlayerKeyboardShortcuts(deps: KeyboardShortcutDeps): void {
         return;
 
       deps.resetHideTimer();
+      logger.debug("player:keys", e.key);
 
       switch (e.key) {
         case " ":
@@ -152,5 +154,28 @@ export function usePlayerKeyboardShortcuts(deps: KeyboardShortcutDeps): void {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [deps]);
+  // Individual deps — avoids re-registering the listener every render
+  // (the `deps` object is a new reference each time).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    deps.togglePlay,
+    deps.seek,
+    deps.currentTime,
+    deps.duration,
+    deps.volume,
+    deps.setVolume,
+    deps.toggleFullscreen,
+    deps.toggleMute,
+    deps.isFullscreen,
+    deps.onBack,
+    deps.resetHideTimer,
+    deps.chapters,
+    deps.volumeBoost,
+    deps.normalizationPreset,
+    deps.onAudioEnhancementChange,
+    deps.onNextEpisode,
+    deps.onPrevEpisode,
+    deps.togglePiP,
+    deps.onToggleShortcuts,
+  ]);
 }

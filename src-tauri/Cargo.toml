@@ -33,3 +33,13 @@ tauri-plugin-single-instance = "2.4.0"
 tauri-plugin-store = "2"
 tauri-plugin-updater = "2"
 url = "2"
+libmpv2 = { version = "4", features = ["build_libmpv"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Pin to the same major.minor as Tauri's transitive `windows` dep so HWND
+# types are interchangeable. Bumping requires Tauri to bump too.
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+] }

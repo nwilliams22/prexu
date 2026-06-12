@@ -1,0 +1,4 @@
+# Files tauri-cli's dev-mode file watcher should ignore. Without this, copying
+# libmpv-2.dll into bin/ during build.rs triggers an infinite rebuild loop.
+bin/libmpv-2.dll
+target/

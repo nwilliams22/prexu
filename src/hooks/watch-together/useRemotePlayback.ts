@@ -58,11 +58,17 @@ export function useRemotePlayback(
     }
   }, [player.isPlaying, isInSession]);
 
-  // Listen for remote play/pause/seek events
+  // Listen for remote play/pause/seek events.
+  //
+  // We route through `player.seek` / `player.togglePlay` rather than touching
+  // `videoRef.current` directly so this works on both the HTML5 path (videoRef
+  // populated) and the native libmpv path (videoRef is always null on Windows).
+  // Refs let us read the latest player state inside long-lived listeners
+  // without re-binding the watchSync subscriptions on every render.
+  const playerRef = useRef(player);
+  playerRef.current = player;
   useEffect(() => {
     if (!isInSession) return;
-
-    const video = player.videoRef.current;
 
     const unsubPlay = watchSync.on(
       "remote_play",
@@ -71,9 +77,7 @@ export function useRemotePlayback(
         timestamp: number;
         from_user: string;
       }) => {
-        if (!video) return;
-
-        // Latency compensation
+        const p = playerRef.current;
         const transitDelay = Math.min(
           (Date.now() - data.timestamp) / 1000,
           2
@@ -81,9 +85,9 @@ export function useRemotePlayback(
         const adjustedTime = data.current_time + transitDelay;
 
         remoteActionRef.current = true;
-        video.currentTime = adjustedTime;
-        if (video.paused) {
-          video.play().catch(() => {});
+        p.seek(adjustedTime);
+        if (!p.isPlaying) {
+          p.togglePlay();
         }
 
         lastRemoteSyncRef.current = {
@@ -97,12 +101,11 @@ export function useRemotePlayback(
     const unsubPause = watchSync.on(
       "remote_pause",
       (data: { current_time: number; timestamp: number }) => {
-        if (!video) return;
-
+        const p = playerRef.current;
         remoteActionRef.current = true;
-        video.currentTime = data.current_time;
-        if (!video.paused) {
-          video.pause();
+        p.seek(data.current_time);
+        if (p.isPlaying) {
+          p.togglePlay();
         }
 
         lastRemoteSyncRef.current = null;
@@ -113,8 +116,7 @@ export function useRemotePlayback(
     const unsubSeek = watchSync.on(
       "remote_seek",
       (data: { current_time: number; timestamp: number }) => {
-        if (!video) return;
-
+        const p = playerRef.current;
         const transitDelay = Math.min(
           (Date.now() - data.timestamp) / 1000,
           2
@@ -122,7 +124,7 @@ export function useRemotePlayback(
         const adjustedTime = data.current_time + transitDelay;
 
         remoteActionRef.current = true;
-        video.currentTime = adjustedTime;
+        p.seek(adjustedTime);
 
         lastRemoteSyncRef.current = {
           time: adjustedTime,
@@ -137,7 +139,7 @@ export function useRemotePlayback(
       unsubPause();
       unsubSeek();
     };
-  }, [isInSession, player.videoRef, setSyncStatus]);
+  }, [isInSession, setSyncStatus]);
 
   // Broadcast buffering state
   useEffect(() => {

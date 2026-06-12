@@ -14,7 +14,16 @@ test.describe("Dashboard", () => {
   });
 
   test("shows empty state when no content available", async ({ page }) => {
-    // Default mock returns empty onDeck and recentlyAdded, so empty state should show
+    // Must stub ALL content sources empty: onDeck, recentlyAdded, AND library sections
+    // (useDashboard uses getRecentlyAddedBySection → /library/sections/*/all, not the
+    // global /library/recentlyAdded endpoint, so the global stub alone is not enough).
+    await page.route("**/library/sections/*/all*", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(mockPlexData.emptyLibrary),
+      }),
+    );
     await page.goto("/");
     await expect(page.getByText("No recent activity")).toBeVisible();
   });
@@ -57,9 +66,12 @@ test.describe("Dashboard", () => {
     );
     await page.goto("/");
     await expect(page.getByRole("heading", { name: "Continue Watching" })).toBeVisible();
-    // Click the first occurrence of "Test Movie 1" (may appear in hero + row)
-    const movieCard = page.getByText("Test Movie 1").first();
-    await movieCard.click();
+    // The Continue Watching row contains PosterCards inside an overflow:hidden/auto
+    // HorizontalRow. Webkit considers these "not visible" for click purposes.
+    // Use dispatchEvent to fire a click directly on the card element,
+    // which bypasses the visibility check while still triggering the React onClick.
+    const card = page.getByRole("button", { name: /Test Movie 1/i }).first();
+    await card.dispatchEvent("click");
     await expect(page).toHaveURL(/\/item\/100/);
   });
 

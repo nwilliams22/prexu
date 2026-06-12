@@ -4,7 +4,7 @@
  * provides a helper to rebuild a transcode session at a given position.
  */
 
-import { useRef, useCallback } from "react";
+import { useRef, useCallback, useMemo } from "react";
 import type HlsType from "hls.js";
 import { buildTranscodeUrl, buildHlsConfig } from "../../services/plex-playback";
 
@@ -101,5 +101,8 @@ export function useHlsLoader(): HlsLoaderResult {
     [loadHls, destroyHls],
   );
 
-  return { hlsRef, HlsCtorRef, loadHls, destroyHls, rebuildHls };
+  return useMemo(
+    () => ({ hlsRef, HlsCtorRef, loadHls, destroyHls, rebuildHls }),
+    [loadHls, destroyHls, rebuildHls],
+  );
 }

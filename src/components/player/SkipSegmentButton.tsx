@@ -9,6 +9,20 @@ interface SkipSegmentButtonProps {
   onNextEpisode?: () => void;
 }
 
+/**
+ * Skip-segment overlay shown during intro/credits markers.
+ *
+ * Layout:
+ *   - Intro: single "Skip Intro" button.
+ *   - Credits without next episode: single "Skip Credits" button.
+ *   - Credits with next episode: TWO stacked buttons — "Skip Credits"
+ *     (primary, top) and "Next Episode" (secondary, below). Splitting them
+ *     lets the user skip past credits to watch post-credits scenes (Marvel
+ *     stingers, anime omake, etc.) instead of being forced into the next
+ *     episode. The 'S' keyboard shortcut always triggers the primary skip;
+ *     Shift+N already advances to the next episode globally
+ *     (usePlayerKeyboardShortcuts), so no new key is added here.
+ */
 export default function SkipSegmentButton({
   segment,
   onSkip,
@@ -17,57 +31,49 @@ export default function SkipSegmentButton({
   onNextEpisode,
 }: SkipSegmentButtonProps) {
   const isCredits = segment.type === "credits";
-  const showNextEpisode = isCredits && hasNextEpisode && onNextEpisode;
+  const showNextEpisode = Boolean(isCredits && hasNextEpisode && onNextEpisode);
 
-  const handleClick = useCallback(() => {
-    if (showNextEpisode) {
-      onNextEpisode!();
-    } else {
-      onSkip();
-    }
-  }, [showNextEpisode, onNextEpisode, onSkip]);
-
-  // Keyboard shortcut: S to skip
+  // Keyboard: S always triggers the primary skip (intro or credits).
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "s" || e.key === "S") {
+        if (e.shiftKey) return; // Shift+S reserved for future bindings
         e.preventDefault();
-        handleClick();
+        onSkip();
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [handleClick]);
+  }, [onSkip]);
 
-  const label = showNextEpisode
-    ? "Next Episode"
-    : isCredits
-      ? "Skip Credits"
-      : "Skip Intro";
+  const handleNextEpisodeClick = useCallback(() => {
+    if (onNextEpisode) onNextEpisode();
+  }, [onNextEpisode]);
+
+  const primaryLabel = isCredits ? "Skip Credits" : "Skip Intro";
 
   return (
     <div style={styles.container}>
-      <button
-        onClick={handleClick}
-        style={styles.button}
-        aria-label={label}
-      >
-        {label}
-        <svg
-          width={16}
-          height={16}
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={2.5}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
+      <div style={styles.buttonStack}>
+        <button
+          onClick={onSkip}
+          style={styles.button}
+          aria-label={primaryLabel}
         >
-          <polyline points="5 4 15 12 5 20" />
-          <line x1={19} y1={5} x2={19} y2={19} />
-        </svg>
-      </button>
+          {primaryLabel}
+          <ChevronIcon />
+        </button>
+        {showNextEpisode && (
+          <button
+            onClick={handleNextEpisodeClick}
+            style={styles.secondaryButton}
+            aria-label="Next Episode"
+          >
+            Next Episode
+            <ChevronIcon />
+          </button>
+        )}
+      </div>
       <button
         onClick={onDismiss}
         style={styles.dismissButton}
@@ -82,20 +88,46 @@ export default function SkipSegmentButton({
   );
 }
 
+function ChevronIcon() {
+  return (
+    <svg
+      width={16}
+      height={16}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <polyline points="5 4 15 12 5 20" />
+      <line x1={19} y1={5} x2={19} y2={19} />
+    </svg>
+  );
+}
+
 const styles: Record<string, React.CSSProperties> = {
   container: {
     position: "absolute",
     bottom: "100px",
     right: "2rem",
     display: "flex",
-    alignItems: "center",
+    alignItems: "flex-end",
     gap: "0.5rem",
     zIndex: 20,
     animation: "skipSlideIn 0.3s ease-out",
   },
+  buttonStack: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "0.5rem",
+    alignItems: "stretch",
+  },
   button: {
     display: "flex",
     alignItems: "center",
+    justifyContent: "space-between",
     gap: "0.5rem",
     background: "rgba(255, 255, 255, 0.95)",
     color: "#000",
@@ -107,6 +139,21 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
     boxShadow: "0 4px 20px rgba(0, 0, 0, 0.4)",
     transition: "background 0.15s ease, transform 0.15s ease",
+  },
+  secondaryButton: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "0.5rem",
+    background: "rgba(0, 0, 0, 0.7)",
+    color: "#fff",
+    fontSize: "0.9rem",
+    fontWeight: 500,
+    padding: "0.55rem 1.15rem",
+    borderRadius: "6px",
+    border: "1px solid rgba(255,255,255,0.2)",
+    cursor: "pointer",
+    backdropFilter: "blur(4px)",
   },
   dismissButton: {
     display: "flex",

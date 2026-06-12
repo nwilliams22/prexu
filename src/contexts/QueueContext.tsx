@@ -7,12 +7,24 @@ import {
   useRef,
   type ReactNode,
 } from "react";
-import type { QueueItem, PlaybackQueue } from "../types/queue";
+import type { QueueItem, PlaybackQueue, QueueSource } from "../types/queue";
 
 interface QueueContextValue {
   queue: PlaybackQueue;
-  /** Replace the entire queue and set current index */
-  setQueue: (items: QueueItem[], startIndex: number, shuffled?: boolean) => void;
+  /**
+   * Replace the entire queue and set current index.
+   * `source` describes whether the queue was auto-populated from sibling
+   * episodes ("auto-episodes") or built by an explicit user action like
+   * Play All / Shuffle on a playlist or collection ("user-built"). The
+   * PostPlay overlay uses this to decide whether to fire for movies — see
+   * `hasNextItem` in src/pages/Player.tsx.
+   */
+  setQueue: (
+    items: QueueItem[],
+    startIndex: number,
+    shuffled?: boolean,
+    source?: QueueSource,
+  ) => void;
   /** Append an item to the end of the queue */
   addToQueue: (item: QueueItem) => void;
   /** Remove an item by index */
@@ -65,8 +77,13 @@ export function QueueProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const setQueue = useCallback(
-    (items: QueueItem[], startIndex: number, shuffled?: boolean) => {
-      setQueueAndPersist({ items, currentIndex: startIndex, shuffled });
+    (
+      items: QueueItem[],
+      startIndex: number,
+      shuffled?: boolean,
+      source?: QueueSource,
+    ) => {
+      setQueueAndPersist({ items, currentIndex: startIndex, shuffled, source });
     },
     [setQueueAndPersist],
   );

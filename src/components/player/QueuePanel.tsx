@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
 import { useQueue } from "../../contexts/QueueContext";
+import { usePlayerSession } from "../../contexts/PlayerContext";
 
 interface QueuePanelProps {
   onClose: () => void;
@@ -10,7 +10,7 @@ interface QueuePanelProps {
 export default function QueuePanel({ onClose, posterUrl }: QueuePanelProps) {
   const { queue, removeFromQueue, reorderQueue, clearQueue, remainingCount } = useQueue();
   const panelRef = useRef<HTMLDivElement>(null);
-  const navigate = useNavigate();
+  const { replaceRatingKey } = usePlayerSession();
 
   // Close on Escape
   useEffect(() => {
@@ -24,9 +24,12 @@ export default function QueuePanel({ onClose, posterUrl }: QueuePanelProps) {
   const handleItemClick = useCallback(
     (ratingKey: string) => {
       onClose();
-      navigate(`/play/${ratingKey}`);
+      // QueuePanel is rendered inside Player — use replaceRatingKey so
+      // the existing player session swaps in place rather than play()
+      // creating a fresh session (which would clobber WT info etc).
+      replaceRatingKey(ratingKey);
     },
-    [onClose, navigate],
+    [onClose, replaceRatingKey],
   );
 
   const handleMoveUp = useCallback(

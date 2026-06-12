@@ -1,11 +1,11 @@
 /**
- * Custom hls.js Loader that uses window.fetch (intercepted by the
- * Tauri HTTP plugin) instead of XMLHttpRequest.
+ * Custom hls.js Loader that uses Tauri's HTTP plugin instead of XHR or
+ * window.fetch.
  *
- * In Tauri v2, the HTTP plugin overrides window.fetch to route requests
- * through Rust's reqwest — this bypasses WebView2 CORS restrictions.
- * However, XHR is NOT overridden, so hls.js's default XhrLoader fails.
- * This loader forces hls.js to use fetch instead of XHR.
+ * Routing through @tauri-apps/plugin-http sends requests from Rust's reqwest
+ * instead of WebView2 — that strips the browser-injected Origin, Referer,
+ * and Sec-Fetch-* headers which Plex's embedded HTTP server rejects with
+ * a bare HTML "400 Bad Request" on the /video/:/transcode endpoint.
  */
 
 import type {
@@ -16,6 +16,7 @@ import type {
   LoaderStats,
 } from "hls.js";
 import { LoadStats } from "hls.js";
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 
 /**
  * Factory that creates a FetchLoader class bound to a specific Plex token.
@@ -73,12 +74,11 @@ export function createTauriLoaderClass(serverToken: string) {
       const urlShort = url.split("/").pop()?.split("?")[0] ?? url.substring(0, 60);
       console.log(`[HLS Loader] Loading: ${urlShort} (type: ${context.responseType})`);
 
-      window
-        .fetch(url, {
-          method: "GET",
-          headers,
-          signal: this.abortController.signal,
-        })
+      tauriFetch(url, {
+        method: "GET",
+        headers,
+        signal: this.abortController.signal,
+      })
         .then(async (response) => {
           clearTimeout(timeoutId);
           if (this.aborted) return;
@@ -100,8 +100,7 @@ export function createTauriLoaderClass(serverToken: string) {
 
           let data: string | ArrayBuffer;
           if (context.responseType === "arraybuffer") {
-            const blob = await response.blob();
-            data = await blob.arrayBuffer();
+            data = await response.arrayBuffer();
           } else {
             data = await response.text();
           }

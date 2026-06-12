@@ -34,6 +34,13 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Native-mpv player path needs body alpha=0 so the sibling Win32 host
+   window (rendering behind the WebView) shows through. Toggled by
+   useTransparentWindow whenever a player session is active on Windows. */
+body.player-transparent {
+  background-color: transparent;
+}
+
 button {
   cursor: pointer;
   border: none;

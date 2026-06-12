@@ -15,22 +15,33 @@ import {
 const PLEX_TV_API = "https://clients.plex.tv/api/v2";
 const APP_NAME = "Prexu";
 const CONNECTIVITY_TIMEOUT_MS = 5000;
-const REQUEST_TIMEOUT_MS = 15000;
+const REQUEST_TIMEOUT_MS = 30000;
+const RETRY_ON_TIMEOUT = 1;
 
 // ── Request deduplication ──
 // For identical GET requests that are already in-flight, return the existing promise.
 const inflightRequests = new Map<string, Promise<Response>>();
 
+/** True if the error is a TimeoutError thrown by our timedFetch abort. */
+export function isTimeoutError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === "TimeoutError";
+}
+
 /**
- * Fetch with automatic timeout. Wraps the native fetch with an AbortController.
+ * Fetch with automatic timeout and one retry on timeout.
  * GET requests are deduplicated: if an identical URL is already in-flight,
  * the existing promise is returned instead of firing a duplicate request.
+ *
+ * On timeout, aborts with a `TimeoutError` DOMException carrying the URL and
+ * elapsed ms so callers see "Request timed out after Xms: <url>" instead of
+ * the cryptic default "signal is aborted without reason".
  */
 export async function timedFetch(
   url: string,
-  init?: RequestInit & { timeoutMs?: number },
+  init?: RequestInit & { timeoutMs?: number; retries?: number },
 ): Promise<Response> {
   const timeout = init?.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  const retries = init?.retries ?? RETRY_ON_TIMEOUT;
   const method = (init?.method ?? "GET").toUpperCase();
 
   // Dedup GET requests
@@ -38,25 +49,92 @@ export async function timedFetch(
     return inflightRequests.get(url)!.then((r) => r.clone());
   }
 
+  const promise = fetchWithRetry(url, init, timeout, retries, method);
+
+  if (method === "GET") {
+    inflightRequests.set(url, promise);
+    // Detach cleanup as a side-effect; swallow rejection on this chain only
+    // (the original `promise` is still returned to the caller, so the real
+    // rejection is observed there).
+    promise
+      .finally(() => inflightRequests.delete(url))
+      .catch(() => {});
+  }
+
+  return promise;
+}
+
+async function fetchWithRetry(
+  url: string,
+  init: (RequestInit & { timeoutMs?: number; retries?: number }) | undefined,
+  timeout: number,
+  retries: number,
+  method: string,
+): Promise<Response> {
+  let attempt = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    try {
+      return await fetchOnce(url, init, timeout);
+    } catch (err) {
+      if (isTimeoutError(err) && attempt < retries) {
+        attempt++;
+        logger.warn(
+          "api",
+          `timedFetch retry ${attempt}/${retries} after timeout`,
+          { url: url.substring(0, 120), method, timeoutMs: timeout },
+        );
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+async function fetchOnce(
+  url: string,
+  init: (RequestInit & { timeoutMs?: number; retries?: number }) | undefined,
+  timeout: number,
+): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
+  const start = Date.now();
+
+  const timer = setTimeout(() => {
+    const elapsed = Date.now() - start;
+    controller.abort(
+      new DOMException(
+        `Request timed out after ${elapsed}ms: ${url}`,
+        "TimeoutError",
+      ),
+    );
+  }, timeout);
 
   // Merge any existing signal (unlikely but safe)
   const signal = init?.signal
     ? AbortSignal.any([init.signal, controller.signal])
     : controller.signal;
 
-  const promise = fetch(url, { ...init, signal, timeoutMs: undefined } as RequestInit)
-    .finally(() => {
-      clearTimeout(timer);
-      if (method === "GET") inflightRequests.delete(url);
-    });
-
-  if (method === "GET") {
-    inflightRequests.set(url, promise);
+  try {
+    return await fetch(url, {
+      ...init,
+      signal,
+      timeoutMs: undefined,
+      retries: undefined,
+    } as RequestInit);
+  } catch (err) {
+    // If WebView2/older runtimes throw a generic AbortError when our
+    // controller aborted, surface our explicit reason instead.
+    if (
+      controller.signal.aborted &&
+      controller.signal.reason instanceof DOMException &&
+      controller.signal.reason.name === "TimeoutError"
+    ) {
+      throw controller.signal.reason;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-
-  return promise;
 }
 
 // ── Auth invalidation event bus ──
@@ -366,67 +444,96 @@ export async function getPlexUser(authToken: string): Promise<PlexUser> {
   };
 }
 
-/** Fetch the user's Plex friends list */
+/** /api/v2/friends — mutual Plex social-graph friends (people who friended
+ *  you back). Returns [] on a 200 with non-array body or a non-200; throws
+ *  on network/parse failure so the caller can decide whether to surface it. */
+async function fetchV2Friends(authToken: string): Promise<PlexFriend[]> {
+  const headers = await getAuthHeaders(authToken);
+  const response = await timedFetch(`${PLEX_TV_API}/friends`, { headers });
+  if (!response.ok) return [];
+  const data = await response.json();
+  if (!Array.isArray(data)) return [];
+  return data.map((f: Record<string, unknown>) => ({
+    id: (f.id as number) ?? 0,
+    username: (f.username as string) ?? (f.title as string) ?? "",
+    email: (f.email as string) ?? "",
+    friendlyName: (f.friendlyName as string) ?? (f.title as string) ?? "",
+    thumb: (f.thumb as string) ?? "",
+    status: (f.status as string) ?? "accepted",
+    home: (f.home as boolean) ?? false,
+  }));
+}
+
+/** /api/users (v1 XML) — users you have shared a library with (whether or
+ *  not they are mutual social friends). Returns [] on non-200; throws on
+ *  network/parse failure. */
+async function fetchV1SharedUsers(authToken: string): Promise<PlexFriend[]> {
+  const headers = await getAuthHeaders(authToken);
+  const xmlHeaders = { ...headers, Accept: "application/xml" };
+  const response = await timedFetch("https://plex.tv/api/users", {
+    headers: xmlHeaders,
+  });
+  if (!response.ok) return [];
+  const xml = await response.text();
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xml, "text/xml");
+  const userElements = doc.querySelectorAll("User");
+  return Array.from(userElements).map((el) => ({
+    id: parseInt(el.getAttribute("id") ?? "0", 10),
+    username: el.getAttribute("username") ?? el.getAttribute("title") ?? "",
+    email: el.getAttribute("email") ?? "",
+    friendlyName:
+      el.getAttribute("friendlyName") ?? el.getAttribute("title") ?? "",
+    thumb: el.getAttribute("thumb") ?? "",
+    status: el.getAttribute("status") ?? "accepted",
+    home: el.getAttribute("home") === "1",
+  }));
+}
+
+/**
+ * Fetch the user's Plex Watch-Together-eligible friend list.
+ *
+ * Merges TWO different Plex APIs because each surfaces a different subset:
+ *   - /api/v2/friends   → mutual Plex social-graph friends
+ *   - /api/users (v1)   → people the user has shared their server with
+ *
+ * Plex Web aggregates both. Pre-prexu-0wq the code only called v2 (with v1
+ * as a fallback ONLY if v2 threw) which silently truncated the list — users
+ * who were shared-with but not mutually friended were invisible. Now both
+ * run in parallel and are merged by `id` (v2 wins on duplicate since it's
+ * the canonical newer API).
+ *
+ * Returns whatever subset succeeded if one endpoint fails. Throws only when
+ * BOTH endpoints fail — preserves the old single-error behavior for the
+ * worst case.
+ */
 export async function getPlexFriends(
   authToken: string
 ): Promise<PlexFriend[]> {
-  const headers = await getAuthHeaders(authToken);
+  const [v2Result, v1Result] = await Promise.allSettled([
+    fetchV2Friends(authToken),
+    fetchV1SharedUsers(authToken),
+  ]);
 
-  // Try v2 JSON endpoint first
-  try {
-    const response = await timedFetch(`${PLEX_TV_API}/friends`, { headers });
-    if (response.ok) {
-      const data = await response.json();
-      if (Array.isArray(data)) {
-        return data.map((f: Record<string, unknown>) => ({
-          id: (f.id as number) ?? 0,
-          username: (f.username as string) ?? (f.title as string) ?? "",
-          email: (f.email as string) ?? "",
-          friendlyName:
-            (f.friendlyName as string) ?? (f.title as string) ?? "",
-          thumb: (f.thumb as string) ?? "",
-          status: (f.status as string) ?? "accepted",
-          home: (f.home as boolean) ?? false,
-        }));
-      }
-    }
-  } catch {
-    // Fall through to v1 XML endpoint
+  const v2 = v2Result.status === "fulfilled" ? v2Result.value : [];
+  const v1 = v1Result.status === "fulfilled" ? v1Result.value : [];
+
+  if (v2Result.status === "rejected" && v1Result.status === "rejected") {
+    const v2Err = v2Result.reason instanceof Error
+      ? v2Result.reason.message
+      : String(v2Result.reason);
+    const v1Err = v1Result.reason instanceof Error
+      ? v1Result.reason.message
+      : String(v1Result.reason);
+    throw new Error(`Failed to fetch friends (v2: ${v2Err}; v1: ${v1Err})`);
   }
 
-  // Fallback: v1 XML endpoint
-  try {
-    const xmlHeaders = { ...headers, Accept: "application/xml" };
-    const response = await timedFetch("https://plex.tv/api/users", {
-      headers: xmlHeaders,
-    });
-
-    if (!response.ok) {
-      throw new Error(`Friends API failed: ${response.status}`);
-    }
-
-    const xml = await response.text();
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(xml, "text/xml");
-    const userElements = doc.querySelectorAll("User");
-
-    return Array.from(userElements).map((el) => ({
-      id: parseInt(el.getAttribute("id") ?? "0", 10),
-      username: el.getAttribute("username") ?? el.getAttribute("title") ?? "",
-      email: el.getAttribute("email") ?? "",
-      friendlyName:
-        el.getAttribute("friendlyName") ??
-        el.getAttribute("title") ??
-        "",
-      thumb: el.getAttribute("thumb") ?? "",
-      status: el.getAttribute("status") ?? "accepted",
-      home: el.getAttribute("home") === "1",
-    }));
-  } catch (err) {
-    throw new Error(
-      `Failed to fetch friends: ${err instanceof Error ? err.message : "Unknown error"}`
-    );
-  }
+  // Merge: v2 entries first (they win on id-collision since Map.set is last-
+  // write-wins and we set v1 after, but reversing the order keeps v2 fields).
+  const byId = new Map<number, PlexFriend>();
+  for (const u of v1) byId.set(u.id, u);
+  for (const u of v2) byId.set(u.id, u); // v2 overrides v1 on dup
+  return Array.from(byId.values());
 }
 
 // ── Plex Home Users API ──

@@ -4,6 +4,7 @@
 
 import { fetchJson } from "./base";
 import { getLibrarySections } from "./base";
+import { logger } from "../logger";
 import type {
   PlexMediaContainer,
   PlexMediaItem,
@@ -12,11 +13,23 @@ import type {
 
 // ── Related Items ──
 
+/**
+ * Fetch items related to a given media item.
+ *
+ * Plex only computes /similar for movies and shows — episodes return 404.
+ * Pass `itemType` so the service can skip the /similar round-trip entirely.
+ */
 export async function getRelatedItems(
   serverUri: string,
   serverToken: string,
-  ratingKey: string
+  ratingKey: string,
+  itemType?: string
 ): Promise<PlexMediaItem[]> {
+  if (itemType === "episode") {
+    logger.debug("api", "getRelatedItems: skipping /similar for episode", { ratingKey });
+    return [];
+  }
+
   // Try the /library/metadata/{id}/similar endpoint first (most reliable)
   try {
     const data = await fetchJson<PlexMediaContainer<PlexMediaItem>>(

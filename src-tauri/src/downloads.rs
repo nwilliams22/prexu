@@ -122,9 +122,16 @@ pub async fn download_media(
         .await
         .map_err(|e| format!("Failed to create temp file: {}", e))?;
 
+    log::info!("[Download] Start: {} ({} bytes) -> {:?}", rating_key, total, temp_path);
+
     let mut downloaded: u64 = 0;
     let mut last_emit: u64 = 0;
-    let emit_interval: u64 = 512 * 1024; // emit every 512KB
+    let mut last_emit_at = std::time::Instant::now();
+    let emit_interval_bytes: u64 = 512 * 1024;
+    // On LAN the 512KB byte gate alone fires hundreds of events/sec, which
+    // floods the webview with state updates and starves UI interaction —
+    // a wall-clock gate caps the rate regardless of throughput.
+    const EMIT_INTERVAL_MS: u128 = 500;
 
     use tokio::io::AsyncWriteExt;
 
@@ -138,14 +145,18 @@ pub async fn download_media(
                         })?;
                         downloaded += bytes.len() as u64;
 
-                        if downloaded - last_emit >= emit_interval || downloaded >= total {
+                        let gates_open = downloaded - last_emit >= emit_interval_bytes
+                            && last_emit_at.elapsed().as_millis() >= EMIT_INTERVAL_MS;
+                        if gates_open || downloaded >= total {
                             emit_progress(downloaded, "downloading", None);
                             last_emit = downloaded;
+                            last_emit_at = std::time::Instant::now();
                         }
                     }
                     Some(Err(e)) => {
                         drop(file);
                         let _ = tokio::fs::remove_file(&temp_path).await;
+                        log::error!("[Download] stream error for {}: {:?}", rating_key, e);
                         emit_progress(downloaded, "error", Some(e.to_string()));
                         let mut active = state.active.lock().await;
                         active.remove(&rating_key);
@@ -218,6 +229,35 @@ pub async fn delete_download(
         log::info!("[Download] Deleted: {}", rating_key);
     }
     Ok(())
+}
+
+/// Reveal the downloads directory in the OS file manager.
+#[tauri::command]
+pub async fn open_downloads_dir(
+    state: tauri::State<'_, DownloadManager>,
+) -> Result<(), String> {
+    let dir = {
+        let cached = state.downloads_dir.lock().await;
+        match &*cached {
+            Some(dir) => dir.clone(),
+            None => resolve_downloads_dir().await?,
+        }
+    };
+    log::info!("[Download] open_downloads_dir: {:?}", dir);
+
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("explorer").arg(&dir).spawn();
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open").arg(&dir).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let result = std::process::Command::new("xdg-open").arg(&dir).spawn();
+
+    result
+        .map(|_| ())
+        .map_err(|e| {
+            log::error!("[Download] open_downloads_dir failed: {:?}", e);
+            format!("Failed to open downloads folder: {}", e)
+        })
 }
 
 /// Check if a local file exists for a given ratingKey and return its path.

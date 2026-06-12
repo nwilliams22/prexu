@@ -23,6 +23,7 @@ export interface PlaybackPreferences {
   audioOffsetMs: number;
   skipIntroEnabled: boolean;
   skipCreditsEnabled: boolean;
+  autoPlayEnabled: boolean;
   subtitleStyle: SubtitleStylePreferences;
 }
 

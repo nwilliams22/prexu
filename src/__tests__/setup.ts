@@ -3,6 +3,17 @@ import * as matchers from "vitest-axe/matchers";
 
 expect.extend(matchers);
 
+// Mock Tauri log plugin globally — the logger service lazy-imports it,
+// and without this mock, every test that imports a module using logger
+// triggers unhandled rejections from Tauri's missing IPC bridge.
+vi.mock("@tauri-apps/plugin-log", () => ({
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  debug: vi.fn(),
+  trace: vi.fn(),
+}));
+
 // Polyfill crypto.randomUUID — jsdom doesn't provide it, storage.ts needs it
 if (!globalThis.crypto?.randomUUID) {
   Object.defineProperty(globalThis, "crypto", {

@@ -15,6 +15,15 @@ import {
   createPlexStream,
 } from "../__tests__/mocks/plex-data";
 
+// Mock Tauri log plugin so logger.trace doesn't hit real invoke
+vi.mock("@tauri-apps/plugin-log", () => ({
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  debug: vi.fn(),
+  trace: vi.fn(),
+}));
+
 // Mock dependencies for async functions
 vi.mock("./storage", () => ({
   getClientIdentifier: vi.fn().mockResolvedValue("test-client-id"),
@@ -525,7 +534,7 @@ describe("plex-playback — async functions", () => {
   // ── reportTimelineBeacon ──
 
   describe("reportTimelineBeacon", () => {
-    it("uses sendBeacon when available", async () => {
+    it("reports stopped via GET fetch (sendBeacon POSTs are rejected by /:/timeline)", async () => {
       const mockBeacon = vi.fn<(url: string, data?: BodyInit | null) => boolean>(() => true);
       Object.defineProperty(navigator, "sendBeacon", {
         value: mockBeacon,
@@ -540,11 +549,33 @@ describe("plex-playback — async functions", () => {
         7200000
       );
 
+      expect(mockFetch).toHaveBeenCalledOnce();
+      const [url] = mockFetch.mock.calls[0];
+      expect(url).toContain("https://server:32400/:/timeline?");
+      expect(url).toContain("state=stopped");
+      expect(url).toContain("ratingKey=12345");
+      expect(url).toContain("time=30000");
+      expect(mockBeacon).not.toHaveBeenCalled();
+    });
+
+    it("falls back to sendBeacon only when fetch throws", async () => {
+      const mockBeacon = vi.fn<(url: string, data?: BodyInit | null) => boolean>(() => true);
+      Object.defineProperty(navigator, "sendBeacon", {
+        value: mockBeacon,
+        writable: true,
+      });
+      mockFetch.mockRejectedValueOnce(new Error("page teardown"));
+
+      await reportTimelineBeacon(
+        "https://server:32400",
+        "my-token",
+        "12345",
+        30000,
+        7200000
+      );
+
       expect(mockBeacon).toHaveBeenCalledOnce();
-      const beaconUrl = mockBeacon.mock.calls[0][0];
-      expect(beaconUrl).toContain("https://server:32400/:/timeline?");
-      expect(beaconUrl).toContain("state=stopped");
-      expect(beaconUrl).toContain("ratingKey=12345");
+      expect(mockBeacon.mock.calls[0][0]).toContain("state=stopped");
     });
   });
 });

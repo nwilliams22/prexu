@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 const LETTERS = "#ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 
 interface AlphaJumpBarProps {
@@ -13,20 +15,39 @@ interface AlphaJumpBarProps {
  * "#" represents items starting with numbers or special characters.
  */
 function AlphaJumpBar({ onJump, availableLetters }: AlphaJumpBarProps) {
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+  const [activeIdx, setActiveIdx] = useState<number | null>(null);
+
   return (
     <nav style={styles.container} aria-label="Jump to letter">
-      {LETTERS.map((letter) => {
+      {LETTERS.map((letter, i) => {
         const hasItems = !availableLetters || availableLetters.has(letter);
+        const isHovered = hasItems && hoveredIdx === i;
+        const isActive = hasItems && activeIdx === i;
         return (
           <button
             key={letter}
             onClick={() => onJump(letter)}
+            onMouseEnter={() => setHoveredIdx(i)}
+            onMouseLeave={() => {
+              setHoveredIdx((prev) => (prev === i ? null : prev));
+              setActiveIdx((prev) => (prev === i ? null : prev));
+            }}
+            onMouseDown={() => setActiveIdx(i)}
+            onMouseUp={() => setActiveIdx(null)}
             style={{
               ...styles.letter,
-              color: hasItems
-                ? "var(--text-primary)"
-                : "var(--text-secondary)",
+              color: isActive
+                ? "#000"
+                : hasItems
+                  ? "var(--text-primary)"
+                  : "var(--text-secondary)",
               opacity: hasItems ? 1 : 0.3,
+              background: isActive
+                ? "var(--accent)"
+                : isHovered
+                  ? "rgba(255, 255, 255, 0.1)"
+                  : "transparent",
             }}
             aria-label={`Jump to ${letter === "#" ? "numbers" : letter}`}
             disabled={!hasItems}
@@ -42,34 +63,34 @@ function AlphaJumpBar({ onJump, availableLetters }: AlphaJumpBarProps) {
 const styles: Record<string, React.CSSProperties> = {
   container: {
     position: "fixed",
-    right: "8px",
+    right: "10px",
     top: "50%",
     transform: "translateY(-50%)",
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
-    gap: "1px",
+    gap: "2px",
     zIndex: 50,
-    padding: "4px 2px",
-    borderRadius: "8px",
-    background: "rgba(0, 0, 0, 0.3)",
-    backdropFilter: "blur(4px)",
+    padding: "8px 4px",
+    borderRadius: "12px",
+    background: "rgba(0, 0, 0, 0.4)",
+    backdropFilter: "blur(6px)",
   },
   letter: {
-    width: "28px",
-    height: "24px",
+    width: "44px",
+    height: "30px",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    fontSize: "0.8rem",
+    fontSize: "0.9rem",
     fontWeight: 600,
     background: "transparent",
     color: "var(--text-primary)",
     border: "none",
     cursor: "pointer",
     padding: 0,
-    borderRadius: "3px",
-    transition: "color 0.1s",
+    borderRadius: "6px",
+    transition: "background 0.1s, color 0.1s",
   },
 };
 

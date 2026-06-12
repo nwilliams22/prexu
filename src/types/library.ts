@@ -33,6 +33,8 @@ export interface PlexStream {
   codec: string;
   index: number;
   displayTitle: string;
+  /** Source file name — present on external/downloaded subtitle streams */
+  title?: string;
   language?: string;
   languageCode?: string;
   selected?: boolean;

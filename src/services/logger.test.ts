@@ -6,6 +6,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
   warn: vi.fn(),
   error: vi.fn(),
   debug: vi.fn(),
+  trace: vi.fn(),
 }));
 
 import { logger } from "./logger";
@@ -38,6 +39,11 @@ describe("logger", () => {
     expect(console.debug).toHaveBeenCalledWith("[cache] hit");
   });
 
+  it("logger.trace calls console.debug with formatted message", async () => {
+    await logger.trace("perf", "tick");
+    expect(console.debug).toHaveBeenCalledWith("[perf] tick");
+  });
+
   it("appends string data to the message", async () => {
     await logger.info("tag", "msg", "extra");
     expect(console.log).toHaveBeenCalledWith("[tag] msg extra");
@@ -58,5 +64,6 @@ describe("logger", () => {
     await expect(logger.warn("tag", "safe")).resolves.toBeUndefined();
     await expect(logger.error("tag", "safe")).resolves.toBeUndefined();
     await expect(logger.debug("tag", "safe")).resolves.toBeUndefined();
+    await expect(logger.trace("tag", "safe")).resolves.toBeUndefined();
   });
 });

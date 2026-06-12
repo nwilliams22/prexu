@@ -1,0 +1,2 @@
+# Runtime DLL is assembled from src-tauri/bin/libmpv-2.dll by CI; never commit it here
+64/libmpv-2.dll

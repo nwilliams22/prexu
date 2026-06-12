@@ -1,0 +1,5 @@
+# Ensure native binaries are never line-ending normalized (corrupts them on checkout)
+*.lib binary
+*.dll binary
+*.exp binary
+*.a binary

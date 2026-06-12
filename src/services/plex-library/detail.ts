@@ -24,6 +24,24 @@ export async function getItemMetadata<T extends PlexMediaItem>(
   return items[0];
 }
 
+/**
+ * Fetch every episode of a show across all seasons.
+ * Plex endpoint: /library/metadata/{ratingKey}/allLeaves — same container
+ * shape as /children (matches python-plexapi Show.episodes()).
+ */
+export async function getAllShowEpisodes<T extends PlexMediaItem>(
+  serverUri: string,
+  serverToken: string,
+  ratingKey: string
+): Promise<T[]> {
+  const data = await fetchJson<PlexMediaContainer<T>>(
+    serverUri,
+    serverToken,
+    `/library/metadata/${ratingKey}/allLeaves`
+  );
+  return data.MediaContainer.Metadata ?? [];
+}
+
 // ── Children (seasons of show, episodes of season) ──
 
 export async function getItemChildren<T extends PlexMediaItem>(

@@ -5,6 +5,24 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Prexu</title>
+    <!-- Inline opaque navy for body so the WebView's first body paint is
+         opaque even before styles.css loads. Tauri main window is
+         `transparent: true` for the native-mpv path; without this, any
+         frame where the window is visible but no React content has
+         painted shows the desktop through. Belt-and-suspenders alongside
+         the visible:false + app_ready handshake (prexu-vs5).
+
+         CRITICAL: html stays transparent (its default). The native player
+         renders mpv into a Win32 host window BEHIND the WebView; for
+         video to show, EVERY layer above mpv must be alpha=0. We toggle
+         body's transparency via the `player-transparent` class in
+         useTransparentWindow, but html is never touched. Painting html
+         opaque navy here would block mpv permanently. (prexu-vs5 fix:
+         d1768ce60 originally styled `html, body` — caused no-video
+         regression; reverted to body-only.) -->
+    <style>
+      body { background-color: #1a1a2e; margin: 0; }
+    </style>
   </head>
   <body>
     <div id="root"></div>
