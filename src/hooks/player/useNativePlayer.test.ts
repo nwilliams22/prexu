@@ -36,10 +36,26 @@ vi.mock("../../services/logger", () => ({
 
 // useAuth + usePreferences supply server + prefs — stub with deterministic
 // shapes. Server is required so the EOF reportTimeline branch doesn't
-// crash; tests don't assert on the timeline calls directly.
+// crash; tests don't assert on the timeline calls directly. The server and
+// timeline objects must be render-stable singletons: initPlayback lists
+// them as useCallback deps, and a fresh identity per render would re-fire
+// the init effect on every state update.
+const { serverMock, timelineMock } = vi.hoisted(() => ({
+  serverMock: { uri: "https://server", accessToken: "token" },
+  timelineMock: {
+    currentTimeRef: { current: 0 },
+    durationRef: { current: 0 },
+    isPlayingRef: { current: false },
+    ratingKeyRef: { current: "" },
+    startTimeline: vi.fn(),
+    stopTimeline: vi.fn(),
+    reportStopped: vi.fn(),
+  },
+}));
+
 vi.mock("../useAuth", () => ({
   useAuth: () => ({
-    server: { uri: "https://server", accessToken: "token" },
+    server: serverMock,
     isAuthenticated: true,
     serverSelected: true,
   }),
@@ -92,15 +108,7 @@ vi.mock("../usePreferences", () => ({
 // useTimelineReporting returns refs + start/stop/reportStopped — stub the
 // minimum surface useNativePlayer uses.
 vi.mock("./useTimelineReporting", () => ({
-  useTimelineReporting: () => ({
-    currentTimeRef: { current: 0 },
-    durationRef: { current: 0 },
-    isPlayingRef: { current: false },
-    ratingKeyRef: { current: "" },
-    startTimeline: vi.fn(),
-    stopTimeline: vi.fn(),
-    reportStopped: vi.fn(),
-  }),
+  useTimelineReporting: () => timelineMock,
 }));
 
 vi.mock("../../services/plex-playback", () => ({
@@ -113,6 +121,7 @@ vi.mock("../../services/plex-playback", () => ({
 
 vi.mock("../../services/storage", () => ({
   addPendingWatchSync: vi.fn(),
+  getClientIdentifier: vi.fn().mockResolvedValue("client-id"),
 }));
 
 // Capture all listen() handlers keyed by event name so tests can fire
@@ -142,6 +151,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { prepareSource, deriveDisplayTitles } from "../../services/plex-playback";
 import { useNativePlayer } from "./useNativePlayer";
 
 beforeEach(() => {
@@ -296,6 +306,106 @@ describe("useNativePlayer dispatch contract (prexu-ve9)", () => {
           shadowEnabled: false,
         },
       });
+    });
+  });
+
+  describe("initPlayback supersession (prexu-bgz.2)", () => {
+    type Prepared = Awaited<ReturnType<typeof prepareSource>>;
+
+    function deferred<T>() {
+      let resolve!: (value: T) => void;
+      const promise = new Promise<T>((res) => {
+        resolve = res;
+      });
+      return { promise, resolve };
+    }
+
+    function makePrepared(url: string, title: string): Prepared {
+      return {
+        item: { type: "movie", title },
+        playable: { Marker: [], duration: 60000 },
+        part: { id: 1, Chapter: [] },
+        categorized: { audio: [], subtitles: [] },
+        defaultAudio: undefined,
+        defaultSub: undefined,
+        isLocal: false,
+        sourceKind: "hls",
+        url,
+        viewOffset: 0,
+      } as unknown as Prepared;
+    }
+
+    it("ignores a stale prepareSource result after a newer init starts", async () => {
+      vi.mocked(invoke).mockResolvedValue(undefined);
+      vi.mocked(deriveDisplayTitles).mockImplementation((item) => ({
+        title: (item as unknown as { title: string }).title,
+        subtitle: "",
+      }));
+      const first = deferred<Prepared>();
+      const second = deferred<Prepared>();
+      vi.mocked(prepareSource)
+        .mockImplementationOnce(() => first.promise)
+        .mockImplementationOnce(() => second.promise);
+
+      const { result, rerender } = renderHook(
+        ({ rk }: { rk: string }) => useNativePlayer(rk),
+        { initialProps: { rk: "100" } },
+      );
+
+      // Second episode starts while the first is still preparing.
+      rerender({ rk: "200" });
+      expect(prepareSource).toHaveBeenCalledTimes(2);
+
+      // The first (now stale) prepare resolves late.
+      await act(async () => {
+        first.resolve(makePrepared("https://server/old.mkv", "Old Episode"));
+        await first.promise;
+        await Promise.resolve();
+      });
+
+      expect(invoke).not.toHaveBeenCalledWith(
+        "player_load_url",
+        expect.objectContaining({ url: "https://server/old.mkv" }),
+      );
+      expect(result.current.title).not.toBe("Old Episode");
+
+      // The current init proceeds normally once its prepare resolves.
+      await act(async () => {
+        second.resolve(makePrepared("https://server/new.mkv", "New Episode"));
+        await second.promise;
+      });
+
+      await waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith("player_load_url", {
+          url: "https://server/new.mkv",
+          headers: {},
+          startOffsetMs: 0,
+        });
+      });
+      expect(invoke).not.toHaveBeenCalledWith(
+        "player_load_url",
+        expect.objectContaining({ url: "https://server/old.mkv" }),
+      );
+      expect(result.current.title).toBe("New Episode");
+    });
+
+    it("does not load anything when the hook unmounts mid-init", async () => {
+      vi.mocked(invoke).mockResolvedValue(undefined);
+      const first = deferred<Prepared>();
+      vi.mocked(prepareSource).mockImplementationOnce(() => first.promise);
+
+      const { unmount } = renderHook(() => useNativePlayer("100"));
+      unmount();
+      vi.mocked(invoke).mockClear();
+
+      first.resolve(makePrepared("https://server/old.mkv", "Old Episode"));
+      await first.promise;
+      await Promise.resolve();
+
+      expect(invoke).not.toHaveBeenCalledWith(
+        "player_load_url",
+        expect.anything(),
+      );
     });
   });
 

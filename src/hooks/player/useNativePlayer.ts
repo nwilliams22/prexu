@@ -93,6 +93,11 @@ export function useNativePlayer(
 
   // Refs that don't trigger re-init
   const directPlayFailedRef = useRef(false);
+  // Monotonic init generation. Each initPlayback claims the next value and
+  // every async continuation checks it still owns the current generation
+  // before touching mpv or React state; the per-ratingKey cleanup bumps it
+  // so a superseded init stops at its next checkpoint.
+  const initGenRef = useRef(0);
   const isLocalPlaybackRef = useRef(false);
   // Media part id of the currently playing file — needed to persist subtitle
   // selection on the server after an on-demand download.
@@ -280,7 +285,8 @@ export function useNativePlayer(
 
   // ── Initialize playback ──
   const initPlayback = useCallback(async () => {
-    logger.info("player", "initPlayback", { ratingKey });
+    const gen = ++initGenRef.current;
+    logger.info("player", "initPlayback", { ratingKey, gen });
     if (!server || !ratingKey) {
       setIsLoading(false);
       setPlaybackError("No server or media selected");
@@ -306,6 +312,10 @@ export function useNativePlayer(
         directPlayFailed: directPlayFailedRef.current,
         skipCodecCheck: true,
       });
+      if (gen !== initGenRef.current) {
+        logger.debug("player", "initPlayback superseded", { gen });
+        return;
+      }
 
       const { title: t, subtitle: s } = deriveDisplayTitles(prepared.item);
       setTitle(t);
@@ -334,6 +344,10 @@ export function useNativePlayer(
       void (async () => {
         try {
           const clientId = await getClientIdentifier();
+          if (gen !== initGenRef.current) {
+            logger.debug("player", "initPlayback superseded", { gen });
+            return;
+          }
           await invoke("player_set_timeline_context", {
             ctx: {
               serverUri: server.uri,
@@ -365,6 +379,10 @@ export function useNativePlayer(
         headers: {} as Record<string, string>,
         startOffsetMs: prepared.viewOffset,
       });
+      if (gen !== initGenRef.current) {
+        logger.debug("player", "initPlayback superseded", { gen });
+        return;
+      }
       logger.info("player", "load_url returned OK, waiting for ready event");
 
       // Apply saved volume + mute now that mpv exists. mpv volume is 0..200
@@ -373,7 +391,15 @@ export function useNativePlayer(
       await invoke("player_set_volume", {
         vol: Math.max(0, Math.min(200, Math.round(volumeRef.current * 100))),
       });
+      if (gen !== initGenRef.current) {
+        logger.debug("player", "initPlayback superseded", { gen });
+        return;
+      }
       await invoke("player_set_muted", { muted: isMutedRef.current });
+      if (gen !== initGenRef.current) {
+        logger.debug("player", "initPlayback superseded", { gen });
+        return;
+      }
 
       // Apply default audio and subtitle track selection. mpv picks aid=1 by
       // default which is usually fine, but the user's preferredAudioLanguage
@@ -389,6 +415,10 @@ export function useNativePlayer(
           await invoke("player_set_audio_track", { id: aidIdx + 1 }).catch((err) =>
             logger.warn("player", "initial player_set_audio_track failed", String(err)),
           );
+          if (gen !== initGenRef.current) {
+            logger.debug("player", "initPlayback superseded", { gen });
+            return;
+          }
         }
       }
       if (defaultSub) {
@@ -413,10 +443,18 @@ export function useNativePlayer(
           logger.warn("player", "initial player_set_sub_track(off) failed", String(err)),
         );
       }
+      if (gen !== initGenRef.current) {
+        logger.debug("player", "initPlayback superseded", { gen });
+        return;
+      }
 
       timeline.startTimeline();
       // setIsLoading(false) happens when `player://ready` fires.
     } catch (err) {
+      if (gen !== initGenRef.current) {
+        logger.debug("player", "initPlayback superseded", { gen });
+        return;
+      }
       // Tauri invoke rejects with a string (not Error) — the previous
       // `err instanceof Error` path was hiding every backend failure.
       const msg =
@@ -445,6 +483,7 @@ export function useNativePlayer(
     directPlayFailedRef.current = false;
     initPlayback();
     return () => {
+      initGenRef.current++;
       logger.info("player", "cleanup: stopping timeline + soft-stop mpv");
       timeline.stopTimeline();
       timeline.reportStopped();
@@ -625,6 +664,7 @@ export function useNativePlayer(
   // playback continues uninterrupted.
   const refreshSubtitlesAfterDownload = useCallback(async () => {
     if (!server) return;
+    const gen = initGenRef.current;
     const prevIds = subtitleTracksRef.current.map((t) => t.id);
     const result = await waitForDownloadedSubtitle(
       server.uri,
@@ -633,6 +673,10 @@ export function useNativePlayer(
       partIdRef.current,
       prevIds,
     );
+    if (gen !== initGenRef.current) {
+      logger.debug("player", "refreshSubtitlesAfterDownload superseded", { gen });
+      return;
+    }
     if (!result) return;
     // Sync the ref immediately — selectSubtitleTrack below resolves the
     // stream's `key` through it before the state update lands.
@@ -648,6 +692,10 @@ export function useNativePlayer(
         );
       } catch (err) {
         logger.error("player", "persist downloaded subtitle failed", String(err));
+      }
+      if (gen !== initGenRef.current) {
+        logger.debug("player", "refreshSubtitlesAfterDownload superseded", { gen });
+        return;
       }
     }
     logger.info("player", "applying downloaded subtitle", { streamId: result.added.id });

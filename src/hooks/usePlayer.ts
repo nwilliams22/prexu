@@ -191,6 +191,11 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
 
   // Direct play failure tracking
   const directPlayFailedRef = useRef(false);
+  // Monotonic init generation. Each initPlayback claims the next value and
+  // its async continuations check ownership before touching the video
+  // element or React state; the per-ratingKey cleanup bumps it so a
+  // superseded init stops at its next checkpoint.
+  const initGenRef = useRef(0);
   // Track if current playback is from a local download (for offline watch sync)
   const isLocalPlaybackRef = useRef(false);
   // Media part id of the current file — needed to persist subtitle selection
@@ -212,6 +217,7 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
 
   // ── Initialize playback ──
   const initPlayback = useCallback(async () => {
+    const gen = ++initGenRef.current;
     if (!server || !ratingKey) {
       setIsLoading(false);
       setPlaybackError("No server or media selected");
@@ -231,6 +237,10 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
         directPlayFailed: directPlayFailedRef.current,
         skipCodecCheck: false,
       });
+      if (gen !== initGenRef.current) {
+        logger.debug("player", "initPlayback superseded", { gen });
+        return;
+      }
 
       const { title: t, subtitle: s } = deriveDisplayTitles(prepared.item);
       setTitle(t);
@@ -265,6 +275,10 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
 
       if (prepared.sourceKind === "local") {
         const { convertFileSrc } = await import("@tauri-apps/api/core");
+        if (gen !== initGenRef.current) {
+          logger.debug("player", "initPlayback superseded", { gen });
+          return;
+        }
         const localUrl = convertFileSrc(prepared.url);
         hlsLoader.destroyHls();
         video.src = localUrl;
@@ -282,6 +296,10 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
         video.play().catch(() => {});
       } else {
         const Hls = await hlsLoader.loadHls();
+        if (gen !== initGenRef.current) {
+          logger.debug("player", "initPlayback superseded", { gen });
+          return;
+        }
         if (!Hls.isSupported()) {
           throw new Error("HLS playback is not supported in this browser/webview");
         }
@@ -352,6 +370,10 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
       timeline.startTimeline();
       setIsLoading(false);
     } catch (err) {
+      if (gen !== initGenRef.current) {
+        logger.debug("player", "initPlayback superseded", { gen });
+        return;
+      }
       setPlaybackError(err instanceof Error ? err.message : "Failed to start playback");
       setIsLoading(false);
     }
@@ -363,6 +385,7 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
     directPlayFailedRef.current = false;
     initPlayback();
     return () => {
+      initGenRef.current++;
       hlsLoader.destroyHls();
       timeline.stopTimeline();
       timeline.reportStopped();
@@ -512,6 +535,7 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
   // at the current position, so playback resumes where it was.
   const refreshSubtitlesAfterDownload = useCallback(async () => {
     if (!server) return;
+    const gen = initGenRef.current;
     const prevIds = streams.subtitleTracks.map((t) => t.id);
     const result = await waitForDownloadedSubtitle(
       server.uri,
@@ -520,6 +544,10 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
       partIdRef.current,
       prevIds,
     );
+    if (gen !== initGenRef.current) {
+      logger.debug("player", "refreshSubtitlesAfterDownload superseded", { gen });
+      return;
+    }
     if (!result) return;
     streams.setSubtitleTracks(result.tracks);
     if (partIdRef.current !== undefined) {
@@ -532,6 +560,10 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
         );
       } catch (err) {
         logger.error("player", "persist downloaded subtitle failed", String(err));
+      }
+      if (gen !== initGenRef.current) {
+        logger.debug("player", "refreshSubtitlesAfterDownload superseded", { gen });
+        return;
       }
     }
     logger.info("player", "applying downloaded subtitle", { streamId: result.added.id });
