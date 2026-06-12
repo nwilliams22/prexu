@@ -122,7 +122,7 @@ If the task needs a skill you don't have, suggest or ask the user for this new s
 ## Phase 4: Submit loop
 - We never commit or PR with attribution
 - We give summary PRs without a changes section as git has the diff
-- We wait for CI to pass then ask the user to squash merge and delete the merged branch
+- We wait for CI to pass, then squash merge the PR and delete the remote branch ourselves (no need to ask)
 - Once merged, we checkout main, pull and delete our merged feature branch
 - We go back to Phase 1 to work a new epic
 
