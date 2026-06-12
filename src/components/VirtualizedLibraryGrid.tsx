@@ -8,12 +8,30 @@
  *
  * For small collections (< 100 items), falls back to
  * the standard CSS grid to keep things simple.
+ *
+ * Exposes an imperative `scrollToIndex(index)` API via the React 19
+ * `ref` prop, so callers (e.g. AlphaJumpBar) can scroll to off-screen
+ * items even when virtualization has unmounted them.
  */
 
-import { useRef, useState, useCallback, useMemo, useLayoutEffect, type ReactNode } from "react";
+import {
+  useRef,
+  useState,
+  useCallback,
+  useMemo,
+  useLayoutEffect,
+  useImperativeHandle,
+  type ReactNode,
+  type Ref,
+} from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useBreakpoint } from "../hooks/useBreakpoint";
 import type { Breakpoint } from "../hooks/useBreakpoint";
+
+export interface LibraryGridHandle {
+  /** Smoothly scroll the grid to the item at the given index. */
+  scrollToIndex: (index: number) => void;
+}
 
 interface VirtualizedLibraryGridProps<T> {
   items: T[];
@@ -32,6 +50,8 @@ interface VirtualizedLibraryGridProps<T> {
   header?: ReactNode;
   /** Content to append to the grid (rendered below items, e.g. loading skeletons) */
   footer?: ReactNode;
+  /** React 19 ref-as-prop: receives the imperative scroll handle */
+  ref?: Ref<LibraryGridHandle>;
 }
 
 const GRID_MIN_WIDTH_PX: Record<Breakpoint, number> = {
@@ -58,11 +78,13 @@ function VirtualizedLibraryGrid<T>({
   renderExpansion,
   header,
   footer,
+  ref,
 }: VirtualizedLibraryGridProps<T>) {
   const bp = useBreakpoint();
   const minWidth = GRID_MIN_WIDTH_PX[bp];
   const parentRef = useRef<HTMLDivElement>(null);
   const [cols, setCols] = useState(4);
+  const virtualize = items.length >= virtualizeThreshold;
 
   // Recalculate columns on resize — use useLayoutEffect so the first
   // measurement happens synchronously before paint, avoiding a flash
@@ -85,8 +107,101 @@ function VirtualizedLibraryGrid<T>({
     return () => observer.disconnect();
   }, [minWidth]);
 
+  // Build the row model for virtualized path; keep call unconditional so
+  // the hook order stays stable when items.length crosses the threshold.
+  const rows = useMemo(() => {
+    if (!virtualize) return [] as VirtualRow<T>[];
+    const result: VirtualRow<T>[] = [];
+    for (let i = 0; i < items.length; i += cols) {
+      const rowItems = items.slice(i, i + cols);
+      result.push({ type: "cards", items: rowItems, startIndex: i });
+      if (expandedKey && renderExpansion) {
+        const expandedItem = rowItems.find(
+          (item, idx) => getKey(item, i + idx) === expandedKey,
+        );
+        if (expandedItem) {
+          result.push({ type: "expansion", item: expandedItem });
+        }
+      }
+    }
+    return result;
+  }, [virtualize, items, cols, expandedKey, renderExpansion, getKey]);
+
+  const getScrollElement = useCallback(() => {
+    let el = parentRef.current?.parentElement;
+    while (el) {
+      const overflow = getComputedStyle(el).overflowY;
+      if (overflow === "auto" || overflow === "scroll") return el;
+      el = el.parentElement;
+    }
+    return document.documentElement;
+  }, []);
+
+  const virtualizer = useVirtualizer({
+    count: virtualize ? rows.length : 0,
+    getScrollElement,
+    estimateSize: (index) => {
+      const row = rows[index];
+      if (!row) return estimateHeight + GAP_Y;
+      if (row.type === "expansion") return 300;
+      return estimateHeight + GAP_Y;
+    },
+    overscan: 3,
+  });
+
+  // Stash the latest virtualizer in a ref so the imperative handle never
+  // closes over a stale instance (the virtualizer object itself changes
+  // identity on each render).
+  const virtualizerRef = useRef(virtualizer);
+  virtualizerRef.current = virtualizer;
+
+  useImperativeHandle(
+    ref,
+    (): LibraryGridHandle => ({
+      scrollToIndex: (index: number) => {
+        if (index < 0) return;
+        if (virtualize) {
+          const rowIndex = Math.floor(index / Math.max(1, cols));
+          // First pass uses estimated row heights for any unmeasured rows
+          // between the current scroll position and the target. For an
+          // alphabet jump that may cover hundreds of unmeasured rows, even a
+          // small per-row estimate error compounds (e.g. 10 px × 200 rows =
+          // 2000 px short). Once the target window renders, those rows get
+          // measured by the virtualizer's measureElement callback; we
+          // re-issue the scroll on the next frame so the corrected offset
+          // is applied. A second RAF tick guards against multi-row libraries
+          // where the second pass still has unmeasured neighbours.
+          // `align: "start"` puts the target row at the TOP of the viewport
+          // (behaviour the user expects for an alphabet jump). `behavior:
+          // "auto"` (instant) avoids smooth-scroll animation latency that
+          // would otherwise mask the second-pass correction.
+          const v = virtualizerRef.current;
+          v.scrollToIndex(rowIndex, { align: "start", behavior: "auto" });
+          requestAnimationFrame(() => {
+            virtualizerRef.current.scrollToIndex(rowIndex, {
+              align: "start",
+              behavior: "auto",
+            });
+            requestAnimationFrame(() => {
+              virtualizerRef.current.scrollToIndex(rowIndex, {
+                align: "start",
+                behavior: "auto",
+              });
+            });
+          });
+          return;
+        }
+        const target = parentRef.current?.querySelector<HTMLElement>(
+          `[data-grid-index="${index}"]`,
+        );
+        target?.scrollIntoView({ behavior: "auto", block: "start" });
+      },
+    }),
+    [virtualize, cols],
+  );
+
   // For small item counts, use a simple CSS grid (no virtualization overhead)
-  if (items.length < virtualizeThreshold) {
+  if (!virtualize) {
     return (
       <div ref={parentRef}>
         <div
@@ -98,93 +213,15 @@ function VirtualizedLibraryGrid<T>({
         >
           {header}
           {items.map((item, i) => (
-            <div key={getKey(item, i)}>{renderItem(item, i)}</div>
+            <div key={getKey(item, i)} data-grid-index={i}>
+              {renderItem(item, i)}
+            </div>
           ))}
           {footer}
         </div>
       </div>
     );
   }
-
-  return (
-    <VirtualizedGridInner
-      items={items}
-      renderItem={renderItem}
-      getKey={getKey}
-      estimateHeight={estimateHeight}
-      parentRef={parentRef}
-      cols={cols}
-      expandedKey={expandedKey}
-      renderExpansion={renderExpansion}
-      header={header}
-      footer={footer}
-    />
-  );
-}
-
-/** Inner virtualized component — extracted to avoid hook rules issues with early returns */
-function VirtualizedGridInner<T>({
-  items,
-  renderItem,
-  getKey,
-  estimateHeight,
-  parentRef,
-  cols,
-  expandedKey,
-  renderExpansion,
-  header,
-  footer,
-}: {
-  items: T[];
-  renderItem: (item: T, index: number) => ReactNode;
-  getKey: (item: T, index: number) => string;
-  estimateHeight: number;
-  parentRef: React.RefObject<HTMLDivElement | null>;
-  cols: number;
-  expandedKey?: string | null;
-  renderExpansion?: (item: T) => ReactNode;
-  header?: ReactNode;
-  footer?: ReactNode;
-}) {
-  // Build the row model: group items into rows, inserting expansion rows as needed
-  const rows = useMemo(() => {
-    const result: VirtualRow<T>[] = [];
-    for (let i = 0; i < items.length; i += cols) {
-      const rowItems = items.slice(i, i + cols);
-      result.push({ type: "cards", items: rowItems, startIndex: i });
-
-      // Check if any item in this row is the expanded one
-      if (expandedKey && renderExpansion) {
-        const expandedItem = rowItems.find((item, idx) => getKey(item, i + idx) === expandedKey);
-        if (expandedItem) {
-          result.push({ type: "expansion", item: expandedItem });
-        }
-      }
-    }
-    return result;
-  }, [items, cols, expandedKey, renderExpansion, getKey]);
-
-  const getScrollElement = useCallback(() => {
-    // Walk up to find the scrollable ancestor
-    let el = parentRef.current?.parentElement;
-    while (el) {
-      const overflow = getComputedStyle(el).overflowY;
-      if (overflow === "auto" || overflow === "scroll") return el;
-      el = el.parentElement;
-    }
-    return document.documentElement;
-  }, [parentRef]);
-
-  const virtualizer = useVirtualizer({
-    count: rows.length,
-    getScrollElement,
-    estimateSize: (index) => {
-      const row = rows[index];
-      if (row.type === "expansion") return 300; // expansion panel estimated height
-      return estimateHeight + GAP_Y;
-    },
-    overscan: 3,
-  });
 
   return (
     <div ref={parentRef}>

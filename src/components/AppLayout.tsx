@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Outlet, Navigate, useNavigate } from "react-router-dom";
+import { Outlet, Navigate, useNavigate, useLocation } from "react-router-dom";
+import { logger } from "../services/logger";
 import { useAuth } from "../hooks/useAuth";
+import { usePlayerLayerStyle } from "../hooks/player/usePlayerLayerStyle";
 import { usePreferences } from "../hooks/usePreferences";
 import { useThemeEffect } from "../hooks/useTheme";
 import { useWatchSync } from "../hooks/useWatchSync";
@@ -21,6 +23,7 @@ import BottomNav from "./BottomNav";
 function AppLayout() {
   const auth = useAuth();
   const { isAuthenticated, serverSelected } = auth;
+  const playerLayerStyle = usePlayerLayerStyle();
   const { preferences } = usePreferences();
   useThemeEffect(preferences.appearance.theme);
   useWatchSync(auth.server ?? null);
@@ -35,6 +38,79 @@ function AppLayout() {
   const sidebarOverlayRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Force a React commit on every window resize so WebView2 (which under
+  // Tauri's `transparent: true` defers paint after a window-resize)
+  // re-flows the dashboard content to fill the new client area
+  // immediately, instead of the user seeing a 1-2 second gap between
+  // the new window edge and the content (prexu-uzk).
+  //
+  // Two signals feed the tick:
+  //   1. `window.addEventListener('resize')` — browser-side, may be batched
+  //      by WebView2 under transparent-window mode.
+  //   2. Tauri 'window://resized' event emitted from the Rust
+  //      `WindowEvent::Resized` handler — fires on every OS-level WM_SIZE
+  //      so we always get a kick even when the browser swallows the resize.
+  //
+  // Inside the rAF callback we ALSO read `document.body.offsetHeight`
+  // before the setState. The read forces WebView2 to perform synchronous
+  // layout at this exact moment instead of deferring until the next idle.
+  // Reading the value is the side effect; the value itself is discarded.
+  // rAF-throttled so a continuous drag-resize doesn't fire more than one
+  // tick per browser frame.
+  const [, setResizeTick] = useState(0);
+  useEffect(() => {
+    let raf = 0;
+    const onResize = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        // Force synchronous layout — WebView2 may otherwise defer reflow
+        // until the next idle, which leaves the dashboard content lagging
+        // behind the new window size for ~1–2s during fast drag-resize.
+        void document.body.offsetHeight;
+        // Layout alone is not enough — WebView2 with transparent: true
+        // can compute the new layout but STILL defer the paint commit,
+        // so the newly-uncovered area on a grow-resize stays navy
+        // (main HWND background) for up to a second. Reading
+        // documentElement.scrollLeft after writing it forces a paint
+        // commit on the next frame instead of waiting for idle. The
+        // write+read pair is the trick: a no-op scrollBy gets
+        // optimized away.
+        const root = document.documentElement;
+        const sx = root.scrollLeft;
+        root.scrollLeft = sx + 1;
+        // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+        root.scrollLeft;
+        root.scrollLeft = sx;
+        setResizeTick((t) => t + 1);
+      });
+    };
+    window.addEventListener("resize", onResize);
+
+    // Tauri-side signal: the Rust window-event handler also fires this
+    // on every WM_SIZE so we don't depend on the browser's resize event
+    // alone. Webview-side `window.resize` can be batched under
+    // transparent-window mode; the Tauri event always lands.
+    let tauriUnlisten: (() => void) | undefined;
+    (async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        tauriUnlisten = await listen("window://resized", () => onResize());
+      } catch (err) {
+        logger.warn(
+          "layout",
+          "listen(window://resized) failed",
+          String(err),
+        );
+      }
+    })();
+
+    return () => {
+      window.removeEventListener("resize", onResize);
+      cancelAnimationFrame(raf);
+      tauriUnlisten?.();
+    };
+  }, []);
 
   const handleScroll = useCallback(() => {
     const el = mainRef.current;
@@ -53,6 +129,27 @@ function AppLayout() {
   useFocusTrap(sidebarOverlayRef, sidebarOpen && tabletOrBelow);
   useRouteAnnouncer();
 
+  // Route-transition spinner — covers the gap between AppLayout/route mount
+  // and the destination page's first paint. Most visible when navigating
+  // FROM the player route, because AppLayout itself is freshly mounting
+  // (Player is rendered outside AppLayout). Without this overlay the user
+  // sees ~1s of static navy bg before the destination page renders content.
+  // The 600ms ceiling is empirical: covers the dev-mode gap observed in user
+  // testing while staying short enough that snappy transitions don't linger.
+  const location = useLocation();
+  const lastPathRef = useRef(location.pathname);
+  const [showTransitionSpinner, setShowTransitionSpinner] = useState(true);
+  useEffect(() => {
+    // Either the AppLayout just mounted (initial true) or pathname changed
+    // — either way, hide after the gap window closes.
+    if (location.pathname !== lastPathRef.current) {
+      lastPathRef.current = location.pathname;
+      setShowTransitionSpinner(true);
+    }
+    const id = window.setTimeout(() => setShowTransitionSpinner(false), 600);
+    return () => window.clearTimeout(id);
+  }, [location.pathname]);
+
   // Close sidebar overlay on Escape
   useEffect(() => {
     if (!sidebarOpen || !tabletOrBelow) return;
@@ -68,7 +165,12 @@ function AppLayout() {
   if (!serverSelected) return <Navigate to="/servers" replace />;
 
   return (
-    <div style={styles.container}>
+    <div
+      style={{
+        ...styles.container,
+        ...playerLayerStyle,
+      }}
+    >
       {/* Header */}
       <header style={styles.header}>
         {/* Left: logo/hamburger area — matches sidebar width below */}
@@ -165,6 +267,11 @@ function AppLayout() {
               <Outlet />
             </ErrorBoundary>
           </div>
+          {showTransitionSpinner && (
+            <div style={styles.transitionSpinner} aria-hidden>
+              <div className="loading-spinner" />
+            </div>
+          )}
         </main>
       </div>
 
@@ -238,6 +345,22 @@ const styles: Record<string, React.CSSProperties> = {
     overflowX: "hidden",
     display: "flex",
     flexDirection: "column",
+    // Owns the background for the route content area so the post-Player-
+    // unmount transition doesn't show body navy through a transparent
+    // Outlet. Same colour as body bg, so no visual change in steady state.
+    background: "var(--bg-primary)",
+    // Required for the absolutely-positioned transition spinner overlay.
+    position: "relative",
+  },
+  transitionSpinner: {
+    position: "absolute",
+    inset: 0,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    background: "var(--bg-primary)",
+    zIndex: 5,
+    pointerEvents: "none",
   },
   pageTransition: {
     animation: "pageEnter 0.2s ease-out",

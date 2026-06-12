@@ -1,8 +1,16 @@
 /**
- * Core playback hook — manages video element, hls.js, playback state,
- * stream tracks, and timeline reporting to Plex.
+ * Core playback hook. Dispatches to one of two backends per platform:
+ * - Windows (Tauri): `useNativePlayer` — libmpv via player://* events
+ * - everywhere else: HTML5 `<video>` + hls.js (the original implementation
+ *   below, renamed `useHtml5Player`)
  *
- * Composes sub-hooks for HLS management, timeline reporting, and stream selection.
+ * Both backends return the same `UsePlayerResult` so PlayerControls,
+ * watch-together hooks, and the post-play screen don't care which is active.
+ *
+ * The dispatch decision is a module-level constant set once at import time
+ * (so React always calls the same hook for any given component instance —
+ * the rules-of-hooks invariant holds even though the call site is a
+ * ternary).
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -11,27 +19,37 @@ import { usePreferences } from "./usePreferences";
 import { useHlsLoader } from "./player/useHlsLoader";
 import { useTimelineReporting } from "./player/useTimelineReporting";
 import { useStreamSelection } from "./player/useStreamSelection";
-import { getItemMetadata } from "../services/plex-library";
-import { getLocalFilePath } from "../services/downloads";
+import { useNativePlayer } from "./player/useNativePlayer";
 import { addPendingWatchSync } from "../services/storage";
 import {
-  canDirectPlay,
-  buildDirectPlayUrl,
-  buildTranscodeUrl,
+  prepareSource,
+  deriveDisplayTitles,
   buildHlsConfig,
-  categorizeStreams,
   reportTimeline,
   getSavedVolume,
   saveVolume,
 } from "../services/plex-playback";
+import {
+  setSelectedSubtitleStream,
+  waitForDownloadedSubtitle,
+} from "../services/subtitle-search";
 import type {
-  PlexMediaItem,
-  PlexMovie,
-  PlexEpisode,
-  PlexStream,
   PlexChapter,
   PlexMarker,
+  PlexStream,
 } from "../types/library";
+import type {
+  NormalizationPreset,
+  SubtitleStylePreferences,
+} from "../types/preferences";
+import { buildSubtitleCss } from "../utils/subtitle-css";
+import { logger } from "../services/logger";
+
+export const IS_NATIVE_PLAYER =
+  typeof window !== "undefined" &&
+  "__TAURI_INTERNALS__" in window &&
+  typeof navigator !== "undefined" &&
+  navigator.userAgent.includes("Windows");
 
 export interface UsePlayerResult {
   // Refs
@@ -57,6 +75,10 @@ export interface UsePlayerResult {
   chapters: PlexChapter[];
   markers: PlexMarker[];
   itemType: string;
+  /** For episodes: the season's ratingKey, used by useShowCreditsLength to
+   *  fetch sibling episodes for the credits-length median estimate. Empty
+   *  string for movies / non-episode media. */
+  parentRatingKey: string;
 
   // Stream info
   audioTracks: PlexStream[];
@@ -73,9 +95,57 @@ export interface UsePlayerResult {
   selectAudioTrack: (streamId: number) => void;
   selectSubtitleTrack: (streamId: number | null) => void;
   retry: () => void;
+  /** After an on-demand subtitle download: poll metadata for the new stream,
+   *  persist it as the part default on the server (Plex deletes unselected
+   *  on-demand downloads), and start showing it without restarting playback.
+   *  Native: mpv sub-add into the running instance. HTML5: HLS rebuild at the
+   *  current position via selectSubtitleTrack. */
+  refreshSubtitlesAfterDownload: () => Promise<void>;
+
+  // ── Backend dispatch methods ──────────────────────────────────────────────
+  // These let consumers drive platform-specific player IPC without
+  // branching on IS_NATIVE_PLAYER. Each backend implements them per its
+  // own semantics; the consumer just calls the method on `player`.
+
+  /** Pause playback. No-op if already paused. Idempotent. */
+  pause: () => void;
+  /** Tear down the player. Native: invoke("player_unload"). HTML5: no-op
+   *  (unmount cleanup handles it). Caller awaits before navigating away. */
+  unload: () => Promise<void>;
+  /** Set fullscreen explicitly. Native: invoke("player_set_fullscreen").
+   *  HTML5: document.requestFullscreen / exitFullscreen on documentElement.
+   *  Returns when the OS transition has been requested (not necessarily
+   *  settled). */
+  setFullscreen: (fullscreen: boolean) => Promise<void>;
+  /** Subscribe to end-of-file. Native: listen to player://eof. HTML5:
+   *  video.addEventListener("ended"). Returns an unsubscribe function. */
+  subscribeToEof: (handler: () => void) => () => void;
+  /** Apply a libass/CSS subtitle style. Native: caches latest and invokes
+   *  player_apply_sub_style once mpv is ready (re-applies on every change).
+   *  HTML5: maintains a <style id="prexu-subtitle-style"> tag with ::cue
+   *  CSS derived from the prefs via buildSubtitleCss. */
+  applySubtitleStyle: (args: { size: number; style: SubtitleStylePreferences }) => void;
+  /** Apply audio enhancement changes that require backend-specific IPC.
+   *  Native: invoke("player_set_af_chain") and/or "player_set_audio_delay_ms".
+   *  HTML5: no-op (the Web Audio graph from useAudioEnhancements is the
+   *  authoritative path on HTML5). The caller should still update the
+   *  React-side audioEnhancements state for the Web Audio path; this
+   *  method only handles the backend-side IPC. */
+  applyAudioEnhancement: (changes: {
+    normalizationPreset?: NormalizationPreset;
+    audioOffsetMs?: number;
+  }) => void;
 }
 
 export function usePlayer(ratingKey: string, offsetOverride?: number | null): UsePlayerResult {
+  // The branch is a module-level constant — React calls the same hook for
+  // any given component instance across renders, so rules-of-hooks holds.
+  return IS_NATIVE_PLAYER
+    ? useNativePlayer(ratingKey, offsetOverride)
+    : useHtml5Player(ratingKey, offsetOverride);
+}
+
+function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UsePlayerResult {
   const { server } = useAuth();
   const { preferences } = usePreferences();
   const prefsRef = useRef(preferences);
@@ -106,6 +176,7 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
   const [chapters, setChapters] = useState<PlexChapter[]>([]);
   const [markers, setMarkers] = useState<PlexMarker[]>([]);
   const [itemType, setItemType] = useState("");
+  const [parentRatingKey, setParentRatingKey] = useState("");
 
   // Stream selection sub-hook
   const streams = useStreamSelection(
@@ -122,6 +193,9 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
   const directPlayFailedRef = useRef(false);
   // Track if current playback is from a local download (for offline watch sync)
   const isLocalPlaybackRef = useRef(false);
+  // Media part id of the current file — needed to persist subtitle selection
+  // on the server after an on-demand download.
+  const partIdRef = useRef<number | undefined>(undefined);
 
   // Refs for values used in initPlayback but that shouldn't trigger re-init
   const volumeRef = useRef(volume);
@@ -149,66 +223,35 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
     setPlaybackError(null);
 
     try {
-      const item = await getItemMetadata<PlexMediaItem>(
-        server.uri,
-        server.accessToken,
+      const prepared = await prepareSource({
+        server,
         ratingKey,
+        preferences: prefsRef.current.playback,
+        offsetOverride: offsetOverrideRef.current,
+        directPlayFailed: directPlayFailedRef.current,
+        skipCodecCheck: false,
+      });
+
+      const { title: t, subtitle: s } = deriveDisplayTitles(prepared.item);
+      setTitle(t);
+      setSubtitle(s);
+
+      setChapters(prepared.part.Chapter ?? []);
+      partIdRef.current = prepared.part.id;
+      setMarkers(prepared.playable.Marker ?? []);
+      setItemType(prepared.item.type);
+      setParentRatingKey(
+        prepared.item.type === "episode"
+          ? (prepared.playable as import("../types/library").PlexEpisode).parentRatingKey ?? ""
+          : "",
       );
 
-      // Set display title
-      if (item.type === "episode") {
-        const ep = item as PlexEpisode;
-        setTitle(ep.grandparentTitle);
-        setSubtitle(
-          `S${String(ep.parentIndex).padStart(2, "0")}E${String(ep.index).padStart(2, "0")} — ${ep.title}`,
-        );
-      } else if (item.type === "movie") {
-        const movie = item as PlexMovie;
-        setTitle(movie.title);
-        setSubtitle(movie.year ? String(movie.year) : "");
-      } else {
-        setTitle(item.title);
-        setSubtitle("");
-      }
+      streams.setAudioTracks(prepared.categorized.audio);
+      streams.setSubtitleTracks(prepared.categorized.subtitles);
+      streams.setSelectedAudioId(prepared.defaultAudio?.id ?? prepared.categorized.audio[0]?.id ?? null);
+      streams.setSelectedSubtitleId(prepared.defaultSub?.id ?? null);
 
-      // Get media info
-      const playableItem = item as PlexMovie | PlexEpisode;
-      const media = playableItem.Media?.[0];
-      if (!media || !media.Part || media.Part.length === 0) {
-        throw new Error("No playable media found");
-      }
-
-      const part = media.Part[0];
-      setChapters(part.Chapter ?? []);
-      setMarkers(playableItem.Marker ?? []);
-      setItemType(item.type);
-
-      // Categorize and set default streams
-      const categorized = categorizeStreams(part);
-      streams.setAudioTracks(categorized.audio);
-      streams.setSubtitleTracks(categorized.subtitles);
-
-      const pb = prefsRef.current.playback;
-      let defaultAudio = pb.preferredAudioLanguage
-        ? categorized.audio.find((s) => s.languageCode === pb.preferredAudioLanguage)
-        : undefined;
-      if (!defaultAudio) defaultAudio = categorized.audio.find((s) => s.selected);
-      streams.setSelectedAudioId(defaultAudio?.id ?? categorized.audio[0]?.id ?? null);
-
-      let defaultSub: PlexStream | undefined;
-      if (pb.defaultSubtitles === "off") {
-        defaultSub = undefined;
-      } else if (pb.defaultSubtitles === "always" && pb.preferredSubtitleLanguage) {
-        defaultSub = categorized.subtitles.find(
-          (s) => s.languageCode === pb.preferredSubtitleLanguage,
-        ) ?? categorized.subtitles[0];
-      } else {
-        defaultSub = categorized.subtitles.find((s) => s.selected);
-      }
-      streams.setSelectedSubtitleId(defaultSub?.id ?? null);
-
-      // Get resume position
-      const viewOffset = offsetOverrideRef.current != null ? offsetOverrideRef.current : (playableItem.viewOffset ?? 0);
+      isLocalPlaybackRef.current = prepared.isLocal;
 
       const video = videoRef.current;
       if (!video) {
@@ -220,62 +263,28 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
       video.volume = Math.min(volumeRef.current, 1);
       video.muted = isMutedRef.current;
 
-      // Check for downloaded local file first
-      isLocalPlaybackRef.current = false;
-      try {
-        const localPath = await getLocalFilePath(ratingKey);
-        if (localPath) {
-          // Use Tauri's asset protocol to serve local files
-          const { convertFileSrc } = await import("@tauri-apps/api/core");
-          const localUrl = convertFileSrc(localPath);
-          hlsLoader.destroyHls();
-          video.src = localUrl;
-          if (viewOffset > 0) video.currentTime = viewOffset / 1000;
-          video.play().catch(() => {});
-          isLocalPlaybackRef.current = true;
-          setIsLoading(false);
-          timeline.startTimeline();
-          return;
-        }
-      } catch {
-        // Not in Tauri or no local file — continue with streaming
+      if (prepared.sourceKind === "local") {
+        const { convertFileSrc } = await import("@tauri-apps/api/core");
+        const localUrl = convertFileSrc(prepared.url);
+        hlsLoader.destroyHls();
+        video.src = localUrl;
+        if (prepared.viewOffset > 0) video.currentTime = prepared.viewOffset / 1000;
+        video.play().catch(() => {});
+        setIsLoading(false);
+        timeline.startTimeline();
+        return;
       }
 
-      // Direct play decision
-      const shouldDirectPlay =
-        !directPlayFailedRef.current &&
-        (pb.directPlayPreference === "always" ||
-        (pb.directPlayPreference === "auto" &&
-          (pb.quality === "original" || canDirectPlay(media))));
-      const forceTranscode = pb.directPlayPreference === "never" || directPlayFailedRef.current;
-
-      if (shouldDirectPlay && !forceTranscode && canDirectPlay(media)) {
-        const url = buildDirectPlayUrl(server.uri, server.accessToken, part.key);
+      if (prepared.sourceKind === "direct") {
         hlsLoader.destroyHls();
-        video.src = url;
-        if (viewOffset > 0) video.currentTime = viewOffset / 1000;
+        video.src = prepared.url;
+        if (prepared.viewOffset > 0) video.currentTime = prepared.viewOffset / 1000;
         video.play().catch(() => {});
       } else {
         const Hls = await hlsLoader.loadHls();
         if (!Hls.isSupported()) {
           throw new Error("HLS playback is not supported in this browser/webview");
         }
-
-        // Don't pass offset to Plex — start transcode from beginning.
-        // We'll seek to the resume point after the manifest loads.
-        const hlsUrl = await buildTranscodeUrl(
-          server.uri,
-          server.accessToken,
-          ratingKey,
-          {
-            audioStreamId: defaultAudio?.id,
-            subtitleStreamId: defaultSub?.id,
-            quality: pb.quality,
-            subtitleSize: pb.subtitleSize,
-            audioBoost: pb.audioBoost,
-            audioCodec: defaultAudio?.codec ?? media.audioCodec,
-          },
-        );
 
         hlsLoader.destroyHls();
 
@@ -285,13 +294,13 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
         });
         const hls = new Hls(hlsConfig);
 
-        hls.loadSource(hlsUrl);
+        hls.loadSource(prepared.url);
         hls.attachMedia(video);
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
           // Seek to resume position after manifest is ready
-          if (viewOffset > 0) {
-            video.currentTime = viewOffset / 1000;
+          if (prepared.viewOffset > 0) {
+            video.currentTime = prepared.viewOffset / 1000;
           }
           video.play().catch(() => {});
         });
@@ -497,6 +506,103 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
     initPlayback();
   }, [initPlayback]);
 
+  // After an on-demand subtitle download: poll metadata for the new stream,
+  // persist it as the part default (Plex deletes an unselected on-demand
+  // download), then select it. selectSubtitleTrack rebuilds the HLS session
+  // at the current position, so playback resumes where it was.
+  const refreshSubtitlesAfterDownload = useCallback(async () => {
+    if (!server) return;
+    const prevIds = streams.subtitleTracks.map((t) => t.id);
+    const result = await waitForDownloadedSubtitle(
+      server.uri,
+      server.accessToken,
+      ratingKey,
+      partIdRef.current,
+      prevIds,
+    );
+    if (!result) return;
+    streams.setSubtitleTracks(result.tracks);
+    if (partIdRef.current !== undefined) {
+      try {
+        await setSelectedSubtitleStream(
+          server.uri,
+          server.accessToken,
+          partIdRef.current,
+          result.added.id,
+        );
+      } catch (err) {
+        logger.error("player", "persist downloaded subtitle failed", String(err));
+      }
+    }
+    logger.info("player", "applying downloaded subtitle", { streamId: result.added.id });
+    await streams.selectSubtitleTrack(result.added.id);
+  }, [server, ratingKey, streams]);
+
+  // ── Backend dispatch methods ──────────────────────────────────────────────
+  const pause = useCallback(() => {
+    videoRef.current?.pause();
+  }, []);
+
+  const unload = useCallback(async () => {
+    // HTML5 path: unmount cleanup tears down hls.js + timeline. Nothing
+    // synchronous needed here. Keep the Promise so callers can await without
+    // branching.
+    logger.debug("player", "html5 unload (no-op)");
+  }, []);
+
+  const setFullscreen = useCallback(async (fullscreen: boolean) => {
+    if (fullscreen) {
+      await document.documentElement.requestFullscreen().catch(() => {});
+    } else if (document.fullscreenElement) {
+      await document.exitFullscreen().catch(() => {});
+    }
+  }, []);
+
+  const subscribeToEof = useCallback((handler: () => void) => {
+    const video = videoRef.current;
+    if (!video) return () => {};
+    video.addEventListener("ended", handler);
+    return () => video.removeEventListener("ended", handler);
+  }, []);
+
+  // HTML5 sub-style: maintain a <style id="prexu-subtitle-style"> tag so
+  // ::cue rules style WebVTT/native text tracks rendered by the browser.
+  // The native path uses libass through invoke; here we own the DOM
+  // insertion ourselves so Player.tsx doesn't have to know which backend
+  // it's driving.
+  const applySubtitleStyle = useCallback(
+    ({ style }: { size: number; style: SubtitleStylePreferences }) => {
+      const id = "prexu-subtitle-style";
+      let styleEl = document.getElementById(id) as HTMLStyleElement | null;
+      if (!styleEl) {
+        styleEl = document.createElement("style");
+        styleEl.id = id;
+        document.head.appendChild(styleEl);
+      }
+      styleEl.textContent = buildSubtitleCss(style);
+    },
+    [],
+  );
+
+  // HTML5 path: audio enhancement runs through the Web Audio graph in
+  // useAudioEnhancements (volume boost, normalization, delay). No backend
+  // IPC needed — this method is a no-op so consumers can call it
+  // unconditionally. The Web Audio side is still updated by Player.tsx.
+  const applyAudioEnhancement = useCallback(
+    (_changes: { normalizationPreset?: NormalizationPreset; audioOffsetMs?: number }) => {
+      // intentional no-op — Web Audio path is the authoritative chain
+    },
+    [],
+  );
+
+  // Clean up the injected <style> tag on unmount so navigating away from
+  // the player doesn't leave global ::cue CSS in <head>.
+  useEffect(() => {
+    return () => {
+      document.getElementById("prexu-subtitle-style")?.remove();
+    };
+  }, []);
+
   return {
     videoRef,
     title,
@@ -504,6 +610,7 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
     chapters,
     markers,
     itemType,
+    parentRatingKey,
     isLoading,
     isPlaying,
     isBuffering,
@@ -526,5 +633,12 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
     selectAudioTrack: streams.selectAudioTrack,
     selectSubtitleTrack: streams.selectSubtitleTrack,
     retry,
+    refreshSubtitlesAfterDownload,
+    pause,
+    unload,
+    setFullscreen,
+    subscribeToEof,
+    applySubtitleStyle,
+    applyAudioEnhancement,
   };
 }

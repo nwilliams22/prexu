@@ -1,12 +1,14 @@
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { usePlayerSession } from "../contexts/PlayerContext";
 import { useAuth } from "../hooks/useAuth";
 import { useParentalControls } from "../hooks/useParentalControls";
 import { useToast } from "../hooks/useToast";
 import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
 import { useItemDetailData } from "../hooks/useItemDetailData";
 import { useSeasonSwitch } from "../hooks/useSeasonSwitch";
-import { getImageUrl, getPlaceholderUrl, getImageSrcSet } from "../services/plex-library";
+import { getImageUrl, getPlaceholderUrl, getImageSrcSet, getAllShowEpisodes } from "../services/plex-library";
+import BulkDownloadButton from "../components/detail/BulkDownloadButton";
 import HorizontalRow from "../components/HorizontalRow";
 import PosterCard from "../components/PosterCard";
 import ErrorState from "../components/ErrorState";
@@ -31,6 +33,7 @@ function ItemDetail() {
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
   const navigate = useNavigate();
+  const { play } = usePlayerSession();
   const isAdmin = activeUser?.isAdmin ?? false;
   const { isItemAllowed, restrictionsEnabled } = useParentalControls();
   const { toast } = useToast();
@@ -151,7 +154,7 @@ function ItemDetail() {
               subtitle={(extra as { subtype?: string }).subtype || "Extra"}
               width={360}
               aspectRatio={0.56}
-              onClick={() => navigate(`/play/${extra.ratingKey}`)}
+              onClick={() => play(extra.ratingKey)}
             />
           ))}
         </HorizontalRow>
@@ -321,7 +324,22 @@ function ItemDetail() {
         {/* Seasons grid */}
         {seasons.length > 0 && (
           <div style={styles.section}>
-            <h2 style={styles.sectionTitle}>Seasons</h2>
+            <div style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "1rem",
+              marginBottom: "0.75rem",
+            }}>
+              <h2 style={{ ...styles.sectionTitle, margin: 0 }}>Seasons</h2>
+              <BulkDownloadButton
+                label="Download Series"
+                noun="series"
+                serverUri={server.uri}
+                getEpisodes={() =>
+                  getAllShowEpisodes<PlexEpisode>(server.uri, server.accessToken, show.ratingKey)
+                }
+              />
+            </div>
             <div style={{
               display: "flex",
               flexWrap: "wrap",
@@ -492,6 +510,15 @@ function ItemDetail() {
           seasonFading={seasonFading}
           episodeThumbUrl={episodeThumbUrl}
           formatDuration={formatDuration}
+          onRefresh={refreshItem}
+          headerAction={
+            <BulkDownloadButton
+              label="Download Season"
+              noun="season"
+              serverUri={server.uri}
+              getEpisodes={async () => episodes}
+            />
+          }
         />
         {(() => {
           // Aggregate cast from episodes for season-specific cast (e.g. anthology shows)

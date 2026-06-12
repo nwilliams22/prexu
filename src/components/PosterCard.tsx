@@ -39,7 +39,19 @@ interface PosterCardProps {
   ratingKey?: string;
   /** Media quality badges (4K, HDR, Atmos, etc.) shown at bottom-left */
   mediaBadges?: MediaBadge[];
+  /** Sibling index inside a shelf / grid. Drives a staggered fade-in
+   *  (prexu-yhg) — each tile's cardEnter animation is delayed by
+   *  `min(index, MAX_STAGGER_INDEX) * STAGGER_STEP_MS`. Omit at
+   *  call sites that aren't in a horizontal row (single-poster
+   *  contexts like hero) so the default 0ms delay is preserved. */
+  index?: number;
 }
+
+/** Stagger window for the cardEnter fade-in. Tiles beyond
+ *  MAX_STAGGER_INDEX all share the cap — keeps the last visible tile
+ *  on a long shelf from feeling perceptibly slower than the first. */
+const STAGGER_STEP_MS = 30;
+const MAX_STAGGER_INDEX = 8;
 
 function PosterCard({
   imageUrl,
@@ -63,27 +75,51 @@ function PosterCard({
   scanning: scanningProp,
   ratingKey,
   mediaBadges,
+  index,
 }: PosterCardProps) {
+  const staggerDelayMs =
+    index === undefined
+      ? 0
+      : Math.min(Math.max(0, index), MAX_STAGGER_INDEX) * STAGGER_STEP_MS;
   const { scanningIds } = useServerActivity();
   const scanning = scanningProp ?? (ratingKey ? scanningIds.has(ratingKey) : false);
   const {
     containerRef,
+    imgRef,
     shouldLoad,
+    isLoaded,
+    hasError: imgError,
     placeholderLoaded,
     onLoad: onLazyLoad,
     onError: onLazyError,
     onPlaceholderLoad,
   } = useLazyImage();
-  const [loaded, setLoaded] = useState(false);
+  const loaded = isLoaded || imgError;
   const [hovered, setHovered] = useState(false);
   const [active, setActive] = useState(false);
   const [playHovered, setPlayHovered] = useState(false);
   const height = Math.round(width * aspectRatio);
 
   return (
-    <button
+    // <div role="button"> — not a real <button>. The card contains
+    // nested action buttons (More options, Play, Expand) and the HTML
+    // spec forbids <button> inside <button>. Browsers DOM-fixup by
+    // hoisting the inner buttons out, breaking React's reconciler and
+    // (in WebView2) eventually crashing the renderer with OOM as React
+    // thrashes re-rendering. role + tabIndex + onKeyDown preserve
+    // keyboard activation and accessibility tree presence. (prexu-9l3)
+    <div
       className="card-enter"
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={(e) => {
+        // Match native <button> activation: Enter and Space fire onClick.
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick?.();
+        }
+      }}
       onContextMenu={(e) => {
         if (onContextMenu) {
           e.preventDefault();
@@ -97,12 +133,17 @@ function PosterCard({
       style={{
         ...styles.card,
         width,
+        cursor: "pointer",
         transform: active ? "scale(1.0)" : hovered ? "scale(1.04)" : "scale(1)",
         border: isExpanded
           ? "2px solid var(--accent)"
           : onExpand
             ? "2px solid transparent"
             : undefined,
+        // animation-delay layers onto the .card-enter keyframe defined
+        // in styles.css. 0ms when no index given so legacy call sites
+        // are unchanged.
+        animationDelay: staggerDelayMs > 0 ? `${staggerDelayMs}ms` : undefined,
       }}
     >
       {/* Image container */}
@@ -128,12 +169,13 @@ function PosterCard({
 
         {shouldLoad && (
           <img
+            ref={imgRef}
             src={imageUrl}
             srcSet={srcSet || undefined}
             sizes={srcSet ? `${width}px` : undefined}
             alt=""
-            onLoad={() => { setLoaded(true); onLazyLoad(); }}
-            onError={() => { setLoaded(true); onLazyError(); }}
+            onLoad={onLazyLoad}
+            onError={onLazyError}
             style={{
               ...styles.image,
               opacity: loaded ? 1 : 0,
@@ -280,7 +322,7 @@ function PosterCard({
         <span style={styles.title}>{title}</span>
         {subtitle && <span style={styles.subtitle}>{subtitle}</span>}
       </div>
-    </button>
+    </div>
   );
 }
 

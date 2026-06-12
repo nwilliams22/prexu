@@ -1,17 +1,27 @@
 /**
- * Full-page video player route.
- * Sits outside the AppLayout (no header/sidebar).
+ * Full-page video player overlay.
+ *
+ * Mounted by PlayerOverlay (App.tsx) when PlayerContext has an active
+ * session — never rendered as a route directly. Position-fixed full
+ * viewport, so it visually replaces whatever's underneath while open
+ * and instantly reveals it on stop.
  */
 
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { useParams, useNavigate, useSearchParams, Navigate } from "react-router-dom";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { Navigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
+import {
+  usePlayerSession,
+  usePlayerMinimize,
+  type PlayerWatchTogether,
+} from "../contexts/PlayerContext";
 import { getImageUrl } from "../services/plex-library";
-import { usePlayer } from "../hooks/usePlayer";
+import { usePlayer, IS_NATIVE_PLAYER } from "../hooks/usePlayer";
 import { useWatchTogether } from "../hooks/useWatchTogether";
 import { useAudioEnhancements } from "../hooks/useAudioEnhancements";
 import { usePreferences } from "../hooks/usePreferences";
-import { useSkipSegments } from "../hooks/player/useSkipSegments";
+import { useSkipSegments, clampSkipTarget } from "../hooks/player/useSkipSegments";
+import { useShowCreditsLength } from "../hooks/player/useShowCreditsLength";
 import { usePlayerControlsVisibility } from "../hooks/player/usePlayerControlsVisibility";
 import { useVideoClickHandling } from "../hooks/player/useVideoClickHandling";
 import { useEpisodeNavigation } from "../hooks/player/useEpisodeNavigation";
@@ -20,54 +30,76 @@ import { useQueue } from "../contexts/QueueContext";
 import { useNextEpisodeDetection } from "../hooks/player/useNextEpisodeDetection";
 import { usePlayerKeyboardShortcuts } from "../hooks/player/usePlayerKeyboardShortcuts";
 import { usePictureInPicture } from "../hooks/player/usePictureInPicture";
+import { usePopOutPlayer } from "../hooks/player/usePopOutPlayer";
+import { usePlayerLifecycle } from "../hooks/player/usePlayerLifecycle";
+import { usePostPlay } from "../hooks/player/usePostPlay";
 import PlayerControls from "../components/PlayerControls";
 import ParticipantOverlay from "../components/ParticipantOverlay";
 import SyncIndicator from "../components/SyncIndicator";
 import NextEpisodePrompt from "../components/NextEpisodePrompt";
 import ErrorOverlay from "../components/player/ErrorOverlay";
+import PopoutDragStrip from "../components/player/PopoutDragStrip";
 import SkipSegmentButton from "../components/player/SkipSegmentButton";
 import QueuePanel from "../components/player/QueuePanel";
 import PostPlayScreen from "../components/player/PostPlayScreen";
 import KeyboardShortcutsOverlay from "../components/player/KeyboardShortcutsOverlay";
+import MinimizedPlayer from "../components/player/MinimizedPlayer";
 import type { NormalizationPreset } from "../types/preferences";
-import { buildSubtitleCss } from "../utils/subtitle-css";
+import { logger } from "../services/logger";
+import { hasNextItem as computeHasNextItem } from "./player-postplay-gate";
+import {
+  derivePostPlayDetailProps,
+  deriveUpNextSlice,
+} from "./player-postplay-props";
+import { playerStyles as styles } from "./Player.styles";
 
-function Player() {
-  const { ratingKey } = useParams<{ ratingKey: string }>();
-  const [searchParams] = useSearchParams();
+interface PlayerProps {
+  ratingKey: string;
+  /** ?offset=N override — null means use saved viewOffset. */
+  offset: number | null;
+  /** Watch Together session info — undefined for solo playback. */
+  watchTogether?: PlayerWatchTogether;
+}
+
+function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   const { isAuthenticated, serverSelected, server } = useAuth();
-  const navigate = useNavigate();
+  const playerSession = usePlayerSession();
+  const playerMinimize = usePlayerMinimize();
 
-  // Offset override — ?offset=0 means "play from beginning"
-  const offsetParam = searchParams.get("offset");
-  const offsetOverride = offsetParam != null ? Number(offsetParam) : null;
+  const player = usePlayer(ratingKey, offset);
 
-  const player = usePlayer(ratingKey ?? "", offsetOverride);
-
-  // Watch Together session from URL query params
-  const sessionId = searchParams.get("session");
-  const isHost = searchParams.get("host") === "true";
-  const relayUrl = searchParams.get("relay");
-  const wt = useWatchTogether(player, sessionId, isHost, relayUrl);
+  // Watch Together — derive props from the session bundle (was previously
+  // pulled from URL query params). useWatchTogether tolerates null inputs
+  // for solo playback.
+  const wt = useWatchTogether(
+    player,
+    watchTogether?.sessionId ?? null,
+    watchTogether?.isHost ?? false,
+    watchTogether?.relayUrl ?? null,
+  );
 
   const { preferences, updatePreferences } = usePreferences();
   const pb = preferences.playback;
 
-  // Subtitle styling via ::cue CSS
-  const subtitleCss = useMemo(() => buildSubtitleCss(pb.subtitleStyle), [pb.subtitleStyle]);
+  // Subtitle styling — dispatched to the active backend (native uses libass
+  // via invoke + ready-gated retry; HTML5 maintains a <style id="prexu-
+  // subtitle-style"> tag with ::cue CSS derived from prefs). Player.tsx
+  // doesn't know which is active — the hook contract does.
+  //
+  // Depend on `applySubtitleStyle` (a stable useCallback) rather than the
+  // whole `player` object — `player` is a useMemo whose identity changes
+  // on every time-pos tick (currentTime is in its deps). Using `player`
+  // here would re-fire this effect ~4 times per second and pump the IPC
+  // on every tick, which mpv's gpu-next vo cannot keep up with on the
+  // main thread and the video stalls. (prexu-7tk)
+  const { applySubtitleStyle } = player;
   useEffect(() => {
-    const id = "prexu-subtitle-style";
-    let styleEl = document.getElementById(id) as HTMLStyleElement | null;
-    if (!styleEl) {
-      styleEl = document.createElement("style");
-      styleEl.id = id;
-      document.head.appendChild(styleEl);
-    }
-    styleEl.textContent = subtitleCss;
-    return () => {
-      styleEl?.remove();
-    };
-  }, [subtitleCss]);
+    applySubtitleStyle({ size: pb.subtitleSize, style: pb.subtitleStyle });
+  }, [applySubtitleStyle, pb.subtitleSize, pb.subtitleStyle]);
+
+  // Body-transparency for the native-mpv path is owned by
+  // useTransparentWindow inside PlayerOverlay (see hooks/player/
+  // useTransparentWindow.ts).
 
   // Audio enhancements — Web Audio API processing graph
   const audioEnhancements = useAudioEnhancements(
@@ -83,6 +115,7 @@ function Player() {
       normalizationPreset?: NormalizationPreset;
       audioOffsetMs?: number;
     }) => {
+      // Web Audio side — authoritative for HTML5, additional layer on native.
       if (changes.volumeBoost !== undefined) {
         audioEnhancements.setVolumeBoost(changes.volumeBoost);
       }
@@ -92,22 +125,147 @@ function Player() {
       if (changes.audioOffsetMs !== undefined) {
         audioEnhancements.setAudioOffsetMs(changes.audioOffsetMs);
       }
+      // Backend IPC bridge — native dispatches to mpv; HTML5 is a no-op.
+      player.applyAudioEnhancement({
+        normalizationPreset: changes.normalizationPreset,
+        audioOffsetMs: changes.audioOffsetMs,
+      });
       updatePreferences({ playback: changes });
     },
-    [audioEnhancements, updatePreferences],
+    [audioEnhancements, updatePreferences, player],
   );
+
+  // Prime the native backend with current audio-enhancement prefs once.
+  // useNativePlayer caches the latest applyAudioEnhancement call and
+  // flushes it on player://ready, so persisted normalization/delay settings
+  // survive cold start. HTML5's applyAudioEnhancement is a no-op (Web
+  // Audio constructor args already covered initial values). Only fires
+  // on mount — subsequent user changes go through handleAudioEnhancementChange.
+  useEffect(() => {
+    player.applyAudioEnhancement({
+      normalizationPreset: pb.normalizationPreset,
+      audioOffsetMs: pb.audioOffsetMs,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only prime
+  }, []);
 
   // Sync main volume's above-1.0 boost to the audio graph's GainNode
   useEffect(() => {
     audioEnhancements.setMainBoost(Math.max(player.volume, 1));
   }, [player.volume, audioEnhancements]);
 
-  // Picture-in-Picture
+  // Picture-in-Picture vs pop-out. On the native (mpv) path there's no
+  // <video> element so the browser PiP API silently fails — we route the
+  // PiP slot to our Win32-native floating pop-out window on Tauri, and
+  // to the standard browser PiP everywhere else. The Rust side owns the
+  // pop-out geometry (corner + size) and reads it from the persisted
+  // store; user-driven resizes round-trip across sessions.
+  //
+  // The native path has a separate button for in-window minimize (the small
+  // corner mode). The two modes are mutually exclusive — `handleMinimize`
+  // exits pop-out first when needed, and `togglePiP` exits minimize first.
   const pip = usePictureInPicture(player.videoRef);
+  const popOut = usePopOutPlayer();
+  const pipActive = IS_NATIVE_PLAYER ? popOut.isPopOut : pip.isPiPActive;
+  const pipSupported = IS_NATIVE_PLAYER
+    ? popOut.isPopOutSupported
+    : pip.isPiPSupported;
+  const togglePiP = useCallback(() => {
+    if (IS_NATIVE_PLAYER) {
+      // Mutual exclusion with minimize: if currently minimized, restore
+      // to full first, then pop out.
+      if (playerMinimize.isMinimized) {
+        playerMinimize.restoreFromMinimize();
+      }
+      popOut.togglePopOut();
+    } else {
+      pip.togglePiP();
+    }
+  }, [popOut, pip, playerMinimize]);
+
+  const handleMinimize = useCallback(() => {
+    // Mutual exclusion with pop-out: if currently popped out, exit
+    // pop-out first, then minimize.
+    if (IS_NATIVE_PLAYER && popOut.isPopOut) {
+      popOut.togglePopOut();
+    }
+    playerMinimize.minimize();
+  }, [popOut, playerMinimize]);
 
   // Controls visibility (auto-hide on inactivity)
   const { controlsVisible, resetHideTimer, handleMouseMove } =
     usePlayerControlsVisibility(player.isPlaying);
+  // Pinned while a bottom-bar popup (subtitle panel, track menu, audio
+  // enhancements) is open. OS-native widgets like the color picker generate
+  // no mousemove, so without the pin the auto-hide timer would unmount the
+  // popup mid-interaction.
+  const [panelPinned, setPanelPinned] = useState(false);
+  const chromeVisible = controlsVisible || panelPinned;
+
+  // Force chrome reflow when the WebView viewport changes (e.g. popout-exit,
+  // fullscreen-enter). WebView2 + tao resize → CSS reflow is lazy; the fixed/
+  // absolute chrome stays stale until the next repaint. A ResizeObserver on the
+  // document root fires synchronously after layout, so bumping a counter here
+  // triggers React to re-render the container, which forces the browser to
+  // recalculate inset: 0 against the new viewport dimensions (prexu-0p3).
+  const [renderTick, setRenderTick] = useState(0);
+  useEffect(() => {
+    const el = document.documentElement;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const { width, height } = entry.contentRect;
+      logger.debug("player", "viewport resize — nudging chrome reflow", { width, height });
+      setRenderTick((t) => t + 1);
+    });
+    observer.observe(el);
+    logger.debug("player", "chrome reflow observer attached");
+    return () => {
+      observer.disconnect();
+      logger.debug("player", "chrome reflow observer detached");
+    };
+  }, []);
+
+  // Hide the player chrome (controls + gradient) WHILE the window is actively
+  // being resized. The mpv host (a native Win32 HWND) tracks the new size
+  // instantly, but the WebView2-composited chrome repaints a frame or more
+  // behind during a fast drag, so any *visible* controls appear to lag the
+  // video edge. Dragging the window edge isn't a controls interaction, so
+  // hiding the chrome for the duration removes the only thing that can look
+  // out-of-sync — the video resizes natively-smooth. (This is also why a
+  // resize with controls already auto-hidden looked perfect: nothing on top
+  // to lag.) Does NOT touch the reflow effect above.
+  //
+  // Drag-START is detected from the browser `resize` event. Drag-END is the
+  // tricky part: under a heavy 4K resize the webview saturates and any
+  // resize-derived "it stopped" signal (ResizeObserver, Tauri window://resized)
+  // arrives SECONDS late and backlogs, which made the controls take seconds to
+  // return. Instead we clear on the first real pointer interaction — the user
+  // moving the mouse to reach for the controls is a signal the webview delivers
+  // promptly — with a timeout fallback so the chrome never stays stuck hidden.
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const endResize = useCallback(() => {
+    if (resizeFallbackRef.current) {
+      clearTimeout(resizeFallbackRef.current);
+      resizeFallbackRef.current = null;
+    }
+    setIsResizing((r) => (r ? false : r));
+  }, []);
+  useEffect(() => {
+    const onResize = () => {
+      setIsResizing(true);
+      if (resizeFallbackRef.current) clearTimeout(resizeFallbackRef.current);
+      // Safety net: if the user never moves the mouse after the drag, reveal
+      // the chrome anyway shortly after resize events stop.
+      resizeFallbackRef.current = setTimeout(endResize, 400);
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      if (resizeFallbackRef.current) clearTimeout(resizeFallbackRef.current);
+    };
+  }, [endResize]);
 
   // Sync-aware play/seek
   const togglePlay = wt.isInSession ? wt.syncTogglePlay : player.togglePlay;
@@ -138,73 +296,134 @@ function Player() {
   const handleNextEpisode = useCallback(() => {
     const next = playNext();
     if (next) {
-      navigate(`/play/${next.ratingKey}`);
+      // Mutate ratingKey in place — usePlayer's ratingKey effect re-inits
+      // playback. AppLayout + the page underneath stay mounted.
+      playerSession.replaceRatingKey(next.ratingKey);
     } else if (episodeNav.handleNextEpisode) {
       episodeNav.handleNextEpisode();
     }
-  }, [playNext, episodeNav.handleNextEpisode, navigate]);
+  }, [playNext, episodeNav.handleNextEpisode, playerSession]);
 
   const handlePrevEpisode = useCallback(() => {
     const prev = playPrev();
     if (prev) {
-      navigate(`/play/${prev.ratingKey}`);
+      playerSession.replaceRatingKey(prev.ratingKey);
     } else if (episodeNav.handlePrevEpisode) {
       episodeNav.handlePrevEpisode();
     }
-  }, [playPrev, episodeNav.handlePrevEpisode, navigate]);
+  }, [playPrev, episodeNav.handlePrevEpisode, playerSession]);
 
-  // Post-play screen — show when playback ends and queue has next item
-  const [showPostPlay, setShowPostPlay] = useState(false);
-  const postPlayShownRef = useRef(false);
+  // "Logical next" — there is a real successor to the currently playing
+  // item. Used by:
+  //   - PostPlayScreen trigger (only auto-prompt when there's a real next;
+  //     standalone movies and final-episodes-with-empty-queue should NOT)
+  //   - SkipSegmentButton's "Next Episode" vs "Skip Credits" label
+  //   - useSkipSegments synthetic-credits gate (see hasNextEpisode arg)
+  //
+  // Decision lives in player-postplay-gate.ts so it can be unit-tested
+  // directly. See that file's docblock for the rules.
+  const hasNextItem = computeHasNextItem({
+    itemType: player.itemType,
+    ratingKey,
+    queue,
+    hasPlexNextEpisode: episodeNav.handleNextEpisode != null,
+  });
 
-  useEffect(() => {
-    const video = player.videoRef.current;
-    if (!video) return;
-    const handleEnded = () => {
-      if (remainingCount > 0 && !wt.isInSession && !postPlayShownRef.current) {
-        postPlayShownRef.current = true;
-        setShowPostPlay(true);
-      }
-    };
-    video.addEventListener("ended", handleEnded);
-    return () => video.removeEventListener("ended", handleEnded);
-  }, [player.videoRef, remainingCount, wt.isInSession]);
+  // Keep a ref to isFullscreen so lifecycle callbacks (useCallback with
+  // stable deps) always read the latest value at click time.
+  const playerIsFullscreenRef = useRef(player.isFullscreen);
+  playerIsFullscreenRef.current = player.isFullscreen;
 
-  // Reset post-play state when ratingKey changes
-  useEffect(() => {
-    postPlayShownRef.current = false;
-    setShowPostPlay(false);
-  }, [ratingKey]);
+  // Player lifecycle — exit/prepareNavAway/navAwayPreservingMount.
+  const lifecycle = usePlayerLifecycle({
+    player,
+    popOut,
+    playerSession,
+    isFullscreenRef: playerIsFullscreenRef,
+  });
 
-  const handlePostPlayNext = useCallback(() => {
-    setShowPostPlay(false);
-    handleNextEpisode();
-  }, [handleNextEpisode]);
+  // Post-play overlay state + EOF handling + mini-mode handoff.
+  const postPlay = usePostPlay({
+    player,
+    queue,
+    ratingKey,
+    itemType: player.itemType,
+    hasNextItem,
+    wtInSession: wt.isInSession,
+    isMinimized: playerMinimize.isMinimized,
+    autoPlayEnabled: pb.autoPlayEnabled,
+    server,
+    onAdvanceNext: handleNextEpisode,
+    onExit: lifecycle.exit,
+    onRestoreFromMinimize: playerMinimize.restoreFromMinimize,
+  });
 
-  const handlePostPlayStop = useCallback(() => {
-    setShowPostPlay(false);
-  }, []);
-
-  // Get the next queue item for the post-play screen
-  const nextQueueItem = useMemo(() => {
-    const { items, currentIndex } = queue;
-    const nextIdx = currentIndex + 1;
-    return nextIdx < items.length ? items[nextIdx] : null;
-  }, [queue]);
-
-  // Skip intro/credits segments
+  // Skip intro/credits segments. ratingKey passed as the reset trigger so
+  // dismissals + last-active state clear cleanly on every episode change
+  // (Player.tsx stays mounted across same-route param navigations).
+  // duration + hasNextItem fuel the synthetic "Next Episode" prompt for
+  // episodes Plex didn't provide a credits marker for. The estimated
+  // credits-window length comes from useShowCreditsLength which medians
+  // sibling episodes' credits markers — usually a tighter fit than the
+  // hard-coded 90s default. Falls back to 90s when fewer than 3 siblings
+  // have markers (i.e. the parent season is too sparse to be useful).
+  // hasNextItem is declared earlier — see comment near PostPlayScreen.
+  const estimatedCreditsLengthMs = useShowCreditsLength(
+    server,
+    player.itemType === "episode" ? player.parentRatingKey : undefined,
+  );
   const { activeSegment, dismissSegment } = useSkipSegments(
     player.markers,
     player.chapters,
     player.currentTime,
     { intro: pb.skipIntroEnabled, credits: pb.skipCreditsEnabled },
+    ratingKey,
+    player.duration,
+    hasNextItem,
+    estimatedCreditsLengthMs,
   );
 
   const handleSkipSegment = useCallback(() => {
-    if (activeSegment) {
-      seek(activeSegment.endTime);
+    if (!activeSegment) return;
+    // Skip Credits with no continuation = "I'm done watching". Exit the
+    // player immediately rather than seeking to a paused-at-EOF black
+    // frame. mpv's eof-reached property is unreliable on the seek-past-
+    // end path anyway (movie test, 2026-05-03), so we don't even rely on
+    // the EOF event firing — go straight to lifecycle.exit.
+    if (activeSegment.type === "credits" && !hasNextItem && !wt.isInSession) {
+      logger.info("player", "Skip Credits with no continuation — exiting player");
+      lifecycle.exit();
+      return;
     }
-  }, [activeSegment, seek]);
+    // Clamp seek target away from exact file end (prexu-7fe.2). When
+    // the synthetic credits segment is in play, activeSegment.endTime
+    // equals player.duration; seeking to duration parks the playhead
+    // at EOF without playback consuming the final frame, so mpv's
+    // eof-reached property never flips and postplay autoplay never
+    // fires. See clampSkipTarget docs for rationale.
+    seek(clampSkipTarget(activeSegment.endTime, player.duration));
+    // Force-resume play on Skip Credits (prexu-7fe.2 follow-up): if
+    // the user paused mid-credits and then clicked Skip Credits, the
+    // clamp alone leaves playback parked at duration-0.5s with no
+    // forward motion, so eof-reached never fires and postplay never
+    // shows. Skip Credits is an explicit "I'm done with this ep, move
+    // on" gesture — resuming play matches that intent and lets the
+    // 0.5s tail roll naturally to EOF. Only applies to credits skips;
+    // intro skips leave the user's pause state alone (paused at intro
+    // is a "let me read this" gesture, not "advance me").
+    if (activeSegment.type === "credits" && !player.isPlaying) {
+      togglePlay();
+    }
+  }, [
+    activeSegment,
+    seek,
+    hasNextItem,
+    wt.isInSession,
+    lifecycle,
+    player.duration,
+    player.isPlaying,
+    togglePlay,
+  ]);
 
   // Next episode detection for Watch Together host
   const nextEp = useNextEpisodeDetection(
@@ -218,8 +437,35 @@ function Player() {
   const [showShortcuts, setShowShortcuts] = useState(false);
   const toggleShortcuts = useCallback(() => setShowShortcuts((v) => !v), []);
 
-  // Keyboard shortcuts
-  const handleBack = useCallback(() => navigate(-1), [navigate]);
+  // Cold-start affordance — first play after install can take ~30s before
+  // first frame (libmpv-2.dll page-in, AV first-execution scan, hwdec
+  // probing). Spinner alone leaves the user wondering if the app is hung.
+  // After 1.5s of isLoading we surface explanatory text. Warm second-plays
+  // resolve in <1s so the message never appears in normal use.
+  const [showLoadingMsg, setShowLoadingMsg] = useState(false);
+  useEffect(() => {
+    if (!player.isLoading) {
+      setShowLoadingMsg(false);
+      return;
+    }
+    const id = window.setTimeout(() => setShowLoadingMsg(true), 1500);
+    return () => window.clearTimeout(id);
+  }, [player.isLoading]);
+
+  // Previous-button handler: uses lifecycle.navAwayPreservingMount which
+  // drops fullscreen but deliberately does NOT prepareNavAway (Player
+  // stays mounted across the ratingKey swap — see the hook's docblock).
+  const handlePreviousFromTopBar = useCallback(
+    () => lifecycle.navAwayPreservingMount(handlePrevEpisode),
+    [lifecycle, handlePrevEpisode],
+  );
+
+  // Whether the top-left "Previous" button should appear. True if the queue
+  // has an item before the current index, or Plex's adjacent-episode API
+  // returned a previous episode. Hidden otherwise (first episode of season,
+  // single movie, etc.) — Exit is always available.
+  const hasPrevious =
+    queue.currentIndex > 0 || episodeNav.handlePrevEpisode != null;
 
   usePlayerKeyboardShortcuts({
     togglePlay,
@@ -231,7 +477,7 @@ function Player() {
     toggleFullscreen: player.toggleFullscreen,
     toggleMute: player.toggleMute,
     isFullscreen: player.isFullscreen,
-    onBack: handleBack,
+    onBack: lifecycle.exit,
     resetHideTimer,
     chapters: player.chapters,
     volumeBoost: audioEnhancements.volumeBoost,
@@ -239,7 +485,7 @@ function Player() {
     onAudioEnhancementChange: handleAudioEnhancementChange,
     onNextEpisode: handleNextEpisode,
     onPrevEpisode: handlePrevEpisode,
-    togglePiP: pip.togglePiP,
+    togglePiP,
     onToggleShortcuts: toggleShortcuts,
   });
 
@@ -252,27 +498,83 @@ function Player() {
   if (!isAuthenticated) return <Navigate to="/login" replace />;
   if (!serverSelected) return <Navigate to="/servers" replace />;
 
+  // Minimized branch — render just the mini corner region with MiniChrome.
+  // All hooks above still run (so playback, WT, timeline reporting, etc.
+  // continue) but the full-viewport chrome, PostPlayScreen,
+  // KeyboardShortcutsOverlay, etc. are suppressed so the routes underneath
+  // remain interactive. The mpv host has already been shrunk by the
+  // Rust-side player_enter_minimize call from PlayerContext.minimize();
+  // this just makes the React chrome match.
+  if (playerMinimize.isMinimized) {
+    return (
+      <MinimizedPlayer
+        player={player}
+        playerMinimize={playerMinimize}
+        togglePlay={togglePlay}
+        seek={seek}
+        onExit={lifecycle.exit}
+        controlsVisible={controlsVisible}
+        resetHideTimer={resetHideTimer}
+        handleMouseMove={handleMouseMove}
+        activeSegment={activeSegment}
+        onSkipSegment={handleSkipSegment}
+        hasNextItem={hasNextItem}
+        onNextEpisode={handleNextEpisode}
+      />
+    );
+  }
+
   return (
     <div
+      data-render-tick={renderTick}
       style={{
         ...styles.container,
-        cursor: controlsVisible ? "default" : "none",
+        // On the native player path the actual video lives in a sibling
+        // Win32 HWND BEHIND this transparent webview. Painting black here
+        // would occlude it. HTML5 path keeps black so the <video> letterbox
+        // stays cinema-style.
+        background: IS_NATIVE_PLAYER ? "transparent" : styles.container.background,
+        cursor: chromeVisible ? "default" : "none",
       }}
-      onMouseMove={handleMouseMove}
+      onMouseMove={() => {
+        // A real pointer move means the drag-resize is over and the user is
+        // reaching for the chrome — reveal it immediately (see isResizing).
+        endResize();
+        handleMouseMove();
+      }}
     >
-      {/* Video element */}
-      <video
-        ref={player.videoRef}
-        style={styles.video}
-        playsInline
-        onClick={handleVideoClick}
-      />
+      {/* Video element — only used on the HTML5 path. On native path
+          videoRef is never populated, so we hide the element entirely so
+          its default black box doesn't occlude the host window. */}
+      {IS_NATIVE_PLAYER ? (
+        /* Transparent click target for the native path — click to
+           play/pause, double-click to fullscreen, same as the HTML5
+           <video> element. */
+        <div
+          style={styles.nativeClickTarget}
+          onClick={handleVideoClick}
+        />
+      ) : (
+        <video
+          ref={player.videoRef}
+          style={styles.video}
+          playsInline
+          onClick={handleVideoClick}
+        />
+      )}
+
+      {/* Pop-out drag strip (prexu-6qz): hover-reveal handle for the
+          borderless floating window. Native popout path only; follows the
+          controls auto-hide state. See PopoutDragStrip for the rationale. */}
+      {IS_NATIVE_PLAYER && popOut.isPopOut && (
+        <PopoutDragStrip visible={chromeVisible} />
+      )}
 
       {/* Loading overlay */}
       {player.isLoading && (
         <div style={styles.centerOverlay}>
           <button
-            onClick={handleBack}
+            onClick={lifecycle.exit}
             style={styles.loadingBackButton}
             aria-label="Go back"
           >
@@ -280,7 +582,17 @@ function Player() {
               <polyline points="15 18 9 12 15 6" />
             </svg>
           </button>
-          <div className="loading-spinner" />
+          <div style={styles.loadingStack}>
+            <div className="loading-spinner" />
+            {showLoadingMsg && (
+              <div style={styles.loadingMessage}>
+                <div style={styles.loadingTitle}>Preparing playback…</div>
+                <div style={styles.loadingHint}>
+                  First play after install can take a moment.
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -296,17 +608,22 @@ function Player() {
         <ErrorOverlay
           error={player.playbackError}
           onRetry={player.retry}
-          onBack={handleBack}
+          onBack={lifecycle.exit}
         />
       )}
 
-      {/* Skip intro/credits button */}
+      {/* Skip intro/credits button. hasNextEpisode gates the "Next Episode"
+          label — must reflect a *logical* next (not just the existence of
+          handleNextEpisode, which is always defined). hasNextItem already
+          encodes the rule: itemType==="episode" AND (queue has next OR Plex
+          episode-nav has next). For movies and last-episodes-with-empty-
+          queue this drops the button to "Skip Credits" instead. */}
       {activeSegment && !player.isLoading && !player.playbackError && (
         <SkipSegmentButton
           segment={activeSegment}
           onSkip={handleSkipSegment}
           onDismiss={dismissSegment}
-          hasNextEpisode={!!handleNextEpisode}
+          hasNextEpisode={hasNextItem}
           onNextEpisode={handleNextEpisode}
         />
       )}
@@ -341,8 +658,10 @@ function Player() {
       {!player.isLoading && !player.playbackError && (
         <PlayerControls
           player={player}
-          onBack={handleBack}
-          visible={controlsVisible}
+          onExit={lifecycle.exit}
+          onPrevious={hasPrevious ? handlePreviousFromTopBar : undefined}
+          visible={chromeVisible && !isResizing}
+          suppressTransition={isResizing}
           chapters={player.chapters}
           onSeek={seek}
           onActivity={resetHideTimer}
@@ -350,15 +669,20 @@ function Player() {
           onPrevEpisode={handlePrevEpisode}
           audioEnhancements={audioEnhancements}
           onAudioEnhancementChange={handleAudioEnhancementChange}
-          isPiPActive={pip.isPiPActive}
-          isPiPSupported={pip.isPiPSupported}
-          onTogglePiP={pip.togglePiP}
+          isPiPActive={pipActive}
+          isPiPSupported={pipSupported}
+          onTogglePiP={togglePiP}
+          isPopOutMode={IS_NATIVE_PLAYER}
+          isMinimizeSupported={IS_NATIVE_PLAYER}
+          isMinimizeActive={playerMinimize.isMinimized}
+          onMinimize={handleMinimize}
           queueCount={remainingCount}
           onToggleQueue={toggleQueuePanel}
           serverUri={server?.uri}
           serverToken={server?.accessToken}
           ratingKey={ratingKey}
-          onSubtitleDownloaded={player.retry}
+          onSubtitleDownloaded={() => void player.refreshSubtitlesAfterDownload()}
+          onPanelPinChange={setPanelPinned}
           syncIndicator={
             wt.isInSession ? (
               <SyncIndicator
@@ -370,13 +694,22 @@ function Player() {
         />
       )}
 
-      {/* Post-play screen */}
-      {showPostPlay && nextQueueItem && server && (
+      {/* Post-play screen. Detail-derived fields come from
+          derivePostPlayDetailProps so the JSX stays render-shaped.
+          upNext is items AFTER the next one (currentIndex+2 onward,
+          capped at 4) — the next one itself is already the hero card. */}
+      {postPlay.showPostPlay && postPlay.nextQueueItem && server && (
         <PostPlayScreen
-          nextItem={nextQueueItem}
-          onPlayNext={handlePostPlayNext}
-          onStop={handlePostPlayStop}
-          posterUrl={(path) => getImageUrl(server.uri, server.accessToken, path, 320, 220)}
+          nextItem={postPlay.nextQueueItem}
+          onPlayNext={postPlay.onPlayNext}
+          onStop={postPlay.onStop}
+          posterUrl={(path) => getImageUrl(server.uri, server.accessToken, path, 480, 270)}
+          autoPlayEnabled={pb.autoPlayEnabled}
+          onAutoPlayChange={(enabled) =>
+            updatePreferences({ playback: { autoPlayEnabled: enabled } })
+          }
+          {...derivePostPlayDetailProps(postPlay.postPlayDetail)}
+          upNext={deriveUpNextSlice(queue)}
         />
       )}
 
@@ -390,58 +723,5 @@ function Player() {
     </div>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  container: {
-    position: "fixed",
-    inset: 0,
-    background: "#000",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    overflow: "hidden",
-  },
-  video: {
-    width: "100%",
-    height: "100%",
-    objectFit: "contain",
-    outline: "none",
-  },
-  centerOverlay: {
-    position: "absolute",
-    inset: 0,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    background: "rgba(0,0,0,0.3)",
-    zIndex: 5,
-  },
-  loadingBackButton: {
-    position: "absolute",
-    top: "1.5rem",
-    left: "1.5rem",
-    background: "rgba(0,0,0,0.5)",
-    border: "none",
-    borderRadius: "50%",
-    width: "44px",
-    height: "44px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    color: "#fff",
-    cursor: "pointer",
-    zIndex: 10,
-  },
-  bufferingOverlay: {
-    position: "absolute",
-    inset: 0,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    background: "rgba(0,0,0,0.3)",
-    zIndex: 5,
-    pointerEvents: "none",
-  },
-};
 
 export default Player;

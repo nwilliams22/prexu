@@ -12,9 +12,12 @@ vi.mock("hls.js", () => ({
 
 const mockFetch = vi.fn();
 
+vi.mock("@tauri-apps/plugin-http", () => ({
+  fetch: (...args: unknown[]) => mockFetch(...args),
+}));
+
 beforeEach(() => {
   vi.useFakeTimers();
-  vi.stubGlobal("fetch", mockFetch);
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -49,13 +52,13 @@ function createCallbacks() {
 }
 
 function createSuccessResponse(overrides = {}) {
-  const mockBlob = new Blob(["test data"]);
+  const mockBuffer = new ArrayBuffer(9);
   return {
     ok: true,
     status: 200,
     statusText: "OK",
     url: "https://plex.test/video/segment.ts",
-    blob: () => Promise.resolve(mockBlob),
+    arrayBuffer: () => Promise.resolve(mockBuffer),
     text: () => Promise.resolve("playlist data"),
     ...overrides,
   };
@@ -129,8 +132,8 @@ describe("createTauriLoaderClass", () => {
   it("calls onSuccess with arraybuffer data on successful fetch", async () => {
     const LoaderClass = createTauriLoaderClass(TOKEN);
     const loader = new LoaderClass({});
-    const mockBlob = new Blob(["test data"]);
-    mockFetch.mockResolvedValue(createSuccessResponse({ blob: () => Promise.resolve(mockBlob) }));
+    const mockBuffer = new ArrayBuffer(9);
+    mockFetch.mockResolvedValue(createSuccessResponse({ arrayBuffer: () => Promise.resolve(mockBuffer) }));
 
     const callbacks = createCallbacks();
     loader.load(createContext(), createConfig(), callbacks);

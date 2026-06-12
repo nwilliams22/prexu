@@ -3,7 +3,7 @@
  * (transport buttons left, utility buttons right).
  */
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { UsePlayerResult } from "../../hooks/usePlayer";
 import type { UseSeekBarResult } from "../../hooks/useSeekBar";
 import type { AudioEnhancementsResult } from "../../hooks/useAudioEnhancements";
@@ -26,16 +26,31 @@ interface ControlsBottomBarProps {
   onActivity?: () => void;
   onNextEpisode?: () => void;
   onPrevEpisode?: () => void;
+  /** Stop button (leftmost transport) — leaves the player route. */
+  onStop?: () => void;
   audioEnhancements?: AudioEnhancementsResult;
   onAudioEnhancementChange?: (changes: {
     volumeBoost?: number;
     normalizationPreset?: NormalizationPreset;
     audioOffsetMs?: number;
   }) => void;
-  /** Picture-in-Picture */
+  /** Picture-in-Picture (or pop-out on native — same button, different
+   *  semantics per platform). On native the aria-label is overridden to
+   *  "Pop out" via `isPopOutMode` so the button label matches the
+   *  Win32-native floating-window behaviour. */
   isPiPActive?: boolean;
   isPiPSupported?: boolean;
   onTogglePiP?: () => void;
+  /** When true, the PiP/Pop-out button shows pop-out semantics ("Pop out"
+   *  label and tooltip) instead of browser PiP. Set on the native player
+   *  path (7il.4). */
+  isPopOutMode?: boolean;
+  /** In-window minimize support (7il.4). Currently Windows-only; the
+   *  button only renders when both `isMinimizeSupported` and `onMinimize`
+   *  are provided so HTML5/macOS paths show only the PiP button. */
+  isMinimizeSupported?: boolean;
+  isMinimizeActive?: boolean;
+  onMinimize?: () => void;
   /** Queue */
   queueCount?: number;
   onToggleQueue?: () => void;
@@ -44,6 +59,11 @@ interface ControlsBottomBarProps {
   serverToken?: string;
   ratingKey?: string;
   onSubtitleDownloaded?: () => void;
+  /** Fired with true while any popup (track menu, enhancements, subtitle
+   *  panel) is open so the parent can pin the controls visible — OS-native
+   *  widgets like the color picker emit no mousemove, and the auto-hide
+   *  timer would otherwise unmount the popup mid-interaction. */
+  onPanelPinChange?: (pinned: boolean) => void;
 }
 
 function ControlsBottomBar({
@@ -57,23 +77,36 @@ function ControlsBottomBar({
   onActivity,
   onNextEpisode,
   onPrevEpisode,
+  onStop,
   audioEnhancements,
   onAudioEnhancementChange,
   isPiPActive,
   isPiPSupported,
   onTogglePiP,
+  isPopOutMode,
+  isMinimizeSupported,
+  isMinimizeActive,
+  onMinimize,
   queueCount,
   onToggleQueue,
   serverUri,
   serverToken,
   ratingKey,
   onSubtitleDownloaded,
+  onPanelPinChange,
 }: ControlsBottomBarProps) {
   const [volumeOpen, setVolumeOpen] = useState(false);
   const [subtitleMenuOpen, setSubtitleMenuOpen] = useState(false);
   const [audioMenuOpen, setAudioMenuOpen] = useState(false);
   const [enhancementsOpen, setEnhancementsOpen] = useState(false);
   const [subtitleSearchOpen, setSubtitleSearchOpen] = useState(false);
+
+  const anyPanelOpen =
+    subtitleMenuOpen || audioMenuOpen || enhancementsOpen || subtitleSearchOpen;
+  useEffect(() => {
+    onPanelPinChange?.(anyPanelOpen);
+    return () => onPanelPinChange?.(false);
+  }, [anyPanelOpen, onPanelPinChange]);
 
   const iconSmall = mobile ? 26 : 22;
   const iconLarge = mobile ? 32 : 28;
@@ -109,6 +142,7 @@ function ControlsBottomBar({
               onActivity={onActivity}
               onNextEpisode={onNextEpisode}
               onPrevEpisode={onPrevEpisode}
+              onStop={onStop}
               mobile={mobile}
               iconSmall={iconSmall}
               iconLarge={iconLarge}
@@ -167,10 +201,17 @@ function ControlsBottomBar({
           <div style={styles.controlsRight}>
             {syncIndicator}
 
-            {/* Subtitle button */}
+            {/* Subtitle button — opens the full tabbed panel (tracks /
+                search / style) directly. The compact TrackMenu is only the
+                fallback when no server connection is available (local
+                playback) since search needs the server. */}
             <button
               onClick={() => {
-                setSubtitleMenuOpen((o) => !o);
+                if (serverUri && serverToken && ratingKey) {
+                  setSubtitleSearchOpen((o) => !o);
+                } else {
+                  setSubtitleMenuOpen((o) => !o);
+                }
                 setAudioMenuOpen(false);
                 setEnhancementsOpen(false);
               }}
@@ -264,7 +305,52 @@ function ControlsBottomBar({
               </button>
             )}
 
-            {/* Picture-in-Picture */}
+            {/* Minimize to corner (Windows-only, prexu-7il.4) */}
+            {isMinimizeSupported && onMinimize && (
+              <button
+                onClick={onMinimize}
+                style={{
+                  ...styles.controlButton,
+                  ...(isMinimizeActive ? { color: "var(--accent)" } : {}),
+                  ...(mobile ? { padding: "0.5rem" } : {}),
+                }}
+                aria-label={
+                  isMinimizeActive
+                    ? "Restore from minimize"
+                    : "Minimize player to corner"
+                }
+                title={
+                  isMinimizeActive
+                    ? "Restore player"
+                    : "Minimize player to corner"
+                }
+              >
+                {/* "Window-restore-down" style: small box inside large box */}
+                <svg
+                  width={iconSmall}
+                  height={iconSmall}
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <rect x={3} y={3} width={14} height={14} rx={2} />
+                  <rect
+                    x={11}
+                    y={11}
+                    width={10}
+                    height={10}
+                    rx={2}
+                    fill="currentColor"
+                    opacity={0.35}
+                  />
+                </svg>
+              </button>
+            )}
+
+            {/* Pop-out (native) / Picture-in-Picture (HTML5) */}
             {isPiPSupported && onTogglePiP && (
               <button
                 onClick={onTogglePiP}
@@ -273,7 +359,24 @@ function ControlsBottomBar({
                   ...(isPiPActive ? { color: "var(--accent)" } : {}),
                   ...(mobile ? { padding: "0.5rem" } : {}),
                 }}
-                aria-label={isPiPActive ? "Exit picture-in-picture" : "Picture-in-picture"}
+                aria-label={
+                  isPopOutMode
+                    ? isPiPActive
+                      ? "Exit pop-out"
+                      : "Pop out floating player"
+                    : isPiPActive
+                      ? "Exit picture-in-picture"
+                      : "Picture-in-picture"
+                }
+                title={
+                  isPopOutMode
+                    ? isPiPActive
+                      ? "Exit pop-out"
+                      : "Pop out floating player"
+                    : isPiPActive
+                      ? "Exit picture-in-picture"
+                      : "Picture-in-picture"
+                }
               >
                 {isPiPActive ? (
                   <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
@@ -330,7 +433,6 @@ function ControlsBottomBar({
           allowNone={player.subtitleTracks.length > 0}
           emptyMessage="No subtitle tracks available"
           onClose={() => setSubtitleMenuOpen(false)}
-          onSearchDownload={serverUri ? () => setSubtitleSearchOpen(true) : undefined}
         />
       )}
 

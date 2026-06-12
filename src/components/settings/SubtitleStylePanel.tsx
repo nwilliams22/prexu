@@ -5,6 +5,10 @@ import { styles } from "./settingsStyles";
 interface SubtitleStylePanelProps {
   subtitleStyle: SubtitleStylePreferences;
   updateSubtitleStyle: (partial: Partial<SubtitleStylePreferences>) => void;
+  /** Embedded mode (player subtitle popup): no section heading and no
+   *  bottom divider — the divider reads as a cut-off scroll edge inside a
+   *  small popup. Settings page keeps the framed section layout. */
+  frameless?: boolean;
 }
 
 const FONT_OPTIONS = [
@@ -20,12 +24,13 @@ const FONT_OPTIONS = [
 export function SubtitleStylePanel({
   subtitleStyle: ss,
   updateSubtitleStyle: update,
+  frameless = false,
 }: SubtitleStylePanelProps) {
   const previewStyle = useMemo(() => buildPreviewStyle(ss), [ss]);
 
   return (
-    <section style={styles.section}>
-      <h3 style={styles.sectionTitle}>Subtitle Style</h3>
+    <section style={frameless ? panelStyles.framelessSection : styles.section}>
+      {!frameless && <h3 style={styles.sectionTitle}>Subtitle Style</h3>}
 
       <div style={styles.field}>
         <label style={styles.label}>Font</label>
@@ -177,6 +182,11 @@ function buildPreviewStyle(ss: SubtitleStylePreferences): React.CSSProperties {
 }
 
 const panelStyles: Record<string, React.CSSProperties> = {
+  framelessSection: {
+    marginBottom: 0,
+    paddingBottom: 0,
+    borderBottom: "none",
+  },
   colorRow: {
     display: "flex",
     alignItems: "center",

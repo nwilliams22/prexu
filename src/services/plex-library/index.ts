@@ -25,7 +25,11 @@ export {
   getOnDeck,
 } from "./items";
 export { getFilterOptions } from "./filter";
-export { getItemMetadata, getItemChildren } from "./detail";
+export {
+  getItemMetadata,
+  getItemChildren,
+  getAllShowEpisodes,
+} from "./detail";
 export { getNextEpisode, getPreviousEpisode } from "./episodes";
 export { getWatchHistory } from "./history";
 export { getCollections, getCollectionItems } from "./collections";

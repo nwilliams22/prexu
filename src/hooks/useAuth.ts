@@ -15,7 +15,13 @@ import {
   getActiveUser,
   migrateToSecureStorage,
 } from "../services/storage";
-import { validateToken, getPlexUser, onAuthInvalid } from "../services/plex-api";
+import { validateToken, getPlexUser, onAuthInvalid, discoverServers } from "../services/plex-api";
+import {
+  probeServerReachability,
+  resolveServerFromDiscovery,
+  logServerResolve,
+} from "../services/server-reachability";
+import { logger } from "../services/logger";
 
 const TOKEN_REVALIDATION_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -23,6 +29,8 @@ export interface AuthContextValue {
   isLoading: boolean;
   isAuthenticated: boolean;
   serverSelected: boolean;
+  /** True when the stored server URI is unreachable and auto-re-resolve failed */
+  serverUnreachable: boolean;
   authToken: string | null;
   server: ServerData | null;
   activeUser: ActiveUser | null;
@@ -51,6 +59,7 @@ export function useAuthState(): AuthContextValue {
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [server, setServer] = useState<ServerData | null>(null);
   const [activeUser, setActiveUser] = useState<ActiveUser | null>(null);
+  const [serverUnreachable, setServerUnreachable] = useState(false);
 
   // On mount, migrate storage then check for existing auth
   useEffect(() => {
@@ -69,7 +78,78 @@ export function useAuthState(): AuthContextValue {
             // Also restore server selection
             const storedServer = await getServer();
             if (storedServer) {
+              // Restore optimistically so the UI is not blocked
               setServer(storedServer);
+
+              // Probe reachability in background — do not await before setIsLoading.
+              // Two attempts: a single 5s probe false-negatives under cold-boot
+              // contention, and the discovery sweep it escalates to costs ~11s
+              // plus a server-state swap that re-triggers dashboard fetches.
+              void (async () => {
+                const reachable = await probeServerReachability(
+                  storedServer.uri,
+                  storedServer.accessToken,
+                  2
+                );
+
+                if (reachable) {
+                  // All good — clear any stale unreachable flag
+                  setServerUnreachable(false);
+                  return;
+                }
+
+                logger.warn(
+                  "auth",
+                  "stored server unreachable, attempting re-resolve",
+                  storedServer.uri.substring(0, 80)
+                );
+
+                // Attempt to re-discover and find the same server by clientIdentifier
+                try {
+                  const servers = await discoverServers(stored.authToken);
+                  const fresh = resolveServerFromDiscovery(
+                    servers,
+                    storedServer.clientIdentifier
+                  );
+
+                  if (
+                    fresh &&
+                    fresh.uri === storedServer.uri &&
+                    fresh.accessToken === storedServer.accessToken
+                  ) {
+                    // Probe false-negatived but discovery reached the same
+                    // address — the server was fine all along. Swapping in an
+                    // identical-but-new server object would re-trigger every
+                    // consumer keyed on `server` (dashboard fetches, activity
+                    // websocket), so leave state untouched.
+                    logger.info(
+                      "auth",
+                      "re-resolve returned identical server; keeping existing state",
+                      storedServer.uri.substring(0, 80)
+                    );
+                    setServerUnreachable(false);
+                  } else if (fresh) {
+                    logServerResolve(storedServer.uri, fresh.uri);
+                    await saveServer(fresh);
+                    setServer(fresh);
+                    setServerUnreachable(false);
+                  } else {
+                    logger.error(
+                      "auth",
+                      "server not found in discovery; clientIdentifier not matched",
+                      storedServer.clientIdentifier
+                    );
+                    setServerUnreachable(true);
+                  }
+                } catch (err) {
+                  logger.error(
+                    "auth",
+                    "discovery failed during server re-resolve",
+                    err instanceof Error ? err.message : String(err)
+                  );
+                  setServerUnreachable(true);
+                }
+              })();
             }
 
             // Restore active user profile
@@ -161,6 +241,7 @@ export function useAuthState(): AuthContextValue {
   const changeServer = useCallback(async () => {
     await clearServer();
     setServer(null);
+    setServerUnreachable(false);
   }, []);
 
   const switchUser = useCallback(
@@ -192,6 +273,7 @@ export function useAuthState(): AuthContextValue {
     isLoading,
     isAuthenticated: authToken !== null,
     serverSelected: server !== null,
+    serverUnreachable,
     authToken,
     server,
     activeUser,

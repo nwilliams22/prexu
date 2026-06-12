@@ -196,8 +196,15 @@ export function useItemDetailData(): ItemDetailData {
         .catch(() => ({ name, items: [] as PlexMediaItem[] }))
     );
 
+    const relatedPromise = getRelatedItems(
+      server.uri,
+      server.accessToken,
+      ratingKey,
+      item.type
+    );
+
     Promise.allSettled([
-      getRelatedItems(server.uri, server.accessToken, ratingKey),
+      relatedPromise,
       getExtras(server.uri, server.accessToken, ratingKey),
       Promise.all(actorSearches),
     ]).then(([relResult, extResult, actorResult]) => {

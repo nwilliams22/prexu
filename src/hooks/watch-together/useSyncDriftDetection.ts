@@ -16,10 +16,15 @@ export function useSyncDriftDetection(
     localTimestamp: number;
   } | null>
 ): void {
-  // Use a ref so the interval callback always reads the latest currentTime
-  // without needing it in the effect dependency array.
+  // Use refs so the interval callback always reads the latest values without
+  // needing them in the effect dependency array. playerRef also lets us drift-
+  // correct via player.seek() which works on both HTML5 (videoRef populated)
+  // and native libmpv (videoRef is null on Windows) — touching videoRef.current
+  // directly silently failed on native.
   const currentTimeRef = useRef(player.currentTime);
   currentTimeRef.current = player.currentTime;
+  const playerRef = useRef(player);
+  playerRef.current = player;
 
   useEffect(() => {
     if (!isInSession || !player.isPlaying) return;
@@ -33,13 +38,10 @@ export function useSyncDriftDetection(
       const drift = Math.abs(currentTimeRef.current - expectedTime);
 
       if (drift > 2) {
-        const video = player.videoRef.current;
-        if (video) {
-          remoteActionRef.current = true;
-          video.currentTime = expectedTime;
-          setSyncStatus("syncing");
-          setTimeout(() => setSyncStatus("synced"), 500);
-        }
+        remoteActionRef.current = true;
+        playerRef.current.seek(expectedTime);
+        setSyncStatus("syncing");
+        setTimeout(() => setSyncStatus("synced"), 500);
       }
     }, 2000);
 
@@ -47,7 +49,6 @@ export function useSyncDriftDetection(
   }, [
     isInSession,
     player.isPlaying,
-    player.videoRef,
     setSyncStatus,
     remoteActionRef,
     lastRemoteSyncRef,

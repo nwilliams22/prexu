@@ -14,6 +14,7 @@ import { useScrollRestoration } from "../hooks/useScrollRestoration";
 import { getImageUrl, getPlaceholderUrl, getImageSrcSet } from "../services/plex-library";
 import LibraryGrid from "../components/LibraryGrid";
 import VirtualizedLibraryGrid from "../components/VirtualizedLibraryGrid";
+import type { LibraryGridHandle } from "../components/VirtualizedLibraryGrid";
 import FilterBar from "../components/FilterBar";
 import PosterCard from "../components/PosterCard";
 import SkeletonCard from "../components/SkeletonCard";
@@ -31,6 +32,11 @@ import type { PlexMediaItem, PlexMediaInfo, PlexCollection, LibraryFilters } fro
 import { getMediaBadges, extractStreamsForBadges } from "../utils/media-badges";
 import type { MediaBadge } from "../utils/media-badges";
 import { STORAGE_KEYS } from "../services/storage/backends";
+import {
+  getLibrarySortBucket,
+  findFirstIndexForLetter,
+} from "../utils/library-sort";
+import { logger } from "../services/logger";
 
 interface PersistedLibraryState {
   sort?: string;
@@ -145,7 +151,7 @@ function LibraryView() {
   const { openContextMenu, overlays: menuOverlays } = useMediaContextMenu();
   const { getPlayHandler, playOverlay } = usePlayAction();
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
-  const gridContainerRef = useRef<HTMLDivElement>(null);
+  const gridApiRef = useRef<LibraryGridHandle>(null);
 
   // Clear expanded state when switching sections
   useEffect(() => {
@@ -211,41 +217,36 @@ function LibraryView() {
     return sorted;
   }, [sectionCollections, collectionSearch, collectionSort, collectionsUnwatchedOnly, collectionWatchedMap, minCollectionSize]);
 
-  // Compute available first-letters from loaded items for the alpha jump bar
+  // Compute available first-letters from loaded items for the alpha jump bar.
+  // Uses the same normalization as the click handler so letters that have no
+  // findable target are correctly disabled (e.g. "The Matrix" → "M", not "T").
   const availableLetters = useMemo(() => {
     const letters = new Set<string>();
-    for (const item of items) {
-      const first = ((item as { titleSort?: string }).titleSort || item.title || "")
-        .charAt(0)
-        .toUpperCase();
-      if (/[A-Z]/.test(first)) {
-        letters.add(first);
-      } else {
-        letters.add("#");
-      }
+    for (const item of filteredItems) {
+      letters.add(getLibrarySortBucket(item));
     }
     return letters;
-  }, [items]);
+  }, [filteredItems]);
 
+  // Scroll the grid (virtualized or not) to the first item whose normalized
+  // sort key starts with `letter`. Querying the DOM directly fails under
+  // virtualization because off-screen rows aren't mounted, so we drive the
+  // grid via its imperative scrollToIndex handle instead.
   const handleAlphaJump = useCallback(
     (letter: string) => {
-      if (!gridContainerRef.current) return;
-      // Find the first card element whose data-title starts with this letter
-      const cards = gridContainerRef.current.querySelectorAll("[data-title-sort]");
-      for (const card of cards) {
-        const titleSort = card.getAttribute("data-title-sort") || "";
-        const first = titleSort.charAt(0).toUpperCase();
-        const matches =
-          letter === "#"
-            ? !/[A-Z]/.test(first)
-            : first === letter;
-        if (matches) {
-          card.scrollIntoView({ behavior: "smooth", block: "center" });
-          return;
-        }
+      const index = findFirstIndexForLetter(filteredItems, letter);
+      if (index < 0) {
+        void logger.debug("library:scrubber", "alpha jump miss", { letter });
+        return;
       }
+      void logger.debug("library:scrubber", "alpha jump", {
+        letter,
+        index,
+        title: filteredItems[index]?.title,
+      });
+      gridApiRef.current?.scrollToIndex(index);
     },
-    []
+    [filteredItems],
   );
 
   // Show alpha jump bar for movie and show libraries when sorted alphabetically
@@ -338,33 +339,31 @@ function LibraryView() {
 
   const renderLibraryItem = useCallback(
     (item: PlexMediaItem) => (
-      <div data-title-sort={(item as { titleSort?: string }).titleSort || item.title}>
-        <PosterCard
-          ratingKey={item.ratingKey}
-          imageUrl={posterUrl(item.thumb)}
-          placeholderUrl={placeholderForPoster(item.thumb)}
-          srcSet={srcSetForPoster(item.thumb)}
-          title={item.title}
-          subtitle={getMediaSubtitle(item, { showEpisodeCount: true })}
-          watched={isWatched(item)}
-          unwatchedCount={getUnwatchedCount(item)}
-          onClick={() => navigate(`/item/${item.ratingKey}`)}
-          onPlay={getPlayHandler(item)}
-          mediaBadges={getItemMediaBadges(item)}
-          showMoreButton
-          onContextMenu={(e) => openContextMenu(e, item)}
-          onMoreClick={(e) => openContextMenu(e, item)}
-          onExpand={
-            item.type === "show"
-              ? () =>
-                  setExpandedKey(
-                    expandedKey === item.ratingKey ? null : item.ratingKey
-                  )
-              : undefined
-          }
-          isExpanded={expandedKey === item.ratingKey}
-        />
-      </div>
+      <PosterCard
+        ratingKey={item.ratingKey}
+        imageUrl={posterUrl(item.thumb)}
+        placeholderUrl={placeholderForPoster(item.thumb)}
+        srcSet={srcSetForPoster(item.thumb)}
+        title={item.title}
+        subtitle={getMediaSubtitle(item, { showEpisodeCount: true })}
+        watched={isWatched(item)}
+        unwatchedCount={getUnwatchedCount(item)}
+        onClick={() => navigate(`/item/${item.ratingKey}`)}
+        onPlay={getPlayHandler(item)}
+        mediaBadges={getItemMediaBadges(item)}
+        showMoreButton
+        onContextMenu={(e) => openContextMenu(e, item)}
+        onMoreClick={(e) => openContextMenu(e, item)}
+        onExpand={
+          item.type === "show"
+            ? () =>
+                setExpandedKey(
+                  expandedKey === item.ratingKey ? null : item.ratingKey,
+                )
+            : undefined
+        }
+        isExpanded={expandedKey === item.ratingKey}
+      />
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [expandedKey, navigate, openContextMenu, getPlayHandler, posterUrl],
@@ -462,8 +461,9 @@ function LibraryView() {
             </>
           )}
 
-          <div ref={gridContainerRef}>
+          <div>
             <VirtualizedLibraryGrid
+              ref={gridApiRef}
               items={filteredItems}
               renderItem={renderLibraryItem}
               getKey={getItemKey}

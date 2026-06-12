@@ -3,7 +3,7 @@
  * Reports playback progress to the Plex server so it can track watch state.
  */
 
-import { useRef, useCallback } from "react";
+import { useRef, useCallback, useMemo } from "react";
 import {
   reportTimeline,
   reportTimelineBeacon,
@@ -71,13 +71,16 @@ export function useTimelineReporting(
     }
   }, [server]);
 
-  return {
-    startTimeline,
-    stopTimeline,
-    reportStopped,
-    currentTimeRef,
-    durationRef,
-    isPlayingRef,
-    ratingKeyRef,
-  };
+  return useMemo(
+    () => ({
+      startTimeline,
+      stopTimeline,
+      reportStopped,
+      currentTimeRef,
+      durationRef,
+      isPlayingRef,
+      ratingKeyRef,
+    }),
+    [startTimeline, stopTimeline, reportStopped],
+  );
 }

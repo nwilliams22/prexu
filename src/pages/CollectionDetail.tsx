@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
+import { usePlayerSession } from "../contexts/PlayerContext";
 import { useAuth } from "../hooks/useAuth";
 import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
 import { useMediaContextMenu } from "../hooks/useMediaContextMenu";
@@ -43,6 +44,7 @@ function CollectionDetail() {
   const { collectionKey } = useParams<{ collectionKey: string }>();
   const { server } = useAuth();
   const navigate = useNavigate();
+  const { play } = usePlayerSession();
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
   useScrollRestoration();
@@ -161,16 +163,16 @@ function CollectionDetail() {
   const handlePlayAll = useCallback(() => {
     const queueItems = buildQueueFromItems(items);
     if (queueItems.length === 0) return;
-    setQueue(queueItems, 0);
-    navigate(`/play/${queueItems[0].ratingKey}`);
-  }, [items, setQueue, navigate]);
+    setQueue(queueItems, 0, false, "user-built");
+    play(queueItems[0].ratingKey);
+  }, [items, setQueue, play]);
 
   const handleShuffle = useCallback(() => {
     const queueItems = shuffleArray(buildQueueFromItems(items));
     if (queueItems.length === 0) return;
-    setQueue(queueItems, 0, true);
-    navigate(`/play/${queueItems[0].ratingKey}`);
-  }, [items, setQueue, navigate]);
+    setQueue(queueItems, 0, true, "user-built");
+    play(queueItems[0].ratingKey);
+  }, [items, setQueue, play]);
 
   if (!server) return null;
 

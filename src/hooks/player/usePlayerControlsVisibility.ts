@@ -23,20 +23,24 @@ export function usePlayerControlsVisibility(
     setControlsVisible(true);
     if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
     hideTimerRef.current = setTimeout(() => {
-      if (isPlaying) setControlsVisible(false);
+      setControlsVisible(false);
     }, CONTROLS_HIDE_MS);
-  }, [isPlaying]);
+  }, []);
 
   const handleMouseMove = useCallback(() => {
     resetHideTimer();
   }, [resetHideTimer]);
 
-  // Always show controls when paused
+  // React to play/pause transitions:
+  // - Always show controls and start a fresh 3s countdown
+  // - This applies whether playing or paused
   useEffect(() => {
-    if (!isPlaying) {
-      setControlsVisible(true);
-      if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
-    }
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    setControlsVisible(true);
+    hideTimerRef.current = setTimeout(
+      () => setControlsVisible(false),
+      CONTROLS_HIDE_MS,
+    );
   }, [isPlaying]);
 
   // Cleanup timer on unmount

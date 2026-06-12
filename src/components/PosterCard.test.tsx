@@ -216,4 +216,42 @@ describe("PosterCard", () => {
     const results = await axe(container);
     expect(results).toHaveNoViolations();
   });
+
+  // prexu-yhg: dashboard shelves pass `index` so each tile's
+  // cardEnter animation kicks off 30 ms after the previous one. This
+  // is a perception win — the user sees tiles populating progressively
+  // instead of all blinking in together. Cap is 8 tiles.
+  describe("stagger animation-delay (index prop)", () => {
+    it("applies no animation-delay when index is omitted (legacy callers)", () => {
+      const { container } = render(<PosterCard {...defaultProps} />);
+      const card = container.querySelector(".card-enter") as HTMLElement;
+      expect(card.style.animationDelay).toBe("");
+    });
+
+    it("applies animation-delay = index * 30ms", () => {
+      const { container } = render(<PosterCard {...defaultProps} index={3} />);
+      const card = container.querySelector(".card-enter") as HTMLElement;
+      expect(card.style.animationDelay).toBe("90ms");
+    });
+
+    it("caps the delay at MAX_STAGGER_INDEX (8 → 240ms)", () => {
+      const { container } = render(<PosterCard {...defaultProps} index={50} />);
+      const card = container.querySelector(".card-enter") as HTMLElement;
+      expect(card.style.animationDelay).toBe("240ms");
+    });
+
+    it("clamps negative index to 0 (no delay)", () => {
+      const { container } = render(<PosterCard {...defaultProps} index={-3} />);
+      const card = container.querySelector(".card-enter") as HTMLElement;
+      expect(card.style.animationDelay).toBe("");
+    });
+
+    it("index=0 omits animation-delay (no 0ms inline)", () => {
+      const { container } = render(<PosterCard {...defaultProps} index={0} />);
+      const card = container.querySelector(".card-enter") as HTMLElement;
+      // 0 * 30 = 0, we suppress the inline style so the keyframe default
+      // applies — keeps the rendered style tree clean.
+      expect(card.style.animationDelay).toBe("");
+    });
+  });
 });

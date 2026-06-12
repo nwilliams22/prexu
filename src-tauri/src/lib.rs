@@ -1,11 +1,14 @@
 mod downloads;
+mod player;
 
 use tauri_plugin_log::{Target, TargetKind};
-use tauri::Manager;
+use tauri::{AppHandle, Manager};
 use std::io::{BufRead, BufReader, Read as StdRead, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
+use std::time::Duration;
 
 // ── Local HTTP proxy for HLS streaming ──
 //
@@ -30,6 +33,56 @@ impl ProxyState {
             downloads_dir: Arc::new(Mutex::new(None)),
         }
     }
+}
+
+/// Show the main window. Called from the frontend once React has painted
+/// its first frame (App.tsx useLayoutEffect). The window is created with
+/// `visible: false` in tauri.conf.json so it stays hidden until content
+/// has rendered, avoiding the "transparent window shows desktop pixels
+/// before chrome paints" flash (prexu-vs5). Idempotent — calling on an
+/// already-visible window is a no-op.
+///
+/// Also kicks off a one-shot mpv warmup (prexu-204): on first call, a
+/// background thread invokes `PlayerState::ensure_init` so the hwdec
+/// probe + DXGI swapchain build are paid here instead of on the user's
+/// first Play. Idempotent via the underlying ensure_init mutex — if the
+/// frontend ever invokes app_ready more than once, the second warmup
+/// call short-circuits at the `guard.is_some()` check.
+#[tauri::command]
+fn app_ready(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
+        log::info!("[setup] app_ready — frontend signalled first paint; showing window");
+        window.show().map_err(|e| format!("show failed: {e}"))?;
+        let _ = window.set_focus();
+    }
+
+    // Warmup: pre-create host window + libmpv handle on a background
+    // thread so the user's first Play skips the hwdec probe + VO
+    // selection (~12 s observed on a cold Win11 boot). The handle stays
+    // parked in PlayerState; player_load_url's ensure_init is a no-op
+    // when it runs after warmup completes.
+    #[cfg(target_os = "windows")]
+    {
+        let warmup_handle = app.clone();
+        std::thread::spawn(move || {
+            let start = std::time::Instant::now();
+            let state = warmup_handle.state::<player::PlayerState>();
+            log::info!("[player:warmup] starting (cold-start hwdec probe)");
+            match state.ensure_init(&warmup_handle) {
+                Ok(()) => log::info!(
+                    "[player:warmup] complete in {} ms",
+                    start.elapsed().as_millis()
+                ),
+                Err(e) => log::warn!(
+                    "[player:warmup] failed after {} ms: {} — first Play will pay the init cost",
+                    start.elapsed().as_millis(),
+                    e
+                ),
+            }
+        });
+    }
+
+    Ok(())
 }
 
 /// Validate that a server URL looks like a legitimate Plex server.
@@ -344,6 +397,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(ProxyState::new())
         .manage(downloads::DownloadManager::new())
+        .manage(player::PlayerState::new())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // If a second instance is launched, focus the existing window
             if let Some(window) = app.get_webview_window("main") {
@@ -355,12 +409,21 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(
             tauri_plugin_log::Builder::default()
-                .level(log::LevelFilter::Info)
+                .level(if cfg!(debug_assertions) {
+                    log::LevelFilter::Debug
+                } else {
+                    log::LevelFilter::Info
+                })
+                .level_for("app_lib::player", if cfg!(debug_assertions) {
+                    log::LevelFilter::Trace
+                } else {
+                    log::LevelFilter::Debug
+                })
                 .targets([
                     Target::new(TargetKind::Stdout),
                     Target::new(TargetKind::LogDir { file_name: None }),
                 ])
-                .max_file_size(5_000_000)
+                .max_file_size(20_000_000)
                 .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
                 .build(),
         )
@@ -369,15 +432,305 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
             start_proxy,
+            app_ready,
             downloads::get_downloads_dir,
+            downloads::open_downloads_dir,
             downloads::download_media,
             downloads::cancel_download,
             downloads::delete_download,
             downloads::get_local_file_path,
+            player::commands::player_load_url,
+            player::commands::player_play,
+            player::commands::player_pause,
+            player::commands::player_seek,
+            player::commands::player_set_volume,
+            player::commands::player_set_muted,
+            player::commands::player_set_audio_track,
+            player::commands::player_set_sub_track,
+            player::commands::player_load_external_sub,
+            player::commands::player_set_audio_delay_ms,
+            player::commands::player_set_af_chain,
+            player::commands::player_apply_sub_style,
+            player::commands::player_set_timeline_context,
+            player::commands::player_clear_timeline_context,
+            player::commands::player_unload,
+            player::commands::player_stop,
+            player::commands::player_set_fullscreen,
+            player::commands::player_enter_popout,
+            player::commands::player_exit_popout,
+            player::commands::player_enter_minimize,
+            player::commands::player_exit_minimize,
+            player::commands::player_update_mini_geometry,
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
-                window.show().unwrap_or_default();
+                // Window is `visible: false` in tauri.conf.json. We do NOT
+                // call window.show() here — the frontend invokes
+                // app_ready once React has painted its first frame
+                // (prexu-vs5). Without that handshake the user sees the
+                // OS window frame appear over a transparent client area
+                // for the duration of the WebView's HTML-parse + CSS
+                // load + first React commit.
+                //
+                // Safety net: if the frontend never signals (broken
+                // bundle, JS error before mount, etc.), show the window
+                // after 3 s so the user isn't staring at nothing. The
+                // common case lands in well under 500 ms.
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(3000));
+                    if let Some(w) = app_handle.get_webview_window("main") {
+                        if !w.is_visible().unwrap_or(true) {
+                            log::warn!("[setup] safety-net show: frontend never invoked app_ready within 3 s");
+                            let _ = w.show();
+                        }
+                    }
+                });
+
+                #[cfg(target_os = "windows")]
+                {
+                    let app_handle = app.handle().clone();
+                    let win_clone = window.clone();
+                    // prexu-w9j: Windows leaves WINDOWPLACEMENT.rcNormalPosition
+                    // at the PRE-snap rect while a window is Aero-Snapped, so a
+                    // maximize→restore cycle on a snapped window restores to the
+                    // wrong (pre-snap) size — and tao doesn't track the snapped
+                    // rect as its restore target either. We remember the last
+                    // non-maximized / non-fullscreen / non-minimized rect and
+                    // re-apply it when the window is restored from maximize.
+                    let last_normal_rect: Arc<
+                        Mutex<Option<(tauri::PhysicalPosition<i32>, tauri::PhysicalSize<u32>)>>,
+                    > = Arc::new(Mutex::new(None));
+                    let was_maximized = Arc::new(AtomicBool::new(false));
+                    let reapplying_rect = Arc::new(AtomicBool::new(false));
+                    window.on_window_event(move |event| {
+                        use tauri::WindowEvent;
+                        let state = app_handle.state::<player::PlayerState>();
+                        match event {
+                            // Pure move (WM_MOVE / drag without resize) —
+                            // fast-path through sync_geometry_move which
+                            // skips the 50ms throttle. Position-only
+                            // SetWindowPos with SWP_NOSIZE doesn't
+                            // trigger mpv's swapchain rebuild, so we can
+                            // run at the full event rate without the
+                            // freeze that necessitates the throttle for
+                            // size changes (prexu-aqd). The trailing-
+                            // edge flush is not needed here either — we
+                            // are not dropping any events.
+                            WindowEvent::Moved(_) => {
+                                if let (Ok(pos), Ok(size)) =
+                                    (win_clone.inner_position(), win_clone.inner_size())
+                                {
+                                    log::trace!(
+                                        "[window] Moved to ({},{}), size={}x{}",
+                                        pos.x, pos.y, size.width, size.height
+                                    );
+                                    state.sync_geometry_move(
+                                        pos.x,
+                                        pos.y,
+                                        size.width as i32,
+                                        size.height as i32,
+                                    );
+                                }
+                            }
+                            // Resize (WM_SIZE — drag-resize, snap,
+                            // maximize/restore, fullscreen toggle). Goes
+                            // through the throttled sync_geometry path
+                            // because each SetWindowPos with size change
+                            // rebuilds mpv's D3D11 swapchain; 60Hz
+                            // rebuild bursts crash gpu-next vo. Throttle
+                            // + trailing-edge flush preserved.
+                            WindowEvent::Resized(_) => {
+                                // prexu-w9j: keep the snapped/normal rect as the
+                                // restore target so maximize→restore returns to it
+                                // instead of the OS's stale pre-snap rect. Guarded
+                                // by `reapplying_rect` so our own set_size/
+                                // set_position re-entrant WM_SIZE doesn't recurse.
+                                if !reapplying_rect.load(Ordering::Relaxed) {
+                                    let maxed = win_clone.is_maximized().unwrap_or(false);
+                                    let fs = win_clone.is_fullscreen().unwrap_or(false);
+                                    let min = win_clone.is_minimized().unwrap_or(false);
+                                    let was_max = was_maximized.swap(maxed, Ordering::Relaxed);
+                                    if was_max && !maxed && !fs && !min {
+                                        // Just un-maximized — the OS restored to the
+                                        // stale pre-snap rect. Re-apply our captured
+                                        // snapped/normal rect.
+                                        let target = *last_normal_rect.lock().unwrap();
+                                        if let Some((opos, isize)) = target {
+                                            reapplying_rect.store(true, Ordering::Relaxed);
+                                            let _ = win_clone
+                                                .set_size(tauri::Size::Physical(isize));
+                                            let _ = win_clone
+                                                .set_position(tauri::Position::Physical(opos));
+                                            reapplying_rect.store(false, Ordering::Relaxed);
+                                            log::info!(
+                                                "[window] restore-from-maximize: reapplied snapped rect ({},{} {}x{})",
+                                                opos.x, opos.y, isize.width, isize.height
+                                            );
+                                        }
+                                    } else if !maxed && !fs && !min {
+                                        // Normal drag-resize or Aero-Snap — this is
+                                        // the size a future restore should return to.
+                                        if let (Ok(opos), Ok(isize)) = (
+                                            win_clone.outer_position(),
+                                            win_clone.inner_size(),
+                                        ) {
+                                            *last_normal_rect.lock().unwrap() =
+                                                Some((opos, isize));
+                                        }
+                                    }
+                                }
+                                if let (Ok(pos), Ok(size)) =
+                                    (win_clone.inner_position(), win_clone.inner_size())
+                                {
+                                    log::trace!("[window] Resized to ({},{},{}x{})", pos.x, pos.y, size.width, size.height);
+                                    // Tell the frontend the OS-level WM_SIZE
+                                    // fired. AppLayout's resize hook listens
+                                    // for this and triggers a forced React
+                                    // commit + synchronous layout read, so
+                                    // dashboard content stays in lockstep
+                                    // with the new client area even when
+                                    // WebView2 batches its own resize event
+                                    // (prexu-uzk follow-up). Payload is the
+                                    // new (width, height) so the receiver
+                                    // can dedup against the last value.
+                                    use tauri::Emitter;
+                                    let _ = app_handle.emit(
+                                        "window://resized",
+                                        (size.width, size.height),
+                                    );
+                                    state.sync_geometry(
+                                        pos.x,
+                                        pos.y,
+                                        size.width as i32,
+                                        size.height as i32,
+                                    );
+                                    // Schedule a trailing-edge flush on the first
+                                    // event of a burst. A fast drag-resize whose
+                                    // final WM_SIZE lands inside the 50ms throttle
+                                    // window leaves the host stuck at stale
+                                    // geometry — sync_geometry stashes the final
+                                    // rect in pending, but no further event arrives
+                                    // to consume it. The worker sleeps the throttle
+                                    // window, then dispatches back to the main
+                                    // thread to apply whatever pending holds at
+                                    // that moment (which is always the most recent
+                                    // rect, since later events overwrite earlier
+                                    // ones). claim_trailing_schedule's atomic swap
+                                    // means subsequent events in the same burst
+                                    // don't double-spawn. (prexu-hhx)
+                                    if state.claim_trailing_schedule() {
+                                        let ah_sleep = app_handle.clone();
+                                        let ah_closure = app_handle.clone();
+                                        std::thread::spawn(move || {
+                                            std::thread::sleep(
+                                                player::GEOMETRY_SYNC_MIN_INTERVAL,
+                                            );
+                                            if let Err(e) =
+                                                ah_sleep.run_on_main_thread(move || {
+                                                    let state = ah_closure
+                                                        .state::<player::PlayerState>();
+                                                    state.flush_pending_geometry();
+                                                })
+                                            {
+                                                log::warn!(
+                                                    "[player] trailing flush dispatch failed: {:?}",
+                                                    e
+                                                );
+                                            }
+                                        });
+                                    }
+                                }
+                            }
+                            // Cross-monitor DPI change: tao gives us the new
+                            // physical size directly to dodge a stale read.
+                            //
+                            // The destructured `scale_factor` is the NEW scale
+                            // for the monitor the window just landed on. We
+                            // push it into PlayerState BEFORE calling
+                            // sync_geometry so `apply_minimize_inset` sees
+                            // the new scale on the very first re-place
+                            // (prexu-buw). Without this, a minimized mini
+                            // player keeps using the old monitor's DPI for
+                            // its physical size and ends up wrong-sized at
+                            // the anchor corner.
+                            WindowEvent::ScaleFactorChanged {
+                                new_inner_size,
+                                scale_factor,
+                                ..
+                            } => {
+                                log::info!(
+                                    "[window] ScaleFactorChanged scale={:.3} new_size={}x{}",
+                                    scale_factor,
+                                    new_inner_size.width,
+                                    new_inner_size.height
+                                );
+                                state.set_scale_factor(*scale_factor);
+                                if let Ok(pos) = win_clone.inner_position() {
+                                    state.sync_geometry(
+                                        pos.x,
+                                        pos.y,
+                                        new_inner_size.width as i32,
+                                        new_inner_size.height as i32,
+                                    );
+                                }
+                            }
+                            // Focus-restore host reassert (prexu-5l5). When
+                            // the main Tauri window regains focus after
+                            // another app fully occluded Prexu, the mpv
+                            // host HWND can be left below the WebView in
+                            // z-order or with a stale DXGI swap chain that
+                            // never re-Presents — the user sees the player
+                            // chrome but the video region is transparent
+                            // through to whatever is behind. Affects every
+                            // player mode (full, fullscreen, popout, mini).
+                            //
+                            // Gated on `consume_focus_reassert` so the
+                            // reassert only fires after an actual out-
+                            // and-back focus cycle. Tauri emits Focused
+                            // (true) on click / mouse-enter as well, and
+                            // running the SetWindowPos chain on each one
+                            // disrupts WebView2 mouse capture (cursor
+                            // sticks on the host edge resize glyph). The
+                            // latch is set on Focused(false) below.
+                            WindowEvent::Focused(false) => {
+                                state.mark_focus_lost();
+                            }
+                            WindowEvent::Focused(true) => {
+                                if !state.consume_focus_reassert() {
+                                    return;
+                                }
+                                if let (Ok(pos), Ok(size), Ok(parent)) = (
+                                    win_clone.inner_position(),
+                                    win_clone.inner_size(),
+                                    win_clone.hwnd(),
+                                ) {
+                                    state.reassert_host_on_focus(
+                                        parent,
+                                        pos.x,
+                                        pos.y,
+                                        size.width as i32,
+                                        size.height as i32,
+                                    );
+                                }
+                            }
+                            // Tear down host window + mpv before Tauri's main
+                            // window goes away so DestroyWindow runs cleanly.
+                            WindowEvent::CloseRequested { .. }
+                            | WindowEvent::Destroyed => {
+                                log::info!("[window] CloseRequested/Destroyed — destroying player");
+                                // Final stopped timeline report BEFORE destroy —
+                                // needs the live mpv time-pos, and the JS
+                                // cleanup can't be relied on during webview
+                                // teardown (prexu-50f). One-shot: the ctx is
+                                // taken so the follow-up Destroyed is a no-op.
+                                state.report_stopped_on_close();
+                                let _ = state.destroy(&app_handle);
+                            }
+                            _ => {}
+                        }
+                    });
+                }
             }
             Ok(())
         })

@@ -1,10 +1,15 @@
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { useBreakpoint, isMobile } from "../../hooks/useBreakpoint";
+import { usePlayerSession } from "../../contexts/PlayerContext";
 import WatchTogetherButton from "../WatchTogetherButton";
 import WatchedToggleButton from "../WatchedToggleButton";
 import DownloadButton from "./DownloadButton";
 import SubtitleSearchPanel from "../player/SubtitleSearchPanel";
+import { setSelectedSubtitleStream } from "../../services/subtitle-search";
+import { getItemMetadata } from "../../services/plex-library";
+import { logger } from "../../services/logger";
 import { formatResumeTime, decodeHtmlEntities } from "../../utils/media-helpers";
 import { detailStyles } from "../../utils/detail-styles";
 import {
@@ -20,6 +25,7 @@ import type {
   PlexSeason,
   PlexEpisode,
   PlexRating,
+  PlexStream,
 } from "../../types/library";
 import {
   getResolutionBadge,
@@ -60,9 +66,119 @@ export default function ItemHeroSection({
   serverToken,
 }: ItemHeroSectionProps) {
   const navigate = useNavigate();
+  const { play } = usePlayerSession();
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
   const [showSubtitleSearch, setShowSubtitleSearch] = useState(false);
+  // Optimistic selection while the subtitle modal is open. refreshItem()
+  // remounts the whole detail page (setItem(null)), which would close the
+  // modal — so selection is tracked locally and the page refreshes only
+  // when the modal closes.
+  const [subtitleOverride, setSubtitleOverride] = useState<
+    number | null | undefined
+  >(undefined);
+  // Fresh subtitle streams fetched after an on-demand download. The item prop
+  // is stale until the page refetches, which only happens on modal close.
+  const [tracksOverride, setTracksOverride] = useState<PlexStream[] | null>(null);
+
+  const openSubtitleSearch = () => {
+    setSubtitleOverride(undefined);
+    setTracksOverride(null);
+    setShowSubtitleSearch(true);
+  };
+
+  const closeSubtitleSearch = () => {
+    setShowSubtitleSearch(false);
+    setSubtitleOverride(undefined);
+    setTracksOverride(null);
+    refreshItem();
+  };
+
+  const displayedSubtitleTracks = (itemTracks: PlexStream[]): PlexStream[] =>
+    tracksOverride ?? itemTracks;
+
+  /**
+   * After the server downloads an on-demand subtitle, poll metadata until the
+   * new stream appears, then select it. Selection is mandatory, not cosmetic:
+   * Plex deletes an on-demand downloaded subtitle as soon as a different
+   * stream (or None) is selected, so an unselected download silently vanishes.
+   * Plex Web applies the download immediately for the same reason.
+   */
+  const handleSubtitleDownloaded = async (
+    ratingKey: string,
+    partId: number | undefined,
+    prevTracks: PlexStream[],
+  ) => {
+    if (!serverUri || !serverToken || partId === undefined) {
+      logger.warn("api", "subtitle refresh skipped — missing server or partId", { partId });
+      return;
+    }
+    const prevIds = new Set(prevTracks.map((t) => t.id));
+    for (let attempt = 1; attempt <= 6; attempt++) {
+      try {
+        const fresh = await getItemMetadata<PlexMovie | PlexEpisode>(
+          serverUri,
+          serverToken,
+          ratingKey,
+        );
+        const part =
+          fresh.Media?.[0]?.Part?.find((p) => p.id === partId) ??
+          fresh.Media?.[0]?.Part?.[0];
+        const tracks = part?.Stream?.filter((s) => s.streamType === 3) ?? [];
+        const added = tracks.find((t) => !prevIds.has(t.id));
+        if (added) {
+          setTracksOverride(tracks);
+          setSubtitleOverride(added.id);
+          await setSelectedSubtitleStream(serverUri, serverToken, partId, added.id);
+          logger.info("api", "downloaded subtitle applied", {
+            ratingKey,
+            streamId: added.id,
+          });
+          return;
+        }
+        logger.debug("api", "downloaded subtitle not in metadata yet", { attempt });
+      } catch (err) {
+        logger.warn("api", "subtitle refresh poll failed", {
+          attempt,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    logger.warn("api", "downloaded subtitle never appeared in metadata", {
+      ratingKey,
+      partId,
+    });
+  };
+
+  /** Persist the chosen subtitle track as the part's default on the server. */
+  const handleSelectSubtitleTrack = async (
+    partId: number | undefined,
+    streamId: number | null,
+  ) => {
+    if (!serverUri || !serverToken || partId === undefined) {
+      logger.warn("api", "subtitle select skipped — missing server or partId", { partId });
+      return;
+    }
+    setSubtitleOverride(streamId);
+    try {
+      await setSelectedSubtitleStream(serverUri, serverToken, partId, streamId);
+    } catch (err) {
+      setSubtitleOverride(undefined);
+      logger.error("api", "subtitle select failed", {
+        partId,
+        streamId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+
+  const resolveSelectedSubtitleId = (
+    tracks: { id: number; selected?: boolean }[],
+  ): number | null =>
+    subtitleOverride !== undefined
+      ? subtitleOverride
+      : tracks.find((t) => t.selected)?.id ?? null;
 
   const formatDuration = (ms: number): string => {
     const mins = Math.round(ms / 60000);
@@ -157,10 +273,13 @@ export default function ItemHeroSection({
               fontSize: mobile ? "1.6rem" : bp === "large" ? "2.8rem" : "2.4rem",
               ...(mobile ? { textAlign: "center" } : {}),
             }}>{movie.title}</h1>
-            <div style={{
-              ...styles.metaRow,
-              ...(mobile ? { justifyContent: "center" } : {}),
-            }}>
+            <div
+              data-testid="hero-meta-row"
+              style={{
+                ...styles.metaRow,
+                ...(mobile ? { justifyContent: "center" } : {}),
+              }}
+            >
               {movie.year && <span>{String(movie.year)}</span>}
               {movie.contentRating && typeof movie.contentRating === "string" && (
                 <span style={styles.rating}>{movie.contentRating}</span>
@@ -175,7 +294,7 @@ export default function ItemHeroSection({
               )}
             </div>
             {movie.Genre && movie.Genre.length > 0 && (
-              <div style={styles.genreRow}>
+              <div data-testid="hero-genre-row" style={styles.genreRow}>
                 {movie.Genre.map((g) => (
                   <span key={g.tag} style={styles.genreTag}>{g.tag}</span>
                 ))}
@@ -191,13 +310,13 @@ export default function ItemHeroSection({
               {movie.viewOffset && movie.viewOffset > 0 ? (
                 <>
                   <button
-                    onClick={() => navigate(`/play/${movie.ratingKey}`)}
+                    onClick={() => play(movie.ratingKey)}
                     style={styles.playButton}
                   >
                     &#9654; Resume from {formatResumeTime(movie.viewOffset)}
                   </button>
                   <button
-                    onClick={() => navigate(`/play/${movie.ratingKey}?offset=0`)}
+                    onClick={() => play(movie.ratingKey, { offset: 0 })}
                     style={styles.secondaryButton}
                   >
                     Play from Beginning
@@ -205,7 +324,7 @@ export default function ItemHeroSection({
                 </>
               ) : (
                 <button
-                  onClick={() => navigate(`/play/${movie.ratingKey}`)}
+                  onClick={() => play(movie.ratingKey)}
                   style={styles.playButton}
                 >
                   &#9654; Play
@@ -274,7 +393,7 @@ export default function ItemHeroSection({
             )}
             {serverUri && serverToken && (
               <button
-                onClick={() => setShowSubtitleSearch(true)}
+                onClick={openSubtitleSearch}
                 style={styles.subtitleSearchButton}
               >
                 <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
@@ -284,24 +403,23 @@ export default function ItemHeroSection({
                 Search &amp; Download Subtitles
               </button>
             )}
-            {showSubtitleSearch && serverUri && serverToken && (
-              <div style={styles.subtitlePanelOverlay} onClick={() => setShowSubtitleSearch(false)}>
+            {showSubtitleSearch && serverUri && serverToken && createPortal(
+              <div style={styles.subtitlePanelOverlay} onClick={closeSubtitleSearch}>
                 <div style={styles.subtitlePanelContainer} onClick={(e) => e.stopPropagation()}>
                   <SubtitleSearchPanel
+                    variant="modal"
                     serverUri={serverUri}
                     serverToken={serverToken}
                     ratingKey={movie.ratingKey}
-                    subtitleTracks={movie.Media?.[0]?.Part?.[0]?.Stream?.filter((s) => s.streamType === 3) ?? []}
-                    onSelectTrack={() => {}}
-                    selectedSubtitleId={null}
-                    onSubtitleDownloaded={() => {
-                      setShowSubtitleSearch(false);
-                      refreshItem();
-                    }}
-                    onClose={() => setShowSubtitleSearch(false)}
+                    subtitleTracks={displayedSubtitleTracks(movie.Media?.[0]?.Part?.[0]?.Stream?.filter((s) => s.streamType === 3) ?? [])}
+                    onSelectTrack={(id) => handleSelectSubtitleTrack(movie.Media?.[0]?.Part?.[0]?.id, id)}
+                    selectedSubtitleId={resolveSelectedSubtitleId(displayedSubtitleTracks(movie.Media?.[0]?.Part?.[0]?.Stream?.filter((s) => s.streamType === 3) ?? []))}
+                    onSubtitleDownloaded={() => handleSubtitleDownloaded(movie.ratingKey, movie.Media?.[0]?.Part?.[0]?.id, displayedSubtitleTracks(movie.Media?.[0]?.Part?.[0]?.Stream?.filter((s) => s.streamType === 3) ?? []))}
+                    onClose={closeSubtitleSearch}
                   />
                 </div>
-              </div>
+              </div>,
+              document.body,
             )}
           </div>
         </div>
@@ -344,10 +462,13 @@ export default function ItemHeroSection({
               fontSize: mobile ? "1.6rem" : bp === "large" ? "2.8rem" : "2.4rem",
               ...(mobile ? { textAlign: "center" } : {}),
             }}>{show.title}</h1>
-            <div style={{
-              ...styles.metaRow,
-              ...(mobile ? { justifyContent: "center" } : {}),
-            }}>
+            <div
+              data-testid="hero-meta-row"
+              style={{
+                ...styles.metaRow,
+                ...(mobile ? { justifyContent: "center" } : {}),
+              }}
+            >
               {show.year && <span>{String(show.year)}</span>}
               {show.contentRating && typeof show.contentRating === "string" && (
                 <span style={styles.rating}>{show.contentRating}</span>
@@ -365,7 +486,7 @@ export default function ItemHeroSection({
               )}
             </div>
             {show.Genre && show.Genre.length > 0 && (
-              <div style={styles.genreRow}>
+              <div data-testid="hero-genre-row" style={styles.genreRow}>
                 {show.Genre.map((g) => (
                   <span key={g.tag} style={styles.genreTag}>{g.tag}</span>
                 ))}
@@ -605,13 +726,13 @@ export default function ItemHeroSection({
               {ep.viewOffset && ep.viewOffset > 0 ? (
                 <>
                   <button
-                    onClick={() => navigate(`/play/${ep.ratingKey}`)}
+                    onClick={() => play(ep.ratingKey)}
                     style={styles.playButton}
                   >
                     &#9654; Resume from {formatResumeTime(ep.viewOffset)}
                   </button>
                   <button
-                    onClick={() => navigate(`/play/${ep.ratingKey}?offset=0`)}
+                    onClick={() => play(ep.ratingKey, { offset: 0 })}
                     style={styles.secondaryButton}
                   >
                     Play from Beginning
@@ -619,7 +740,7 @@ export default function ItemHeroSection({
                 </>
               ) : (
                 <button
-                  onClick={() => navigate(`/play/${ep.ratingKey}`)}
+                  onClick={() => play(ep.ratingKey)}
                   style={styles.playButton}
                 >
                   &#9654; Play
@@ -669,7 +790,7 @@ export default function ItemHeroSection({
             )}
             {serverUri && serverToken && (
               <button
-                onClick={() => setShowSubtitleSearch(true)}
+                onClick={openSubtitleSearch}
                 style={styles.subtitleSearchButton}
               >
                 <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
@@ -679,24 +800,23 @@ export default function ItemHeroSection({
                 Search &amp; Download Subtitles
               </button>
             )}
-            {showSubtitleSearch && serverUri && serverToken && (
-              <div style={styles.subtitlePanelOverlay} onClick={() => setShowSubtitleSearch(false)}>
+            {showSubtitleSearch && serverUri && serverToken && createPortal(
+              <div style={styles.subtitlePanelOverlay} onClick={closeSubtitleSearch}>
                 <div style={styles.subtitlePanelContainer} onClick={(e) => e.stopPropagation()}>
                   <SubtitleSearchPanel
+                    variant="modal"
                     serverUri={serverUri}
                     serverToken={serverToken}
                     ratingKey={ep.ratingKey}
-                    subtitleTracks={ep.Media?.[0]?.Part?.[0]?.Stream?.filter((s) => s.streamType === 3) ?? []}
-                    onSelectTrack={() => {}}
-                    selectedSubtitleId={null}
-                    onSubtitleDownloaded={() => {
-                      setShowSubtitleSearch(false);
-                      refreshItem();
-                    }}
-                    onClose={() => setShowSubtitleSearch(false)}
+                    subtitleTracks={displayedSubtitleTracks(ep.Media?.[0]?.Part?.[0]?.Stream?.filter((s) => s.streamType === 3) ?? [])}
+                    onSelectTrack={(id) => handleSelectSubtitleTrack(ep.Media?.[0]?.Part?.[0]?.id, id)}
+                    selectedSubtitleId={resolveSelectedSubtitleId(displayedSubtitleTracks(ep.Media?.[0]?.Part?.[0]?.Stream?.filter((s) => s.streamType === 3) ?? []))}
+                    onSubtitleDownloaded={() => handleSubtitleDownloaded(ep.ratingKey, ep.Media?.[0]?.Part?.[0]?.id, displayedSubtitleTracks(ep.Media?.[0]?.Part?.[0]?.Stream?.filter((s) => s.streamType === 3) ?? []))}
+                    onClose={closeSubtitleSearch}
                   />
                 </div>
-              </div>
+              </div>,
+              document.body,
             )}
           </div>
         </div>

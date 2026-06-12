@@ -2,8 +2,11 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { LANGUAGES } from "../../constants/languages";
 import { searchSubtitles, downloadSubtitle } from "../../services/subtitle-search";
 import { filterSubtitleTracks } from "../../utils/subtitle-filter";
+import { usePreferences } from "../../hooks/usePreferences";
+import { SubtitleStylePanel } from "../settings/SubtitleStylePanel";
 import type { PlexStream } from "../../types/library";
 import type { ExternalSubtitle } from "../../types/subtitles";
+import type { SubtitleStylePreferences } from "../../types/preferences";
 
 interface SubtitleSearchPanelProps {
   serverUri: string;
@@ -14,9 +17,11 @@ interface SubtitleSearchPanelProps {
   selectedSubtitleId: number | null;
   onSubtitleDownloaded: () => void;
   onClose: () => void;
+  /** "side" — right-anchored overlay (player); "modal" — fills a centered dialog container (detail pages) */
+  variant?: "side" | "modal";
 }
 
-type Tab = "embedded" | "search";
+type Tab = "embedded" | "search" | "style";
 
 export default function SubtitleSearchPanel({
   serverUri,
@@ -27,9 +32,25 @@ export default function SubtitleSearchPanel({
   selectedSubtitleId,
   onSubtitleDownloaded,
   onClose,
+  variant = "side",
 }: SubtitleSearchPanelProps) {
   const [activeTab, setActiveTab] = useState<Tab>("embedded");
   const panelRef = useRef<HTMLDivElement>(null);
+
+  // Style tab (player variant only) — edits flow through the preferences
+  // context; Player.tsx re-applies them to the running video on change, so
+  // every tweak is a live preview.
+  const { preferences, updatePreferences } = usePreferences();
+  const pb = preferences.playback;
+  const updateSubtitleStyle = useCallback(
+    (partial: Partial<SubtitleStylePreferences>) => {
+      updatePreferences({
+        playback: { subtitleStyle: { ...pb.subtitleStyle, ...partial } },
+      });
+    },
+    [pb.subtitleStyle, updatePreferences],
+  );
+  const showStyleTab = variant === "side";
 
   // Embedded tab state
   const [filterQuery, setFilterQuery] = useState("");
@@ -43,6 +64,7 @@ export default function SubtitleSearchPanel({
   const [searchError, setSearchError] = useState<string | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [downloadSuccess, setDownloadSuccess] = useState<string | null>(null);
+  const [hasSearched, setHasSearched] = useState(false);
 
   // Close on Escape
   useEffect(() => {
@@ -67,6 +89,7 @@ export default function SubtitleSearchPanel({
     try {
       const results = await searchSubtitles(serverUri, serverToken, ratingKey, searchLang);
       setSearchResults(results);
+      setHasSearched(true);
     } catch (err) {
       setSearchError(err instanceof Error ? err.message : "Search failed");
     } finally {
@@ -90,8 +113,13 @@ export default function SubtitleSearchPanel({
 
   return (
     <>
-      <div style={styles.backdrop} onClick={onClose} />
-      <div ref={panelRef} style={styles.panel} role="dialog" aria-label="Subtitle search">
+      {variant === "side" && <div style={styles.backdrop} onClick={onClose} />}
+      <div
+        ref={panelRef}
+        style={variant === "modal" ? styles.panelModal : styles.panel}
+        role="dialog"
+        aria-label="Subtitle search"
+      >
         <div style={styles.header}>
           <h3 style={styles.title}>Subtitles</h3>
           <button onClick={onClose} style={styles.closeButton} aria-label="Close">
@@ -122,6 +150,17 @@ export default function SubtitleSearchPanel({
           >
             Search Online
           </button>
+          {showStyleTab && (
+            <button
+              onClick={() => setActiveTab("style")}
+              style={{
+                ...styles.tab,
+                ...(activeTab === "style" ? styles.tabActive : {}),
+              }}
+            >
+              Style
+            </button>
+          )}
         </div>
 
         <div style={styles.content}>
@@ -183,8 +222,12 @@ export default function SubtitleSearchPanel({
                     role="option"
                     aria-selected={selectedSubtitleId === track.id}
                   >
-                    <span style={styles.trackTitle}>{track.displayTitle}</span>
+                    {/* External/downloaded streams carry the source file name in
+                        `title` \u2014 show it like the search tab; embedded streams
+                        only have the language displayTitle. */}
+                    <span style={styles.trackTitle}>{track.title || track.displayTitle}</span>
                     <span style={styles.trackMeta}>
+                      {track.title && track.language && `${track.language} \u00b7 `}
                       {track.codec?.toUpperCase()}
                       {track.forced && " \u00b7 Forced"}
                       {track.hearingImpaired && " \u00b7 HI"}
@@ -196,7 +239,7 @@ export default function SubtitleSearchPanel({
                 )}
               </div>
             </>
-          ) : (
+          ) : activeTab === "search" ? (
             <>
               {/* Search controls */}
               <div style={styles.searchRow}>
@@ -229,9 +272,11 @@ export default function SubtitleSearchPanel({
                     <div style={styles.resultInfo}>
                       <span style={styles.trackTitle}>{sub.fileName}</span>
                       <span style={styles.trackMeta}>
-                        {sub.format.toUpperCase()}
+                        {sub.language}
+                        {" \u00b7 "}{sub.format.toUpperCase()}
                         {sub.hearingImpaired && " \u00b7 HI"}
-                        {" \u00b7 "}{Math.round(sub.matchConfidence * 100)}% match
+                        {sub.matchConfidence !== null &&
+                          ` \u00b7 ${Math.round(sub.matchConfidence * 100)}% match`}
                         {" \u00b7 "}{sub.provider}
                       </span>
                     </div>
@@ -253,13 +298,45 @@ export default function SubtitleSearchPanel({
                 ))}
                 {searchResults.length === 0 && !isSearching && !searchError && (
                   <div style={styles.emptyState}>
-                    Select a language and click Search to find subtitles
+                    {hasSearched
+                      ? "No subtitles found for this language"
+                      : "Select a language and click Search to find subtitles"}
                   </div>
                 )}
                 {isSearching && (
                   <div style={styles.emptyState}>Searching for subtitles...</div>
                 )}
               </div>
+            </>
+          ) : (
+            <>
+              {/* Size lives in playback prefs (drives libass scale / ::cue
+                  font-size); the rest of the style fields live in
+                  subtitleStyle. Both apply live via Player's style effect. */}
+              <div style={styles.sizeField}>
+                <label style={styles.sizeLabel}>
+                  Subtitle Size: {pb.subtitleSize}%
+                </label>
+                <input
+                  type="range"
+                  min={50}
+                  max={200}
+                  step={10}
+                  value={pb.subtitleSize}
+                  onChange={(e) =>
+                    updatePreferences({
+                      playback: { subtitleSize: Number(e.target.value) },
+                    })
+                  }
+                  style={styles.sizeSlider}
+                  aria-label="Subtitle size"
+                />
+              </div>
+              <SubtitleStylePanel
+                subtitleStyle={pb.subtitleStyle}
+                updateSubtitleStyle={updateSubtitleStyle}
+                frameless
+              />
             </>
           )}
         </div>
@@ -273,21 +350,32 @@ const styles: Record<string, React.CSSProperties> = {
     position: "fixed",
     inset: 0,
     zIndex: 40,
+    // PlayerControls' root layer is pointerEvents:none — children must opt
+    // back in or clicks fall through to the video click-to-pause target.
+    pointerEvents: "auto",
   },
   panel: {
     position: "absolute",
-    right: 0,
-    top: 0,
-    bottom: 0,
-    width: "380px",
+    right: "1rem",
+    bottom: "96px",
+    width: "340px",
     maxWidth: "90vw",
+    maxHeight: "60vh",
     background: "rgba(15, 15, 15, 0.95)",
     backdropFilter: "blur(16px)",
-    borderLeft: "1px solid rgba(255,255,255,0.1)",
+    border: "1px solid rgba(255,255,255,0.1)",
+    borderRadius: "12px",
+    overflow: "hidden",
     zIndex: 41,
     display: "flex",
     flexDirection: "column",
-    animation: "slideLeft 0.2s ease-out",
+    pointerEvents: "auto",
+  },
+  panelModal: {
+    display: "flex",
+    flexDirection: "column",
+    maxHeight: "80vh",
+    minHeight: "320px",
   },
   header: {
     display: "flex",
@@ -328,7 +416,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   tabActive: {
     color: "var(--accent)",
-    borderBottomColor: "var(--accent)",
+    borderBottom: "2px solid var(--accent)",
   },
   content: {
     flex: 1,
@@ -451,6 +539,20 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "0.85rem",
     textAlign: "center",
     padding: "1.5rem 1rem",
+  },
+  sizeField: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "0.4rem",
+    padding: "0.25rem 0.25rem 0.5rem",
+  },
+  sizeLabel: {
+    fontSize: "0.85rem",
+    color: "var(--text-secondary)",
+  },
+  sizeSlider: {
+    width: "100%",
+    accentColor: "var(--accent)",
   },
   error: {
     color: "#f44",

@@ -1,9 +1,36 @@
+import { invoke } from "@tauri-apps/api/core";
 import { useAuth } from "../hooks/useAuth";
 import { useDownloads } from "../hooks/useDownloads";
 import { useNavigate } from "react-router-dom";
+import { usePlayerSession } from "../contexts/PlayerContext";
 import { getImageUrl } from "../services/plex-library";
+import { logger } from "../services/logger";
 import EmptyState from "../components/EmptyState";
 import type { DownloadItem } from "../types/downloads";
+
+function openDownloadsFolder() {
+  logger.info("downloads", "open_downloads_dir");
+  invoke("open_downloads_dir").catch((err) => {
+    logger.error("downloads", "open_downloads_dir failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
+}
+
+function OpenFolderButton() {
+  return (
+    <button
+      onClick={openDownloadsFolder}
+      style={styles.openFolderBtn}
+      title="Open the downloads folder in your file manager"
+    >
+      <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+        <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
+      </svg>
+      Open folder
+    </button>
+  );
+}
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -19,6 +46,7 @@ function DownloadItemRow({ item, serverUri, serverToken }: {
 }) {
   const { cancelDownload, deleteDownload, retryDownload } = useDownloads();
   const navigate = useNavigate();
+  const { play } = usePlayerSession();
   const progress = item.fileSize > 0 ? item.bytesDownloaded / item.fileSize : 0;
   const thumbUrl = getImageUrl(serverUri, serverToken, item.thumb, 80, 120);
 
@@ -74,7 +102,7 @@ function DownloadItemRow({ item, serverUri, serverToken }: {
         )}
         {item.status === "complete" && (
           <button
-            onClick={() => navigate(`/play/${item.ratingKey}`)}
+            onClick={() => play(item.ratingKey)}
             style={styles.playBtn}
             title="Play"
           >
@@ -127,7 +155,10 @@ function Downloads() {
   if (downloads.length === 0) {
     return (
       <div style={styles.container}>
-        <h2 style={styles.title}>Downloads</h2>
+        <div style={styles.headerRow}>
+          <h2 style={styles.title}>Downloads</h2>
+          <OpenFolderButton />
+        </div>
         <div style={{
           position: "absolute",
           top: 0,
@@ -159,7 +190,10 @@ function Downloads() {
 
   return (
     <div style={styles.container}>
-      <h2 style={styles.title}>Downloads</h2>
+      <div style={styles.headerRow}>
+        <h2 style={styles.title}>Downloads</h2>
+        <OpenFolderButton />
+      </div>
 
       {active.length > 0 && (
         <section style={styles.section}>
@@ -215,10 +249,29 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "1.5rem",
     maxWidth: "800px",
   },
+  headerRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: "1.5rem",
+  },
   title: {
     fontSize: "1.5rem",
     fontWeight: 700,
-    marginBottom: "1.5rem",
+    margin: 0,
+  },
+  openFolderBtn: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.45rem",
+    padding: "0.45rem 0.9rem",
+    borderRadius: "8px",
+    border: "1px solid var(--border)",
+    background: "transparent",
+    color: "var(--text-secondary)",
+    fontSize: "0.85rem",
+    fontWeight: 500,
+    cursor: "pointer",
   },
   section: {
     marginBottom: "1.5rem",

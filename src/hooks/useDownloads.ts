@@ -13,9 +13,15 @@ import {
   deleteDownload as deleteDownloadService,
 } from "../services/downloads";
 import { getDownloadItems, saveDownloadItems } from "../services/storage";
+import { logger } from "../services/logger";
 import type { DownloadItem, DownloadProgressEvent } from "../types/downloads";
 
-const MAX_CONCURRENT = 2;
+// Serialized on purpose: the Plex server drops the in-flight file stream
+// with IncompleteBody the moment a second full-file GET starts (observed
+// consistently on LAN — two concurrent downloads kill each other in turns).
+const MAX_CONCURRENT = 1;
+const MAX_AUTO_RETRIES = 3;
+const RETRY_DELAYS_MS = [1000, 3000, 8000];
 
 export interface DownloadsContextValue {
   downloads: DownloadItem[];
@@ -48,9 +54,22 @@ export function useDownloadsState(
   server: { uri: string; accessToken: string } | null,
 ): DownloadsContextValue {
   const [downloads, setDownloads] = useState<DownloadItem[]>([]);
+  // Bumped when a retry backoff elapses so the queue effect re-runs;
+  // ref mutations alone don't re-render.
+  const [retryTick, setRetryTick] = useState(0);
   const processingRef = useRef(new Set<string>());
+  const autoRetriesRef = useRef(new Map<string, number>());
+  const retryTimersRef = useRef(new Set<ReturnType<typeof setTimeout>>());
   const serverRef = useRef(server);
   serverRef.current = server;
+
+  useEffect(() => {
+    const timers = retryTimersRef.current;
+    return () => {
+      timers.forEach(clearTimeout);
+      timers.clear();
+    };
+  }, []);
 
   // Load saved download metadata on mount
   useEffect(() => {
@@ -65,13 +84,16 @@ export function useDownloadsState(
     });
   }, []);
 
-  // Persist downloads to storage on change
-  const downloadsRef = useRef(downloads);
-  downloadsRef.current = downloads;
+  // Persist downloads to storage when membership or status changes.
+  // Progress events mutate bytesDownloaded many times per second — writing
+  // storage on every tick is wasted I/O, and interrupted "downloading" items
+  // are reset on restart anyway, so byte counts only matter at completion.
+  const persistSigRef = useRef("");
   useEffect(() => {
-    if (downloads.length > 0 || downloadsRef.current.length > 0) {
-      saveDownloadItems(downloads);
-    }
+    const sig = downloads.map((d) => `${d.ratingKey}:${d.status}`).join("|");
+    if (sig === persistSigRef.current) return;
+    persistSigRef.current = sig;
+    saveDownloadItems(downloads);
   }, [downloads]);
 
   // Listen for Tauri download-progress events
@@ -110,6 +132,9 @@ export function useDownloadsState(
           ) {
             processingRef.current.delete(ratingKey);
           }
+          if (status === "complete") {
+            autoRetriesRef.current.delete(ratingKey);
+          }
         },
       );
     })();
@@ -145,6 +170,10 @@ export function useDownloadsState(
         ),
       );
 
+      logger.info("downloads", "starting download", {
+        ratingKey: item.ratingKey,
+        fileName: item.fileName,
+      });
       startDownload(
         item.serverUri,
         server.accessToken,
@@ -153,21 +182,66 @@ export function useDownloadsState(
         item.fileName,
         item.fileSize,
       ).catch((err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        const attempts = autoRetriesRef.current.get(item.ratingKey) ?? 0;
+        // Transient stream errors (connection reset, bad response body) are
+        // common; requeue with backoff before surfacing a failure. The key
+        // stays in processingRef during the backoff so the queue effect
+        // leaves it alone until the timer releases it.
+        if (attempts < MAX_AUTO_RETRIES) {
+          autoRetriesRef.current.set(item.ratingKey, attempts + 1);
+          // The "error" progress event may have already removed the key from
+          // processingRef — re-add it so the queue can't restart this item
+          // before the backoff elapses.
+          processingRef.current.add(item.ratingKey);
+          const delay =
+            RETRY_DELAYS_MS[Math.min(attempts, RETRY_DELAYS_MS.length - 1)];
+          logger.warn("downloads", "download failed — auto-retrying", {
+            ratingKey: item.ratingKey,
+            attempt: attempts + 1,
+            delayMs: delay,
+            error: message,
+          });
+          setDownloads((prev) =>
+            prev.map((d) =>
+              d.ratingKey === item.ratingKey
+                ? {
+                    ...d,
+                    status: "queued" as const,
+                    bytesDownloaded: 0,
+                    errorMessage: undefined,
+                  }
+                : d,
+            ),
+          );
+          const timer = setTimeout(() => {
+            retryTimersRef.current.delete(timer);
+            processingRef.current.delete(item.ratingKey);
+            setRetryTick((t) => t + 1);
+          }, delay);
+          retryTimersRef.current.add(timer);
+          return;
+        }
+        processingRef.current.delete(item.ratingKey);
+        logger.error("downloads", "download failed", {
+          ratingKey: item.ratingKey,
+          error: message,
+        });
         setDownloads((prev) =>
           prev.map((d) =>
             d.ratingKey === item.ratingKey
               ? {
                   ...d,
                   status: "error" as const,
-                  errorMessage: err instanceof Error ? err.message : String(err),
+                  errorMessage: message,
                 }
               : d,
           ),
         );
-        processingRef.current.delete(item.ratingKey);
       });
     }
-  }, [downloads, server]);
+    // retryTick re-runs this effect when a retry backoff elapses.
+  }, [downloads, server, retryTick]);
 
   const isDownloaded = useCallback(
     (ratingKey: string) =>
@@ -193,6 +267,7 @@ export function useDownloadsState(
   );
 
   const queueDownload = useCallback((item: DownloadItem) => {
+    autoRetriesRef.current.delete(item.ratingKey);
     setDownloads((prev) => {
       // Don't add duplicates
       if (prev.some((d) => d.ratingKey === item.ratingKey)) return prev;
@@ -219,6 +294,7 @@ export function useDownloadsState(
   }, []);
 
   const retryDownload = useCallback((ratingKey: string) => {
+    autoRetriesRef.current.delete(ratingKey);
     setDownloads((prev) =>
       prev.map((d) =>
         d.ratingKey === ratingKey

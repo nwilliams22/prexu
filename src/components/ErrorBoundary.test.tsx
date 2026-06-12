@@ -2,6 +2,17 @@ import React from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ErrorBoundary from "./ErrorBoundary";
+import { logger } from "../services/logger";
+
+vi.mock("../services/logger", () => ({
+  logger: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+    trace: vi.fn(),
+  },
+}));
 
 // A component that throws an error
 function BrokenComponent({ shouldThrow = true }: { shouldThrow?: boolean }) {
@@ -106,5 +117,26 @@ describe("ErrorBoundary", () => {
     );
 
     expect(container.querySelector("svg")).toBeInTheDocument();
+  });
+
+  it("logs error name, message, stack, and componentStack via logger.error", () => {
+    vi.mocked(logger.error).mockClear();
+
+    render(
+      <ErrorBoundary>
+        <BrokenComponent />
+      </ErrorBoundary>
+    );
+
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    const [tag, message, data] = vi.mocked(logger.error).mock.calls[0];
+    expect(tag).toBe("error-boundary");
+    expect(message).toBe("uncaught error in component tree");
+    expect(data).toMatchObject({
+      name: "Error",
+      message: "Test error message",
+      stack: expect.stringContaining("Test error message"),
+      componentStack: expect.stringContaining("BrokenComponent"),
+    });
   });
 });
