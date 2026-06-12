@@ -91,6 +91,53 @@ describe("probeServerReachability", () => {
     vi.unstubAllGlobals();
   });
 
+  it("retries the probe when attempts > 1 and succeeds on the second try", async () => {
+    const mockFetch = vi
+      .fn()
+      .mockRejectedValueOnce(new DOMException("Aborted", "AbortError"))
+      .mockResolvedValueOnce({ ok: true } as Response);
+    vi.stubGlobal("fetch", mockFetch);
+
+    const result = await probeServerReachability(
+      "https://192.168.1.100:32400",
+      "test-server-token",
+      2
+    );
+
+    expect(result).toBe(true);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    vi.unstubAllGlobals();
+  });
+
+  it("does not retry by default (single attempt)", async () => {
+    const mockFetch = vi.fn().mockRejectedValue(new Error("Network failure"));
+    vi.stubGlobal("fetch", mockFetch);
+
+    const result = await probeServerReachability(
+      "https://192.168.1.100:32400",
+      "test-server-token"
+    );
+
+    expect(result).toBe(false);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
+  });
+
+  it("returns false after exhausting all attempts", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({ ok: false, status: 503 } as Response);
+    vi.stubGlobal("fetch", mockFetch);
+
+    const result = await probeServerReachability(
+      "https://192.168.1.100:32400",
+      "test-server-token",
+      3
+    );
+
+    expect(result).toBe(false);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    vi.unstubAllGlobals();
+  });
+
   it("hits the /identity path on the server URI", async () => {
     const mockFetch = vi.fn().mockResolvedValue({ ok: true } as Response);
     vi.stubGlobal("fetch", mockFetch);

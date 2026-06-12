@@ -81,11 +81,15 @@ export function useAuthState(): AuthContextValue {
               // Restore optimistically so the UI is not blocked
               setServer(storedServer);
 
-              // Probe reachability in background — do not await before setIsLoading
+              // Probe reachability in background — do not await before setIsLoading.
+              // Two attempts: a single 5s probe false-negatives under cold-boot
+              // contention, and the discovery sweep it escalates to costs ~11s
+              // plus a server-state swap that re-triggers dashboard fetches.
               void (async () => {
                 const reachable = await probeServerReachability(
                   storedServer.uri,
-                  storedServer.accessToken
+                  storedServer.accessToken,
+                  2
                 );
 
                 if (reachable) {
@@ -108,7 +112,23 @@ export function useAuthState(): AuthContextValue {
                     storedServer.clientIdentifier
                   );
 
-                  if (fresh) {
+                  if (
+                    fresh &&
+                    fresh.uri === storedServer.uri &&
+                    fresh.accessToken === storedServer.accessToken
+                  ) {
+                    // Probe false-negatived but discovery reached the same
+                    // address — the server was fine all along. Swapping in an
+                    // identical-but-new server object would re-trigger every
+                    // consumer keyed on `server` (dashboard fetches, activity
+                    // websocket), so leave state untouched.
+                    logger.info(
+                      "auth",
+                      "re-resolve returned identical server; keeping existing state",
+                      storedServer.uri.substring(0, 80)
+                    );
+                    setServerUnreachable(false);
+                  } else if (fresh) {
                     logServerResolve(storedServer.uri, fresh.uri);
                     await saveServer(fresh);
                     setServer(fresh);

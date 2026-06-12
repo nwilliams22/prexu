@@ -112,7 +112,8 @@ describe("useAuthState — server re-resolve", () => {
     await waitFor(() => {
       expect(mockReachability.probeServerReachability).toHaveBeenCalledWith(
         storedServer.uri,
-        storedServer.accessToken
+        storedServer.accessToken,
+        2
       );
     });
 
@@ -151,6 +152,28 @@ describe("useAuthState — server re-resolve", () => {
       storedServer.uri,
       freshServer.uri
     );
+  });
+
+  it("skips saveServer/setServer when re-resolve returns the identical server", async () => {
+    setupValidAuth();
+    mockReachability.probeServerReachability.mockResolvedValue(false);
+    mockPlexApi.discoverServers.mockResolvedValue([]);
+    // Discovery lands on the same uri + accessToken the store already has —
+    // swapping state would re-trigger every consumer keyed on `server`.
+    mockReachability.resolveServerFromDiscovery.mockReturnValue({ ...storedServer });
+
+    const { result } = renderHook(() => useAuthState());
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await waitFor(() => {
+      expect(mockReachability.resolveServerFromDiscovery).toHaveBeenCalled();
+    });
+
+    expect(result.current.serverUnreachable).toBe(false);
+    expect(mockStorage.saveServer).not.toHaveBeenCalled();
+    expect(mockReachability.logServerResolve).not.toHaveBeenCalled();
+    expect(result.current.server).toEqual(storedServer);
   });
 
   it("calls discoverServers with the auth token during re-resolve", async () => {

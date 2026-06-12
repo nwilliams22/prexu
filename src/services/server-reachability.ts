@@ -10,16 +10,7 @@ import { logger } from "./logger";
 
 const PROBE_TIMEOUT_MS = 5000;
 
-/**
- * Probe whether a Plex server URI is reachable by hitting /identity.
- *
- * Uses AbortController for timeout so the probe never hangs.
- * Returns true when the server responds with any HTTP success status.
- */
-export async function probeServerReachability(
-  serverUri: string,
-  serverToken: string
-): Promise<boolean> {
+async function probeOnce(serverUri: string, serverToken: string): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
 
@@ -35,6 +26,34 @@ export async function probeServerReachability(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Probe whether a Plex server URI is reachable by hitting /identity.
+ *
+ * Uses AbortController for timeout so the probe never hangs. Returns true
+ * when the server responds with any HTTP success status.
+ *
+ * `attempts` > 1 retries the same URI before giving up. A failed probe
+ * escalates to a full plex.tv discovery sweep at the call site (~11s of
+ * background probing plus a server-state swap), so a cheap retry that
+ * absorbs cold-boot contention is much cheaper than a false negative.
+ */
+export async function probeServerReachability(
+  serverUri: string,
+  serverToken: string,
+  attempts = 1
+): Promise<boolean> {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    if (await probeOnce(serverUri, serverToken)) return true;
+    if (attempt < attempts) {
+      logger.debug("auth", "reachability probe failed, retrying", {
+        attempt,
+        of: attempts,
+      });
+    }
+  }
+  return false;
 }
 
 /**
