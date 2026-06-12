@@ -34,6 +34,15 @@ pub(crate) const GEOMETRY_SYNC_MIN_INTERVAL: Duration = Duration::from_millis(33
 /// HWND that mpv renders into. Created lazily on the first `ensure_init`.
 pub struct PlayerState {
     inner: Mutex<Option<Inner>>,
+    /// Serializes `ensure_init` runs. `inner` must NEVER be held across
+    /// host-window creation or mpv construction (~12 s cold hwdec probe):
+    /// main-thread handlers (`Focused`, `CloseRequested`, the fullscreen
+    /// early-sync closure) take `inner` with blocking locks, and host
+    /// creation round-trips through `run_on_main_thread` — a main thread
+    /// parked on `inner` can never service that closure. Initialization
+    /// is therefore guarded by this dedicated lock instead, and `inner`
+    /// is only taken briefly to check/store.
+    init_lock: Mutex<()>,
     /// True while a fullscreen toggle is in flight. The window-event
     /// listener fires Resized many times during Tauri's animated transition;
     /// each one triggers SetWindowPos on the host, which makes mpv's
@@ -187,6 +196,7 @@ impl PlayerState {
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(None),
+            init_lock: Mutex::new(()),
             fullscreen_transition: AtomicBool::new(false),
             // Initial value is `now` so the very first sync passes through
             // immediately (Instant arithmetic is monotonic).
@@ -315,10 +325,45 @@ impl PlayerState {
     /// affect playback or geometry sync. Revisit on a tao version bump.
     pub(crate) fn ensure_init(&self, app: &AppHandle) -> Result<(), String> {
         log::info!("[player] ensure_init called");
-        let mut guard = self.inner.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
-        if guard.is_some() {
-            log::debug!("[player] ensure_init: already initialized");
-            return Ok(());
+        {
+            let guard = self.inner.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
+            if guard.is_some() {
+                log::debug!("[player] ensure_init: already initialized");
+                return Ok(());
+            }
+        }
+
+        // Serialize initializers on `init_lock`, not `inner` — see the
+        // field doc on `init_lock` for why `inner` must stay free during
+        // construction. Concurrent callers (warmup thread vs an early
+        // player_load_url) must WAIT here rather than fail: load_url
+        // errors surface to the user as a fatal playback error, and the
+        // warmup race is by design (see app_ready in lib.rs).
+        let _init_guard = match self.init_lock.try_lock() {
+            Ok(g) => g,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                log::warn!(
+                    "[player] ensure_init: init already in progress on another thread; waiting"
+                );
+                self.init_lock
+                    .lock()
+                    .map_err(|e| format!("Init lock poisoned: {}", e))?
+            }
+            Err(std::sync::TryLockError::Poisoned(e)) => {
+                log::error!("[player] ensure_init: init lock poisoned: {:?}", e);
+                return Err(format!("Init lock poisoned: {}", e));
+            }
+        };
+
+        // Re-check under the init lock: a concurrent caller may have
+        // finished (or failed — in which case we retry below) while we
+        // waited for the lock.
+        {
+            let guard = self.inner.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
+            if guard.is_some() {
+                log::info!("[player] ensure_init: completed by concurrent caller");
+                return Ok(());
+            }
         }
 
         // Snapshot minimize state + DPI scale BEFORE the run_on_main_thread
@@ -448,14 +493,15 @@ impl PlayerState {
 
         let mpv = Arc::new(mpv);
         let event_pump = events::spawn_event_pump(Arc::clone(&mpv), app.clone())?;
-        log::info!("[player] event pump spawned, init complete");
 
+        let mut guard = self.inner.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
         *guard = Some(Inner {
             mpv,
             event_pump: Some(event_pump),
             #[cfg(target_os = "windows")]
             host: Some(host),
         });
+        log::info!("[player] event pump spawned, init complete");
         Ok(())
     }
 
