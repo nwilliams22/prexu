@@ -3,7 +3,7 @@
  * (transport buttons left, utility buttons right).
  */
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { UsePlayerResult } from "../../hooks/usePlayer";
 import type { UseSeekBarResult } from "../../hooks/useSeekBar";
 import type { AudioEnhancementsResult } from "../../hooks/useAudioEnhancements";
@@ -59,6 +59,11 @@ interface ControlsBottomBarProps {
   serverToken?: string;
   ratingKey?: string;
   onSubtitleDownloaded?: () => void;
+  /** Fired with true while any popup (track menu, enhancements, subtitle
+   *  panel) is open so the parent can pin the controls visible — OS-native
+   *  widgets like the color picker emit no mousemove, and the auto-hide
+   *  timer would otherwise unmount the popup mid-interaction. */
+  onPanelPinChange?: (pinned: boolean) => void;
 }
 
 function ControlsBottomBar({
@@ -88,12 +93,20 @@ function ControlsBottomBar({
   serverToken,
   ratingKey,
   onSubtitleDownloaded,
+  onPanelPinChange,
 }: ControlsBottomBarProps) {
   const [volumeOpen, setVolumeOpen] = useState(false);
   const [subtitleMenuOpen, setSubtitleMenuOpen] = useState(false);
   const [audioMenuOpen, setAudioMenuOpen] = useState(false);
   const [enhancementsOpen, setEnhancementsOpen] = useState(false);
   const [subtitleSearchOpen, setSubtitleSearchOpen] = useState(false);
+
+  const anyPanelOpen =
+    subtitleMenuOpen || audioMenuOpen || enhancementsOpen || subtitleSearchOpen;
+  useEffect(() => {
+    onPanelPinChange?.(anyPanelOpen);
+    return () => onPanelPinChange?.(false);
+  }, [anyPanelOpen, onPanelPinChange]);
 
   const iconSmall = mobile ? 26 : 22;
   const iconLarge = mobile ? 32 : 28;
@@ -188,10 +201,17 @@ function ControlsBottomBar({
           <div style={styles.controlsRight}>
             {syncIndicator}
 
-            {/* Subtitle button */}
+            {/* Subtitle button — opens the full tabbed panel (tracks /
+                search / style) directly. The compact TrackMenu is only the
+                fallback when no server connection is available (local
+                playback) since search needs the server. */}
             <button
               onClick={() => {
-                setSubtitleMenuOpen((o) => !o);
+                if (serverUri && serverToken && ratingKey) {
+                  setSubtitleSearchOpen((o) => !o);
+                } else {
+                  setSubtitleMenuOpen((o) => !o);
+                }
                 setAudioMenuOpen(false);
                 setEnhancementsOpen(false);
               }}
@@ -413,7 +433,6 @@ function ControlsBottomBar({
           allowNone={player.subtitleTracks.length > 0}
           emptyMessage="No subtitle tracks available"
           onClose={() => setSubtitleMenuOpen(false)}
-          onSearchDownload={serverUri ? () => setSubtitleSearchOpen(true) : undefined}
         />
       )}
 

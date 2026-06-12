@@ -195,6 +195,12 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   // Controls visibility (auto-hide on inactivity)
   const { controlsVisible, resetHideTimer, handleMouseMove } =
     usePlayerControlsVisibility(player.isPlaying);
+  // Pinned while a bottom-bar popup (subtitle panel, track menu, audio
+  // enhancements) is open. OS-native widgets like the color picker generate
+  // no mousemove, so without the pin the auto-hide timer would unmount the
+  // popup mid-interaction.
+  const [panelPinned, setPanelPinned] = useState(false);
+  const chromeVisible = controlsVisible || panelPinned;
 
   // Force chrome reflow when the WebView viewport changes (e.g. popout-exit,
   // fullscreen-enter). WebView2 + tao resize → CSS reflow is lazy; the fixed/
@@ -528,7 +534,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
         // would occlude it. HTML5 path keeps black so the <video> letterbox
         // stays cinema-style.
         background: IS_NATIVE_PLAYER ? "transparent" : styles.container.background,
-        cursor: controlsVisible ? "default" : "none",
+        cursor: chromeVisible ? "default" : "none",
       }}
       onMouseMove={() => {
         // A real pointer move means the drag-resize is over and the user is
@@ -561,7 +567,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
           borderless floating window. Native popout path only; follows the
           controls auto-hide state. See PopoutDragStrip for the rationale. */}
       {IS_NATIVE_PLAYER && popOut.isPopOut && (
-        <PopoutDragStrip visible={controlsVisible} />
+        <PopoutDragStrip visible={chromeVisible} />
       )}
 
       {/* Loading overlay */}
@@ -654,7 +660,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
           player={player}
           onExit={lifecycle.exit}
           onPrevious={hasPrevious ? handlePreviousFromTopBar : undefined}
-          visible={controlsVisible && !isResizing}
+          visible={chromeVisible && !isResizing}
           suppressTransition={isResizing}
           chapters={player.chapters}
           onSeek={seek}
@@ -676,6 +682,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
           serverToken={server?.accessToken}
           ratingKey={ratingKey}
           onSubtitleDownloaded={() => void player.refreshSubtitlesAfterDownload()}
+          onPanelPinChange={setPanelPinned}
           syncIndicator={
             wt.isInSession ? (
               <SyncIndicator

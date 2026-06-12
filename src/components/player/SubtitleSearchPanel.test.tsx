@@ -185,7 +185,9 @@ describe("SubtitleSearchPanel", () => {
   it("shows the Style tab in the player (side) variant with live style controls", () => {
     renderPanel();
     fireEvent.click(screen.getByRole("button", { name: "Style" }));
-    expect(screen.getByText("Subtitle Style")).toBeInTheDocument();
+    // Frameless embed: no "Subtitle Style" heading and no section divider
+    expect(screen.queryByText("Subtitle Style")).toBeNull();
+    expect(screen.getByText("Font")).toBeInTheDocument();
     expect(screen.getByText(/Subtitle Size: 100%/)).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Subtitle size"), {

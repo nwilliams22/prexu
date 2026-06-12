@@ -335,6 +335,7 @@ export default function SubtitleSearchPanel({
               <SubtitleStylePanel
                 subtitleStyle={pb.subtitleStyle}
                 updateSubtitleStyle={updateSubtitleStyle}
+                frameless
               />
             </>
           )}

@@ -58,9 +58,11 @@ interface PlayerControlsProps {
   serverToken?: string;
   ratingKey?: string;
   onSubtitleDownloaded?: () => void;
+  /** True while any bottom-bar popup is open — pins controls visible. */
+  onPanelPinChange?: (pinned: boolean) => void;
 }
 
-function PlayerControls({ player, onExit, onPrevious, visible, suppressTransition, syncIndicator, chapters, onSeek, onActivity, onNextEpisode, onPrevEpisode, audioEnhancements, onAudioEnhancementChange, isPiPActive, isPiPSupported, onTogglePiP, isPopOutMode, isMinimizeSupported, isMinimizeActive, onMinimize, queueCount, onToggleQueue, serverUri, serverToken, ratingKey, onSubtitleDownloaded }: PlayerControlsProps) {
+function PlayerControls({ player, onExit, onPrevious, visible, suppressTransition, syncIndicator, chapters, onSeek, onActivity, onNextEpisode, onPrevEpisode, audioEnhancements, onAudioEnhancementChange, isPiPActive, isPiPSupported, onTogglePiP, isPopOutMode, isMinimizeSupported, isMinimizeActive, onMinimize, queueCount, onToggleQueue, serverUri, serverToken, ratingKey, onSubtitleDownloaded, onPanelPinChange }: PlayerControlsProps) {
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
   const [previousHovered, setPreviousHovered] = useState(false);
@@ -166,6 +168,7 @@ function PlayerControls({ player, onExit, onPrevious, visible, suppressTransitio
         serverToken={serverToken}
         ratingKey={ratingKey}
         onSubtitleDownloaded={onSubtitleDownloaded}
+        onPanelPinChange={onPanelPinChange}
       />
     </div>
   );
