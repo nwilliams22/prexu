@@ -16,6 +16,33 @@ fn mpv_quote(arg: &str) -> String {
     format!("\"{}\"", escaped)
 }
 
+/// Mask any X-Plex-Token query value, then truncate to 80 chars for logging.
+/// Truncation alone is not enough: with a short server URI the token itself
+/// falls inside the truncation window.
+fn redact_url(url: &str) -> String {
+    let mut out = String::with_capacity(url.len());
+    let mut rest = url;
+    loop {
+        match rest.to_ascii_lowercase().find("x-plex-token=") {
+            Some(idx) => {
+                let val_start = idx + "x-plex-token=".len();
+                out.push_str(&rest[..val_start]);
+                out.push_str("***");
+                let after = &rest[val_start..];
+                rest = match after.find('&') {
+                    Some(amp) => &after[amp..],
+                    None => "",
+                };
+            }
+            None => {
+                out.push_str(rest);
+                break;
+            }
+        }
+    }
+    out.chars().take(80).collect()
+}
+
 #[tauri::command]
 pub async fn player_load_url(
     url: String,
@@ -138,8 +165,7 @@ pub async fn player_load_external_sub(
     url: String,
     state: State<'_, PlayerState>,
 ) -> Result<(), String> {
-    let preview = &url[..url.len().min(80)];
-    log::info!("[player:cmd] load_external_sub url={}", preview);
+    log::info!("[player:cmd] load_external_sub url={}", redact_url(&url));
     state.with_mpv(|mpv| mpv.command("sub-add", &[mpv_quote(&url).as_str(), "select"]))
 }
 
@@ -311,7 +337,7 @@ pub async fn player_stop() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{css_font_to_family, mpv_quote};
+    use super::{css_font_to_family, mpv_quote, redact_url};
 
     #[test]
     fn takes_first_family_and_strips_quotes() {
@@ -353,5 +379,33 @@ mod tests {
             mpv_quote("https://example.com/library/parts/1/file.mkv?X-Plex-Token=t"),
             "\"https://example.com/library/parts/1/file.mkv?X-Plex-Token=t\""
         );
+    }
+
+    #[test]
+    fn redact_url_masks_token_value() {
+        assert_eq!(
+            redact_url("http://192.168.1.5:32400/library/streams/1.srt?X-Plex-Token=secret123"),
+            "http://192.168.1.5:32400/library/streams/1.srt?X-Plex-Token=***"
+        );
+    }
+
+    #[test]
+    fn redact_url_preserves_following_params_and_case() {
+        assert_eq!(
+            redact_url("http://h/p?a=1&x-plex-token=abc&b=2"),
+            "http://h/p?a=1&x-plex-token=***&b=2"
+        );
+    }
+
+    #[test]
+    fn redact_url_truncates_to_80_chars_without_panicking_on_multibyte() {
+        let long = format!("http://h/{}?X-Plex-Token=t", "é".repeat(100));
+        let out = redact_url(&long);
+        assert_eq!(out.chars().count(), 80);
+    }
+
+    #[test]
+    fn redact_url_passes_tokenless_urls_through() {
+        assert_eq!(redact_url("http://h/path"), "http://h/path");
     }
 }

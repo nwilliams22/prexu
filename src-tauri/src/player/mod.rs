@@ -1028,7 +1028,7 @@ impl PlayerState {
             .send();
         match result {
             Ok(resp) => log::info!("[player] close report sent, status {}", resp.status()),
-            Err(e) => log::warn!("[player] close report failed: {}", e),
+            Err(e) => log::warn!("[player] close report failed: {}", e.without_url()),
         }
     }
 
