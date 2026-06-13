@@ -7,6 +7,14 @@ use futures_util::StreamExt;
 
 use crate::validate_server_url;
 
+/// Returns true when `downloaded` has reached or exceeded `total` AND `total`
+/// is a known (non-zero) value. When `total == 0` (content-length absent and
+/// no caller-supplied file_size) we never claim to be "at end" via the byte
+/// comparison — completion is detected by stream exhaustion instead.
+fn progress_at_end(downloaded: u64, total: u64) -> bool {
+    total > 0 && downloaded >= total
+}
+
 /// Manages active downloads with cancellation support.
 pub struct DownloadManager {
     active: Arc<Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>>,
@@ -122,6 +130,9 @@ pub async fn download_media(
         .await
         .map_err(|e| format!("Failed to create temp file: {}", e))?;
 
+    if total == 0 {
+        log::debug!("[downloads] unknown total size for {} — content-length missing and file_size=0; in-loop 100% gate disabled", rating_key);
+    }
     log::info!("[Download] Start: {} ({} bytes) -> {:?}", rating_key, total, temp_path);
 
     let mut downloaded: u64 = 0;
@@ -147,7 +158,12 @@ pub async fn download_media(
 
                         let gates_open = downloaded - last_emit >= emit_interval_bytes
                             && last_emit_at.elapsed().as_millis() >= EMIT_INTERVAL_MS;
-                        if gates_open || downloaded >= total {
+                        // Only use the `downloaded >= total` shortcut when total is
+                        // known; with total == 0 (missing content-length + file_size)
+                        // the condition would be true on every chunk, flooding the
+                        // webview with events on each byte received.
+                        let at_end = progress_at_end(downloaded, total);
+                        if gates_open || at_end {
                             emit_progress(downloaded, "downloading", None);
                             last_emit = downloaded;
                             last_emit_at = std::time::Instant::now();
@@ -185,7 +201,10 @@ pub async fn download_media(
         .await
         .map_err(|e| format!("Failed to finalize download: {}", e))?;
 
-    emit_progress(total, "complete", None);
+    // Emit final 100% exactly once. Use `downloaded` (actual bytes written)
+    // rather than `total` so unknown-size downloads (total == 0) still report
+    // the real byte count in the complete event.
+    emit_progress(downloaded, "complete", None);
 
     let mut active = state.active.lock().await;
     active.remove(&rating_key);
@@ -291,4 +310,34 @@ pub async fn get_local_file_path(
     }
 
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::progress_at_end;
+
+    #[test]
+    fn unknown_total_never_signals_at_end() {
+        // When total == 0 (content-length missing, file_size == 0) the gate
+        // must never fire, even with downloaded == 0 (first chunk / empty body).
+        assert!(!progress_at_end(0, 0));
+        assert!(!progress_at_end(1024, 0));
+        assert!(!progress_at_end(u64::MAX, 0));
+    }
+
+    #[test]
+    fn known_total_signals_at_end_when_reached() {
+        let total: u64 = 1_000_000;
+        assert!(!progress_at_end(0, total));
+        assert!(!progress_at_end(999_999, total));
+        assert!(progress_at_end(1_000_000, total));
+        // Overshooting (last chunk may push past total) still signals completion.
+        assert!(progress_at_end(1_000_001, total));
+    }
+
+    #[test]
+    fn known_total_of_one_byte_works() {
+        assert!(!progress_at_end(0, 1));
+        assert!(progress_at_end(1, 1));
+    }
 }
