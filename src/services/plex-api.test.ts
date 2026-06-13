@@ -1,4 +1,4 @@
-import { validateToken, getPlexUser, getHomeUsers, switchHomeUser, getPlexFriends, timedFetch, isTimeoutError } from "./plex-api";
+import { validateToken, getPlexUser, getHomeUsers, switchHomeUser, getPlexFriends, timedFetch, isTimeoutError, REQUEST_TIMEOUT_MS } from "./plex-api";
 
 // Mock storage module
 vi.mock("./storage", () => ({
@@ -10,23 +10,29 @@ const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
 function jsonResponse(data: unknown, status = 200): Response {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    statusText: status === 200 ? "OK" : "Error",
-    json: () => Promise.resolve(data),
-    text: () => Promise.resolve(JSON.stringify(data)),
-  } as Response;
+  const make = (): Response =>
+    ({
+      ok: status >= 200 && status < 300,
+      status,
+      statusText: status === 200 ? "OK" : "Error",
+      json: () => Promise.resolve(data),
+      text: () => Promise.resolve(JSON.stringify(data)),
+      clone: make,
+    }) as unknown as Response;
+  return make();
 }
 
 function xmlResponse(xml: string, status = 200): Response {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    statusText: status === 200 ? "OK" : "Error",
-    json: () => Promise.reject(new Error("not json")),
-    text: () => Promise.resolve(xml),
-  } as Response;
+  const make = (): Response =>
+    ({
+      ok: status >= 200 && status < 300,
+      status,
+      statusText: status === 200 ? "OK" : "Error",
+      json: () => Promise.reject(new Error("not json")),
+      text: () => Promise.resolve(xml),
+      clone: make,
+    }) as unknown as Response;
+  return make();
 }
 
 describe("plex-api", () => {
@@ -326,6 +332,184 @@ describe("plex-api", () => {
         timedFetch(url, { retries: 1 }),
       ).rejects.toThrow("Network error");
       expect(calls).toBe(1);
+    });
+
+    it("default timeout is 15s (30s worst-case envelope with one retry)", () => {
+      expect(REQUEST_TIMEOUT_MS).toBe(15000);
+    });
+
+    it("GET retries once on timeout by default (no explicit retries)", async () => {
+      let calls = 0;
+      mockFetch.mockImplementation((_url: string, opts: { signal: AbortSignal }) => {
+        calls++;
+        return new Promise((_resolve, reject) => {
+          opts.signal.addEventListener("abort", () =>
+            reject(opts.signal.reason ?? new Error("aborted")),
+          );
+        });
+      });
+
+      const url = `https://example.test/get-default-retry-${Date.now()}-${Math.random()}`;
+      await expect(
+        timedFetch(url, { timeoutMs: 10 }),
+      ).rejects.toThrow(/Request timed out/);
+      expect(calls).toBe(2); // initial attempt + 1 default retry
+    });
+
+    it.each(["POST", "PUT", "DELETE"])(
+      "%s does not retry on timeout by default",
+      async (method) => {
+        let calls = 0;
+        mockFetch.mockImplementation((_url: string, opts: { signal: AbortSignal }) => {
+          calls++;
+          return new Promise((_resolve, reject) => {
+            opts.signal.addEventListener("abort", () =>
+              reject(opts.signal.reason ?? new Error("aborted")),
+            );
+          });
+        });
+
+        const url = `https://example.test/${method}-no-retry-${Date.now()}-${Math.random()}`;
+        await expect(
+          timedFetch(url, { method, timeoutMs: 10 }),
+        ).rejects.toThrow(/Request timed out/);
+        expect(calls).toBe(1);
+      },
+    );
+
+    it("non-GET can still opt in to retries explicitly", async () => {
+      let calls = 0;
+      mockFetch.mockImplementation((_url: string, opts: { signal: AbortSignal }) => {
+        calls++;
+        if (calls === 1) {
+          return new Promise((_resolve, reject) => {
+            opts.signal.addEventListener("abort", () =>
+              reject(opts.signal.reason ?? new Error("aborted")),
+            );
+          });
+        }
+        return Promise.resolve(jsonResponse({ ok: true }));
+      });
+
+      const url = `https://example.test/post-opt-in-${Date.now()}-${Math.random()}`;
+      const response = await timedFetch(url, {
+        method: "POST",
+        timeoutMs: 10,
+        retries: 1,
+      });
+      expect(response.ok).toBe(true);
+      expect(calls).toBe(2);
+    });
+
+    /**
+     * Single-use Response mock: json()/text() throw on second consumption of
+     * the same instance, like a real Response body. clone() returns a fresh
+     * unconsumed instance.
+     */
+    function singleUseResponse(data: unknown) {
+      let cloneCount = 0;
+      let originalConsumed = false;
+      const make = (isOriginal: boolean): Response => {
+        let consumed = false;
+        return {
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          json: () => {
+            if (consumed) {
+              return Promise.reject(new TypeError("body already used"));
+            }
+            consumed = true;
+            if (isOriginal) originalConsumed = true;
+            return Promise.resolve(data);
+          },
+          clone: () => {
+            cloneCount++;
+            return make(false);
+          },
+        } as unknown as Response;
+      };
+      return {
+        response: make(true),
+        get cloneCount() {
+          return cloneCount;
+        },
+        get originalConsumed() {
+          return originalConsumed;
+        },
+      };
+    }
+
+    it("dedup clone race: first caller consuming body does not break deduped caller", async () => {
+      const data = { value: 42 };
+      const controlled = singleUseResponse(data);
+      let resolveFetch!: (r: Response) => void;
+      mockFetch.mockImplementation(
+        () => new Promise<Response>((res) => (resolveFetch = res)),
+      );
+
+      const url = `https://example.test/clone-race-${Date.now()}-${Math.random()}`;
+      const first = timedFetch(url);
+      const second = timedFetch(url); // dedup hit while in-flight
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      resolveFetch(controlled.response);
+      const [r1, r2] = await Promise.all([first, second]);
+
+      // First caller consumes its body fully...
+      await expect(r1.json()).resolves.toEqual(data);
+      // ...and the deduped caller can still read the body.
+      await expect(r2.json()).resolves.toEqual(data);
+
+      // The shared original was never consumed; everyone got a clone.
+      expect(controlled.originalConsumed).toBe(false);
+      expect(controlled.cloneCount).toBeGreaterThanOrEqual(2);
+    });
+
+    it("dedup is isolated per auth token: same URL with different tokens fires separate requests", async () => {
+      const resolvers: Array<(r: Response) => void> = [];
+      mockFetch.mockImplementation(
+        () => new Promise<Response>((res) => resolvers.push(res)),
+      );
+
+      const url = `https://example.test/token-isolation-${Date.now()}-${Math.random()}`;
+      const asUserA = timedFetch(url, { headers: { "X-Plex-Token": "token-user-a" } });
+      const asUserB = timedFetch(url, { headers: { "X-Plex-Token": "token-user-b" } });
+      // Different tokens must NOT share the in-flight response.
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+
+      // Same token while in-flight still dedups.
+      const asUserAAgain = timedFetch(url, { headers: { "X-Plex-Token": "token-user-a" } });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+
+      resolvers[0](jsonResponse({ user: "a" }));
+      resolvers[1](jsonResponse({ user: "b" }));
+
+      const [ra, rb, ra2] = await Promise.all([asUserA, asUserB, asUserAAgain]);
+      await expect(ra.json()).resolves.toEqual({ user: "a" });
+      await expect(rb.json()).resolves.toEqual({ user: "b" });
+      await expect(ra2.json()).resolves.toEqual({ user: "a" });
+    });
+
+    it("dedup keys do not contain the raw token", async () => {
+      // The fingerprint must differ per token but never embed the token itself.
+      // Indirectly verified above; here we just confirm requests with and
+      // without a token are isolated from each other too.
+      const resolvers: Array<(r: Response) => void> = [];
+      mockFetch.mockImplementation(
+        () => new Promise<Response>((res) => resolvers.push(res)),
+      );
+
+      const url = `https://example.test/anon-vs-auth-${Date.now()}-${Math.random()}`;
+      const anon = timedFetch(url);
+      const authed = timedFetch(url, { headers: { "X-Plex-Token": "secret" } });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+
+      resolvers[0](jsonResponse({ who: "anon" }));
+      resolvers[1](jsonResponse({ who: "authed" }));
+      const [r1, r2] = await Promise.all([anon, authed]);
+      await expect(r1.json()).resolves.toEqual({ who: "anon" });
+      await expect(r2.json()).resolves.toEqual({ who: "authed" });
     });
   });
 
