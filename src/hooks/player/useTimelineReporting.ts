@@ -8,7 +8,7 @@ import {
   reportTimeline,
   reportTimelineBeacon,
 } from "../../services/plex-playback";
-import { markAsUnwatched } from "../../services/plex-library";
+import { markAsUnwatched, getItemMetadata } from "../../services/plex-library";
 import { logger } from "../../services/logger";
 
 const TIMELINE_INTERVAL_MS = 10_000;
@@ -86,12 +86,29 @@ export function useTimelineReporting(
         ratingKey,
         timeMs: Math.round(timeMs),
       });
-      markAsUnwatched(server.uri, server.accessToken, ratingKey)
-        .then(() =>
+      const { uri, accessToken } = server;
+      markAsUnwatched(uri, accessToken, ratingKey)
+        .then(async () => {
           logger.info("playback", "resume marker cleared (unscrobble ok)", {
             ratingKey,
-          }),
-        )
+          });
+          // Verify server-side state so we can tell whether unscrobble actually
+          // cleared the resume offset (server bug) vs the dashboard showing a
+          // stale cache (client bug). Diagnostic — cheap, early-stop only.
+          try {
+            const meta = await getItemMetadata(uri, accessToken, ratingKey);
+            logger.info("playback", "post-unscrobble server state", {
+              ratingKey,
+              viewOffset: (meta as { viewOffset?: number }).viewOffset ?? 0,
+              viewCount: (meta as { viewCount?: number }).viewCount ?? 0,
+            });
+          } catch (err) {
+            logger.warn("playback", "post-unscrobble verify failed", {
+              ratingKey,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        })
         .catch((err) =>
           logger.warn("playback", "unscrobble failed", {
             ratingKey,

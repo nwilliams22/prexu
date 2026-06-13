@@ -8,6 +8,7 @@ vi.mock("../../services/plex-playback", () => ({
 }));
 vi.mock("../../services/plex-library", () => ({
   markAsUnwatched: vi.fn().mockResolvedValue(undefined),
+  getItemMetadata: vi.fn().mockResolvedValue({ viewOffset: 0, viewCount: 0 }),
 }));
 vi.mock("../../services/logger", () => ({
   logger: {
