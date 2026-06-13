@@ -67,6 +67,10 @@ pub fn attach_window_handlers(window: &tauri::WebviewWindow, app_handle: AppHand
         Mutex<Option<(tauri::PhysicalPosition<i32>, tauri::PhysicalSize<u32>)>>,
     > = Arc::new(Mutex::new(None));
     let was_maximized = Arc::new(AtomicBool::new(false));
+    // Track fullscreen/minimized too so a maximize/restore/un-minimize state
+    // transition can be detected and synced immediately (prexu-hia9).
+    let was_fullscreen = Arc::new(AtomicBool::new(false));
+    let was_minimized = Arc::new(AtomicBool::new(false));
     let reapplying_rect = Arc::new(AtomicBool::new(false));
 
     // Start the long-lived trailing-edge flusher task (prexu-bgz.24).
@@ -144,6 +148,12 @@ pub fn attach_window_handlers(window: &tauri::WebviewWindow, app_handle: AppHand
                 let inner_sz = win_clone.inner_size();
 
                 let was_max = was_maximized.swap(maxed, Ordering::Relaxed);
+                // A discrete maximize / restore / fullscreen / un-minimize is a
+                // one-shot state change, not a drag-resize burst — detect it so
+                // the host can be synced immediately (prexu-hia9).
+                let was_fs = was_fullscreen.swap(fs, Ordering::Relaxed);
+                let was_min = was_minimized.swap(min, Ordering::Relaxed);
+                let state_transition = maxed != was_max || fs != was_fs || min != was_min;
                 if is_restore_from_maximize(was_max, maxed, fs, min) {
                     // Just un-maximized — the OS restored to the
                     // stale pre-snap rect. Re-apply our captured
@@ -187,6 +197,24 @@ pub fn attach_window_handlers(window: &tauri::WebviewWindow, app_handle: AppHand
                         "window://resized",
                         (size.width, size.height),
                     );
+                    // On a discrete maximize/restore/un-minimize, apply the new
+                    // client rect immediately (throttle-bypassing) so the mpv
+                    // host doesn't lag the chrome through the maximize
+                    // animation. Skipped while minimized (host is hidden /
+                    // zero-size). The throttled sync_geometry below then
+                    // dedup-skips the identical rect. (prexu-hia9)
+                    if state_transition && !min {
+                        log::debug!(
+                            "[window] state transition (max={} fs={} min={}) — immediate host sync",
+                            maxed, fs, min
+                        );
+                        state.sync_geometry_now(
+                            pos.x,
+                            pos.y,
+                            size.width as i32,
+                            size.height as i32,
+                        );
+                    }
                     state.sync_geometry(
                         pos.x,
                         pos.y,

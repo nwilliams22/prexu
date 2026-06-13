@@ -213,6 +213,34 @@ pub(crate) fn plan_sync(
     SyncPlan::Apply(ax, ay, aw, ah)
 }
 
+/// Force-apply variant for discrete window-state transitions
+/// (maximize / restore / fullscreen toggle). These are one-shot events, not
+/// continuous drag-resize bursts, so the throttle that protects against
+/// swapchain-rebuild storms must NOT defer them — waiting for the throttle
+/// (or the DWM-animation-delayed `WM_SIZE`) is what makes the mpv host visibly
+/// lag the chrome on maximize. Skips the throttle gate but still updates
+/// `last_sync` (re-arming the throttle for any follow-up burst) and dedups
+/// against `last_geometry` so an already-correct host isn't re-set.
+#[cfg(target_os = "windows")]
+pub(crate) fn plan_sync_immediate(
+    g: &mut GeomState,
+    now: Instant,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> SyncPlan {
+    g.last_sync = now;
+    g.pending_geometry = None;
+    let (ax, ay, aw, ah) = apply_minimize_inset_inner(g, x, y, width, height);
+    let new = (ax, ay, aw, ah);
+    if g.last_geometry == Some(new) {
+        return SyncPlan::Deduped;
+    }
+    g.last_geometry = Some(new);
+    SyncPlan::Apply(ax, ay, aw, ah)
+}
+
 /// What `sync_geometry_move` should do. `None` means dedup-skip (no host
 /// call); `Some` carries the inset-adjusted position plus the
 /// `last_geometry` write-back to perform AFTER the host call succeeds so a
@@ -618,6 +646,31 @@ mod tests {
         // The host op was attempted but failed — last_geometry must NOT move.
         assert_eq!(host.calls(), vec![HostCall::SetPosition(30, 40)]);
         assert_eq!(g.last_geometry, Some((0, 0, 800, 600)));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn plan_sync_immediate_applies_inside_throttle_window() {
+        let mut g = GeomState::new();
+        let host = RecordingHost::new();
+        let base = g.last_sync + GEOMETRY_SYNC_MIN_INTERVAL + Duration::from_millis(1);
+        // First normal sync establishes last_sync = base.
+        drive_sync(&mut g, &host, base, 0, 0, 800, 600);
+        // A maximize 5ms later would be THROTTLED by plan_sync, but the
+        // immediate variant applies it now (state transition).
+        let plan = plan_sync_immediate(&mut g, base + Duration::from_millis(5), 0, -10, 2560, 1392);
+        assert_eq!(plan, SyncPlan::Apply(0, -10, 2560, 1392));
+        assert_eq!(g.last_geometry, Some((0, -10, 2560, 1392)));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn plan_sync_immediate_dedups_when_already_applied() {
+        let mut g = GeomState::new();
+        g.last_geometry = Some((0, 0, 2560, 1392));
+        let now = g.last_sync + Duration::from_millis(1);
+        let plan = plan_sync_immediate(&mut g, now, 0, 0, 2560, 1392);
+        assert_eq!(plan, SyncPlan::Deduped);
     }
 
     #[cfg(target_os = "windows")]

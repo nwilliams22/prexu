@@ -751,6 +751,40 @@ impl PlayerState {
         }
     }
 
+    /// Immediate, throttle-bypassing geometry sync for discrete window-state
+    /// transitions (maximize / restore / un-minimize). The regular
+    /// `sync_geometry` throttle exists to coalesce continuous drag-resize
+    /// bursts; a one-shot maximize is not a burst, and routing it through the
+    /// throttle (plus waiting for the DWM-animation-delayed `WM_SIZE`) is what
+    /// makes the host lag the chrome. Applies the supplied client rect at once.
+    /// (prexu-hia9)
+    #[cfg(target_os = "windows")]
+    pub(crate) fn sync_geometry_now(&self, x: i32, y: i32, width: i32, height: i32) {
+        log::debug!(
+            "[player] sync_geometry_now (state transition) ({},{},{}x{})",
+            x, y, width, height
+        );
+        if self.fullscreen_transition.load(Ordering::Acquire) {
+            log::trace!("[player] sync_geometry_now suppressed — fullscreen transition");
+            return;
+        }
+        let plan = {
+            let Ok(mut g) = self.geom.lock() else { return };
+            geometry::plan_sync_immediate(&mut g, Instant::now(), x, y, width, height)
+            // g dropped before inner.try_lock() — same invariant as sync_geometry
+        };
+        let geometry::SyncPlan::Apply(ax, ay, aw, ah) = plan else { return };
+        let Ok(guard) = self.inner.try_lock() else { return };
+        if let Some(inner) = guard.as_ref() {
+            if let Some(host) = inner.host.as_ref() {
+                log::debug!("[player] sync_geometry_now applied ({},{},{}x{})", ax, ay, aw, ah);
+                if let Err(e) = host.set_geometry(ax, ay, aw, ah) {
+                    log::warn!("[player] sync_geometry_now failed: {}", e);
+                }
+            }
+        }
+    }
+
     /// Spawn the long-lived trailing-edge flusher task (prexu-bgz.24).
     ///
     /// Called once from `attach_window_handlers` in `events.rs` before any
