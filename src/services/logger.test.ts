@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Mock the Tauri log plugin so its invoke calls don't throw
 vi.mock("@tauri-apps/plugin-log", () => ({
@@ -9,7 +9,8 @@ vi.mock("@tauri-apps/plugin-log", () => ({
   trace: vi.fn(),
 }));
 
-import { logger, redactUrl } from "./logger";
+import { logger, redactUrl, setLogLevel } from "./logger";
+import * as tauriLogMock from "@tauri-apps/plugin-log";
 
 describe("redactUrl", () => {
   it("redacts a token mid-string so truncation cannot leak a prefix", () => {
@@ -118,5 +119,73 @@ describe("logger", () => {
     await expect(logger.error("tag", "safe")).resolves.toBeUndefined();
     await expect(logger.debug("tag", "safe")).resolves.toBeUndefined();
     await expect(logger.trace("tag", "safe")).resolves.toBeUndefined();
+  });
+});
+
+describe("logger level gating", () => {
+  beforeEach(() => {
+    // The plugin-log mock fns come from the vi.mock factory; restoreMocks
+    // does not clear their call history, so clear it explicitly.
+    vi.clearAllMocks();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "debug").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    // Module-level state, not a mock — reset to the dev/test default.
+    setLogLevel("trace");
+  });
+
+  it("defaults to trace in dev/test (everything passes)", async () => {
+    await logger.trace("perf", "tick");
+    await logger.debug("cache", "hit");
+    expect(console.debug).toHaveBeenCalledTimes(2);
+  });
+
+  it("below-threshold calls return before formatting, console, or Tauri", async () => {
+    setLogLevel("info");
+    const stringifySpy = vi.spyOn(JSON, "stringify");
+
+    await logger.trace("perf", "tick", { pos: 1.23 });
+    await logger.debug("player", "geometry", { x: 0, y: 0 });
+
+    expect(stringifySpy).not.toHaveBeenCalled();
+    expect(console.debug).not.toHaveBeenCalled();
+    expect(tauriLogMock.trace).not.toHaveBeenCalled();
+    expect(tauriLogMock.debug).not.toHaveBeenCalled();
+  });
+
+  it("at/above-threshold calls pass through unchanged", async () => {
+    setLogLevel("info");
+
+    await logger.info("tag", "msg", { a: 1 });
+    await logger.warn("tag", "uh oh");
+    await logger.error("tag", "boom");
+
+    expect(console.log).toHaveBeenCalledWith('[tag] msg {"a":1}');
+    expect(console.warn).toHaveBeenCalledWith("[tag] uh oh");
+    expect(console.error).toHaveBeenCalledWith("[tag] boom");
+    expect(tauriLogMock.info).toHaveBeenCalledWith('[tag] msg {"a":1}');
+    expect(tauriLogMock.warn).toHaveBeenCalledWith("[tag] uh oh");
+    expect(tauriLogMock.error).toHaveBeenCalledWith("[tag] boom");
+  });
+
+  it("gates each level independently of the others", async () => {
+    setLogLevel("warn");
+
+    await logger.info("tag", "filtered");
+    await logger.warn("tag", "kept");
+
+    expect(console.log).not.toHaveBeenCalled();
+    expect(tauriLogMock.info).not.toHaveBeenCalled();
+    expect(console.warn).toHaveBeenCalledWith("[tag] kept");
+  });
+
+  it("gated calls still resolve to undefined", async () => {
+    setLogLevel("error");
+    await expect(logger.trace("tag", "x")).resolves.toBeUndefined();
+    await expect(logger.info("tag", "x")).resolves.toBeUndefined();
   });
 });
