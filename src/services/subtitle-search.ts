@@ -40,12 +40,38 @@ interface PlexSubtitleResponse {
  * The Plex subtitle agent only accepts ISO 639-1 two-letter codes; the
  * three-letter 639-2 codes used elsewhere in the app (embedded stream
  * languageCode) make it return HTTP 500.
+ *
+ * Covers both ISO 639-2/T (terminological) and ISO 639-2/B (bibliographic)
+ * codes. Plex commonly sends the /B variants for several languages (e.g.
+ * "fre" instead of "fra", "ger" instead of "deu") which would otherwise
+ * fall through the map and reproduce the 500 this lookup is meant to prevent.
  */
 const ISO_639_2_TO_1: Record<string, string> = {
+  // ISO 639-2/T (terminological) codes
   eng: "en", spa: "es", fra: "fr", deu: "de", ita: "it",
   por: "pt", rus: "ru", jpn: "ja", kor: "ko", zho: "zh",
   ara: "ar", hin: "hi", nld: "nl", pol: "pl", swe: "sv",
   nor: "no", dan: "da", fin: "fi", tur: "tr",
+  // ISO 639-2/B (bibliographic) aliases — same 639-1 target as their /T counterparts
+  fre: "fr", // French    (fra)
+  ger: "de", // German    (deu)
+  chi: "zh", // Chinese   (zho)
+  dut: "nl", // Dutch     (nld)
+  cze: "cs", // Czech     (ces)
+  gre: "el", // Greek     (ell)
+  ice: "is", // Icelandic (isl)
+  mac: "mk", // Macedonian (mkd)
+  may: "ms", // Malay     (msa)
+  bur: "my", // Burmese   (mya)
+  per: "fa", // Persian   (fas)
+  rum: "ro", // Romanian  (ron)
+  slo: "sk", // Slovak    (slk)
+  tib: "bo", // Tibetan   (bod)
+  wel: "cy", // Welsh     (cym)
+  arm: "hy", // Armenian  (hye)
+  geo: "ka", // Georgian  (kat)
+  baq: "eu", // Basque    (eus)
+  alb: "sq", // Albanian  (sqi)
 };
 
 /**
