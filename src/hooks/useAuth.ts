@@ -21,7 +21,7 @@ import {
   resolveServerFromDiscovery,
   logServerResolve,
 } from "../services/server-reachability";
-import { logger } from "../services/logger";
+import { logger, redactUrl } from "../services/logger";
 
 const TOKEN_REVALIDATION_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -99,7 +99,7 @@ export function useAuthState(): AuthContextValue {
                 logger.warn(
                   "auth",
                   "stored server unreachable, attempting re-resolve",
-                  storedServer.uri.substring(0, 80)
+                  redactUrl(storedServer.uri)
                 );
 
                 // Attempt to re-discover and find the same server by clientIdentifier
@@ -123,7 +123,7 @@ export function useAuthState(): AuthContextValue {
                     logger.info(
                       "auth",
                       "re-resolve returned identical server; keeping existing state",
-                      storedServer.uri.substring(0, 80)
+                      redactUrl(storedServer.uri)
                     );
                     setServerUnreachable(false);
                   } else if (fresh) {

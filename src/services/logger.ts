@@ -20,6 +20,17 @@ async function getTauriLog() {
   }
 }
 
+/**
+ * Redact Plex auth tokens from a URL before logging, then truncate.
+ *
+ * Naive truncation (e.g. `url.substring(0, 80)`) leaks token prefixes when
+ * the server URI is short, because the X-Plex-Token query param lands inside
+ * the truncation window. Always run URLs through this before logging them.
+ */
+export function redactUrl(url: string): string {
+  return url.replace(/X-Plex-Token=[^&]*/gi, "X-Plex-Token=***").substring(0, 100);
+}
+
 function formatMessage(tag: string, message: string, data?: unknown): string {
   const parts = [`[${tag}] ${message}`];
   if (data !== undefined) {

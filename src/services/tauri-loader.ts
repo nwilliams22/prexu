@@ -17,6 +17,7 @@ import type {
 } from "hls.js";
 import { LoadStats } from "hls.js";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { redactUrl } from "./logger";
 
 /**
  * Factory that creates a FetchLoader class bound to a specific Plex token.
@@ -63,7 +64,7 @@ export function createTauriLoaderClass(serverToken: string) {
         if (this.aborted) return;
         this.aborted = true;
         this.abortController?.abort();
-        console.warn(`[HLS Loader] Timeout after ${timeoutMs}ms for ${url.substring(0, 80)}`);
+        console.warn(`[HLS Loader] Timeout after ${timeoutMs}ms for ${redactUrl(url)}`);
         if (this.callbacks?.onTimeout) {
           this.callbacks.onTimeout(this.stats, context, null);
         }

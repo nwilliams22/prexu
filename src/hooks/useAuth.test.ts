@@ -34,7 +34,8 @@ vi.mock("../services/server-reachability", () => ({
 }));
 
 // Mock logger to avoid Tauri IPC calls in test environment
-vi.mock("../services/logger", () => ({
+vi.mock("../services/logger", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../services/logger")>()),
   logger: {
     info: vi.fn(),
     warn: vi.fn(),

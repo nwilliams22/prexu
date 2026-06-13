@@ -3,7 +3,7 @@
  */
 
 import type { PlexResource, PlexServer, PlexConnection } from "../types/plex";
-import { logger } from "./logger";
+import { logger, redactUrl } from "./logger";
 import type { HomeUser } from "../types/home-user";
 import { getClientIdentifier } from "./storage";
 import {
@@ -32,8 +32,9 @@ export function isTimeoutError(err: unknown): boolean {
  * GET requests are deduplicated: if an identical URL is already in-flight,
  * the existing promise is returned instead of firing a duplicate request.
  *
- * On timeout, aborts with a `TimeoutError` DOMException carrying the URL and
- * elapsed ms so callers see "Request timed out after Xms: <url>" instead of
+ * On timeout, aborts with a `TimeoutError` DOMException carrying the
+ * token-redacted URL and elapsed ms so callers see
+ * "Request timed out after Xms: <url>" instead of
  * the cryptic default "signal is aborted without reason".
  */
 export async function timedFetch(
@@ -82,7 +83,7 @@ async function fetchWithRetry(
         logger.warn(
           "api",
           `timedFetch retry ${attempt}/${retries} after timeout`,
-          { url: url.substring(0, 120), method, timeoutMs: timeout },
+          { url: redactUrl(url), method, timeoutMs: timeout },
         );
         continue;
       }
@@ -103,7 +104,7 @@ async function fetchOnce(
     const elapsed = Date.now() - start;
     controller.abort(
       new DOMException(
-        `Request timed out after ${elapsed}ms: ${url}`,
+        `Request timed out after ${elapsed}ms: ${redactUrl(url)}`,
         "TimeoutError",
       ),
     );

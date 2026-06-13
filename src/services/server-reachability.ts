@@ -6,7 +6,7 @@
  */
 
 import { getServerHeaders } from "./plex-api";
-import { logger } from "./logger";
+import { logger, redactUrl } from "./logger";
 
 const PROBE_TIMEOUT_MS = 5000;
 
@@ -83,11 +83,9 @@ export function resolveServerFromDiscovery(
 }
 
 /**
- * Log a re-resolve event, truncating URIs to 80 chars to avoid
+ * Log a re-resolve event, redacting tokens and truncating URIs to avoid
  * leaking full tokens in logs.
  */
 export function logServerResolve(oldUri: string, newUri: string): void {
-  const truncOld = oldUri.substring(0, 80);
-  const truncNew = newUri.substring(0, 80);
-  logger.info("auth", "server URI re-resolved", { from: truncOld, to: truncNew });
+  logger.info("auth", "server URI re-resolved", { from: redactUrl(oldUri), to: redactUrl(newUri) });
 }

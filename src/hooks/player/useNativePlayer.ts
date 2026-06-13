@@ -38,7 +38,7 @@ import type {
   SubtitleStylePreferences,
 } from "../../types/preferences";
 import type { UsePlayerResult } from "../usePlayer";
-import { logger } from "../../services/logger";
+import { logger, redactUrl } from "../../services/logger";
 
 export function useNativePlayer(
   ratingKey: string,
@@ -174,7 +174,7 @@ export function useNativePlayer(
           if (externalSub) {
             pendingExternalSubRef.current = null;
             logger.info("player", "ready-flush player_load_external_sub", {
-              url: externalSub.substring(0, 80),
+              url: redactUrl(externalSub),
             });
             invoke("player_load_external_sub", { url: externalSub }).catch((err) =>
               logger.error("player", "ready-flush player_load_external_sub failed", String(err)),
@@ -362,12 +362,12 @@ export function useNativePlayer(
         }
       })();
 
-      logger.debug("player", "URL chosen", { kind: prepared.sourceKind, url: prepared.url.substring(0, 80) });
+      logger.debug("player", "URL chosen", { kind: prepared.sourceKind, url: redactUrl(prepared.url) });
 
       // load_url runs ensure_init server-side which actually creates the
       // mpv handle. Volume/mute commands assume an initialised handle, so
       // they MUST come after load_url, not before.
-      logger.info("player", "loading URL", { url: prepared.url.substring(0, 80), startOffsetMs: prepared.viewOffset });
+      logger.info("player", "loading URL", { url: redactUrl(prepared.url), startOffsetMs: prepared.viewOffset });
       // Buffer the external default sub BEFORE loadfile: the ready event can
       // fire before the post-load_url code below runs (fast reloads), and
       // the ready handler is what flushes this ref via sub-add.
@@ -636,7 +636,7 @@ export function useNativePlayer(
       const url = `${server!.uri}${sub.key}?X-Plex-Token=${server!.accessToken}`;
       logger.debug("player", "selectSubtitleTrack external", {
         plexId: streamId,
-        url: url.substring(0, 80),
+        url: redactUrl(url),
       });
       invoke("player_load_external_sub", { url }).catch((err) =>
         logger.error("player", "player_load_external_sub failed", String(err)),

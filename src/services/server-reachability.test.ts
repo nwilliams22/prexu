@@ -13,8 +13,9 @@ vi.mock("./plex-api", () => ({
   }),
 }));
 
-// Mock logger so we don't hit Tauri in tests
-vi.mock("./logger", () => ({
+// Mock logger so we don't hit Tauri in tests (keep the real redactUrl)
+vi.mock("./logger", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./logger")>()),
   logger: {
     info: vi.fn(),
     warn: vi.fn(),
@@ -212,7 +213,7 @@ describe("logServerResolve", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("logs at info level with truncated URIs", () => {
-    const longUri = "https://" + "a".repeat(100) + ":32400";
+    const longUri = "https://" + "a".repeat(120) + ":32400";
     logServerResolve(longUri, "https://10.0.0.5:32400");
 
     expect(mockLogger.info).toHaveBeenCalledOnce();
@@ -220,17 +221,25 @@ describe("logServerResolve", () => {
       "auth",
       "server URI re-resolved",
       expect.objectContaining({
-        from: longUri.substring(0, 80),
+        from: longUri.substring(0, 100),
         to: "https://10.0.0.5:32400",
       })
     );
   });
 
-  it("does not include content beyond 80 chars", () => {
+  it("redacts tokens if a URI ever carries one", () => {
+    logServerResolve("https://10.0.0.5:32400?X-Plex-Token=secret", "https://new:32400");
+    const call = mockLogger.info.mock.calls[0];
+    const data = call[2] as { from: string; to: string };
+    expect(data.from).not.toContain("secret");
+    expect(data.from).toContain("X-Plex-Token=***");
+  });
+
+  it("does not include content beyond 100 chars", () => {
     const longUri = "https://" + "x".repeat(200) + ":32400";
     logServerResolve(longUri, "https://new:32400");
     const call = mockLogger.info.mock.calls[0];
     const data = call[2] as { from: string; to: string };
-    expect(data.from.length).toBeLessThanOrEqual(80);
+    expect(data.from.length).toBeLessThanOrEqual(100);
   });
 });

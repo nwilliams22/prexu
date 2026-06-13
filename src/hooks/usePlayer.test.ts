@@ -45,7 +45,8 @@ const { serverMock, hlsLoaderMock, timelineMock, streamsMock } = vi.hoisted(() =
   },
 }));
 
-vi.mock("../services/logger", () => ({
+vi.mock("../services/logger", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../services/logger")>()),
   logger: {
     info: vi.fn(),
     warn: vi.fn(),

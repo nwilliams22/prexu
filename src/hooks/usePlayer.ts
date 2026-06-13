@@ -43,7 +43,7 @@ import type {
   SubtitleStylePreferences,
 } from "../types/preferences";
 import { buildSubtitleCss } from "../utils/subtitle-css";
-import { logger } from "../services/logger";
+import { logger, redactUrl } from "../services/logger";
 
 export const IS_NATIVE_PLAYER =
   typeof window !== "undefined" &&
@@ -329,7 +329,7 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
             `fatal: ${data.fatal}`,
             `type: ${data.type}`,
             `details: ${data.details}`,
-            data.url ? `url: ${data.url.substring(0, 80)}` : null,
+            data.url ? `url: ${redactUrl(data.url)}` : null,
             data.response ? `response: ${JSON.stringify({ code: data.response.code, text: data.response.text })}` : null,
             data.error ? `error: ${data.error.message ?? data.error}` : null,
             data.reason ? `reason: ${data.reason}` : null,
