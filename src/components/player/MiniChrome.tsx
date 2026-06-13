@@ -99,7 +99,8 @@ const SKIP_SECONDS = 10;
  *  below the threshold is a true no-op. */
 const DRAG_THRESHOLD_PX = 4;
 
-/** Throttle window for mid-drag IPC during resize. The mpv host re-snaps
+/** Throttle window for mid-drag IPC during resize and scrub-bar drags
+ *  (prexu-bgz.10 reuses this gate for player_seek). The mpv host re-snaps
  *  to the corner on every Resized event; 30 Hz (33 ms) matches the
  *  sync_geometry floor in src-tauri/src/player/mod.rs (prexu-8qk —
  *  bumped from 50 ms 2026-05-27 after the window-drag throttle was
@@ -454,6 +455,14 @@ export default function MiniChrome({
   const scrubTrackRef = useRef<HTMLDivElement | null>(null);
   const scrubDraggingRef = useRef(false);
 
+  // ── Scrub IPC throttle state (ref — no re-renders) ──────────────────────
+  // prexu-bgz.10: every seekFromPointer call is a raw player_seek IPC, so an
+  // un-throttled pointermove drag flooded the mpv command queue. Mirror the
+  // resize path's leading-edge Date.now() gate (lastResizeIpcRef +
+  // RESIZE_IPC_THROTTLE_MS); pointerup always issues a final seek with the
+  // exact release position so no position is lost to the throttle window.
+  const lastScrubIpcRef = useRef<number>(0);
+
   const seekFromPointer = useCallback(
     (clientX: number) => {
       const track = scrubTrackRef.current;
@@ -478,6 +487,9 @@ export default function MiniChrome({
       if (typeof target.setPointerCapture === "function") {
         target.setPointerCapture(e.pointerId);
       }
+      // The grab itself seeks immediately and opens the throttle window so
+      // a pointermove in the same instant doesn't double-fire the IPC.
+      lastScrubIpcRef.current = Date.now();
       seekFromPointer(e.clientX);
     },
     [onActivity, seekFromPointer],
@@ -486,7 +498,13 @@ export default function MiniChrome({
   const handleScrubPointerMove = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
       if (!scrubDraggingRef.current) return;
-      seekFromPointer(e.clientX);
+      // Throttle mid-drag seeks to ~30 Hz — same gate as onResizeMove. The
+      // final position is always committed by handleScrubPointerUp.
+      const now = Date.now();
+      if (now - lastScrubIpcRef.current >= RESIZE_IPC_THROTTLE_MS) {
+        lastScrubIpcRef.current = now;
+        seekFromPointer(e.clientX);
+      }
     },
     [seekFromPointer],
   );
@@ -495,6 +513,8 @@ export default function MiniChrome({
     (e: React.PointerEvent<HTMLDivElement>) => {
       if (!scrubDraggingRef.current) return;
       scrubDraggingRef.current = false;
+      // ALWAYS seek on release — bypasses the throttle gate so the exact
+      // release position is never lost to the 33 ms window.
       seekFromPointer(e.clientX);
     },
     [seekFromPointer],
