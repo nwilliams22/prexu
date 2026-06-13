@@ -44,15 +44,14 @@ export function createTauriLoaderClass(serverToken: string) {
       this.stats.loading.start = performance.now();
       this.aborted = false;
 
-      // Add the Plex token if not already present
-      let url = context.url;
-      if (!url.includes("X-Plex-Token=")) {
-        const separator = url.includes("?") ? "&" : "?";
-        url = `${url}${separator}X-Plex-Token=${encodeURIComponent(serverToken)}`;
-      }
+      const url = context.url;
 
-      // Build request headers
-      const headers: Record<string, string> = {};
+      // Build request headers. Token is sent via header only — not appended
+      // to the URL — so it does not appear in Tauri's structured log output or
+      // in the HLS segment URL that hls.js surfaces in error events.
+      const headers: Record<string, string> = {
+        "X-Plex-Token": serverToken,
+      };
       if (context.rangeStart !== undefined && context.rangeEnd !== undefined) {
         headers["Range"] = `bytes=${context.rangeStart}-${context.rangeEnd - 1}`;
       }

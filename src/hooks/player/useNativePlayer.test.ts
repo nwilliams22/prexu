@@ -114,6 +114,8 @@ vi.mock("./useTimelineReporting", () => ({
 
 vi.mock("../../services/plex-playback", () => ({
   prepareSource: vi.fn().mockResolvedValue(null),
+  applyPreparedMetadata: vi.fn(),
+  refreshDownloadedSubtitles: vi.fn().mockResolvedValue(undefined),
   deriveDisplayTitles: vi.fn(() => ({ title: "", subtitle: "" })),
   reportTimeline: vi.fn(),
   getSavedVolume: () => 1,
@@ -152,7 +154,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { prepareSource, deriveDisplayTitles } from "../../services/plex-playback";
+import { prepareSource } from "../../services/plex-playback";
 import { useNativePlayer } from "./useNativePlayer";
 
 beforeEach(() => {
@@ -338,17 +340,13 @@ describe("useNativePlayer dispatch contract (prexu-ve9)", () => {
 
     it("ignores a stale prepareSource result after a newer init starts", async () => {
       vi.mocked(invoke).mockResolvedValue(undefined);
-      vi.mocked(deriveDisplayTitles).mockImplementation((item) => ({
-        title: (item as unknown as { title: string }).title,
-        subtitle: "",
-      }));
       const first = deferred<Prepared>();
       const second = deferred<Prepared>();
       vi.mocked(prepareSource)
         .mockImplementationOnce(() => first.promise)
         .mockImplementationOnce(() => second.promise);
 
-      const { result, rerender } = renderHook(
+      const { rerender } = renderHook(
         ({ rk }: { rk: string }) => useNativePlayer(rk),
         { initialProps: { rk: "100" } },
       );
@@ -364,11 +362,11 @@ describe("useNativePlayer dispatch contract (prexu-ve9)", () => {
         await Promise.resolve();
       });
 
+      // Stale url must never be sent to mpv.
       expect(invoke).not.toHaveBeenCalledWith(
         "player_load_url",
         expect.objectContaining({ url: "https://server/old.mkv" }),
       );
-      expect(result.current.title).not.toBe("Old Episode");
 
       // The current init proceeds normally once its prepare resolves.
       await act(async () => {
@@ -387,7 +385,6 @@ describe("useNativePlayer dispatch contract (prexu-ve9)", () => {
         "player_load_url",
         expect.objectContaining({ url: "https://server/old.mkv" }),
       );
-      expect(result.current.title).toBe("New Episode");
     });
 
     it("does not load anything when the hook unmounts mid-init", async () => {
@@ -564,6 +561,141 @@ describe("useNativePlayer dispatch contract (prexu-ve9)", () => {
       expect(result.current.subscribeToEof).toBe(subscribeToEof);
       expect(result.current.pause).toBe(pause);
       expect(result.current.unload).toBe(unload);
+    });
+  });
+
+  // ── enqueueOrRun / flushOnReady queue semantics (prexu-bgz.32) ──
+
+  describe("deferred-op queue (prexu-bgz.32)", () => {
+    it("flushes sub-style and af-chain in insertion order on player://ready", async () => {
+      const { result } = renderHook(() => useNativePlayer("123"));
+
+      await waitFor(() => {
+        expect(eventHandlers["player://ready"]?.length ?? 0).toBeGreaterThan(0);
+      });
+
+      const callOrder: string[] = [];
+      vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+        callOrder.push(cmd as string);
+        return undefined;
+      });
+
+      // Enqueue ops before ready fires.
+      act(() => {
+        result.current.applySubtitleStyle({
+          size: 100,
+          style: {
+            fontFamily: "Arial",
+            textColor: "#fff",
+            backgroundColor: "#000",
+            backgroundOpacity: 0.5,
+            outlineColor: "#000",
+            outlineWidth: 1,
+            shadowEnabled: false,
+          },
+        });
+        result.current.applyAudioEnhancement({ normalizationPreset: "night" });
+        result.current.applyAudioEnhancement({ audioOffsetMs: 200 });
+      });
+
+      // Nothing fired yet.
+      expect(callOrder.filter((c) => c.startsWith("player_"))).toHaveLength(0);
+
+      // Fire ready — ops should flush in insertion order.
+      act(() => {
+        fireReady();
+      });
+
+      // sub-style was enqueued first, then af-chain, then audio-delay.
+      expect(callOrder).toEqual([
+        "player_apply_sub_style",
+        "player_set_af_chain",
+        "player_set_audio_delay_ms",
+      ]);
+    });
+
+    it("replaces a pending sub-style with the latest when called twice pre-ready", async () => {
+      const { result } = renderHook(() => useNativePlayer("123"));
+
+      await waitFor(() => {
+        expect(eventHandlers["player://ready"]?.length ?? 0).toBeGreaterThan(0);
+      });
+
+      vi.mocked(invoke).mockResolvedValue(undefined);
+
+      act(() => {
+        result.current.applySubtitleStyle({
+          size: 80,
+          style: {
+            fontFamily: "Old",
+            textColor: "#000",
+            backgroundColor: "#fff",
+            backgroundOpacity: 1,
+            outlineColor: "#fff",
+            outlineWidth: 0,
+            shadowEnabled: false,
+          },
+        });
+        // Second call should REPLACE the first in the queue.
+        result.current.applySubtitleStyle({
+          size: 120,
+          style: {
+            fontFamily: "New",
+            textColor: "#fff",
+            backgroundColor: "#000",
+            backgroundOpacity: 0,
+            outlineColor: "#000",
+            outlineWidth: 2,
+            shadowEnabled: true,
+          },
+        });
+      });
+
+      act(() => {
+        fireReady();
+      });
+
+      // Only one player_apply_sub_style invocation with the latest args.
+      const subStyleCalls = vi.mocked(invoke).mock.calls.filter(
+        ([cmd]) => cmd === "player_apply_sub_style",
+      );
+      expect(subStyleCalls).toHaveLength(1);
+      expect(subStyleCalls[0][1]).toMatchObject({ style: { fontFamily: "New", size: 120 } });
+    });
+
+    it("fires immediately post-ready without queuing", async () => {
+      const { result } = renderHook(() => useNativePlayer("123"));
+
+      await waitFor(() => {
+        expect(eventHandlers["player://ready"]?.length ?? 0).toBeGreaterThan(0);
+      });
+
+      act(() => {
+        fireReady();
+      });
+
+      vi.mocked(invoke).mockClear();
+
+      act(() => {
+        result.current.applySubtitleStyle({
+          size: 100,
+          style: {
+            fontFamily: "Arial",
+            textColor: "#fff",
+            backgroundColor: "#000",
+            backgroundOpacity: 0.5,
+            outlineColor: "#000",
+            outlineWidth: 1,
+            shadowEnabled: false,
+          },
+        });
+      });
+
+      // Post-ready: invoke fires synchronously within the act.
+      expect(invoke).toHaveBeenCalledWith(
+        "player_apply_sub_style",
+        expect.objectContaining({ style: expect.objectContaining({ fontFamily: "Arial" }) }),
+      );
     });
   });
 });

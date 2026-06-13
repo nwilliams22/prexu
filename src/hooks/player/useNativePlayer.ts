@@ -18,17 +18,13 @@ import { useTimelineReporting } from "./useTimelineReporting";
 import { addPendingWatchSync, getClientIdentifier } from "../../services/storage";
 import {
   prepareSource,
-  deriveDisplayTitles,
+  applyPreparedMetadata,
+  refreshDownloadedSubtitles,
   reportTimeline,
   getSavedVolume,
   saveVolume,
 } from "../../services/plex-playback";
-import {
-  setSelectedSubtitleStream,
-  waitForDownloadedSubtitle,
-} from "../../services/subtitle-search";
 import type {
-  PlexEpisode,
   PlexStream,
   PlexChapter,
   PlexMarker,
@@ -102,10 +98,6 @@ export function useNativePlayer(
   // Media part id of the currently playing file — needed to persist subtitle
   // selection on the server after an on-demand download.
   const partIdRef = useRef<number | undefined>(undefined);
-  // External default sub URL awaiting sub-add. mpv rejects sub-add before the
-  // file has loaded (MPV_ERROR_COMMAND), so the initial external subtitle is
-  // buffered here and flushed in the player://ready handler.
-  const pendingExternalSubRef = useRef<string | null>(null);
   const volumeRef = useRef(volume);
   volumeRef.current = volume;
   const isMutedRef = useRef(isMuted);
@@ -113,25 +105,41 @@ export function useNativePlayer(
   const offsetOverrideRef = useRef(offsetOverride);
   offsetOverrideRef.current = offsetOverride;
 
-  // ── Backend dispatch ref state ──
-  // Track readiness so applySubtitleStyle / applyAudioEnhancement can defer
-  // IPC until mpv exists. isLoading starts true and flips false on
-  // player://ready; we mirror it in a ref so the callbacks stay stable.
+  // ── Deferred-op queue ──
+  // Replaces three separate pending refs (pendingExternalSubRef,
+  // pendingSubStyleRef, pendingAfRef). Any op that needs mpv to be ready
+  // calls enqueueOrRun(fn): if mpv is ready the op fires immediately,
+  // otherwise it is appended to the queue and replayed in insertion order
+  // when player://ready fires. For ops that must replace a prior pending
+  // version (sub-style, af-chain) the caller dequeues the old entry first
+  // via dequeueByTag before enqueuing the new one — this is handled inside
+  // applySubtitleStyle / applyAudioEnhancement below.
   const isReadyRef = useRef(false);
-  // Latest sub-style awaiting (re-)apply when mpv becomes ready. mpv only
-  // accepts sub-* property writes once it has a handle, so changes that
-  // arrive pre-ready are buffered here and flushed in the ready handler.
-  const pendingSubStyleRef = useRef<
-    { size: number; style: SubtitleStylePreferences } | null
-  >(null);
-  // Latest audio-enhancement state awaiting initial apply at ready time.
-  // Player.tsx populates this once via applyAudioEnhancement(prefs) before
-  // mpv exists; we replay it on ready so persisted prefs survive restart.
-  // Subsequent user changes hit the live IPCs directly.
-  const pendingAfRef = useRef<{
-    normalizationPreset?: NormalizationPreset;
-    audioOffsetMs?: number;
-  } | null>(null);
+  const deferredOpsRef = useRef<Array<{ tag: string; fn: () => void }>>([]);
+
+  const enqueueOrRun = useCallback((tag: string, fn: () => void) => {
+    if (isReadyRef.current) {
+      fn();
+    } else {
+      deferredOpsRef.current.push({ tag, fn });
+    }
+  }, []);
+
+  const dequeueByTag = useCallback((tag: string) => {
+    deferredOpsRef.current = deferredOpsRef.current.filter((op) => op.tag !== tag);
+  }, []);
+
+  const flushOnReady = useCallback(() => {
+    const ops = deferredOpsRef.current.splice(0);
+    for (const op of ops) {
+      try {
+        op.fn();
+      } catch (err) {
+        logger.error("player", `ready-flush op [${op.tag}] threw`, String(err));
+      }
+    }
+  }, []);
+
   // Subscriber slots for the public subscribeToEof contract. Kept separate
   // from the bookkeeping listener below (addPendingWatchSync + reportTimeline
   // + setIsPlaying); these fire so consumers like usePostPlay can react to
@@ -167,72 +175,11 @@ export function useNativePlayer(
           isReadyRef.current = true;
           setIsLoading(false);
           setIsBuffering(false);
-          // Flush the initial external default subtitle. sub-add only works
-          // once mpv has an active file; initPlayback buffers the URL here
-          // instead of firing it pre-load (which failed with Raw(-12)).
-          const externalSub = pendingExternalSubRef.current;
-          if (externalSub) {
-            pendingExternalSubRef.current = null;
-            logger.info("player", "ready-flush player_load_external_sub", {
-              url: redactUrl(externalSub),
-            });
-            invoke("player_load_external_sub", { url: externalSub }).catch((err) =>
-              logger.error("player", "ready-flush player_load_external_sub failed", String(err)),
-            );
-          }
-          // Flush any sub-style change that arrived before mpv existed.
-          // applySubtitleStyle stores the latest request in pendingSubStyleRef;
-          // we replay it here so persisted prefs take effect on cold start.
-          const subStyle = pendingSubStyleRef.current;
-          if (subStyle) {
-            const payload = {
-              size: subStyle.size,
-              fontFamily: subStyle.style.fontFamily,
-              textColor: subStyle.style.textColor,
-              backgroundColor: subStyle.style.backgroundColor,
-              backgroundOpacity: subStyle.style.backgroundOpacity,
-              outlineColor: subStyle.style.outlineColor,
-              outlineWidth: subStyle.style.outlineWidth,
-              shadowEnabled: subStyle.style.shadowEnabled,
-            };
-            logger.info("player", "ready-flush player_apply_sub_style", payload);
-            invoke("player_apply_sub_style", { style: payload }).catch((err) =>
-              logger.error("player", "ready-flush player_apply_sub_style failed", String(err)),
-            );
-          }
-          // Flush initial audio-enhancement state. Web Audio path handles
-          // its own initial values via constructor args; native needs an
-          // explicit IPC pair once mpv exists. Player.tsx primes this
-          // before ready fires so persisted prefs survive cold start.
-          const af = pendingAfRef.current;
-          if (af) {
-            if (af.normalizationPreset !== undefined) {
-              logger.info("player", "ready-flush player_set_af_chain", {
-                preset: af.normalizationPreset,
-              });
-              invoke("player_set_af_chain", { preset: af.normalizationPreset }).catch(
-                (err) =>
-                  logger.error(
-                    "player",
-                    "ready-flush player_set_af_chain failed",
-                    String(err),
-                  ),
-              );
-            }
-            if (af.audioOffsetMs !== undefined) {
-              logger.info("player", "ready-flush player_set_audio_delay_ms", {
-                ms: af.audioOffsetMs,
-              });
-              invoke("player_set_audio_delay_ms", { ms: af.audioOffsetMs }).catch(
-                (err) =>
-                  logger.error(
-                    "player",
-                    "ready-flush player_set_audio_delay_ms failed",
-                    String(err),
-                  ),
-              );
-            }
-          }
+          // Replay all deferred ops in insertion order. The ops themselves
+          // contain the logging and invoke calls that were previously inlined
+          // here (external sub, sub-style, af-chain). Ordering is preserved
+          // because enqueueOrRun appends in call order.
+          flushOnReady();
         }),
         listen<null>("player://eof", () => {
           logger.info("player", "received eof event");
@@ -280,8 +227,8 @@ export function useNativePlayer(
       cancelled = true;
       for (const u of unlisteners) u();
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- timeline refs are stable
-  }, [server]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- timeline refs and flushOnReady are stable
+  }, [server, flushOnReady]);
 
   // ── Initialize playback ──
   const initPlayback = useCallback(async () => {
@@ -317,26 +264,25 @@ export function useNativePlayer(
         return;
       }
 
-      const { title: t, subtitle: s } = deriveDisplayTitles(prepared.item);
-      setTitle(t);
-      setSubtitle(s);
-
-      setChapters(prepared.part.Chapter ?? []);
-      partIdRef.current = prepared.part.id;
-      setMarkers(prepared.playable.Marker ?? []);
-      setItemType(prepared.item.type);
-      setParentRatingKey(
-        prepared.item.type === "episode"
-          ? (prepared.playable as PlexEpisode).parentRatingKey ?? ""
-          : "",
-      );
-
-      setAudioTracks(prepared.categorized.audio);
-      setSubtitleTracks(prepared.categorized.subtitles);
-      setSelectedAudioId(prepared.defaultAudio?.id ?? prepared.categorized.audio[0]?.id ?? null);
-      setSelectedSubtitleId(prepared.defaultSub?.id ?? null);
-
-      isLocalPlaybackRef.current = prepared.isLocal;
+      applyPreparedMetadata(prepared, {
+        setTitle,
+        setSubtitle,
+        setChapters,
+        setMarkers,
+        setItemType,
+        setParentRatingKey,
+        setAudioTracks,
+        setSubtitleTracks: (tracks) => {
+          // Sync the ref immediately so selectSubtitleTrack can resolve the
+          // external sub `key` before the state update lands.
+          subtitleTracksRef.current = tracks;
+          setSubtitleTracks(tracks);
+        },
+        setSelectedAudioId,
+        setSelectedSubtitleId,
+        setIsLocalPlayback: (v) => { isLocalPlaybackRef.current = v; },
+        setPartId: (v) => { partIdRef.current = v; },
+      });
 
       // Register the Rust-side close report context (prexu-50f): if the
       // window closes mid-playback the JS cleanup can't run, so Rust fires
@@ -369,11 +315,20 @@ export function useNativePlayer(
       // they MUST come after load_url, not before.
       logger.info("player", "loading URL", { url: redactUrl(prepared.url), startOffsetMs: prepared.viewOffset });
       // Buffer the external default sub BEFORE loadfile: the ready event can
-      // fire before the post-load_url code below runs (fast reloads), and
-      // the ready handler is what flushes this ref via sub-add.
-      pendingExternalSubRef.current = prepared.defaultSub?.key
-        ? `${server.uri}${prepared.defaultSub.key}?X-Plex-Token=${server.accessToken}`
-        : null;
+      // fire before the post-load_url code below runs (fast reloads). Use
+      // enqueueOrRun so it runs via the ready flush with preserved ordering.
+      dequeueByTag("external-sub");
+      if (prepared.defaultSub?.key) {
+        const externalSubUrl = `${server.uri}${prepared.defaultSub.key}?X-Plex-Token=${server.accessToken}`;
+        enqueueOrRun("external-sub", () => {
+          logger.info("player", "ready-flush player_load_external_sub", {
+            url: redactUrl(externalSubUrl),
+          });
+          invoke("player_load_external_sub", { url: externalSubUrl }).catch((err) =>
+            logger.error("player", "ready-flush player_load_external_sub failed", String(err)),
+          );
+        });
+      }
       await invoke("player_load_url", {
         url: prepared.url,
         headers: {} as Record<string, string>,
@@ -423,9 +378,9 @@ export function useNativePlayer(
       }
       if (defaultSub) {
         if (defaultSub.key) {
-          // External default sub: handled by the ready-flush of
-          // pendingExternalSubRef (set above, before loadfile) — sub-add
-          // fails with MPV_ERROR_COMMAND before the file is loaded.
+          // External default sub: enqueued above (before loadfile) via
+          // enqueueOrRun("external-sub") — sub-add fails with
+          // MPV_ERROR_COMMAND before the file is loaded; the op runs on ready.
           logger.debug("player", "external default sub deferred to ready", {
             key: defaultSub.key,
           });
@@ -670,42 +625,21 @@ export function useNativePlayer(
   // playback continues uninterrupted.
   const refreshSubtitlesAfterDownload = useCallback(async () => {
     if (!server) return;
-    const gen = initGenRef.current;
-    const prevIds = subtitleTracksRef.current.map((t) => t.id);
-    const result = await waitForDownloadedSubtitle(
-      server.uri,
-      server.accessToken,
+    await refreshDownloadedSubtitles({
+      server,
       ratingKey,
-      partIdRef.current,
-      prevIds,
-    );
-    if (gen !== initGenRef.current) {
-      logger.debug("player", "refreshSubtitlesAfterDownload superseded", { gen });
-      return;
-    }
-    if (!result) return;
-    // Sync the ref immediately — selectSubtitleTrack below resolves the
-    // stream's `key` through it before the state update lands.
-    subtitleTracksRef.current = result.tracks;
-    setSubtitleTracks(result.tracks);
-    if (partIdRef.current !== undefined) {
-      try {
-        await setSelectedSubtitleStream(
-          server.uri,
-          server.accessToken,
-          partIdRef.current,
-          result.added.id,
-        );
-      } catch (err) {
-        logger.error("player", "persist downloaded subtitle failed", String(err));
-      }
-      if (gen !== initGenRef.current) {
-        logger.debug("player", "refreshSubtitlesAfterDownload superseded", { gen });
-        return;
-      }
-    }
-    logger.info("player", "applying downloaded subtitle", { streamId: result.added.id });
-    selectSubtitleTrack(result.added.id);
+      partIdRef,
+      initGenRef,
+      prevSubIds: subtitleTracksRef.current.map((t) => t.id),
+      // Sync the ref immediately — selectSubtitleTrack resolves the stream's
+      // `key` through it before the state update lands.
+      onTracksUpdated: (tracks) => {
+        subtitleTracksRef.current = tracks;
+        setSubtitleTracks(tracks);
+      },
+      // Native path: fire-and-forget (sync mpv invoke inside selectSubtitleTrack).
+      onSelectSubtitle: (id) => { selectSubtitleTrack(id); },
+    });
   }, [server, ratingKey, selectSubtitleTrack]);
 
   // ── Public dispatch methods ──────────────────────────────────────────────
@@ -741,71 +675,71 @@ export function useNativePlayer(
     };
   }, []);
 
-  // Cache the latest sub-style request and apply it now if mpv is ready;
-  // otherwise the ready listener above will flush pendingSubStyleRef.
+  // Enqueue the latest sub-style request, replacing any prior pending version.
+  // If mpv is already ready the op fires immediately via enqueueOrRun.
   const applySubtitleStyle = useCallback(
     ({ size, style }: { size: number; style: SubtitleStylePreferences }) => {
-      pendingSubStyleRef.current = { size, style };
+      // Replace any previously queued style — only the latest matters.
+      dequeueByTag("sub-style");
       if (!isReadyRef.current) {
         logger.debug("player", "applySubtitleStyle deferred (mpv not ready)");
-        return;
       }
-      const payload = {
-        size,
-        fontFamily: style.fontFamily,
-        textColor: style.textColor,
-        backgroundColor: style.backgroundColor,
-        backgroundOpacity: style.backgroundOpacity,
-        outlineColor: style.outlineColor,
-        outlineWidth: style.outlineWidth,
-        shadowEnabled: style.shadowEnabled,
-      };
-      logger.info("player", "player_apply_sub_style", payload);
-      invoke("player_apply_sub_style", { style: payload }).catch((err) =>
-        logger.error("player", "player_apply_sub_style failed", String(err)),
-      );
+      enqueueOrRun("sub-style", () => {
+        const payload = {
+          size,
+          fontFamily: style.fontFamily,
+          textColor: style.textColor,
+          backgroundColor: style.backgroundColor,
+          backgroundOpacity: style.backgroundOpacity,
+          outlineColor: style.outlineColor,
+          outlineWidth: style.outlineWidth,
+          shadowEnabled: style.shadowEnabled,
+        };
+        logger.info("player", "player_apply_sub_style", payload);
+        invoke("player_apply_sub_style", { style: payload }).catch((err) =>
+          logger.error("player", "player_apply_sub_style failed", String(err)),
+        );
+      });
     },
-    [],
+    [enqueueOrRun, dequeueByTag],
   );
 
-  // Audio enhancement IPC bridge. Before mpv is ready we buffer the desired
-  // state in pendingAfRef so the ready handler can flush it (covers cold
-  // start where persisted prefs need to be applied once). After ready we
-  // hit the IPCs directly so user-driven changes are immediate.
+  // Audio enhancement IPC bridge. Each field is enqueued independently so
+  // partial updates (e.g. only audioOffsetMs) don't discard a prior pending
+  // normalizationPreset that hasn't flushed yet. If mpv is already ready
+  // enqueueOrRun fires each op immediately.
   const applyAudioEnhancement = useCallback(
     (changes: {
       normalizationPreset?: NormalizationPreset;
       audioOffsetMs?: number;
     }) => {
-      // Merge the latest fields into the pending bag so a later ready
-      // flush sees the full state, even if changes arrived as separate
-      // partial calls.
-      pendingAfRef.current = {
-        ...(pendingAfRef.current ?? {}),
-        ...changes,
-      };
       if (!isReadyRef.current) {
         logger.debug("player", "applyAudioEnhancement deferred (mpv not ready)", changes);
-        return;
       }
       if (changes.normalizationPreset !== undefined) {
-        logger.info("player", "player_set_af_chain", {
-          preset: changes.normalizationPreset,
+        const preset = changes.normalizationPreset;
+        // Replace any pending normalization — only the latest preset matters.
+        dequeueByTag("af-chain");
+        enqueueOrRun("af-chain", () => {
+          logger.info("player", "player_set_af_chain", { preset });
+          invoke("player_set_af_chain", { preset }).catch(
+            (err) => logger.error("player", "player_set_af_chain failed", String(err)),
+          );
         });
-        invoke("player_set_af_chain", { preset: changes.normalizationPreset }).catch(
-          (err) => logger.error("player", "player_set_af_chain failed", String(err)),
-        );
       }
       if (changes.audioOffsetMs !== undefined) {
-        logger.info("player", "player_set_audio_delay_ms", {
-          ms: changes.audioOffsetMs,
+        const ms = changes.audioOffsetMs;
+        // Replace any pending audio delay — only the latest value matters.
+        dequeueByTag("audio-delay");
+        enqueueOrRun("audio-delay", () => {
+          logger.info("player", "player_set_audio_delay_ms", { ms });
+          invoke("player_set_audio_delay_ms", { ms }).catch(
+            (err) => logger.error("player", "player_set_audio_delay_ms failed", String(err)),
+          );
         });
-        invoke("player_set_audio_delay_ms", { ms: changes.audioOffsetMs }).catch(
-          (err) => logger.error("player", "player_set_audio_delay_ms failed", String(err)),
-        );
       }
     },
-    [],
+    [enqueueOrRun, dequeueByTag],
   );
 
   // Tick-stable slice: memoized over stable callbacks + rarely-changing

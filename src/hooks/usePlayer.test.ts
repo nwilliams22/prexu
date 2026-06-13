@@ -114,7 +114,23 @@ vi.mock("./player/useNativePlayer", () => ({
 
 vi.mock("../services/plex-playback", () => ({
   prepareSource: vi.fn(),
-  deriveDisplayTitles: vi.fn(() => ({ title: "", subtitle: "" })),
+  applyPreparedMetadata: vi.fn((prepared, setters) => {
+    // Minimal implementation so the title-dependent test assertions still
+    // work: call the setters that useHtml5Player checks in the test.
+    setters.setTitle(prepared.item?.title ?? "");
+    setters.setSubtitle("");
+    setters.setChapters(prepared.part?.Chapter ?? []);
+    setters.setMarkers(prepared.playable?.Marker ?? []);
+    setters.setItemType(prepared.item?.type ?? "");
+    setters.setParentRatingKey("");
+    setters.setAudioTracks(prepared.categorized?.audio ?? []);
+    setters.setSubtitleTracks(prepared.categorized?.subtitles ?? []);
+    setters.setSelectedAudioId(null);
+    setters.setSelectedSubtitleId(null);
+    setters.setIsLocalPlayback(prepared.isLocal ?? false);
+    setters.setPartId(prepared.part?.id);
+  }),
+  refreshDownloadedSubtitles: vi.fn().mockResolvedValue(undefined),
   buildHlsConfig: vi.fn(() => ({})),
   reportTimeline: vi.fn(),
   getSavedVolume: () => 1,
@@ -130,7 +146,7 @@ vi.mock("../services/subtitle-search", () => ({
   waitForDownloadedSubtitle: vi.fn(),
 }));
 
-import { prepareSource, deriveDisplayTitles } from "../services/plex-playback";
+import { prepareSource } from "../services/plex-playback";
 import { logger } from "../services/logger";
 import { usePlayer } from "./usePlayer";
 
@@ -163,12 +179,10 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+import { applyPreparedMetadata } from "../services/plex-playback";
+
 describe("useHtml5Player initPlayback supersession (prexu-bgz.2)", () => {
   it("ignores a stale prepareSource result after a newer init starts", async () => {
-    vi.mocked(deriveDisplayTitles).mockImplementation((item) => ({
-      title: (item as unknown as { title: string }).title,
-      subtitle: "",
-    }));
     const first = deferred<Prepared>();
     const second = deferred<Prepared>();
     vi.mocked(prepareSource)
@@ -192,6 +206,9 @@ describe("useHtml5Player initPlayback supersession (prexu-bgz.2)", () => {
     });
 
     expect(result.current.title).not.toBe("Old Episode");
+    // applyPreparedMetadata (and therefore setAudioTracks) should not be called
+    // for the stale generation.
+    expect(applyPreparedMetadata).not.toHaveBeenCalled();
     expect(streamsMock.setAudioTracks).not.toHaveBeenCalled();
     expect(logger.debug).toHaveBeenCalledWith(
       "player",
@@ -222,7 +239,7 @@ describe("useHtml5Player initPlayback supersession (prexu-bgz.2)", () => {
     await first.promise;
     await Promise.resolve();
 
-    expect(deriveDisplayTitles).not.toHaveBeenCalled();
+    expect(applyPreparedMetadata).not.toHaveBeenCalled();
     expect(streamsMock.setAudioTracks).not.toHaveBeenCalled();
     expect(logger.debug).toHaveBeenCalledWith(
       "player",

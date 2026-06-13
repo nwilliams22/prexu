@@ -23,16 +23,13 @@ import { useNativePlayer } from "./player/useNativePlayer";
 import { addPendingWatchSync } from "../services/storage";
 import {
   prepareSource,
-  deriveDisplayTitles,
+  applyPreparedMetadata,
+  refreshDownloadedSubtitles,
   buildHlsConfig,
   reportTimeline,
   getSavedVolume,
   saveVolume,
 } from "../services/plex-playback";
-import {
-  setSelectedSubtitleStream,
-  waitForDownloadedSubtitle,
-} from "../services/subtitle-search";
 import type {
   PlexChapter,
   PlexMarker,
@@ -263,26 +260,20 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
         return;
       }
 
-      const { title: t, subtitle: s } = deriveDisplayTitles(prepared.item);
-      setTitle(t);
-      setSubtitle(s);
-
-      setChapters(prepared.part.Chapter ?? []);
-      partIdRef.current = prepared.part.id;
-      setMarkers(prepared.playable.Marker ?? []);
-      setItemType(prepared.item.type);
-      setParentRatingKey(
-        prepared.item.type === "episode"
-          ? (prepared.playable as import("../types/library").PlexEpisode).parentRatingKey ?? ""
-          : "",
-      );
-
-      streams.setAudioTracks(prepared.categorized.audio);
-      streams.setSubtitleTracks(prepared.categorized.subtitles);
-      streams.setSelectedAudioId(prepared.defaultAudio?.id ?? prepared.categorized.audio[0]?.id ?? null);
-      streams.setSelectedSubtitleId(prepared.defaultSub?.id ?? null);
-
-      isLocalPlaybackRef.current = prepared.isLocal;
+      applyPreparedMetadata(prepared, {
+        setTitle,
+        setSubtitle,
+        setChapters,
+        setMarkers,
+        setItemType,
+        setParentRatingKey,
+        setAudioTracks: streams.setAudioTracks,
+        setSubtitleTracks: streams.setSubtitleTracks,
+        setSelectedAudioId: streams.setSelectedAudioId,
+        setSelectedSubtitleId: streams.setSelectedSubtitleId,
+        setIsLocalPlayback: (v) => { isLocalPlaybackRef.current = v; },
+        setPartId: (v) => { partIdRef.current = v; },
+      });
 
       const video = videoRef.current;
       if (!video) {
@@ -556,39 +547,16 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
   // at the current position, so playback resumes where it was.
   const refreshSubtitlesAfterDownload = useCallback(async () => {
     if (!server) return;
-    const gen = initGenRef.current;
-    const prevIds = streams.subtitleTracks.map((t) => t.id);
-    const result = await waitForDownloadedSubtitle(
-      server.uri,
-      server.accessToken,
+    await refreshDownloadedSubtitles({
+      server,
       ratingKey,
-      partIdRef.current,
-      prevIds,
-    );
-    if (gen !== initGenRef.current) {
-      logger.debug("player", "refreshSubtitlesAfterDownload superseded", { gen });
-      return;
-    }
-    if (!result) return;
-    streams.setSubtitleTracks(result.tracks);
-    if (partIdRef.current !== undefined) {
-      try {
-        await setSelectedSubtitleStream(
-          server.uri,
-          server.accessToken,
-          partIdRef.current,
-          result.added.id,
-        );
-      } catch (err) {
-        logger.error("player", "persist downloaded subtitle failed", String(err));
-      }
-      if (gen !== initGenRef.current) {
-        logger.debug("player", "refreshSubtitlesAfterDownload superseded", { gen });
-        return;
-      }
-    }
-    logger.info("player", "applying downloaded subtitle", { streamId: result.added.id });
-    await streams.selectSubtitleTrack(result.added.id);
+      partIdRef,
+      initGenRef,
+      prevSubIds: streams.subtitleTracks.map((t) => t.id),
+      onTracksUpdated: streams.setSubtitleTracks,
+      // HTML5 path: await so HLS rebuild completes before returning.
+      onSelectSubtitle: (id) => streams.selectSubtitleTrack(id),
+    });
   }, [server, ratingKey, streams]);
 
   // ── Backend dispatch methods ──────────────────────────────────────────────
