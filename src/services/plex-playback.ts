@@ -361,7 +361,14 @@ export async function prepareSource(args: PrepareSourceArgs): Promise<PreparedSo
 
   logger.debug("player", "prepareSource", { ratingKey, directPlayFailed, skipCodecCheck });
 
-  const item = await getItemMetadata<PlexMediaItem>(server.uri, server.accessToken, ratingKey);
+  // Run the metadata fetch (network RTT) and local-file lookup (Tauri IPC)
+  // concurrently — they are independent. A metadata rejection still throws to
+  // the caller (the local-path result is discarded, matching the old
+  // waterfall where it never ran); a local-path failure is still swallowed.
+  const [item, localPath] = await Promise.all([
+    getItemMetadata<PlexMediaItem>(server.uri, server.accessToken, ratingKey),
+    getLocalFilePath(ratingKey).catch(() => null),
+  ]);
 
   const playable = item as PlexMovie | PlexEpisode;
   const media = playable.Media?.[0];
@@ -391,7 +398,6 @@ export async function prepareSource(args: PrepareSourceArgs): Promise<PreparedSo
   const viewOffset = offsetOverride != null ? offsetOverride : (playable.viewOffset ?? 0);
 
   // Check for a locally downloaded file first.
-  const localPath = await getLocalFilePath(ratingKey).catch(() => null);
   if (localPath) {
     logger.debug("player", "URL chosen: local file", { ratingKey });
     return {
