@@ -49,11 +49,50 @@ use tauri::{AppHandle, Emitter, Manager};
 ///    `mark_focus_lost` / `reassert_host_on_focus` (prexu-5l5)
 /// 5. **Teardown** — `WindowEvent::CloseRequested | Destroyed` →
 ///    `report_stopped_on_close` + `destroy` (prexu-50f)
+/// Disable DWM maximize/minimize/restore transition animations on the main
+/// window. The mpv host is a separate top-level window that can't ride the
+/// chrome's ~250ms grow/shrink animation, so the two visibly mismatch during
+/// it. Forcing transitions off makes the chrome snap instantly, matching the
+/// host's immediate resize — no mismatch frame (prexu-hia9).
+#[cfg(target_os = "windows")]
+fn disable_window_transitions(window: &tauri::WebviewWindow) {
+    use windows::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED,
+    };
+    let hwnd = match window.hwnd() {
+        Ok(h) => h,
+        Err(e) => {
+            log::warn!("[window] disable_window_transitions: no hwnd: {}", e);
+            return;
+        }
+    };
+    // DWMWA_TRANSITIONS_FORCEDISABLED takes a BOOL (4-byte int); 1 = disable.
+    let disable: i32 = 1;
+    let res = unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_TRANSITIONS_FORCEDISABLED,
+            &disable as *const _ as *const core::ffi::c_void,
+            std::mem::size_of::<i32>() as u32,
+        )
+    };
+    match res {
+        Ok(()) => log::info!(
+            "[window] DWM transitions force-disabled HWND={:?} (instant maximize/restore)",
+            hwnd.0
+        ),
+        Err(e) => log::warn!("[window] DwmSetWindowAttribute failed: {:?}", e),
+    }
+}
+
 #[cfg(target_os = "windows")]
 pub fn attach_window_handlers(window: &tauri::WebviewWindow, app_handle: AppHandle) {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
     use tauri::WindowEvent;
+
+    // Snap maximize/restore (no animation) so chrome + mpv host stay in lockstep.
+    disable_window_transitions(window);
 
     let win_clone = window.clone();
     // prexu-w9j: Windows leaves WINDOWPLACEMENT.rcNormalPosition
