@@ -158,15 +158,19 @@ export function useRemotePlayback(
     }
   }, [player.isBuffering, isInSession]);
 
-  // Sync-aware actions
+  // Sync-aware actions. Depend on the stable togglePlay/seek callbacks —
+  // not the whole `player` object, whose identity changes on every
+  // time-pos tick — so these stay tick-stable for downstream consumers
+  // (keyboard handler, memoized transport controls).
+  const { togglePlay, seek } = player;
   const syncTogglePlay = useCallback(() => {
-    player.togglePlay();
+    togglePlay();
     // Broadcasting happens via the isPlaying effect above
-  }, [player]);
+  }, [togglePlay]);
 
   const syncSeek = useCallback(
     (time: number) => {
-      player.seek(time);
+      seek(time);
       if (isInSession) {
         watchSync.send({
           type: "seek",
@@ -179,7 +183,7 @@ export function useRemotePlayback(
         };
       }
     },
-    [player, isInSession]
+    [seek, isInSession]
   );
 
   return {

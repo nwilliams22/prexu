@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, createContext, useContext } from "react";
+import { useState, useEffect, useCallback, useMemo, createContext, useContext } from "react";
 import type { AuthData, ServerData } from "../types/plex";
 import type { ActiveUser } from "../types/home-user";
 import {
@@ -21,7 +21,7 @@ import {
   resolveServerFromDiscovery,
   logServerResolve,
 } from "../services/server-reachability";
-import { logger } from "../services/logger";
+import { logger, redactUrl } from "../services/logger";
 
 const TOKEN_REVALIDATION_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -44,13 +44,11 @@ export interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 export const AuthProvider = AuthContext.Provider;
 
-/** Hook to access auth state from any component */
+/** Hook to access auth state; must be rendered within an AuthProvider */
 export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext);
-  if (ctx) return ctx;
-
-  // Fallback: standalone hook (used at the App level before context is set up)
-  return useAuthState();
+  if (!ctx) throw new Error("useAuth must be used within an AuthProvider");
+  return ctx;
 }
 
 /** Core auth state management hook */
@@ -101,7 +99,7 @@ export function useAuthState(): AuthContextValue {
                 logger.warn(
                   "auth",
                   "stored server unreachable, attempting re-resolve",
-                  storedServer.uri.substring(0, 80)
+                  redactUrl(storedServer.uri)
                 );
 
                 // Attempt to re-discover and find the same server by clientIdentifier
@@ -125,7 +123,7 @@ export function useAuthState(): AuthContextValue {
                     logger.info(
                       "auth",
                       "re-resolve returned identical server; keeping existing state",
-                      storedServer.uri.substring(0, 80)
+                      redactUrl(storedServer.uri)
                     );
                     setServerUnreachable(false);
                   } else if (fresh) {
@@ -269,18 +267,32 @@ export function useAuthState(): AuthContextValue {
     [authToken]
   );
 
-  return {
-    isLoading,
-    isAuthenticated: authToken !== null,
-    serverSelected: server !== null,
-    serverUnreachable,
-    authToken,
-    server,
-    activeUser,
-    login,
-    logout,
-    selectServer,
-    changeServer,
-    switchUser,
-  };
+  return useMemo<AuthContextValue>(
+    () => ({
+      isLoading,
+      isAuthenticated: authToken !== null,
+      serverSelected: server !== null,
+      serverUnreachable,
+      authToken,
+      server,
+      activeUser,
+      login,
+      logout,
+      selectServer,
+      changeServer,
+      switchUser,
+    }),
+    [
+      isLoading,
+      authToken,
+      server,
+      serverUnreachable,
+      activeUser,
+      login,
+      logout,
+      selectServer,
+      changeServer,
+      switchUser,
+    ],
+  );
 }

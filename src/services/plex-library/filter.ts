@@ -88,3 +88,45 @@ export async function getFilterOptions(
     (data.MediaContainer.Directory as unknown as { key: string; title: string }[]) ?? []
   ).map((d) => ({ key: d.key, title: d.title }));
 }
+
+// ── First-Character Index ──
+
+export interface FirstCharacterBucket {
+  /** The letter or "#" for non-alpha titles */
+  key: string;
+  /** Number of items whose sort title starts with this character */
+  size: number;
+}
+
+/**
+ * Fetches the per-letter item count index for a library section.
+ *
+ * Calls `/library/sections/{id}/firstCharacter` which Plex returns as a
+ * Directory array of `{ key, size }` entries — one per distinct first
+ * character of the items' sort titles. This lets the AlphaJumpBar be
+ * populated without loading any actual media items.
+ *
+ * Returns an empty array when the server returns a non-2xx status or an
+ * unexpected shape (callers should treat that as "unavailable" and fall
+ * back to loading all items).
+ */
+export async function getSectionFirstCharacter(
+  serverUri: string,
+  serverToken: string,
+  sectionId: string
+): Promise<FirstCharacterBucket[]> {
+  const data = await fetchJson<PlexMediaContainer<never>>(
+    serverUri,
+    serverToken,
+    `/library/sections/${sectionId}/firstCharacter`
+  );
+  const dirs = data.MediaContainer.Directory as unknown as Array<{
+    key: string;
+    size: string | number;
+  }> | undefined;
+  if (!Array.isArray(dirs)) return [];
+  return dirs.map((d) => ({
+    key: d.key,
+    size: typeof d.size === "number" ? d.size : parseInt(String(d.size), 10) || 0,
+  }));
+}

@@ -1,14 +1,20 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { render } from "@testing-library/react";
+import { render, cleanup } from "@testing-library/react";
 import React from "react";
-import { useLazyImage } from "./useLazyImage";
+import { useLazyImage, _resetSharedObserversForTesting } from "./useLazyImage";
 
 // ---------------------------------------------------------------------------
 // IntersectionObserver stubs
+//
+// With the shared-observer refactor the module constructs one IO per rootMargin
+// and routes entries by element. All stubs therefore need to:
+//   - Accept a callback that takes IntersectionObserverEntry[]
+//   - Provide a `target` element in each fired entry so the shared pool's
+//     element-keyed dispatch can find the right consumer callback
 // ---------------------------------------------------------------------------
 
-/** Returns an IO class that fires isIntersecting=true inside observe(). */
+/** IO class that fires isIntersecting=true for every observe() call. */
 function makeImmediateIO() {
   return class ImmediateIO {
     private cb: (entries: IntersectionObserverEntry[]) => void;
@@ -18,41 +24,53 @@ function makeImmediateIO() {
     observe(el: Element) {
       this.cb([{ isIntersecting: true, target: el } as IntersectionObserverEntry]);
     }
+    unobserve(_el: Element) {}
     disconnect() {}
-    unobserve() {}
   };
 }
 
-/** Returns an IO class that never fires. */
+/** IO class that never fires. */
 function makeNeverIO() {
   return class NeverIO {
-    constructor(_cb: unknown) {}
-    observe() {}
+    private cb: (entries: IntersectionObserverEntry[]) => void;
+    constructor(cb: (entries: IntersectionObserverEntry[]) => void) {
+      this.cb = cb;
+    }
+    observe(_el: Element) {}
+    unobserve(_el: Element) {}
     disconnect() {}
-    unobserve() {}
   };
 }
 
-/** Returns a controllable IO class + a trigger function. */
+/**
+ * Returns a controllable IO class + a `trigger(el, isIntersecting)` function.
+ * The caller supplies the element so target-keyed dispatch works.
+ */
 function makeControllableIO() {
   let storedCb: ((entries: IntersectionObserverEntry[]) => void) | null = null;
-  const trigger = (isIntersecting = true) => {
-    storedCb?.([{ isIntersecting } as IntersectionObserverEntry]);
+  const trigger = (el: Element, isIntersecting = true) => {
+    storedCb?.([{ isIntersecting, target: el } as IntersectionObserverEntry]);
   };
   const IOClass = class ControlIO {
     constructor(cb: (entries: IntersectionObserverEntry[]) => void) {
       storedCb = cb;
     }
-    observe() {}
+    observe(_el: Element) {}
+    unobserve(_el: Element) {}
     disconnect() {}
-    unobserve() {}
   };
   return { IOClass, trigger };
 }
 
-// Restore the global after each test so stubs don't leak across suites
+// Reset shared-observer pool AND DOM after each test so stubs don't bleed
+// across suites. The module-level Map must be cleared before the global stub
+// is restored (vi.unstubAllGlobals) because _resetSharedObserversForTesting
+// calls observer.disconnect() — that should call the stub's disconnect, not
+// the real API which may not be available in jsdom.
 afterEach(() => {
+  _resetSharedObserversForTesting();
   vi.unstubAllGlobals();
+  cleanup();
 });
 
 // ---------------------------------------------------------------------------
@@ -111,7 +129,8 @@ describe("useLazyImage", () => {
       const { rerender } = render(<HookHost onResult={(r) => { captured = r; }} />);
       expect(captured!.shouldLoad).toBe(false);
 
-      act(() => { trigger(true); });
+      const el = captured!.containerRef.current!;
+      act(() => { trigger(el, true); });
       rerender(<HookHost onResult={(r) => { captured = r; }} />);
 
       expect(captured!.shouldLoad).toBe(true);
@@ -124,7 +143,8 @@ describe("useLazyImage", () => {
       let captured: ReturnType<typeof useLazyImage> | null = null;
       render(<HookHost onResult={(r) => { captured = r; }} />);
 
-      act(() => { trigger(false); });
+      const el = captured!.containerRef.current!;
+      act(() => { trigger(el, false); });
 
       expect(captured!.shouldLoad).toBe(false);
     });
@@ -218,6 +238,172 @@ describe("useLazyImage", () => {
       const { result } = renderHook(() => useLazyImage());
       expect(result.current.imgRef).toBeDefined();
       expect(result.current.imgRef.current).toBeNull();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Shared-observer specific tests
+  // ---------------------------------------------------------------------------
+
+  describe("shared IntersectionObserver pool", () => {
+    it("reuses the same IO instance for two hooks with the same rootMargin", () => {
+      const constructorSpy = vi.fn();
+      const IOClass = class SpyIO {
+        private cb: (entries: IntersectionObserverEntry[]) => void;
+        constructor(cb: (entries: IntersectionObserverEntry[]) => void) {
+          constructorSpy();
+          this.cb = cb;
+        }
+        observe(_el: Element) {}
+        unobserve(_el: Element) {}
+        disconnect() {}
+      };
+      vi.stubGlobal("IntersectionObserver", IOClass);
+
+      let r1: ReturnType<typeof useLazyImage> | null = null;
+      let r2: ReturnType<typeof useLazyImage> | null = null;
+      function Host1() {
+        const res = useLazyImage("200px");
+        r1 = res;
+        return <div ref={res.containerRef} />;
+      }
+      function Host2() {
+        const res = useLazyImage("200px");
+        r2 = res;
+        return <div ref={res.containerRef} />;
+      }
+
+      render(
+        <>
+          <Host1 />
+          <Host2 />
+        </>,
+      );
+
+      // Both hooks share the same rootMargin — only ONE IO should be constructed
+      expect(constructorSpy).toHaveBeenCalledTimes(1);
+      // Both containerRefs are populated
+      expect(r1!.containerRef.current).not.toBeNull();
+      expect(r2!.containerRef.current).not.toBeNull();
+    });
+
+    it("creates separate IO instances for different rootMargins", () => {
+      const constructorSpy = vi.fn();
+      const IOClass = class SpyIO {
+        private cb: (entries: IntersectionObserverEntry[]) => void;
+        constructor(cb: (entries: IntersectionObserverEntry[]) => void) {
+          constructorSpy();
+          this.cb = cb;
+        }
+        observe(_el: Element) {}
+        unobserve(_el: Element) {}
+        disconnect() {}
+      };
+      vi.stubGlobal("IntersectionObserver", IOClass);
+
+      function HostA() {
+        const res = useLazyImage("100px");
+        return <div ref={res.containerRef} />;
+      }
+      function HostB() {
+        const res = useLazyImage("400px");
+        return <div ref={res.containerRef} />;
+      }
+
+      render(
+        <>
+          <HostA />
+          <HostB />
+        </>,
+      );
+
+      // Different rootMargins → two separate IO instances
+      expect(constructorSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it("unobserves the element on unmount (does not leak callbacks)", () => {
+      const unobserveSpy = vi.fn();
+      const IOClass = class CleanupIO {
+        private cb: (entries: IntersectionObserverEntry[]) => void;
+        constructor(cb: (entries: IntersectionObserverEntry[]) => void) {
+          this.cb = cb;
+        }
+        observe(_el: Element) {}
+        unobserve(el: Element) { unobserveSpy(el); }
+        disconnect() {}
+      };
+      vi.stubGlobal("IntersectionObserver", IOClass);
+
+      let captured: ReturnType<typeof useLazyImage> | null = null;
+      const { unmount } = render(
+        <HookHost onResult={(r) => { captured = r; }} />,
+      );
+
+      const el = captured!.containerRef.current!;
+      expect(el).not.toBeNull();
+
+      unmount();
+
+      // unobserve should have been called with the element
+      expect(unobserveSpy).toHaveBeenCalledWith(el);
+    });
+
+    it("fires the per-element callback and unobserves when intersection triggers", () => {
+      const unobserveSpy = vi.fn();
+      let storedCb: ((entries: IntersectionObserverEntry[]) => void) | null = null;
+      const IOClass = class TriggerIO {
+        constructor(cb: (entries: IntersectionObserverEntry[]) => void) {
+          storedCb = cb;
+        }
+        observe(_el: Element) {}
+        unobserve(el: Element) { unobserveSpy(el); }
+        disconnect() {}
+      };
+      vi.stubGlobal("IntersectionObserver", IOClass);
+
+      let captured: ReturnType<typeof useLazyImage> | null = null;
+      const { rerender } = render(
+        <HookHost onResult={(r) => { captured = r; }} />,
+      );
+
+      const el = captured!.containerRef.current!;
+      expect(captured!.shouldLoad).toBe(false);
+
+      // Simulate intersection
+      act(() => {
+        storedCb!([{ isIntersecting: true, target: el } as IntersectionObserverEntry]);
+      });
+      rerender(<HookHost onResult={(r) => { captured = r; }} />);
+
+      // shouldLoad must flip
+      expect(captured!.shouldLoad).toBe(true);
+      // The element must be unobserved after first intersection (once-and-done)
+      expect(unobserveSpy).toHaveBeenCalledWith(el);
+    });
+
+    it("does not fire callback for a different element's intersection entry", () => {
+      let storedCb: ((entries: IntersectionObserverEntry[]) => void) | null = null;
+      const IOClass = class MultiIO {
+        constructor(cb: (entries: IntersectionObserverEntry[]) => void) {
+          storedCb = cb;
+        }
+        observe(_el: Element) {}
+        unobserve(_el: Element) {}
+        disconnect() {}
+      };
+      vi.stubGlobal("IntersectionObserver", IOClass);
+
+      let captured: ReturnType<typeof useLazyImage> | null = null;
+      render(<HookHost onResult={(r) => { captured = r; }} />);
+
+      // Fire an entry for a completely different element (not the one we observed)
+      const foreignEl = document.createElement("div");
+      act(() => {
+        storedCb!([{ isIntersecting: true, target: foreignEl } as IntersectionObserverEntry]);
+      });
+
+      // shouldLoad must remain false — the callback was for a foreign element
+      expect(captured!.shouldLoad).toBe(false);
     });
   });
 });

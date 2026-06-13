@@ -45,12 +45,38 @@ const STORAGE_KEY = "prexu_playback_queue";
 
 const emptyQueue: PlaybackQueue = { items: [], currentIndex: -1 };
 
+function isValidQueueItem(v: unknown): v is QueueItem {
+  if (!v || typeof v !== "object") return false;
+  const o = v as Record<string, unknown>;
+  return (
+    typeof o.ratingKey === "string" &&
+    typeof o.title === "string" &&
+    typeof o.subtitle === "string" &&
+    typeof o.thumb === "string" &&
+    typeof o.duration === "number" &&
+    (o.type === "movie" || o.type === "episode")
+  );
+}
+
+function isValidQueue(v: unknown): v is PlaybackQueue {
+  if (!v || typeof v !== "object") return false;
+  const o = v as Record<string, unknown>;
+  return (
+    Array.isArray(o.items) &&
+    o.items.every(isValidQueueItem) &&
+    typeof o.currentIndex === "number"
+  );
+}
+
 function loadQueue(): PlaybackQueue {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) return JSON.parse(stored);
+    if (stored) {
+      const parsed: unknown = JSON.parse(stored);
+      if (isValidQueue(parsed)) return parsed;
+    }
   } catch {
-    // ignore parse errors
+    // ignore parse / validation errors
   }
   return emptyQueue;
 }

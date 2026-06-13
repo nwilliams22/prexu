@@ -20,6 +20,37 @@ import { useEffect } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { usePlayerSession, type PlayerWatchTogether } from "../contexts/PlayerContext";
 import { LAST_NON_PLAYER_ROUTE_KEY } from "../App";
+import { logger } from "../services/logger";
+
+/**
+ * Validate a relay URL from an untrusted deep-link query param.
+ *
+ * Only ws:// and wss:// are accepted — http/https or arbitrary schemes
+ * could redirect the WebSocket connection to an attacker-controlled host
+ * that leaks session metadata or injects sync commands.
+ *
+ * Returns the validated URL string on success, or null if rejected.
+ */
+function validateRelayUrl(raw: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    logger.warn("ws", "relay URL from invite rejected: not a valid URL", {
+      relay: raw.substring(0, 80),
+    });
+    return null;
+  }
+
+  if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+    logger.warn("ws", "relay URL from invite rejected: disallowed scheme", {
+      relay: raw.substring(0, 80),
+    });
+    return null;
+  }
+
+  return raw;
+}
 
 export default function PlayBridge() {
   const { ratingKey } = useParams<{ ratingKey: string }>();
@@ -35,7 +66,8 @@ export default function PlayBridge() {
 
     const sessionId = searchParams.get("session");
     const isHost = searchParams.get("host") === "true";
-    const relayUrl = searchParams.get("relay");
+    const rawRelayUrl = searchParams.get("relay");
+    const relayUrl = rawRelayUrl != null ? validateRelayUrl(rawRelayUrl) : null;
     const watchTogether: PlayerWatchTogether | undefined = sessionId
       ? { sessionId, isHost, relayUrl: relayUrl ?? undefined }
       : undefined;

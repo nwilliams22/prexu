@@ -20,6 +20,7 @@ import {
 import {
   useServerActivityState,
   ServerActivityProvider,
+  ScanningStoreProvider,
 } from "../hooks/useServerActivity";
 import { QueueProvider } from "./QueueContext";
 import { PlayerProvider } from "./PlayerContext";
@@ -61,6 +62,7 @@ export default function AppProviders({ children }: AppProvidersProps) {
       <HomeUsersProvider value={homeUsersState}>
         <PreferencesProvider value={prefsState}>
           <ParentalControlsProvider value={parentalState}>
+            <ScanningStoreProvider value={activityState.scanningStore}>
             <ServerActivityProvider value={activityState}>
             <InviteProvider value={inviteState}>
               <ContentRequestProvider value={contentRequestState}>
@@ -74,6 +76,7 @@ export default function AppProviders({ children }: AppProvidersProps) {
               </ContentRequestProvider>
             </InviteProvider>
             </ServerActivityProvider>
+            </ScanningStoreProvider>
           </ParentalControlsProvider>
         </PreferencesProvider>
       </HomeUsersProvider>

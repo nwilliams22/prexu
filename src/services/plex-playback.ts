@@ -8,6 +8,10 @@ import { getClientIdentifier } from "./storage";
 import { createTauriLoaderClass } from "./tauri-loader";
 import { getItemMetadata } from "./plex-library";
 import { getLocalFilePath } from "./downloads";
+import {
+  setSelectedSubtitleStream,
+  waitForDownloadedSubtitle,
+} from "./subtitle-search";
 import type {
   PlexMediaItem,
   PlexMovie,
@@ -15,6 +19,8 @@ import type {
   PlexMediaInfo,
   PlexMediaPart,
   PlexStream,
+  PlexChapter,
+  PlexMarker,
 } from "../types/library";
 import type { PlaybackPreferences } from "../types/preferences";
 import { logger } from "./logger";
@@ -252,6 +258,7 @@ export async function reportTimelineBeacon(
 ): Promise<void> {
   const clientId = await getClientIdentifier();
 
+  // Token is sent via headers only — not in the query string.
   const params = new URLSearchParams({
     ratingKey,
     key: `/library/metadata/${ratingKey}`,
@@ -259,7 +266,6 @@ export async function reportTimelineBeacon(
     time: String(Math.round(timeMs)),
     duration: String(Math.round(durationMs)),
     "X-Plex-Client-Identifier": clientId,
-    "X-Plex-Token": serverToken,
   });
 
   const url = `${serverUri}/:/timeline?${params.toString()}`;
@@ -268,17 +274,12 @@ export async function reportTimelineBeacon(
     timeMs: Math.round(timeMs),
   });
 
-  try {
-    const headers = await getServerHeaders(serverToken);
-    await timedFetch(url, { headers, keepalive: true });
-  } catch (err) {
-    logger.warn("playback", "stopped report fetch failed, trying sendBeacon", {
-      error: err instanceof Error ? err.message : String(err),
-    });
-    if (navigator.sendBeacon) {
-      navigator.sendBeacon(url);
-    }
-  }
+  // sendBeacon is intentionally absent: it issues a POST which /:/timeline
+  // does not accept, so a beacon fallback would silently fail every time.
+  // Player exit is an SPA route change (the webview survives), so an awaited
+  // fetch with keepalive is reliable here.
+  const headers = await getServerHeaders(serverToken);
+  await timedFetch(url, { headers, keepalive: true });
 }
 
 // ── Volume Persistence ──
@@ -361,7 +362,14 @@ export async function prepareSource(args: PrepareSourceArgs): Promise<PreparedSo
 
   logger.debug("player", "prepareSource", { ratingKey, directPlayFailed, skipCodecCheck });
 
-  const item = await getItemMetadata<PlexMediaItem>(server.uri, server.accessToken, ratingKey);
+  // Run the metadata fetch (network RTT) and local-file lookup (Tauri IPC)
+  // concurrently — they are independent. A metadata rejection still throws to
+  // the caller (the local-path result is discarded, matching the old
+  // waterfall where it never ran); a local-path failure is still swallowed.
+  const [item, localPath] = await Promise.all([
+    getItemMetadata<PlexMediaItem>(server.uri, server.accessToken, ratingKey),
+    getLocalFilePath(ratingKey).catch(() => null),
+  ]);
 
   const playable = item as PlexMovie | PlexEpisode;
   const media = playable.Media?.[0];
@@ -391,7 +399,6 @@ export async function prepareSource(args: PrepareSourceArgs): Promise<PreparedSo
   const viewOffset = offsetOverride != null ? offsetOverride : (playable.viewOffset ?? 0);
 
   // Check for a locally downloaded file first.
-  const localPath = await getLocalFilePath(ratingKey).catch(() => null);
   if (localPath) {
     logger.debug("player", "URL chosen: local file", { ratingKey });
     return {
@@ -497,4 +504,152 @@ export function deriveDisplayTitles(item: PlexMediaItem): { title: string; subti
     };
   }
   return { title: item.title, subtitle: "" };
+}
+
+// ── Shared metadata application ──
+
+/**
+ * Setters that both HTML5 and native backends provide to receive metadata after
+ * a successful prepareSource call. The native backend owns its own state vars
+ * directly; the HTML5 backend routes through useStreamSelection.
+ */
+export interface PreparedMetadataSetters {
+  setTitle: (v: string) => void;
+  setSubtitle: (v: string) => void;
+  setChapters: (v: PlexChapter[]) => void;
+  setMarkers: (v: PlexMarker[]) => void;
+  setItemType: (v: string) => void;
+  setParentRatingKey: (v: string) => void;
+  setAudioTracks: (v: PlexStream[]) => void;
+  setSubtitleTracks: (v: PlexStream[]) => void;
+  setSelectedAudioId: (v: number | null) => void;
+  setSelectedSubtitleId: (v: number | null) => void;
+  setIsLocalPlayback: (v: boolean) => void;
+  setPartId: (v: number | undefined) => void;
+}
+
+/**
+ * Apply metadata from a PreparedSource to both backends' state setters.
+ *
+ * Divergences handled:
+ * - `skipCodecCheck` is a prepareSource INPUT not an output — both backends
+ *   pass it at call time (native: true, html5: false). No difference here.
+ * - The native backend additionally runs player_set_timeline_context after this
+ *   function returns; that is backend-specific and stays in useNativePlayer.
+ */
+export function applyPreparedMetadata(
+  prepared: PreparedSource,
+  setters: PreparedMetadataSetters,
+): void {
+  const { title: t, subtitle: s } = deriveDisplayTitles(prepared.item);
+  setters.setTitle(t);
+  setters.setSubtitle(s);
+
+  setters.setChapters(prepared.part.Chapter ?? []);
+  setters.setPartId(prepared.part.id);
+  setters.setMarkers(prepared.playable.Marker ?? []);
+  setters.setItemType(prepared.item.type);
+  setters.setParentRatingKey(
+    prepared.item.type === "episode"
+      ? (prepared.playable as PlexEpisode).parentRatingKey ?? ""
+      : "",
+  );
+
+  setters.setAudioTracks(prepared.categorized.audio);
+  setters.setSubtitleTracks(prepared.categorized.subtitles);
+  setters.setSelectedAudioId(
+    prepared.defaultAudio?.id ?? prepared.categorized.audio[0]?.id ?? null,
+  );
+  setters.setSelectedSubtitleId(prepared.defaultSub?.id ?? null);
+
+  setters.setIsLocalPlayback(prepared.isLocal);
+}
+
+// ── Shared subtitle refresh after on-demand download ──
+
+export interface RefreshSubsContext {
+  server: { uri: string; accessToken: string };
+  ratingKey: string;
+  partIdRef: { current: number | undefined };
+  /** Current generation counter — refresh is abandoned if it changes mid-flight. */
+  initGenRef: { current: number };
+  /** IDs of the subtitle tracks currently known. Used to detect the new one. */
+  prevSubIds: number[];
+  /**
+   * Called with the updated track list once the new stream is detected.
+   *
+   * Divergence: the native backend must also sync subtitleTracksRef.current
+   * before state update so selectSubtitleTrack resolves the external sub `key`
+   * synchronously. Pass a callback that does both:
+   *   (tracks) => { subtitleTracksRef.current = tracks; setSubtitleTracks(tracks); }
+   */
+  onTracksUpdated: (tracks: PlexStream[]) => void;
+  /**
+   * Called once tracks are updated and server persistence has been attempted.
+   * HTML5 backend awaits this (HLS rebuild via selectSubtitleTrack).
+   * Native backend is fire-and-forget (sync mpv invoke).
+   */
+  onSelectSubtitle: (streamId: number) => void | Promise<void>;
+}
+
+/**
+ * Shared implementation of the on-demand subtitle refresh flow used by both
+ * HTML5 and native backends.
+ *
+ * Flow:
+ * 1. Poll waitForDownloadedSubtitle until a new stream appears (or timeout).
+ * 2. Abandon if initGenRef.current changed (superseded by a new episode).
+ * 3. Update subtitle tracks via onTracksUpdated.
+ * 4. Persist the selected stream on the Plex server (best-effort).
+ * 5. Call onSelectSubtitle(streamId) — backend decides how to activate it.
+ */
+export async function refreshDownloadedSubtitles(
+  ctx: RefreshSubsContext,
+): Promise<void> {
+  const {
+    server,
+    ratingKey,
+    partIdRef,
+    initGenRef,
+    prevSubIds,
+    onTracksUpdated,
+    onSelectSubtitle,
+  } = ctx;
+  const gen = initGenRef.current;
+
+  const result = await waitForDownloadedSubtitle(
+    server.uri,
+    server.accessToken,
+    ratingKey,
+    partIdRef.current,
+    prevSubIds,
+  );
+
+  if (gen !== initGenRef.current) {
+    logger.debug("player", "refreshSubtitlesAfterDownload superseded", { gen });
+    return;
+  }
+  if (!result) return;
+
+  onTracksUpdated(result.tracks);
+
+  if (partIdRef.current !== undefined) {
+    try {
+      await setSelectedSubtitleStream(
+        server.uri,
+        server.accessToken,
+        partIdRef.current,
+        result.added.id,
+      );
+    } catch (err) {
+      logger.error("player", "persist downloaded subtitle failed", String(err));
+    }
+    if (gen !== initGenRef.current) {
+      logger.debug("player", "refreshSubtitlesAfterDownload superseded", { gen });
+      return;
+    }
+  }
+
+  logger.info("player", "applying downloaded subtitle", { streamId: result.added.id });
+  await onSelectSubtitle(result.added.id);
 }

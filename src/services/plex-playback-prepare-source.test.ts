@@ -306,6 +306,49 @@ describe("prepareSource", () => {
     expect(result.viewOffset).toBe(0);
   });
 
+  // Extra: metadata fetch and local-file lookup run concurrently, not as a
+  // waterfall. Both must be invoked before either promise resolves, and
+  // resolving the local-path lookup FIRST must not break anything.
+  it("starts getItemMetadata and getLocalFilePath concurrently", async () => {
+    const movie = makeMovie();
+    // vi.fn() call history persists across tests in this file (restoreMocks
+    // only affects vi.spyOn spies) — clear it so call counts below are exact.
+    mockGetItemMetadata.mockClear();
+    mockGetLocalFilePath.mockClear();
+    let resolveMetadata!: (v: unknown) => void;
+    let resolveLocal!: (v: string | null) => void;
+    mockGetItemMetadata.mockReturnValue(
+      new Promise((resolve) => {
+        resolveMetadata = resolve;
+      })
+    );
+    mockGetLocalFilePath.mockReturnValue(
+      new Promise((resolve) => {
+        resolveLocal = resolve;
+      })
+    );
+
+    const pending = prepareSource({
+      server: SERVER,
+      ratingKey: RATING_KEY,
+      preferences: makePrefs(),
+    });
+
+    // Neither promise has resolved yet — a waterfall would not have called
+    // getLocalFilePath until getItemMetadata resolved.
+    expect(mockGetItemMetadata).toHaveBeenCalledTimes(1);
+    expect(mockGetLocalFilePath).toHaveBeenCalledTimes(1);
+    expect(mockGetLocalFilePath).toHaveBeenCalledWith(RATING_KEY);
+
+    // Resolve the local-path lookup first, then metadata — out of waterfall order.
+    resolveLocal("C:\\Downloads\\movie.mkv");
+    resolveMetadata(movie);
+
+    const result = await pending;
+    expect(result.sourceKind).toBe("local");
+    expect(result.url).toBe("C:\\Downloads\\movie.mkv");
+  });
+
   // Extra: quality=original in auto mode → direct play without codec check
   it("returns direct when quality=original in auto mode", async () => {
     const part = createPlexMediaPart({

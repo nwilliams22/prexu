@@ -1,17 +1,26 @@
 /**
  * Transport skip buttons — previous/next episode, chapter skip,
  * and hold-to-accelerate 10s skip with play/pause in the center.
+ *
+ * Memoized: nothing here displays the playhead, so the subtree skips
+ * the 4 Hz time-pos re-renders. The live position is read at interaction
+ * time through `currentTimeRef`, which the per-tick-rendering
+ * PlayerControls keeps fresh.
  */
 
-import { useRef, useCallback, useState } from "react";
-import type { UsePlayerResult } from "../../hooks/usePlayer";
+import { memo, useRef, useCallback, useState } from "react";
 import type { PlexChapter } from "../../types/library";
 import { useHoldToSkip } from "../../hooks/useHoldToSkip";
 
 const SKIP_SECONDS = 10;
 
 interface SkipButtonsProps {
-  player: UsePlayerResult;
+  isPlaying: boolean;
+  togglePlay: () => void;
+  duration: number;
+  /** Live playhead position (seconds), kept fresh by an ancestor that
+   *  re-renders per time-pos tick. Read at interaction time only. */
+  currentTimeRef: React.RefObject<number>;
   chapters?: PlexChapter[];
   seekFn: (time: number) => void;
   onActivity?: () => void;
@@ -25,7 +34,10 @@ interface SkipButtonsProps {
 }
 
 function SkipButtons({
-  player,
+  isPlaying,
+  togglePlay,
+  duration,
+  currentTimeRef,
   chapters,
   seekFn,
   onActivity,
@@ -42,10 +54,8 @@ function SkipButtons({
   // Refs for latest values so hold-to-skip callbacks always read current state
   const seekFnRef = useRef(seekFn);
   seekFnRef.current = seekFn;
-  const currentTimeRef = useRef(player.currentTime);
-  currentTimeRef.current = player.currentTime;
-  const durationRef = useRef(player.duration);
-  durationRef.current = player.duration;
+  const durationRef = useRef(duration);
+  durationRef.current = duration;
 
   const showSkipIndicator = useCallback(
     (label: string) => {
@@ -61,7 +71,7 @@ function SkipButtons({
     direction: "backward",
     onSkip: useCallback((seconds: number) => {
       seekFnRef.current(Math.max(0, currentTimeRef.current - seconds));
-    }, []),
+    }, [currentTimeRef]),
     onSkipLabel: showSkipIndicator,
   });
 
@@ -69,14 +79,15 @@ function SkipButtons({
     direction: "forward",
     onSkip: useCallback((seconds: number) => {
       seekFnRef.current(Math.min(durationRef.current, currentTimeRef.current + seconds));
-    }, []),
+    }, [currentTimeRef]),
     onSkipLabel: showSkipIndicator,
   });
 
   const handleChapterSkip = useCallback(
     (direction: "next" | "prev") => {
+      const currentTime = currentTimeRef.current;
       if (chapters && chapters.length > 0) {
-        const currentMs = player.currentTime * 1000;
+        const currentMs = currentTime * 1000;
         if (direction === "next") {
           const next = chapters.find((c) => c.startTimeOffset > currentMs + 1000);
           if (next) {
@@ -95,11 +106,11 @@ function SkipButtons({
         }
       }
       const delta = direction === "next" ? 30 : -30;
-      const target = Math.max(0, Math.min(player.duration, player.currentTime + delta));
+      const target = Math.max(0, Math.min(duration, currentTime + delta));
       seekFn(target);
       showSkipIndicator(direction === "next" ? "+30" : "-30");
     },
-    [chapters, player.currentTime, player.duration, seekFn, showSkipIndicator],
+    [chapters, duration, currentTimeRef, seekFn, showSkipIndicator],
   );
 
   const btnStyle = {
@@ -173,8 +184,8 @@ function SkipButtons({
       )}
 
       {/* Play / Pause */}
-      <button onClick={player.togglePlay} style={btnStyle} aria-label={player.isPlaying ? "Pause" : "Play"}>
-        {player.isPlaying ? (
+      <button onClick={togglePlay} style={btnStyle} aria-label={isPlaying ? "Pause" : "Play"}>
+        {isPlaying ? (
           <svg width={iconLarge} height={iconLarge} viewBox="0 0 24 24" fill="currentColor">
             <rect x={6} y={4} width={4} height={16} rx={1} />
             <rect x={14} y={4} width={4} height={16} rx={1} />
@@ -264,4 +275,4 @@ const styles: Record<string, React.CSSProperties> = {
   },
 };
 
-export default SkipButtons;
+export default memo(SkipButtons);

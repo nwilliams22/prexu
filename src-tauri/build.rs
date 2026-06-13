@@ -22,13 +22,35 @@ fn main() {
 
 #[cfg(target_os = "windows")]
 fn copy_libmpv_dll() {
-    // MPV_SOURCE env var wins. Falls back to C:\libmpv (the install location
-    // documented in docs/native-player-status.md step 1.2). The fallback exists
-    // because some launchers (npm.cmd → tauri-cli → cargo) strip env vars on
-    // Windows, making MPV_SOURCE-only too brittle for `npm run tauri dev`.
-    let source = env::var_os("MPV_SOURCE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(r"C:\libmpv"));
+    // MPV_SOURCE env var wins. In DEBUG builds falls back to C:\libmpv (the
+    // install location documented in docs/native-player-status.md step 1.2).
+    // The fallback exists because some launchers (npm.cmd → tauri-cli → cargo)
+    // strip env vars on Windows, making MPV_SOURCE-only too brittle for
+    // `npm run tauri dev`.
+    //
+    // In RELEASE builds the fallback is disabled: loading a DLL from a
+    // world-writable well-known path is a DLL-planting vector. Release builds
+    // must set MPV_SOURCE explicitly so the DLL origin is auditable.
+    let profile = env::var("PROFILE").unwrap_or_default();
+    let source = match env::var_os("MPV_SOURCE") {
+        Some(val) => PathBuf::from(val),
+        None => {
+            if profile == "release" {
+                // Hard error: do not fall back to a hardcoded path in release.
+                // This aborts the build so the DLL-planting risk can never ship.
+                eprintln!(
+                    "cargo:error=MPV_SOURCE must be set for release builds; \
+                     falling back to a hardcoded path is a DLL-planting risk"
+                );
+                panic!(
+                    "MPV_SOURCE env var is required for release builds \
+                     (set it to the directory containing 64\\libmpv-2.dll)"
+                );
+            }
+            // Debug/dev convenience fallback only.
+            PathBuf::from(r"C:\libmpv")
+        }
+    };
     let src = source.join("64").join("libmpv-2.dll");
     println!("cargo:rerun-if-changed={}", src.display());
     println!("cargo:rerun-if-env-changed=MPV_SOURCE");

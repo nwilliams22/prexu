@@ -14,9 +14,22 @@
  *
  * Exposes a `completionCounter` that increments whenever an activity
  * finishes or library content changes, so the dashboard auto-refreshes.
+ *
+ * Per-item scanning state is held in an external ScanningStore so poster
+ * cards can subscribe narrowly via `useIsScanning(ratingKey)` instead of
+ * re-rendering on every context value change (prexu-bgz.15).
  */
 
-import { createContext, useContext, useState, useEffect, useRef } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { useAuth } from "./useAuth";
 import { logger } from "../services/logger";
 import {
@@ -62,18 +75,127 @@ export function useServerActivity(): ServerActivityValue {
   return useContext(ServerActivityContext);
 }
 
+// ── Scanning-ID store (per-key subscriptions) ──
+//
+// scanningIds churns on every timeline notification and TTL expiry. If
+// poster cards read it through the main context, EVERY mounted card
+// re-renders on any scanning change (prexu-bgz.15). Instead the ids live
+// in a small external store; `useIsScanning(ratingKey)` subscribes via
+// useSyncExternalStore with a per-key boolean snapshot, so a card only
+// re-renders when ITS OWN scanning state flips.
+
+export interface ScanningStore {
+  /** Subscribe to scanning-set changes. Returns an unsubscribe function. */
+  subscribe: (listener: () => void) => () => void;
+  /** Immutable snapshot of the ratingKeys currently being scanned. */
+  getSnapshot: () => ReadonlySet<string>;
+  /** Add an id to the scanning set (no-op + no notify if already present). */
+  add: (id: string) => void;
+  /** Remove an id from the scanning set (no-op + no notify if absent). */
+  remove: (id: string) => void;
+  /** Remove all ids (no notify if already empty). */
+  clear: () => void;
+}
+
+export function createScanningStore(): ScanningStore {
+  let snapshot: ReadonlySet<string> = EMPTY_SET;
+  const listeners = new Set<() => void>();
+  const emit = () => {
+    for (const listener of listeners) listener();
+  };
+  return {
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    getSnapshot: () => snapshot,
+    add(id) {
+      if (snapshot.has(id)) return;
+      const next = new Set(snapshot);
+      next.add(id);
+      snapshot = next;
+      logger.trace("activity", "scanning id added", { id, count: next.size });
+      emit();
+    },
+    remove(id) {
+      if (!snapshot.has(id)) return;
+      const next = new Set(snapshot);
+      next.delete(id);
+      snapshot = next.size === 0 ? EMPTY_SET : next;
+      logger.trace("activity", "scanning id removed", {
+        id,
+        count: snapshot.size,
+      });
+      emit();
+    },
+    clear() {
+      if (snapshot.size === 0) return;
+      snapshot = EMPTY_SET;
+      logger.trace("activity", "scanning ids cleared");
+      emit();
+    },
+  };
+}
+
+/** Inert store used when no provider is mounted (e.g. bare component tests). */
+const noopScanningStore: ScanningStore = {
+  subscribe: () => () => {},
+  getSnapshot: () => EMPTY_SET,
+  add: () => {},
+  remove: () => {},
+  clear: () => {},
+};
+
+const ScanningStoreContext = createContext<ScanningStore>(noopScanningStore);
+export const ScanningStoreProvider = ScanningStoreContext.Provider;
+
+/**
+ * Narrow selector: is this ratingKey currently being scanned/updated?
+ * Re-renders the caller ONLY when the boolean for this key flips —
+ * unrelated scanning activity, session refetches, and activity progress
+ * never touch it.
+ */
+export function useIsScanning(ratingKey: string | undefined): boolean {
+  const store = useContext(ScanningStoreContext);
+  const subscribe = useCallback(
+    (listener: () => void) => store.subscribe(listener),
+    [store],
+  );
+  const getSnapshot = useCallback(
+    // Falsy key (undefined / "") never scans — mirrors the old
+    // `ratingKey ? scanningIds.has(ratingKey) : false` check.
+    () => (ratingKey ? store.getSnapshot().has(ratingKey) : false),
+    [store, ratingKey],
+  );
+  return useSyncExternalStore(subscribe, getSnapshot);
+}
+
 // ── Provider hook ──
 
 const POLL_FALLBACK_INTERVAL = 30_000; // 30 s — only used when WebSocket is down
 const WS_RECONNECT_DELAY = 5_000;
 const TIMELINE_DEBOUNCE_MS = 1_000; // debounce rapid timeline notifications
 
-export function useServerActivityState(): ServerActivityValue {
+/** Full provider state: context value plus the scanning store to provide. */
+export interface ServerActivityState extends ServerActivityValue {
+  scanningStore: ScanningStore;
+}
+
+export function useServerActivityState(): ServerActivityState {
   const { server } = useAuth();
   const [activities, setActivities] = useState<PlexActivity[]>([]);
   const [sessions, setSessions] = useState<PlexSession[]>([]);
   const [completionCounter, setCompletionCounter] = useState(0);
-  const [scanningIds, setScanningIds] = useState<ReadonlySet<string>>(EMPTY_SET);
+
+  // Scanning ids live outside React state so poster cards can subscribe
+  // per-key (see ScanningStore above). One store per provider instance.
+  const scanningStoreRef = useRef<ScanningStore | null>(null);
+  if (scanningStoreRef.current === null) {
+    scanningStoreRef.current = createScanningStore();
+  }
+  const scanningStore = scanningStoreRef.current;
 
   // Timers for auto-removing scanning IDs after a short TTL
   const scanTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -181,11 +303,7 @@ export function useServerActivityState(): ServerActivityValue {
             if (entry.itemID) {
               const id = String(entry.itemID);
               // Add to scanning set
-              setScanningIds((prev) => {
-                const next = new Set(prev);
-                next.add(id);
-                return next;
-              });
+              scanningStore.add(id);
               // Clear any existing timer for this ID and set a new one
               const existing = scanTimersRef.current.get(id);
               if (existing) clearTimeout(existing);
@@ -193,11 +311,7 @@ export function useServerActivityState(): ServerActivityValue {
                 id,
                 setTimeout(() => {
                   if (mountedRef.current) {
-                    setScanningIds((prev) => {
-                      const next = new Set(prev);
-                      next.delete(id);
-                      return next.size === 0 ? EMPTY_SET : next;
-                    });
+                    scanningStore.remove(id);
                   }
                   scanTimersRef.current.delete(id);
                 }, 3000),
@@ -269,16 +383,35 @@ export function useServerActivityState(): ServerActivityValue {
       // Clean up scanning timers
       for (const timer of scanTimersRef.current.values()) clearTimeout(timer);
       scanTimersRef.current.clear();
+      // Timers are gone, so ids would otherwise linger forever — drop them
+      // (also clears stale scan overlays when switching servers).
+      scanningStore.clear();
       if (ws) {
         ws.onclose = null; // prevent reconnection on intentional close
         ws.close();
       }
     };
-  }, [server]);
+  }, [server, scanningStore]);
 
-  const isActive = activities.length > 0;
+  // Full-set view for legacy consumers reading scanningIds off the context.
+  const scanningIds = useSyncExternalStore(
+    scanningStore.subscribe,
+    scanningStore.getSnapshot,
+  );
 
-  return { activities, sessions, isActive, completionCounter, scanningIds };
+  // Memoized so the context provider value is referentially stable across
+  // renders that don't change any of its fields (prexu-bgz.15).
+  return useMemo(
+    () => ({
+      activities,
+      sessions,
+      isActive: activities.length > 0,
+      completionCounter,
+      scanningIds,
+      scanningStore,
+    }),
+    [activities, sessions, completionCounter, scanningIds, scanningStore],
+  );
 }
 
 // Re-export for provider wrapper

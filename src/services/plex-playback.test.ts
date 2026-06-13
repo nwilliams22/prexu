@@ -8,7 +8,10 @@ import {
   getSavedVolume,
   saveVolume,
   QUALITY_PRESETS,
+  applyPreparedMetadata,
+  refreshDownloadedSubtitles,
 } from "./plex-playback";
+import type { PreparedSource, PreparedMetadataSetters } from "./plex-playback";
 import {
   createPlexMediaInfo,
   createPlexMediaPart,
@@ -27,6 +30,16 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 // Mock dependencies for async functions
 vi.mock("./storage", () => ({
   getClientIdentifier: vi.fn().mockResolvedValue("test-client-id"),
+}));
+
+const mockWaitForDownloadedSubtitle = vi.fn();
+const mockSetSelectedSubtitleStream = vi.fn();
+
+vi.mock("./subtitle-search", () => ({
+  waitForDownloadedSubtitle: (...args: unknown[]) =>
+    mockWaitForDownloadedSubtitle(...args),
+  setSelectedSubtitleStream: (...args: unknown[]) =>
+    mockSetSelectedSubtitleStream(...args),
 }));
 
 const mockFetch = vi.fn().mockResolvedValue({ ok: true } as Response);
@@ -534,13 +547,7 @@ describe("plex-playback — async functions", () => {
   // ── reportTimelineBeacon ──
 
   describe("reportTimelineBeacon", () => {
-    it("reports stopped via GET fetch (sendBeacon POSTs are rejected by /:/timeline)", async () => {
-      const mockBeacon = vi.fn<(url: string, data?: BodyInit | null) => boolean>(() => true);
-      Object.defineProperty(navigator, "sendBeacon", {
-        value: mockBeacon,
-        writable: true,
-      });
-
+    it("reports stopped via GET fetch with token in headers, not URL", async () => {
       await reportTimelineBeacon(
         "https://server:32400",
         "my-token",
@@ -550,32 +557,397 @@ describe("plex-playback — async functions", () => {
       );
 
       expect(mockFetch).toHaveBeenCalledOnce();
-      const [url] = mockFetch.mock.calls[0];
+      const [url, opts] = mockFetch.mock.calls[0];
       expect(url).toContain("https://server:32400/:/timeline?");
       expect(url).toContain("state=stopped");
       expect(url).toContain("ratingKey=12345");
       expect(url).toContain("time=30000");
-      expect(mockBeacon).not.toHaveBeenCalled();
+      // Token must NOT appear in the query string
+      expect(url).not.toContain("X-Plex-Token");
+      // Token must appear in the request headers (via getServerHeaders)
+      expect(opts?.headers).toBeDefined();
+      expect((opts?.headers as Record<string, string>)["X-Plex-Token"]).toBe("server-token");
     });
 
-    it("falls back to sendBeacon only when fetch throws", async () => {
+    it("does not call sendBeacon — fetch is authoritative (sendBeacon POST is rejected by /:/timeline)", async () => {
       const mockBeacon = vi.fn<(url: string, data?: BodyInit | null) => boolean>(() => true);
       Object.defineProperty(navigator, "sendBeacon", {
         value: mockBeacon,
         writable: true,
       });
-      mockFetch.mockRejectedValueOnce(new Error("page teardown"));
 
       await reportTimelineBeacon(
         "https://server:32400",
         "my-token",
         "12345",
         30000,
-        7200000
+        7200000,
       );
 
-      expect(mockBeacon).toHaveBeenCalledOnce();
-      expect(mockBeacon.mock.calls[0][0]).toContain("state=stopped");
+      expect(mockBeacon).not.toHaveBeenCalled();
     });
+
+    it("propagates fetch errors (no silent swallow)", async () => {
+      mockFetch.mockRejectedValueOnce(new Error("network gone"));
+
+      await expect(
+        reportTimelineBeacon(
+          "https://server:32400",
+          "my-token",
+          "12345",
+          0,
+          0,
+        ),
+      ).rejects.toThrow("network gone");
+    });
+  });
+});
+
+// ── applyPreparedMetadata (prexu-bgz.31) ──
+
+/**
+ * Factory for a minimal PreparedSource sufficient for applyPreparedMetadata.
+ * Covers both backends: the divergence (skipCodecCheck) is a prepareSource
+ * INPUT and does not appear in the PreparedSource struct at all.
+ */
+function makePreparedSource(overrides: Partial<PreparedSource> = {}): PreparedSource {
+  return {
+    url: "https://server/index.m3u8",
+    item: {
+      type: "movie",
+      title: "Test Movie",
+      ratingKey: "100",
+      key: "/library/metadata/100",
+      thumb: "",
+      art: "",
+      addedAt: 0,
+      updatedAt: 0,
+    },
+    playable: {
+      type: "movie",
+      title: "Test Movie",
+      ratingKey: "100",
+      key: "/library/metadata/100",
+      thumb: "",
+      art: "",
+      addedAt: 0,
+      updatedAt: 0,
+      Marker: [{ id: 1, type: "intro", startTimeOffset: 0, endTimeOffset: 90000, final: false }],
+      Media: [],
+    },
+    media: createPlexMediaInfo({ videoCodec: "h264", audioCodec: "aac" }),
+    part: createPlexMediaPart({
+      id: 42,
+      Chapter: [{ id: 1, tag: "Chapter 1", startTimeOffset: 0, endTimeOffset: 60000, index: 1 }],
+    }),
+    viewOffset: 0,
+    categorized: {
+      video: null,
+      audio: [createPlexStream({ streamType: 2, id: 10, languageCode: "eng" })],
+      subtitles: [createPlexStream({ streamType: 3, id: 20, languageCode: "eng" })],
+    },
+    defaultAudio: createPlexStream({ streamType: 2, id: 10, languageCode: "eng" }),
+    defaultSub: createPlexStream({ streamType: 3, id: 20, languageCode: "eng" }),
+    sourceKind: "transcode",
+    isLocal: false,
+    ...overrides,
+  } as unknown as PreparedSource;
+}
+
+function makeSetters(): PreparedMetadataSetters & Record<string, ReturnType<typeof vi.fn>> {
+  return {
+    setTitle: vi.fn(),
+    setSubtitle: vi.fn(),
+    setChapters: vi.fn(),
+    setMarkers: vi.fn(),
+    setItemType: vi.fn(),
+    setParentRatingKey: vi.fn(),
+    setAudioTracks: vi.fn(),
+    setSubtitleTracks: vi.fn(),
+    setSelectedAudioId: vi.fn(),
+    setSelectedSubtitleId: vi.fn(),
+    setIsLocalPlayback: vi.fn(),
+    setPartId: vi.fn(),
+  };
+}
+
+describe("applyPreparedMetadata (prexu-bgz.31)", () => {
+  it("sets title/subtitle for a movie", () => {
+    const prepared = makePreparedSource({
+      item: {
+        type: "movie",
+        title: "Inception",
+        year: 2010,
+        ratingKey: "1",
+        key: "/library/metadata/1",
+        thumb: "",
+        art: "",
+        addedAt: 0,
+        updatedAt: 0,
+      } as unknown as PreparedSource["item"],
+      playable: {
+        type: "movie",
+        title: "Inception",
+        year: 2010,
+        ratingKey: "1",
+        key: "/library/metadata/1",
+        thumb: "",
+        art: "",
+        addedAt: 0,
+        updatedAt: 0,
+        Marker: [],
+        Media: [],
+      } as unknown as PreparedSource["playable"],
+    });
+    const setters = makeSetters();
+    applyPreparedMetadata(prepared, setters);
+    expect(setters.setTitle).toHaveBeenCalledWith("Inception");
+    expect(setters.setSubtitle).toHaveBeenCalledWith("2010");
+    expect(setters.setItemType).toHaveBeenCalledWith("movie");
+    expect(setters.setParentRatingKey).toHaveBeenCalledWith("");
+  });
+
+  it("sets title/subtitle for an episode", () => {
+    const prepared = makePreparedSource({
+      item: {
+        type: "episode",
+        title: "Pilot",
+        ratingKey: "2",
+        key: "/library/metadata/2",
+        thumb: "",
+        art: "",
+        addedAt: 0,
+        updatedAt: 0,
+        grandparentTitle: "Breaking Bad",
+        parentIndex: 1,
+        index: 1,
+        parentRatingKey: "99",
+      } as unknown as PreparedSource["item"],
+      playable: {
+        type: "episode",
+        title: "Pilot",
+        ratingKey: "2",
+        key: "/library/metadata/2",
+        thumb: "",
+        art: "",
+        addedAt: 0,
+        updatedAt: 0,
+        grandparentTitle: "Breaking Bad",
+        parentIndex: 1,
+        index: 1,
+        parentRatingKey: "99",
+        Marker: [],
+        Media: [],
+      } as unknown as PreparedSource["playable"],
+    });
+    const setters = makeSetters();
+    applyPreparedMetadata(prepared, setters);
+    expect(setters.setTitle).toHaveBeenCalledWith("Breaking Bad");
+    expect(setters.setSubtitle).toHaveBeenCalledWith("S01E01 — Pilot");
+    expect(setters.setItemType).toHaveBeenCalledWith("episode");
+    expect(setters.setParentRatingKey).toHaveBeenCalledWith("99");
+  });
+
+  it("sets audio/subtitle tracks and selections", () => {
+    const prepared = makePreparedSource();
+    const setters = makeSetters();
+    applyPreparedMetadata(prepared, setters);
+    expect(setters.setAudioTracks).toHaveBeenCalledWith(prepared.categorized.audio);
+    expect(setters.setSubtitleTracks).toHaveBeenCalledWith(prepared.categorized.subtitles);
+    expect(setters.setSelectedAudioId).toHaveBeenCalledWith(prepared.defaultAudio!.id);
+    expect(setters.setSelectedSubtitleId).toHaveBeenCalledWith(prepared.defaultSub!.id);
+  });
+
+  it("falls back to first audio track id when defaultAudio is undefined", () => {
+    const firstAudio = createPlexStream({ streamType: 2, id: 55 });
+    const prepared = makePreparedSource({
+      defaultAudio: undefined,
+      categorized: {
+        video: null,
+        audio: [firstAudio],
+        subtitles: [],
+      },
+    });
+    const setters = makeSetters();
+    applyPreparedMetadata(prepared, setters);
+    expect(setters.setSelectedAudioId).toHaveBeenCalledWith(55);
+  });
+
+  it("sets selectedSubtitleId to null when defaultSub is undefined", () => {
+    const prepared = makePreparedSource({ defaultSub: undefined });
+    const setters = makeSetters();
+    applyPreparedMetadata(prepared, setters);
+    expect(setters.setSelectedSubtitleId).toHaveBeenCalledWith(null);
+  });
+
+  it("sets chapters from prepared.part.Chapter", () => {
+    const prepared = makePreparedSource();
+    const setters = makeSetters();
+    applyPreparedMetadata(prepared, setters);
+    expect(setters.setChapters).toHaveBeenCalledWith(prepared.part.Chapter);
+  });
+
+  it("sets partId from prepared.part.id", () => {
+    const prepared = makePreparedSource();
+    const setters = makeSetters();
+    applyPreparedMetadata(prepared, setters);
+    expect(setters.setPartId).toHaveBeenCalledWith(42);
+  });
+
+  it("sets isLocalPlayback to true for local sources", () => {
+    const prepared = makePreparedSource({ isLocal: true, sourceKind: "local" });
+    const setters = makeSetters();
+    applyPreparedMetadata(prepared, setters);
+    expect(setters.setIsLocalPlayback).toHaveBeenCalledWith(true);
+  });
+
+  it("skipCodecCheck divergence: both backends use same PreparedSource — no field for it", () => {
+    // skipCodecCheck is a prepareSource INPUT arg, not an output field.
+    // This test confirms PreparedSource has no skipCodecCheck property so
+    // applyPreparedMetadata remains truly unified.
+    const prepared = makePreparedSource();
+    expect("skipCodecCheck" in prepared).toBe(false);
+  });
+});
+
+// ── refreshDownloadedSubtitles (prexu-bgz.31) ──
+
+describe("refreshDownloadedSubtitles (prexu-bgz.31)", () => {
+  const server = { uri: "https://server", accessToken: "tok" };
+  const newTrack = createPlexStream({ streamType: 3, id: 99, languageCode: "jpn" });
+  const existingTrack = createPlexStream({ streamType: 3, id: 20, languageCode: "eng" });
+
+  beforeEach(() => {
+    mockWaitForDownloadedSubtitle.mockReset();
+    mockSetSelectedSubtitleStream.mockReset();
+  });
+
+  it("calls onTracksUpdated and onSelectSubtitle with new stream id", async () => {
+    mockWaitForDownloadedSubtitle.mockResolvedValue({
+      tracks: [existingTrack, newTrack],
+      added: newTrack,
+    });
+    mockSetSelectedSubtitleStream.mockResolvedValue(undefined);
+
+    const partIdRef = { current: 42 as number | undefined };
+    const initGenRef = { current: 0 };
+    const onTracksUpdated = vi.fn();
+    const onSelectSubtitle = vi.fn().mockResolvedValue(undefined);
+
+    await refreshDownloadedSubtitles({
+      server,
+      ratingKey: "1",
+      partIdRef,
+      initGenRef,
+      prevSubIds: [existingTrack.id],
+      onTracksUpdated,
+      onSelectSubtitle,
+    });
+
+    expect(onTracksUpdated).toHaveBeenCalledWith([existingTrack, newTrack]);
+    expect(onSelectSubtitle).toHaveBeenCalledWith(99);
+    expect(mockSetSelectedSubtitleStream).toHaveBeenCalledWith(
+      server.uri,
+      server.accessToken,
+      42,
+      99,
+    );
+  });
+
+  it("does nothing when waitForDownloadedSubtitle returns null", async () => {
+    mockWaitForDownloadedSubtitle.mockResolvedValue(null);
+
+    const onTracksUpdated = vi.fn();
+    const onSelectSubtitle = vi.fn();
+
+    await refreshDownloadedSubtitles({
+      server,
+      ratingKey: "1",
+      partIdRef: { current: 1 },
+      initGenRef: { current: 0 },
+      prevSubIds: [],
+      onTracksUpdated,
+      onSelectSubtitle,
+    });
+
+    expect(onTracksUpdated).not.toHaveBeenCalled();
+    expect(onSelectSubtitle).not.toHaveBeenCalled();
+  });
+
+  it("abandons mid-flight when initGenRef changes before the wait resolves", async () => {
+    const initGenRef = { current: 0 };
+    mockWaitForDownloadedSubtitle.mockImplementation(async () => {
+      // Bump generation to simulate a new episode starting.
+      initGenRef.current = 1;
+      return {
+        tracks: [newTrack],
+        added: newTrack,
+      };
+    });
+
+    const onTracksUpdated = vi.fn();
+    const onSelectSubtitle = vi.fn();
+
+    await refreshDownloadedSubtitles({
+      server,
+      ratingKey: "1",
+      partIdRef: { current: 1 },
+      initGenRef,
+      prevSubIds: [],
+      onTracksUpdated,
+      onSelectSubtitle,
+    });
+
+    // Superseded — should bail out after waitForDownloadedSubtitle returns.
+    expect(onTracksUpdated).not.toHaveBeenCalled();
+    expect(onSelectSubtitle).not.toHaveBeenCalled();
+  });
+
+  it("continues when partIdRef is undefined (skips server persist)", async () => {
+    mockWaitForDownloadedSubtitle.mockResolvedValue({
+      tracks: [newTrack],
+      added: newTrack,
+    });
+
+    const onTracksUpdated = vi.fn();
+    const onSelectSubtitle = vi.fn().mockResolvedValue(undefined);
+
+    await refreshDownloadedSubtitles({
+      server,
+      ratingKey: "1",
+      partIdRef: { current: undefined },
+      initGenRef: { current: 0 },
+      prevSubIds: [],
+      onTracksUpdated,
+      onSelectSubtitle,
+    });
+
+    // No partId — server persist is skipped, but selection still proceeds.
+    expect(mockSetSelectedSubtitleStream).not.toHaveBeenCalled();
+    expect(onSelectSubtitle).toHaveBeenCalledWith(newTrack.id);
+  });
+
+  it("continues gracefully when setSelectedSubtitleStream throws", async () => {
+    mockWaitForDownloadedSubtitle.mockResolvedValue({
+      tracks: [newTrack],
+      added: newTrack,
+    });
+    mockSetSelectedSubtitleStream.mockRejectedValue(new Error("server error"));
+
+    const onTracksUpdated = vi.fn();
+    const onSelectSubtitle = vi.fn().mockResolvedValue(undefined);
+
+    // Should not throw — persist is best-effort.
+    await refreshDownloadedSubtitles({
+      server,
+      ratingKey: "1",
+      partIdRef: { current: 42 },
+      initGenRef: { current: 0 },
+      prevSubIds: [],
+      onTracksUpdated,
+      onSelectSubtitle,
+    });
+
+    expect(onSelectSubtitle).toHaveBeenCalledWith(newTrack.id);
   });
 });

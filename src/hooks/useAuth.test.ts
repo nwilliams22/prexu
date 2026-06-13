@@ -1,5 +1,6 @@
+import { createElement, type ReactNode } from "react";
 import { renderHook, act, waitFor } from "@testing-library/react";
-import { useAuthState } from "./useAuth";
+import { useAuth, useAuthState, AuthProvider, type AuthContextValue } from "./useAuth";
 
 // Mock storage module
 vi.mock("../services/storage", () => ({
@@ -33,7 +34,8 @@ vi.mock("../services/server-reachability", () => ({
 }));
 
 // Mock logger to avoid Tauri IPC calls in test environment
-vi.mock("../services/logger", () => ({
+vi.mock("../services/logger", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../services/logger")>()),
   logger: {
     info: vi.fn(),
     warn: vi.fn(),
@@ -246,5 +248,47 @@ describe("useAuthState", () => {
     // Server should be cleared (re-discover needed)
     expect(result.current.server).toBeNull();
     expect(mockStorage.clearServer).toHaveBeenCalled();
+  });
+});
+
+describe("useAuth", () => {
+  const contextValue: AuthContextValue = {
+    isLoading: false,
+    isAuthenticated: true,
+    serverSelected: true,
+    serverUnreachable: false,
+    authToken: "ctx-token",
+    server: {
+      name: "Ctx Server",
+      clientIdentifier: "ctx-server-id",
+      accessToken: "ctx-server-token",
+      uri: "https://ctx-server:32400",
+    },
+    activeUser: null,
+    login: vi.fn(),
+    logout: vi.fn(),
+    selectServer: vi.fn(),
+    changeServer: vi.fn(),
+    switchUser: vi.fn(),
+  };
+
+  it("throws when used outside an AuthProvider", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(() => renderHook(() => useAuth())).toThrow(
+        "useAuth must be used within an AuthProvider"
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("returns the provider's context value when wrapped in AuthProvider", () => {
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(AuthProvider, { value: contextValue }, children);
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+
+    expect(result.current).toBe(contextValue);
   });
 });

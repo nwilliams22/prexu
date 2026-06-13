@@ -32,7 +32,7 @@ export type SyncEventType =
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Listener = (data: any) => void;
 
-class WatchSyncService {
+class wsService {
   private ws: WebSocket | null = null;
   private url = "";
   private listeners: Map<SyncEventType, Set<Listener>> = new Map();
@@ -85,7 +85,7 @@ class WatchSyncService {
   /** Send a message to the relay server. */
   send(message: Record<string, unknown>): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      logger.warn("WatchSync", "Cannot send — not connected");
+      logger.warn("ws", "Cannot send — not connected");
       return;
     }
     this.ws.send(JSON.stringify(message));
@@ -123,13 +123,13 @@ class WatchSyncService {
     try {
       this.ws = new WebSocket(this.url);
     } catch (err) {
-      logger.error("WatchSync", "Failed to create WebSocket", String(err));
+      logger.error("ws", "Failed to create WebSocket", err);
       this.scheduleReconnect();
       return;
     }
 
     this.ws.onopen = () => {
-      logger.info("WatchSync", "Connected to relay");
+      logger.info("ws", "Connected to relay");
       this.reconnectDelay = 1000; // Reset backoff on success
       this.emit("connected", null);
 
@@ -154,7 +154,7 @@ class WatchSyncService {
     };
 
     this.ws.onclose = () => {
-      logger.info("WatchSync", "Disconnected from relay");
+      logger.info("ws", "Disconnected from relay");
       this.authenticated = false;
       if (this.pingInterval) {
         clearInterval(this.pingInterval);
@@ -168,7 +168,7 @@ class WatchSyncService {
     };
 
     this.ws.onerror = (err) => {
-      logger.error("WatchSync", "WebSocket error", String(err));
+      logger.error("ws", "WebSocket error", err);
     };
   }
 
@@ -177,7 +177,7 @@ class WatchSyncService {
     try {
       data = JSON.parse(raw);
     } catch {
-      logger.warn("WatchSync", "Failed to parse message", raw.substring(0, 80));
+      logger.warn("ws", "Failed to parse message", raw.substring(0, 80));
       return;
     }
 
@@ -247,7 +247,7 @@ class WatchSyncService {
         this.emit("pending_content_requests", data);
         break;
       default:
-        logger.warn("WatchSync", "Unknown message type", type);
+        logger.warn("ws", "Unknown message type", type);
     }
   }
 
@@ -258,7 +258,7 @@ class WatchSyncService {
         try {
           listener(data);
         } catch (err) {
-          logger.error("WatchSync", `Error in ${event} listener`, String(err));
+          logger.error("ws", `Error in ${event} listener`, err);
         }
       }
     }
@@ -267,7 +267,7 @@ class WatchSyncService {
   private scheduleReconnect(): void {
     if (this.reconnectTimer) return;
 
-    logger.info("WatchSync", `Reconnecting in ${this.reconnectDelay / 1000}s`);
+    logger.info("ws", `Reconnecting in ${this.reconnectDelay / 1000}s`);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.createConnection();
@@ -282,4 +282,4 @@ class WatchSyncService {
 }
 
 /** Singleton instance */
-export const watchSync = new WatchSyncService();
+export const watchSync = new wsService();

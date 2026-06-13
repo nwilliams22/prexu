@@ -1,4 +1,4 @@
-import type { PlexMediaInfo, PlexStream } from "../types/library";
+import type { PlexMediaInfo, PlexMediaItem, PlexStream } from "../types/library";
 
 export interface MediaBadge {
   label: string;
@@ -135,6 +135,22 @@ export function formatBitrate(bitrate: number): string {
     return `${(bitrate / 1000).toFixed(1)} Mbps`;
   }
   return `${bitrate} Kbps`;
+}
+
+/**
+ * Extract media badges from a PlexMediaItem that may carry Media[] at runtime.
+ * Returns undefined when no media info is present or when no badges apply.
+ */
+export function getItemMediaBadges(
+  item: PlexMediaItem,
+): MediaBadge[] | undefined {
+  // PlexMovie / PlexEpisode extend PlexMediaItem with Media[]; the base
+  // type doesn't declare it, so narrow at runtime.
+  const media = (item as { Media?: PlexMediaInfo[] }).Media?.[0];
+  if (!media) return undefined;
+  const { videoStream, audioStream } = extractStreamsForBadges(media);
+  const badges = getMediaBadges(media, videoStream, audioStream);
+  return badges.length > 0 ? badges : undefined;
 }
 
 /**

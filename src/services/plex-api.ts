@@ -3,7 +3,7 @@
  */
 
 import type { PlexResource, PlexServer, PlexConnection } from "../types/plex";
-import { logger } from "./logger";
+import { logger, redactUrl } from "./logger";
 import type { HomeUser } from "../types/home-user";
 import { getClientIdentifier } from "./storage";
 import {
@@ -15,11 +15,13 @@ import {
 const PLEX_TV_API = "https://clients.plex.tv/api/v2";
 const APP_NAME = "Prexu";
 const CONNECTIVITY_TIMEOUT_MS = 5000;
-const REQUEST_TIMEOUT_MS = 30000;
+export const REQUEST_TIMEOUT_MS = 15000;
 const RETRY_ON_TIMEOUT = 1;
 
 // ── Request deduplication ──
-// For identical GET requests that are already in-flight, return the existing promise.
+// For identical GET requests that are already in-flight, share the response.
+// Keyed by token fingerprint + URL so a request authorized as one user is
+// never served to a caller using a different token (e.g. after switchHomeUser).
 const inflightRequests = new Map<string, Promise<Response>>();
 
 /** True if the error is a TimeoutError thrown by our timedFetch abort. */
@@ -27,13 +29,50 @@ export function isTimeoutError(err: unknown): boolean {
   return err instanceof DOMException && err.name === "TimeoutError";
 }
 
+/** Non-cryptographic FNV-1a hash, used to fingerprint tokens in dedup keys. */
+function fnv1a(str: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(36);
+}
+
 /**
- * Fetch with automatic timeout and one retry on timeout.
- * GET requests are deduplicated: if an identical URL is already in-flight,
- * the existing promise is returned instead of firing a duplicate request.
+ * Fingerprint of the auth identity attached to a request, derived from the
+ * X-Plex-Token header. The raw token never appears in the dedup key.
+ */
+function tokenFingerprint(init?: RequestInit): string {
+  const headers = init?.headers;
+  let token = "";
+  if (headers instanceof Headers) {
+    token = headers.get("X-Plex-Token") ?? "";
+  } else if (Array.isArray(headers)) {
+    token =
+      headers.find(([k]) => k.toLowerCase() === "x-plex-token")?.[1] ?? "";
+  } else if (headers) {
+    const record = headers as Record<string, string>;
+    token = record["X-Plex-Token"] ?? record["x-plex-token"] ?? "";
+  }
+  return token ? fnv1a(token) : "anon";
+}
+
+/**
+ * Fetch with automatic timeout. GET requests retry once on timeout
+ * (15s timeout x 2 attempts = 30s worst case); non-idempotent methods
+ * (POST/PUT/DELETE) never retry by default to avoid duplicated side
+ * effects — callers may opt in with `retries`.
  *
- * On timeout, aborts with a `TimeoutError` DOMException carrying the URL and
- * elapsed ms so callers see "Request timed out after Xms: <url>" instead of
+ * GET requests are deduplicated: if an identical URL with the same auth
+ * token is already in-flight, the existing response is shared. The shared
+ * Response is never consumed directly — every consumer (including the
+ * caller that initiated the request) receives a `clone()`, so one caller
+ * reading the body cannot break another ("body already used").
+ *
+ * On timeout, aborts with a `TimeoutError` DOMException carrying the
+ * token-redacted URL and elapsed ms so callers see
+ * "Request timed out after Xms: <url>" instead of
  * the cryptic default "signal is aborted without reason".
  */
 export async function timedFetch(
@@ -41,27 +80,33 @@ export async function timedFetch(
   init?: RequestInit & { timeoutMs?: number; retries?: number },
 ): Promise<Response> {
   const timeout = init?.timeoutMs ?? REQUEST_TIMEOUT_MS;
-  const retries = init?.retries ?? RETRY_ON_TIMEOUT;
   const method = (init?.method ?? "GET").toUpperCase();
+  // Only GETs retry by default; retrying non-idempotent methods on timeout
+  // can duplicate side effects (the server may have applied the first call).
+  const retries = init?.retries ?? (method === "GET" ? RETRY_ON_TIMEOUT : 0);
 
-  // Dedup GET requests
-  if (method === "GET" && inflightRequests.has(url)) {
-    return inflightRequests.get(url)!.then((r) => r.clone());
+  if (method !== "GET") {
+    return fetchWithRetry(url, init, timeout, retries, method);
+  }
+
+  // Dedup GET requests (keyed by token fingerprint + URL)
+  const key = `${tokenFingerprint(init)}:${url}`;
+  const existing = inflightRequests.get(key);
+  if (existing) {
+    return existing.then((r) => r.clone());
   }
 
   const promise = fetchWithRetry(url, init, timeout, retries, method);
+  inflightRequests.set(key, promise);
+  // Detach cleanup as a side-effect; swallow rejection on this chain only
+  // (consumers observe the real rejection via their own chains).
+  promise
+    .finally(() => inflightRequests.delete(key))
+    .catch(() => {});
 
-  if (method === "GET") {
-    inflightRequests.set(url, promise);
-    // Detach cleanup as a side-effect; swallow rejection on this chain only
-    // (the original `promise` is still returned to the caller, so the real
-    // rejection is observed there).
-    promise
-      .finally(() => inflightRequests.delete(url))
-      .catch(() => {});
-  }
-
-  return promise;
+  // The owner promise resolves to a never-consumed Response; every consumer
+  // (including this first caller) gets a clone so bodies are independent.
+  return promise.then((r) => r.clone());
 }
 
 async function fetchWithRetry(
@@ -82,7 +127,7 @@ async function fetchWithRetry(
         logger.warn(
           "api",
           `timedFetch retry ${attempt}/${retries} after timeout`,
-          { url: url.substring(0, 120), method, timeoutMs: timeout },
+          { url: redactUrl(url), method, timeoutMs: timeout },
         );
         continue;
       }
@@ -103,7 +148,7 @@ async function fetchOnce(
     const elapsed = Date.now() - start;
     controller.abort(
       new DOMException(
-        `Request timed out after ${elapsed}ms: ${url}`,
+        `Request timed out after ${elapsed}ms: ${redactUrl(url)}`,
         "TimeoutError",
       ),
     );

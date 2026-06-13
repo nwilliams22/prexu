@@ -13,7 +13,7 @@
  *     body opaque — the cleanup effect never re-runs).
  */
 
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { IS_NATIVE_PLAYER, type UsePlayerResult } from "../usePlayer";
 import type { UsePopOutPlayerResult } from "./usePopOutPlayer";
 import type { PlayerSessionContextValue } from "../../contexts/PlayerContext";
@@ -59,14 +59,19 @@ export function usePlayerLifecycle({
   // so the backend (native = mpv via invoke, HTML5 = document.exitFullscreen)
   // owns the actual IPC. Skipped entirely when no fullscreen is active so
   // neither backend has to handle an unnecessary transition.
+  //
+  // Depends on the stable setFullscreen/unload callbacks rather than the
+  // whole `player` object, whose identity changes on every time-pos tick
+  // — keeping these callbacks (and the JSX props they feed) tick-stable.
+  const { setFullscreen, unload } = player;
   const exitFullscreenIfActive = useCallback(async () => {
     if (!isFullscreenRef.current) return;
     try {
-      await player.setFullscreen(false);
+      await setFullscreen(false);
     } catch {
       // Swallow — cleanup path's fullscreen-exit safety net catches up.
     }
-  }, [isFullscreenRef, player]);
+  }, [isFullscreenRef, setFullscreen]);
 
   // Pre-exit cleanup: paint body opaque + drop fullscreen before tearing
   // mpv down. The useLayoutEffect cleanup in Player.tsx SHOULD run sync
@@ -98,15 +103,16 @@ export function usePlayerLifecycle({
   // Audio is silenced synchronously by the awaited player_unload (the
   // pump-join + final mpv terminate happen in the background — see
   // src-tauri/src/player/mod.rs destroy()).
+  const { isPopOut, togglePopOut } = popOut;
   const exit = useCallback(async () => {
     logger.info("player", "handleExit start");
     // If we're in pop-out mode, exit it FIRST so the main window is
     // restored to its pre-pop-out outer geometry and always-on-top is
     // cleared before we unload the player. Without this the app stays at
     // the pop-out size after the player closes.
-    if (IS_NATIVE_PLAYER && popOut.isPopOut) {
+    if (IS_NATIVE_PLAYER && isPopOut) {
       try {
-        popOut.togglePopOut();
+        togglePopOut();
       } catch (err) {
         logger.warn("player", "handleExit exit-popout failed", String(err));
       }
@@ -115,12 +121,12 @@ export function usePlayerLifecycle({
     try {
       // Dispatches to backend: native runs player_unload (silences audio
       // synchronously); HTML5 is a no-op (unmount cleanup handles it).
-      await player.unload();
+      await unload();
     } catch (err) {
       logger.warn("player", "handleExit player.unload failed", String(err));
     }
     playerSession.stop();
-  }, [prepareNavAway, playerSession, popOut, player]);
+  }, [prepareNavAway, playerSession, isPopOut, togglePopOut, unload]);
 
   // Previous = go to the prior episode/queue item. Mirrors handleNextEpisode
   // shape: queue first, then Plex episode-nav fallback. We deliberately do
@@ -139,5 +145,10 @@ export function usePlayerLifecycle({
     [exitFullscreenIfActive],
   );
 
-  return { exit, prepareNavAway, navAwayPreservingMount };
+  // Memoized so consumers can list `lifecycle` itself in dep arrays / memo
+  // props without re-firing on every render of the owning component.
+  return useMemo(
+    () => ({ exit, prepareNavAway, navAwayPreservingMount }),
+    [exit, prepareNavAway, navAwayPreservingMount],
+  );
 }

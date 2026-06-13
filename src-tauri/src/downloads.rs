@@ -7,6 +7,55 @@ use futures_util::StreamExt;
 
 use crate::validate_server_url;
 
+/// Returns true when `downloaded` has reached or exceeded `total` AND `total`
+/// is a known (non-zero) value. When `total == 0` (content-length absent and
+/// no caller-supplied file_size) we never claim to be "at end" via the byte
+/// comparison — completion is detected by stream exhaustion instead.
+fn progress_at_end(downloaded: u64, total: u64) -> bool {
+    total > 0 && downloaded >= total
+}
+
+/// Validate a path component (rating_key or file_name) that will be joined
+/// onto the downloads directory. Rejects any value that could escape the
+/// intended directory via path traversal or absolute paths.
+///
+/// Allowlist: printable ASCII excluding `/`, `\`, `:`, `*`, `?`, `"`, `<`,
+/// `>`, `|`, and NUL. Also rejects `..` as a component, absolute paths, and
+/// Windows drive-qualified paths (e.g. `C:foo`).
+///
+/// Returns `Ok(())` if the value is safe, or `Err` with a static description.
+fn validate_path_component(value: &str) -> Result<(), &'static str> {
+    if value.is_empty() {
+        return Err("path component must not be empty");
+    }
+    // Reject NUL byte (can truncate OS path strings).
+    if value.contains('\0') {
+        return Err("path component contains NUL byte");
+    }
+    // Reject path separator characters.
+    if value.contains('/') || value.contains('\\') {
+        return Err("path component contains path separator");
+    }
+    // Reject Windows drive qualifiers like "C:" or "C:foo".
+    // A colon in any position is sufficient — it's never valid in a bare name.
+    if value.contains(':') {
+        return Err("path component contains drive qualifier or colon");
+    }
+    // Reject UNC prefix "\\" — already caught above by the backslash check,
+    // but be explicit for clarity. Reject lone "." and ".." traversal segments.
+    if value == ".." || value == "." {
+        return Err("path component is a traversal segment");
+    }
+    // Reject Windows shell-special characters that could be exploited via
+    // later shell invocations or confuse file managers.
+    for ch in ['*', '?', '"', '<', '>', '|'] {
+        if value.contains(ch) {
+            return Err("path component contains a forbidden character");
+        }
+    }
+    Ok(())
+}
+
 /// Manages active downloads with cancellation support.
 pub struct DownloadManager {
     active: Arc<Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>>,
@@ -72,6 +121,18 @@ pub async fn download_media(
 ) -> Result<(), String> {
     validate_server_url(&server_url)?;
 
+    // Guard against path traversal via attacker-influenced rating_key / file_name.
+    // Log a warning on rejection but do NOT echo the raw value into the log
+    // (log-injection risk); only log a fixed label for each parameter.
+    if let Err(reason) = validate_path_component(&rating_key) {
+        log::warn!("[downloads] rejected download request: invalid rating_key — {}", reason);
+        return Err(format!("Invalid rating_key: {}", reason));
+    }
+    if let Err(reason) = validate_path_component(&file_name) {
+        log::warn!("[downloads] rejected download request: invalid file_name — {}", reason);
+        return Err(format!("Invalid file_name: {}", reason));
+    }
+
     let downloads_dir = resolve_downloads_dir().await?;
     let item_dir = downloads_dir.join(&rating_key);
     tokio::fs::create_dir_all(&item_dir)
@@ -108,7 +169,9 @@ pub async fn download_media(
         .get(&url)
         .send()
         .await
-        .map_err(|e| format!("Download request failed: {}", e))?;
+        // Strip the URL (contains X-Plex-Token) from reqwest's error before
+        // returning it to the webview or logging it.
+        .map_err(|e| format!("Download request failed: {}", e.without_url()))?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -122,6 +185,9 @@ pub async fn download_media(
         .await
         .map_err(|e| format!("Failed to create temp file: {}", e))?;
 
+    if total == 0 {
+        log::debug!("[downloads] unknown total size for {} — content-length missing and file_size=0; in-loop 100% gate disabled", rating_key);
+    }
     log::info!("[Download] Start: {} ({} bytes) -> {:?}", rating_key, total, temp_path);
 
     let mut downloaded: u64 = 0;
@@ -147,7 +213,12 @@ pub async fn download_media(
 
                         let gates_open = downloaded - last_emit >= emit_interval_bytes
                             && last_emit_at.elapsed().as_millis() >= EMIT_INTERVAL_MS;
-                        if gates_open || downloaded >= total {
+                        // Only use the `downloaded >= total` shortcut when total is
+                        // known; with total == 0 (missing content-length + file_size)
+                        // the condition would be true on every chunk, flooding the
+                        // webview with events on each byte received.
+                        let at_end = progress_at_end(downloaded, total);
+                        if gates_open || at_end {
                             emit_progress(downloaded, "downloading", None);
                             last_emit = downloaded;
                             last_emit_at = std::time::Instant::now();
@@ -156,11 +227,14 @@ pub async fn download_media(
                     Some(Err(e)) => {
                         drop(file);
                         let _ = tokio::fs::remove_file(&temp_path).await;
-                        log::error!("[Download] stream error for {}: {:?}", rating_key, e);
-                        emit_progress(downloaded, "error", Some(e.to_string()));
+                        // Strip the URL (contains X-Plex-Token) before logging
+                        // or forwarding to the webview via the progress event.
+                        let safe_err = e.without_url();
+                        log::error!("[downloads] stream error for {}: {:?}", rating_key, safe_err);
+                        emit_progress(downloaded, "error", Some(safe_err.to_string()));
                         let mut active = state.active.lock().await;
                         active.remove(&rating_key);
-                        return Err(format!("Download error: {}", e));
+                        return Err(format!("Download error: {}", safe_err));
                     }
                     None => break, // Stream complete
                 }
@@ -185,7 +259,10 @@ pub async fn download_media(
         .await
         .map_err(|e| format!("Failed to finalize download: {}", e))?;
 
-    emit_progress(total, "complete", None);
+    // Emit final 100% exactly once. Use `downloaded` (actual bytes written)
+    // rather than `total` so unknown-size downloads (total == 0) still report
+    // the real byte count in the complete event.
+    emit_progress(downloaded, "complete", None);
 
     let mut active = state.active.lock().await;
     active.remove(&rating_key);
@@ -291,4 +368,143 @@ pub async fn get_local_file_path(
     }
 
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{progress_at_end, validate_path_component};
+    use crate::util::redact_url;
+
+    #[test]
+    fn unknown_total_never_signals_at_end() {
+        // When total == 0 (content-length missing, file_size == 0) the gate
+        // must never fire, even with downloaded == 0 (first chunk / empty body).
+        assert!(!progress_at_end(0, 0));
+        assert!(!progress_at_end(1024, 0));
+        assert!(!progress_at_end(u64::MAX, 0));
+    }
+
+    #[test]
+    fn known_total_signals_at_end_when_reached() {
+        let total: u64 = 1_000_000;
+        assert!(!progress_at_end(0, total));
+        assert!(!progress_at_end(999_999, total));
+        assert!(progress_at_end(1_000_000, total));
+        // Overshooting (last chunk may push past total) still signals completion.
+        assert!(progress_at_end(1_000_001, total));
+    }
+
+    #[test]
+    fn known_total_of_one_byte_works() {
+        assert!(!progress_at_end(0, 1));
+        assert!(progress_at_end(1, 1));
+    }
+
+    // ── Token redaction in download errors ──
+
+    /// The token that appears in the download URL must never surface in any
+    /// string that flows to a log or to the webview (progress event / Err).
+    #[test]
+    fn redact_url_strips_token_from_download_url() {
+        let url = "http://192.168.1.5:32400/library/parts/42/file.mkv?X-Plex-Token=s3cr3t";
+        let out = redact_url(url);
+        assert!(!out.contains("s3cr3t"), "token must not appear in redacted output");
+        assert!(out.contains("X-Plex-Token=***"), "redaction placeholder must be present");
+    }
+
+    #[test]
+    fn redact_url_handles_token_with_trailing_params() {
+        // Plex sometimes appends extra query params after the token.
+        let url = "http://h/p?quality=high&X-Plex-Token=abc123&format=mkv";
+        let out = redact_url(url);
+        assert!(!out.contains("abc123"));
+        assert!(out.contains("&format=mkv"), "params after token must be preserved");
+    }
+
+    #[test]
+    fn redact_url_is_case_insensitive_on_param_name() {
+        let url = "http://h/p?x-plex-token=SECRETVAL";
+        let out = redact_url(url);
+        assert!(!out.contains("SECRETVAL"), "token value must be redacted regardless of param case");
+    }
+
+    #[test]
+    fn redact_url_passes_through_url_without_token() {
+        // Non-auth URLs (e.g. HLS segment without inline token) must be unchanged.
+        let url = "http://192.168.1.5:32400/video/:/transcode/universal/session/1/segments.m3u8";
+        assert_eq!(redact_url(url), url);
+    }
+
+    // ── Path-traversal validation ──
+
+    #[test]
+    fn valid_path_components_are_accepted() {
+        // Typical rating_key values from Plex (numeric strings).
+        assert!(validate_path_component("12345").is_ok());
+        assert!(validate_path_component("98765432").is_ok());
+        // Typical file names from Plex media.
+        assert!(validate_path_component("Movie.Title.2024.mkv").is_ok());
+        assert!(validate_path_component("episode-s01e02.mp4").is_ok());
+        assert!(validate_path_component("show_name_720p.avi").is_ok());
+        assert!(validate_path_component("file with spaces.mkv").is_ok());
+    }
+
+    #[test]
+    fn dot_dot_traversal_is_rejected() {
+        assert!(validate_path_component("..").is_err());
+        // A single dot is also rejected.
+        assert!(validate_path_component(".").is_err());
+    }
+
+    #[test]
+    fn forward_slash_traversal_is_rejected() {
+        assert!(validate_path_component("../secret").is_err());
+        assert!(validate_path_component("foo/bar").is_err());
+        assert!(validate_path_component("/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn backslash_traversal_is_rejected() {
+        assert!(validate_path_component("..\\secret").is_err());
+        assert!(validate_path_component("foo\\bar").is_err());
+        assert!(validate_path_component("\\Windows\\System32").is_err());
+    }
+
+    #[test]
+    fn absolute_path_is_rejected() {
+        // Unix absolute path caught by the leading slash check.
+        assert!(validate_path_component("/absolute/path").is_err());
+        // Windows absolute path caught by the backslash check.
+        assert!(validate_path_component("\\absolute\\path").is_err());
+    }
+
+    #[test]
+    fn drive_qualified_path_is_rejected() {
+        // Windows drive letters like "C:" or "C:foo" must be rejected.
+        assert!(validate_path_component("C:").is_err());
+        assert!(validate_path_component("C:foo").is_err());
+        assert!(validate_path_component("C:\\Windows").is_err());
+        assert!(validate_path_component("Z:relative").is_err());
+    }
+
+    #[test]
+    fn nul_byte_is_rejected() {
+        assert!(validate_path_component("file\0name").is_err());
+        assert!(validate_path_component("\0").is_err());
+    }
+
+    #[test]
+    fn empty_string_is_rejected() {
+        assert!(validate_path_component("").is_err());
+    }
+
+    #[test]
+    fn shell_special_characters_are_rejected() {
+        assert!(validate_path_component("file*name").is_err());
+        assert!(validate_path_component("file?name").is_err());
+        assert!(validate_path_component("file\"name").is_err());
+        assert!(validate_path_component("file<name").is_err());
+        assert!(validate_path_component("file>name").is_err());
+        assert!(validate_path_component("file|name").is_err());
+    }
 }

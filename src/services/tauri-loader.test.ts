@@ -80,7 +80,7 @@ describe("createTauriLoaderClass", () => {
     expect(typeof loader.destroy).toBe("function");
   });
 
-  it("appends X-Plex-Token to URL when not present", () => {
+  it("sends X-Plex-Token in request headers, not in the URL", () => {
     const LoaderClass = createTauriLoaderClass(TOKEN);
     const loader = new LoaderClass({});
     mockFetch.mockResolvedValue(createSuccessResponse());
@@ -89,27 +89,35 @@ describe("createTauriLoaderClass", () => {
 
     expect(mockFetch).toHaveBeenCalledOnce();
     const calledUrl = mockFetch.mock.calls[0][0] as string;
-    expect(calledUrl).toContain(`X-Plex-Token=${TOKEN}`);
-    expect(calledUrl).toBe(
-      `https://plex.test/video/segment.ts?X-Plex-Token=${TOKEN}`,
-    );
+    // Token must NOT appear in the URL
+    expect(calledUrl).not.toContain("X-Plex-Token");
+    // Original URL is unchanged
+    expect(calledUrl).toBe("https://plex.test/video/segment.ts");
+    // Token must appear in the request headers
+    const fetchOptions = mockFetch.mock.calls[0][1] as RequestInit;
+    expect((fetchOptions.headers as Record<string, string>)["X-Plex-Token"]).toBe(TOKEN);
   });
 
-  it("does not duplicate token if already in URL", () => {
+  it("URL with pre-existing query params is passed through unchanged", () => {
     const LoaderClass = createTauriLoaderClass(TOKEN);
     const loader = new LoaderClass({});
     mockFetch.mockResolvedValue(createSuccessResponse());
 
-    const urlWithToken = `https://plex.test/video/segment.ts?X-Plex-Token=${TOKEN}`;
+    const urlWithParams = "https://plex.test/video/segment.ts?foo=bar";
     loader.load(
-      createContext({ url: urlWithToken }),
+      createContext({ url: urlWithParams }),
       createConfig(),
       createCallbacks(),
     );
 
     const calledUrl = mockFetch.mock.calls[0][0] as string;
-    const tokenCount = (calledUrl.match(/X-Plex-Token/g) || []).length;
-    expect(tokenCount).toBe(1);
+    // Token still not in URL
+    expect(calledUrl).not.toContain("X-Plex-Token");
+    // Other params preserved
+    expect(calledUrl).toContain("foo=bar");
+    // Token in headers
+    const fetchOptions = mockFetch.mock.calls[0][1] as RequestInit;
+    expect((fetchOptions.headers as Record<string, string>)["X-Plex-Token"]).toBe(TOKEN);
   });
 
   it("adds Range header for range requests", () => {
@@ -127,6 +135,8 @@ describe("createTauriLoaderClass", () => {
     expect((fetchOptions.headers as Record<string, string>)["Range"]).toBe(
       "bytes=0-999",
     );
+    // Token still present in headers alongside Range
+    expect((fetchOptions.headers as Record<string, string>)["X-Plex-Token"]).toBe(TOKEN);
   });
 
   it("calls onSuccess with arraybuffer data on successful fetch", async () => {

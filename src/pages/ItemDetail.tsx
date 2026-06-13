@@ -61,6 +61,17 @@ function ItemDetail() {
 
   const { seasonFading, switchSeason } = useSeasonSwitch(setItem, setEpisodes);
 
+  // Redirect restricted content
+  const itemRating = item ? (item as { contentRating?: string }).contentRating : undefined;
+  const restricted = restrictionsEnabled && item && !isItemAllowed(itemRating);
+
+  useEffect(() => {
+    if (restricted) {
+      toast("This content is restricted on your profile", "error");
+      navigate(-1);
+    }
+  }, [restricted, toast, navigate]);
+
   if (!server) return null;
 
   const artUrl = (path: string) =>
@@ -197,17 +208,6 @@ function ItemDetail() {
       </div>
     );
   };
-
-  // Redirect restricted content
-  const itemRating = item ? (item as { contentRating?: string }).contentRating : undefined;
-  const restricted = restrictionsEnabled && item && !isItemAllowed(itemRating);
-
-  useEffect(() => {
-    if (restricted) {
-      toast("This content is restricted on your profile", "error");
-      navigate(-1);
-    }
-  }, [restricted, toast, navigate]);
 
   if (isLoading) {
     return (

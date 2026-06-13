@@ -5,26 +5,23 @@
  * to determine whether a stored server URI is still reachable.
  */
 
-import { getServerHeaders } from "./plex-api";
-import { logger } from "./logger";
+import { getServerHeaders, timedFetch } from "./plex-api";
+import { logger, redactUrl } from "./logger";
 
 const PROBE_TIMEOUT_MS = 5000;
+const PROBE_RETRY_DELAY_MS = 750;
 
 async function probeOnce(serverUri: string, serverToken: string): Promise<boolean> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-
   try {
     const headers = await getServerHeaders(serverToken);
-    const response = await fetch(`${serverUri}/identity`, {
+    const response = await timedFetch(`${serverUri}/identity`, {
       headers,
-      signal: controller.signal,
+      timeoutMs: PROBE_TIMEOUT_MS,
+      retries: 0,
     });
     return response.ok;
   } catch {
     return false;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -51,6 +48,7 @@ export async function probeServerReachability(
         attempt,
         of: attempts,
       });
+      await new Promise((resolve) => setTimeout(resolve, PROBE_RETRY_DELAY_MS));
     }
   }
   return false;
@@ -83,11 +81,9 @@ export function resolveServerFromDiscovery(
 }
 
 /**
- * Log a re-resolve event, truncating URIs to 80 chars to avoid
+ * Log a re-resolve event, redacting tokens and truncating URIs to avoid
  * leaking full tokens in logs.
  */
 export function logServerResolve(oldUri: string, newUri: string): void {
-  const truncOld = oldUri.substring(0, 80);
-  const truncNew = newUri.substring(0, 80);
-  logger.info("auth", "server URI re-resolved", { from: truncOld, to: truncNew });
+  logger.info("auth", "server URI re-resolved", { from: redactUrl(oldUri), to: redactUrl(newUri) });
 }

@@ -6,6 +6,7 @@ import {
   getMediaBadges,
   formatBitrate,
   extractStreamsForBadges,
+  getItemMediaBadges,
 } from "./media-badges";
 import type { PlexMediaInfo, PlexStream } from "../types/library";
 
@@ -154,6 +155,65 @@ describe("formatBitrate", () => {
   it("formats Kbps for low bitrates", () => {
     expect(formatBitrate(856)).toBe("856 Kbps");
     expect(formatBitrate(500)).toBe("500 Kbps");
+  });
+});
+
+describe("getItemMediaBadges", () => {
+  it("returns undefined when item has no Media", () => {
+    expect(getItemMediaBadges({})).toBeUndefined();
+    expect(getItemMediaBadges({ Media: [] })).toBeUndefined();
+  });
+
+  it("returns undefined when first Media entry yields no badges (e.g. unknown resolution)", () => {
+    const item = {
+      Media: [
+        {
+          id: 1, duration: 100, bitrate: 500,
+          videoResolution: "360", videoCodec: "h264",
+          audioCodec: "mp3", audioChannels: 2,
+        } as PlexMediaInfo,
+      ],
+    };
+    expect(getItemMediaBadges(item)).toBeUndefined();
+  });
+
+  it("returns badges for a 1080p item", () => {
+    const item = {
+      Media: [
+        {
+          id: 1, duration: 7200000, bitrate: 8000,
+          videoResolution: "1080", videoCodec: "h264",
+          audioCodec: "aac", audioChannels: 2,
+        } as PlexMediaInfo,
+      ],
+    };
+    const badges = getItemMediaBadges(item);
+    expect(badges).toHaveLength(1);
+    expect(badges![0]).toEqual({ label: "1080p", type: "resolution" });
+  });
+
+  it("returns badges for a 4K HDR Atmos item", () => {
+    const item = {
+      Media: [
+        {
+          id: 1, duration: 7200000, bitrate: 20000,
+          videoResolution: "2160", videoCodec: "hevc",
+          audioCodec: "truehd", audioChannels: 8,
+          Part: [{
+            id: 1, key: "/k", duration: 7200000, file: "f", size: 1, container: "mkv",
+            Stream: [
+              { id: 1, streamType: 1, codec: "hevc", index: 0, displayTitle: "V", colorSpace: "bt2020", bitDepth: 10 } as PlexStream,
+              { id: 2, streamType: 2, codec: "truehd", index: 1, displayTitle: "A", extendedDisplayTitle: "TrueHD 7.1 Atmos", channels: 8 } as PlexStream,
+            ],
+          }],
+        } as PlexMediaInfo,
+      ],
+    };
+    const badges = getItemMediaBadges(item);
+    expect(badges).toHaveLength(3);
+    expect(badges![0].label).toBe("4K");
+    expect(badges![1].label).toBe("HDR");
+    expect(badges![2].label).toBe("Atmos");
   });
 });
 
