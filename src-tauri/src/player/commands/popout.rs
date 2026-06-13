@@ -589,11 +589,12 @@ pub async fn player_enter_popout(
     // storm to read the stale inset and shrink the host to the bottom-right
     // corner of the new popout window. Clearing here is authoritative —
     // subsequent Resized events will all see minimize=None.
-    if let Ok(mut mz) = state.minimize.lock() {
-        if mz.is_some() {
+    {
+        let had = state.geom.lock().map(|g| g.minimize.is_some()).unwrap_or(false);
+        if had {
             log::debug!("[player:popout] clearing leftover minimize inset on enter");
         }
-        *mz = None;
+        let _ = state.set_minimize(None);
     }
 
     // prexu-ajn: resolve the target work area from the persisted monitor

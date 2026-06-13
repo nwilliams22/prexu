@@ -92,11 +92,7 @@ pub async fn player_enter_minimize(
         width, height, new_state.padding, new_state.corner, scale
     );
 
-    if let Ok(mut mz) = state.minimize.lock() {
-        *mz = Some(new_state);
-    } else {
-        return Err("minimize lock poisoned".to_string());
-    }
+    state.set_minimize(Some(new_state))?;
 
     // Force resync now so the host shrinks immediately rather than waiting
     // for the next window event. apply_host_geometry honors the inset.
@@ -141,11 +137,7 @@ pub async fn player_update_mini_geometry(
         width, height, new_state.padding, new_state.corner, scale
     );
 
-    if let Ok(mut mz) = state.minimize.lock() {
-        *mz = Some(new_state);
-    } else {
-        return Err("minimize lock poisoned".to_string());
-    }
+    state.set_minimize(Some(new_state))?;
 
     resync_host(&main, &state);
 
@@ -168,11 +160,7 @@ pub async fn player_exit_minimize(
         .get_webview_window("main")
         .ok_or_else(|| "main webview window not found".to_string())?;
 
-    if let Ok(mut mz) = state.minimize.lock() {
-        *mz = None;
-    } else {
-        return Err("minimize lock poisoned".to_string());
-    }
+    state.set_minimize(None)?;
 
     resync_host(&main, &state);
     Ok(())
@@ -268,18 +256,18 @@ mod tests {
     #[test]
     fn minimize_state_starts_none() {
         let state = PlayerState::new();
-        assert!(state.minimize.lock().unwrap().is_none());
+        assert!(state.geom.lock().unwrap().minimize.is_none());
     }
 
     #[test]
     fn enter_minimize_core_sets_state_with_explicit_values() {
         // Simulate what player_enter_minimize does after calling
-        // compute_minimize_state: write the result into state.minimize.
+        // compute_minimize_state: write the result via set_minimize.
         let state = PlayerState::new();
         let new_state = compute_minimize_state(320, 180, Some(8), Some(MinimizeCorner::TopLeft));
-        *state.minimize.lock().unwrap() = Some(new_state);
+        state.set_minimize(Some(new_state)).unwrap();
 
-        let stored = state.minimize.lock().unwrap().unwrap();
+        let stored = state.geom.lock().unwrap().minimize.unwrap();
         assert_eq!(stored.width, 320);
         assert_eq!(stored.height, 180);
         assert_eq!(stored.padding, 8);
@@ -290,9 +278,9 @@ mod tests {
     fn enter_minimize_core_applies_defaults_when_none() {
         let state = PlayerState::new();
         let new_state = compute_minimize_state(360, 200, None, None);
-        *state.minimize.lock().unwrap() = Some(new_state);
+        state.set_minimize(Some(new_state)).unwrap();
 
-        let stored = state.minimize.lock().unwrap().unwrap();
+        let stored = state.geom.lock().unwrap().minimize.unwrap();
         assert_eq!(stored.padding, MINIMIZE_DEFAULT_PADDING);
         assert_eq!(stored.corner, MinimizeCorner::BottomRight);
     }
@@ -300,16 +288,14 @@ mod tests {
     #[test]
     fn update_mini_geometry_core_overwrites_existing_state() {
         // update_mini_geometry calls compute_minimize_state then replaces
-        // the mutex value — same write as enter_minimize. Verify that a
-        // second write with different args overwrites the first.
+        // via set_minimize. Verify that a second write with different args
+        // overwrites the first.
         let state = PlayerState::new();
-        *state.minimize.lock().unwrap() =
-            Some(compute_minimize_state(360, 200, Some(16), Some(MinimizeCorner::BottomRight)));
+        state.set_minimize(Some(compute_minimize_state(360, 200, Some(16), Some(MinimizeCorner::BottomRight)))).unwrap();
         // Now simulate an update (e.g. user drags resize handle).
-        *state.minimize.lock().unwrap() =
-            Some(compute_minimize_state(240, 135, Some(8), Some(MinimizeCorner::TopLeft)));
+        state.set_minimize(Some(compute_minimize_state(240, 135, Some(8), Some(MinimizeCorner::TopLeft)))).unwrap();
 
-        let stored = state.minimize.lock().unwrap().unwrap();
+        let stored = state.geom.lock().unwrap().minimize.unwrap();
         assert_eq!(stored.width, 240);
         assert_eq!(stored.height, 135);
         assert_eq!(stored.padding, 8);
@@ -319,13 +305,11 @@ mod tests {
     #[test]
     fn update_mini_geometry_core_applies_defaults_on_none_args() {
         let state = PlayerState::new();
-        *state.minimize.lock().unwrap() =
-            Some(compute_minimize_state(360, 200, Some(20), Some(MinimizeCorner::TopRight)));
+        state.set_minimize(Some(compute_minimize_state(360, 200, Some(20), Some(MinimizeCorner::TopRight)))).unwrap();
         // Simulate update with None padding/corner.
-        *state.minimize.lock().unwrap() =
-            Some(compute_minimize_state(480, 270, None, None));
+        state.set_minimize(Some(compute_minimize_state(480, 270, None, None))).unwrap();
 
-        let stored = state.minimize.lock().unwrap().unwrap();
+        let stored = state.geom.lock().unwrap().minimize.unwrap();
         assert_eq!(stored.padding, MINIMIZE_DEFAULT_PADDING);
         assert_eq!(stored.corner, MinimizeCorner::BottomRight);
     }
@@ -333,22 +317,21 @@ mod tests {
     #[test]
     fn exit_minimize_core_clears_state_to_none() {
         let state = PlayerState::new();
-        *state.minimize.lock().unwrap() =
-            Some(compute_minimize_state(360, 200, None, None));
-        assert!(state.minimize.lock().unwrap().is_some());
+        state.set_minimize(Some(compute_minimize_state(360, 200, None, None))).unwrap();
+        assert!(state.geom.lock().unwrap().minimize.is_some());
 
-        // Simulate what player_exit_minimize does: set minimize to None.
-        *state.minimize.lock().unwrap() = None;
+        // Simulate what player_exit_minimize does.
+        state.set_minimize(None).unwrap();
 
-        assert!(state.minimize.lock().unwrap().is_none());
+        assert!(state.geom.lock().unwrap().minimize.is_none());
     }
 
     #[test]
     fn exit_minimize_core_is_idempotent_when_already_none() {
         let state = PlayerState::new();
         // Already None — clearing again must not panic.
-        *state.minimize.lock().unwrap() = None;
-        assert!(state.minimize.lock().unwrap().is_none());
+        state.set_minimize(None).unwrap();
+        assert!(state.geom.lock().unwrap().minimize.is_none());
     }
 
     // ── MINIMIZE_DEFAULT_PADDING constant is the single source of truth ──
