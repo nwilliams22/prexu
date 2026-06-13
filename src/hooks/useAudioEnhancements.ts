@@ -1,4 +1,11 @@
-import { useRef, useEffect, useCallback, useState, type RefObject } from "react";
+import {
+  useRef,
+  useEffect,
+  useCallback,
+  useMemo,
+  useState,
+  type RefObject,
+} from "react";
 import type { NormalizationPreset } from "../types/preferences";
 
 // DynamicsCompressor parameters per normalization preset. Tuned to approximate
@@ -213,14 +220,28 @@ export function useAudioEnhancements(
     }
   }, []);
 
-  return {
-    volumeBoost,
-    setVolumeBoost,
-    setMainBoost,
-    normalizationPreset,
-    setNormalizationPreset,
-    audioOffsetMs,
-    setAudioOffsetMs,
-    isInitialized,
-  };
+  // Memoized so consumers can pass the result object straight into dep
+  // arrays / React.memo props without it changing identity every render.
+  return useMemo(
+    () => ({
+      volumeBoost,
+      setVolumeBoost,
+      setMainBoost,
+      normalizationPreset,
+      setNormalizationPreset,
+      audioOffsetMs,
+      setAudioOffsetMs,
+      isInitialized,
+    }),
+    [
+      volumeBoost,
+      setVolumeBoost,
+      setMainBoost,
+      normalizationPreset,
+      setNormalizationPreset,
+      audioOffsetMs,
+      setAudioOffsetMs,
+      isInitialized,
+    ],
+  );
 }

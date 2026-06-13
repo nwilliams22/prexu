@@ -3,7 +3,7 @@
  * Provides navigation callbacks for episode transitions.
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { getItemMetadata, getNextEpisode, getPreviousEpisode } from "../../services/plex-library";
 import type { PlexEpisode, PlexMediaItem } from "../../types/library";
@@ -53,12 +53,18 @@ export function useEpisodeNavigation(
     return () => { cancelled = true; };
   }, [server, ratingKey, itemType]);
 
-  const handleNextEpisode = nextEp
-    ? () => navigate(`/play/${nextEp.ratingKey}`)
-    : undefined;
-  const handlePrevEpisode = prevEp
-    ? () => navigate(`/play/${prevEp.ratingKey}`)
-    : undefined;
+  // Stable identities (changing only when the adjacent episode actually
+  // changes) so downstream useCallback/React.memo consumers don't churn
+  // on every render of the owning component.
+  const goNext = useCallback(() => {
+    if (nextEp) navigate(`/play/${nextEp.ratingKey}`);
+  }, [nextEp, navigate]);
+  const goPrev = useCallback(() => {
+    if (prevEp) navigate(`/play/${prevEp.ratingKey}`);
+  }, [prevEp, navigate]);
 
-  return { handleNextEpisode, handlePrevEpisode };
+  return {
+    handleNextEpisode: nextEp ? goNext : undefined,
+    handlePrevEpisode: prevEp ? goPrev : undefined,
+  };
 }

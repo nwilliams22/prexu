@@ -13,7 +13,7 @@
  * ternary).
  */
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useAuth } from "./useAuth";
 import { usePreferences } from "./usePreferences";
 import { useHlsLoader } from "./player/useHlsLoader";
@@ -135,7 +135,28 @@ export interface UsePlayerResult {
     normalizationPreset?: NormalizationPreset;
     audioOffsetMs?: number;
   }) => void;
+
+  /**
+   * Identity-stable slice of this result: everything except the 4 Hz
+   * time-pos values (`currentTime` / `buffered`). Both backends memoize
+   * this object over stable callbacks + rarely-changing state only, so
+   * its identity survives time-pos ticks. Chrome components (buttons,
+   * menus, transport) and effects should consume this slice — or
+   * individual fields/callbacks — instead of the whole result, which
+   * gets a new identity on every tick. Components that genuinely
+   * display time (seek bar, time labels) keep reading `currentTime` /
+   * `buffered` from the full result.
+   */
+  chrome: PlayerChrome;
 }
+
+/**
+ * The tick-stable portion of `UsePlayerResult` — see `UsePlayerResult.chrome`.
+ */
+export type PlayerChrome = Omit<
+  UsePlayerResult,
+  "currentTime" | "buffered" | "chrome"
+>;
 
 export function usePlayer(ratingKey: string, offsetOverride?: number | null): UsePlayerResult {
   // The branch is a module-level constant — React calls the same hook for
@@ -635,42 +656,85 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
     };
   }, []);
 
-  return {
-    videoRef,
-    title,
-    subtitle,
-    chapters,
-    markers,
-    itemType,
-    parentRatingKey,
-    isLoading,
-    isPlaying,
-    isBuffering,
-    currentTime,
-    duration,
-    buffered,
-    volume,
-    isMuted,
-    isFullscreen,
-    playbackError,
-    audioTracks: streams.audioTracks,
-    subtitleTracks: streams.subtitleTracks,
-    selectedAudioId: streams.selectedAudioId,
-    selectedSubtitleId: streams.selectedSubtitleId,
-    togglePlay,
-    seek,
-    setVolume,
-    toggleMute,
-    toggleFullscreen,
-    selectAudioTrack: streams.selectAudioTrack,
-    selectSubtitleTrack: streams.selectSubtitleTrack,
-    retry,
-    refreshSubtitlesAfterDownload,
-    pause,
-    unload,
-    setFullscreen,
-    subscribeToEof,
-    applySubtitleStyle,
-    applyAudioEnhancement,
-  };
+  // Tick-stable slice: memoized over stable callbacks + rarely-changing
+  // state only. currentTime/buffered are deliberately excluded so chrome
+  // consumers (transport buttons, menus, effects) don't churn at 4 Hz.
+  const chrome = useMemo<PlayerChrome>(
+    () => ({
+      videoRef,
+      title,
+      subtitle,
+      chapters,
+      markers,
+      itemType,
+      parentRatingKey,
+      isLoading,
+      isPlaying,
+      isBuffering,
+      duration,
+      volume,
+      isMuted,
+      isFullscreen,
+      playbackError,
+      audioTracks: streams.audioTracks,
+      subtitleTracks: streams.subtitleTracks,
+      selectedAudioId: streams.selectedAudioId,
+      selectedSubtitleId: streams.selectedSubtitleId,
+      togglePlay,
+      seek,
+      setVolume,
+      toggleMute,
+      toggleFullscreen,
+      selectAudioTrack: streams.selectAudioTrack,
+      selectSubtitleTrack: streams.selectSubtitleTrack,
+      retry,
+      refreshSubtitlesAfterDownload,
+      pause,
+      unload,
+      setFullscreen,
+      subscribeToEof,
+      applySubtitleStyle,
+      applyAudioEnhancement,
+    }),
+    [
+      title,
+      subtitle,
+      chapters,
+      markers,
+      itemType,
+      parentRatingKey,
+      isLoading,
+      isPlaying,
+      isBuffering,
+      duration,
+      volume,
+      isMuted,
+      isFullscreen,
+      playbackError,
+      streams.audioTracks,
+      streams.subtitleTracks,
+      streams.selectedAudioId,
+      streams.selectedSubtitleId,
+      togglePlay,
+      seek,
+      setVolume,
+      toggleMute,
+      toggleFullscreen,
+      streams.selectAudioTrack,
+      streams.selectSubtitleTrack,
+      retry,
+      refreshSubtitlesAfterDownload,
+      pause,
+      unload,
+      setFullscreen,
+      subscribeToEof,
+      applySubtitleStyle,
+      applyAudioEnhancement,
+    ],
+  );
+
+  return useMemo<UsePlayerResult>(
+    () => ({ ...chrome, currentTime, buffered, chrome }),
+    [chrome, currentTime, buffered],
+  );
 }

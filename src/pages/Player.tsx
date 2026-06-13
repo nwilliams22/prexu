@@ -7,7 +7,7 @@
  * and instantly reveals it on stop.
  */
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import {
@@ -92,7 +92,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   // here would re-fire this effect ~4 times per second and pump the IPC
   // on every tick, which mpv's gpu-next vo cannot keep up with on the
   // main thread and the video stalls. (prexu-7tk)
-  const { applySubtitleStyle } = player;
+  const { applySubtitleStyle, applyAudioEnhancement } = player;
   useEffect(() => {
     applySubtitleStyle({ size: pb.subtitleSize, style: pb.subtitleStyle });
   }, [applySubtitleStyle, pb.subtitleSize, pb.subtitleStyle]);
@@ -126,13 +126,13 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
         audioEnhancements.setAudioOffsetMs(changes.audioOffsetMs);
       }
       // Backend IPC bridge — native dispatches to mpv; HTML5 is a no-op.
-      player.applyAudioEnhancement({
+      applyAudioEnhancement({
         normalizationPreset: changes.normalizationPreset,
         audioOffsetMs: changes.audioOffsetMs,
       });
       updatePreferences({ playback: changes });
     },
-    [audioEnhancements, updatePreferences, player],
+    [audioEnhancements, updatePreferences, applyAudioEnhancement],
   );
 
   // Prime the native backend with current audio-enhancement prefs once.
@@ -142,7 +142,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   // Audio constructor args already covered initial values). Only fires
   // on mount — subsequent user changes go through handleAudioEnhancementChange.
   useEffect(() => {
-    player.applyAudioEnhancement({
+    applyAudioEnhancement({
       normalizationPreset: pb.normalizationPreset,
       audioOffsetMs: pb.audioOffsetMs,
     });
@@ -150,9 +150,10 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   }, []);
 
   // Sync main volume's above-1.0 boost to the audio graph's GainNode
+  const { setMainBoost } = audioEnhancements;
   useEffect(() => {
-    audioEnhancements.setMainBoost(Math.max(player.volume, 1));
-  }, [player.volume, audioEnhancements]);
+    setMainBoost(Math.max(player.volume, 1));
+  }, [player.volume, setMainBoost]);
 
   // Picture-in-Picture vs pop-out. On the native (mpv) path there's no
   // <video> element so the browser PiP API silently fails — we route the
@@ -170,6 +171,11 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   const pipSupported = IS_NATIVE_PLAYER
     ? popOut.isPopOutSupported
     : pip.isPiPSupported;
+  // Individual fields as deps — the pip/popOut result objects are rebuilt
+  // each render, and using them whole would recreate these callbacks (and
+  // break memoized chrome children downstream) on every render.
+  const { isPopOut, togglePopOut } = popOut;
+  const { togglePiP: toggleBrowserPiP } = pip;
   const togglePiP = useCallback(() => {
     if (IS_NATIVE_PLAYER) {
       // Mutual exclusion with minimize: if currently minimized, restore
@@ -177,20 +183,20 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
       if (playerMinimize.isMinimized) {
         playerMinimize.restoreFromMinimize();
       }
-      popOut.togglePopOut();
+      togglePopOut();
     } else {
-      pip.togglePiP();
+      toggleBrowserPiP();
     }
-  }, [popOut, pip, playerMinimize]);
+  }, [togglePopOut, toggleBrowserPiP, playerMinimize]);
 
   const handleMinimize = useCallback(() => {
     // Mutual exclusion with pop-out: if currently popped out, exit
     // pop-out first, then minimize.
-    if (IS_NATIVE_PLAYER && popOut.isPopOut) {
-      popOut.togglePopOut();
+    if (IS_NATIVE_PLAYER && isPopOut) {
+      togglePopOut();
     }
     playerMinimize.minimize();
-  }, [popOut, playerMinimize]);
+  }, [isPopOut, togglePopOut, playerMinimize]);
 
   // Controls visibility (auto-hide on inactivity)
   const { controlsVisible, resetHideTimer, handleMouseMove } =
@@ -494,6 +500,26 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     if (player.title) document.title = `${player.title} - Prexu`;
   }, [player.title]);
 
+  // Tick-stable props for the controls tree. PlayerControls re-renders per
+  // time-pos tick by design (it owns the seek bar), but its memoized
+  // ControlsBottomBar child must only see identity-stable props — inline
+  // arrows / fresh JSX here would defeat that memo every render.
+  const { refreshSubtitlesAfterDownload } = player;
+  const handleSubtitleDownloaded = useCallback(
+    () => void refreshSubtitlesAfterDownload(),
+    [refreshSubtitlesAfterDownload],
+  );
+  const syncIndicator = useMemo(
+    () =>
+      wt.isInSession ? (
+        <SyncIndicator
+          syncStatus={wt.syncStatus}
+          participantCount={wt.participants.length + 1}
+        />
+      ) : undefined,
+    [wt.isInSession, wt.syncStatus, wt.participants.length],
+  );
+
   // Auth guards — placed after all hooks to respect React rules of hooks
   if (!isAuthenticated) return <Navigate to="/login" replace />;
   if (!serverSelected) return <Navigate to="/servers" replace />;
@@ -681,16 +707,9 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
           serverUri={server?.uri}
           serverToken={server?.accessToken}
           ratingKey={ratingKey}
-          onSubtitleDownloaded={() => void player.refreshSubtitlesAfterDownload()}
+          onSubtitleDownloaded={handleSubtitleDownloaded}
           onPanelPinChange={setPanelPinned}
-          syncIndicator={
-            wt.isInSession ? (
-              <SyncIndicator
-                syncStatus={wt.syncStatus}
-                participantCount={wt.participants.length + 1}
-              />
-            ) : undefined
-          }
+          syncIndicator={syncIndicator}
         />
       )}
 

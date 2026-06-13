@@ -3,7 +3,7 @@
  * fullscreen, and track selection buttons.
  */
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { UsePlayerResult } from "../hooks/usePlayer";
 import type { AudioEnhancementsResult } from "../hooks/useAudioEnhancements";
 import type { NormalizationPreset } from "../types/preferences";
@@ -12,6 +12,7 @@ import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
 import { useSeekBar } from "../hooks/useSeekBar";
 import { formatDurationLabel } from "../utils/time-format";
 import ControlsBottomBar from "./player/ControlsBottomBar";
+import SeekBar from "./player/SeekBar";
 
 interface PlayerControlsProps {
   player: UsePlayerResult;
@@ -78,6 +79,14 @@ function PlayerControls({ player, onExit, onPrevious, visible, suppressTransitio
     onActivity,
   });
 
+  // Live playhead position for interaction-time reads (chapter skip,
+  // hold-to-skip). This component re-renders on every time-pos tick (it
+  // owns the seek bar), so the ref stays fresh — while the memoized
+  // ControlsBottomBar/SkipButtons tree below it does not re-render and
+  // reads the position through the ref instead of a prop.
+  const currentTimeRef = useRef(player.currentTime);
+  currentTimeRef.current = player.currentTime;
+
   return (
     <div
       style={{
@@ -140,36 +149,51 @@ function PlayerControls({ player, onExit, onPrevious, visible, suppressTransitio
         </div>
       </div>
 
-      {/* Bottom controls (seek bar + transport + utility buttons + menus) */}
-      <ControlsBottomBar
-        player={player}
-        seekBar={seekBar}
-        seekFn={seekFn}
-        visible={visible}
-        mobile={mobile}
-        syncIndicator={syncIndicator}
-        chapters={chapters}
-        onActivity={onActivity}
-        onNextEpisode={onNextEpisode}
-        onPrevEpisode={onPrevEpisode}
-        onStop={onExit}
-        audioEnhancements={audioEnhancements}
-        onAudioEnhancementChange={onAudioEnhancementChange}
-        isPiPActive={isPiPActive}
-        isPiPSupported={isPiPSupported}
-        onTogglePiP={onTogglePiP}
-        isPopOutMode={isPopOutMode}
-        isMinimizeSupported={isMinimizeSupported}
-        isMinimizeActive={isMinimizeActive}
-        onMinimize={onMinimize}
-        queueCount={queueCount}
-        onToggleQueue={onToggleQueue}
-        serverUri={serverUri}
-        serverToken={serverToken}
-        ratingKey={ratingKey}
-        onSubtitleDownloaded={onSubtitleDownloaded}
-        onPanelPinChange={onPanelPinChange}
-      />
+      {/* Bottom controls. The seek bar renders here — it genuinely
+          displays time and re-renders with this component on every
+          time-pos tick. ControlsBottomBar (buttons + menus) is memoized
+          over the tick-stable chrome slice so it skips those ticks. */}
+      <div
+        style={{
+          ...styles.bottomArea,
+          pointerEvents: visible || seekBar.isDragging ? "auto" : "none",
+        }}
+      >
+        <SeekBar
+          seekBar={seekBar}
+          currentTime={player.currentTime}
+          duration={player.duration}
+          mobile={mobile}
+        />
+        <ControlsBottomBar
+          player={player.chrome}
+          currentTimeRef={currentTimeRef}
+          seekFn={seekFn}
+          mobile={mobile}
+          syncIndicator={syncIndicator}
+          chapters={chapters}
+          onActivity={onActivity}
+          onNextEpisode={onNextEpisode}
+          onPrevEpisode={onPrevEpisode}
+          onStop={onExit}
+          audioEnhancements={audioEnhancements}
+          onAudioEnhancementChange={onAudioEnhancementChange}
+          isPiPActive={isPiPActive}
+          isPiPSupported={isPiPSupported}
+          onTogglePiP={onTogglePiP}
+          isPopOutMode={isPopOutMode}
+          isMinimizeSupported={isMinimizeSupported}
+          isMinimizeActive={isMinimizeActive}
+          onMinimize={onMinimize}
+          queueCount={queueCount}
+          onToggleQueue={onToggleQueue}
+          serverUri={serverUri}
+          serverToken={serverToken}
+          ratingKey={ratingKey}
+          onSubtitleDownloaded={onSubtitleDownloaded}
+          onPanelPinChange={onPanelPinChange}
+        />
+      </div>
     </div>
   );
 }
@@ -191,6 +215,13 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "0.75rem",
     padding: "1rem 1.25rem",
     background: "linear-gradient(to bottom, rgba(0,0,0,0.7) 0%, transparent 100%)",
+  },
+  bottomArea: {
+    display: "flex",
+    flexDirection: "column",
+    padding: "0 1.25rem 0.75rem",
+    background: "linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 100%)",
+    paddingTop: "3rem",
   },
   backButton: {
     background: "transparent",

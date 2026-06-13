@@ -2,7 +2,7 @@
  * Keyboard shortcut handling for the video player.
  */
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { NormalizationPreset } from "../../types/preferences";
 import { logger } from "../../services/logger";
 
@@ -49,6 +49,14 @@ export interface KeyboardShortcutDeps {
 }
 
 export function usePlayerKeyboardShortcuts(deps: KeyboardShortcutDeps): void {
+  // The handler reads everything through this ref so the global keydown
+  // listener is registered exactly once per mount. Several deps change at
+  // the 4 Hz time-pos rate (currentTime) or per user gesture (volume,
+  // chapters), and listing them as effect deps removed/re-added the
+  // window listener several times per second for the whole session.
+  const depsRef = useRef(deps);
+  depsRef.current = deps;
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (
@@ -56,6 +64,8 @@ export function usePlayerKeyboardShortcuts(deps: KeyboardShortcutDeps): void {
         e.target instanceof HTMLTextAreaElement
       )
         return;
+
+      const deps = depsRef.current;
 
       deps.resetHideTimer();
       logger.debug("player:keys", e.key);
@@ -154,28 +164,5 @@ export function usePlayerKeyboardShortcuts(deps: KeyboardShortcutDeps): void {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  // Individual deps — avoids re-registering the listener every render
-  // (the `deps` object is a new reference each time).
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    deps.togglePlay,
-    deps.seek,
-    deps.currentTime,
-    deps.duration,
-    deps.volume,
-    deps.setVolume,
-    deps.toggleFullscreen,
-    deps.toggleMute,
-    deps.isFullscreen,
-    deps.onBack,
-    deps.resetHideTimer,
-    deps.chapters,
-    deps.volumeBoost,
-    deps.normalizationPreset,
-    deps.onAudioEnhancementChange,
-    deps.onNextEpisode,
-    deps.onPrevEpisode,
-    deps.togglePiP,
-    deps.onToggleShortcuts,
-  ]);
+  }, []);
 }

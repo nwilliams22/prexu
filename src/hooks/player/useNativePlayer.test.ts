@@ -475,4 +475,95 @@ describe("useNativePlayer dispatch contract (prexu-ve9)", () => {
       });
     });
   });
+
+  describe("chrome slice stability (prexu-bgz.5)", () => {
+    function fire(name: string, payload: unknown) {
+      const subs = eventHandlers[name];
+      if (!subs || subs.length === 0) {
+        throw new Error(`${name} handlers not registered yet`);
+      }
+      for (const h of subs) h({ payload });
+    }
+
+    it("keeps chrome identity across time-pos/buffered ticks while the live values update", async () => {
+      const { result } = renderHook(() => useNativePlayer("123"));
+
+      await waitFor(() => {
+        expect(eventHandlers["player://time-pos"]?.length ?? 0).toBeGreaterThan(0);
+      });
+      // Let the async init settle (mocked prepareSource resolves null →
+      // error path flips isLoading false) so the snapshot below isn't
+      // invalidated by trailing init state updates.
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      const chromeBefore = result.current.chrome;
+
+      act(() => {
+        fire("player://time-pos", 12.5);
+      });
+      expect(result.current.currentTime).toBe(12.5);
+      expect(result.current.chrome).toBe(chromeBefore);
+
+      act(() => {
+        fire("player://buffered", 30);
+      });
+      expect(result.current.buffered).toBe(30);
+      expect(result.current.chrome).toBe(chromeBefore);
+
+      act(() => {
+        fire("player://time-pos", 12.75);
+      });
+      expect(result.current.currentTime).toBe(12.75);
+      expect(result.current.chrome).toBe(chromeBefore);
+    });
+
+    it("swaps chrome identity when non-tick state actually changes", async () => {
+      const { result } = renderHook(() => useNativePlayer("123"));
+
+      await waitFor(() => {
+        expect(eventHandlers["player://paused"]?.length ?? 0).toBeGreaterThan(0);
+      });
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      const chromeBefore = result.current.chrome;
+
+      // paused=false → isPlaying true — a genuine chrome state transition.
+      act(() => {
+        fire("player://paused", false);
+      });
+      expect(result.current.isPlaying).toBe(true);
+      expect(result.current.chrome).not.toBe(chromeBefore);
+      expect(result.current.chrome.isPlaying).toBe(true);
+    });
+
+    it("keeps action callbacks identity-stable across ticks and play state changes", async () => {
+      const { result } = renderHook(() => useNativePlayer("123"));
+
+      await waitFor(() => {
+        expect(eventHandlers["player://time-pos"]?.length ?? 0).toBeGreaterThan(0);
+      });
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      const { togglePlay, seek, setFullscreen, subscribeToEof, pause, unload } =
+        result.current;
+
+      act(() => {
+        fire("player://time-pos", 60);
+        fire("player://paused", false);
+      });
+
+      expect(result.current.togglePlay).toBe(togglePlay);
+      expect(result.current.seek).toBe(seek);
+      expect(result.current.setFullscreen).toBe(setFullscreen);
+      expect(result.current.subscribeToEof).toBe(subscribeToEof);
+      expect(result.current.pause).toBe(pause);
+      expect(result.current.unload).toBe(unload);
+    });
+  });
 });

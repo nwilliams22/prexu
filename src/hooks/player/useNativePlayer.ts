@@ -37,7 +37,7 @@ import type {
   NormalizationPreset,
   SubtitleStylePreferences,
 } from "../../types/preferences";
-import type { UsePlayerResult } from "../usePlayer";
+import type { PlayerChrome, UsePlayerResult } from "../usePlayer";
 import { logger, redactUrl } from "../../services/logger";
 
 export function useNativePlayer(
@@ -539,10 +539,16 @@ export function useNativePlayer(
   // polish can add an explicit window-event listener if it matters.
 
   // ── Actions ──
+  // isPlaying is read through a ref so togglePlay keeps a stable identity
+  // across play/pause transitions — it sits in the tick-stable chrome
+  // slice and feeds long-lived consumers (keyboard handler, WT sync).
+  const isPlayingRef = useRef(isPlaying);
+  isPlayingRef.current = isPlaying;
   const togglePlay = useCallback(() => {
-    logger.debug("player", isPlaying ? "pause" : "play");
-    invoke(isPlaying ? "player_pause" : "player_play").catch(() => {});
-  }, [isPlaying]);
+    const playing = isPlayingRef.current;
+    logger.debug("player", playing ? "pause" : "play");
+    invoke(playing ? "player_pause" : "player_play").catch(() => {});
+  }, []);
 
   const seek = useCallback((time: number) => {
     logger.debug("player", "seek", { seconds: time });
@@ -802,7 +808,11 @@ export function useNativePlayer(
     [],
   );
 
-  return useMemo<UsePlayerResult>(
+  // Tick-stable slice: memoized over stable callbacks + rarely-changing
+  // state only. currentTime/buffered are deliberately excluded so chrome
+  // consumers (transport buttons, menus, effects) don't churn at the
+  // Rust-throttled 4 Hz time-pos rate.
+  const chrome = useMemo<PlayerChrome>(
     () => ({
       videoRef,
       title,
@@ -814,9 +824,7 @@ export function useNativePlayer(
       isLoading,
       isPlaying,
       isBuffering,
-      currentTime,
       duration,
-      buffered,
       volume,
       isMuted,
       isFullscreen,
@@ -851,9 +859,7 @@ export function useNativePlayer(
       isLoading,
       isPlaying,
       isBuffering,
-      currentTime,
       duration,
-      buffered,
       volume,
       isMuted,
       isFullscreen,
@@ -878,5 +884,10 @@ export function useNativePlayer(
       applySubtitleStyle,
       applyAudioEnhancement,
     ],
+  );
+
+  return useMemo<UsePlayerResult>(
+    () => ({ ...chrome, currentTime, buffered, chrome }),
+    [chrome, currentTime, buffered],
   );
 }

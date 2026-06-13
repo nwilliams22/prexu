@@ -105,6 +105,11 @@ export function usePostPlay({
   // player://eof on native, video.addEventListener("ended") on HTML5).
   // The pause-on-PostPlay call below is similarly dispatched via
   // player.pause(); this hook does not touch videoRef directly.
+  //
+  // Depend on the two stable callbacks rather than the whole `player`
+  // object — the full result gets a new identity on every time-pos tick,
+  // which would unsubscribe/resubscribe the EOF handler ~4x/sec.
+  const { subscribeToEof, pause } = player;
   useEffect(() => {
     const handleEnded = () => {
       // hasNextItem encodes "real successor exists":
@@ -128,7 +133,7 @@ export function usePostPlay({
         // re-issues loadfile) leaks audio/video under the overlay; (b) on
         // HTML5, browsers may fire `ended` then auto-restart on certain
         // codecs. Idempotent — pausing an already-paused player is a no-op.
-        player.pause();
+        pause();
         setShowPostPlay(true);
         return;
       }
@@ -141,9 +146,10 @@ export function usePostPlay({
         onExitRef.current();
       }
     };
-    return player.subscribeToEof(handleEnded);
+    return subscribeToEof(handleEnded);
   }, [
-    player,
+    subscribeToEof,
+    pause,
     hasNextItem,
     wtInSession,
     itemType,
