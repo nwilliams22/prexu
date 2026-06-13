@@ -1,5 +1,5 @@
 import { useState, memo } from "react";
-import { useServerActivity } from "../hooks/useServerActivity";
+import { useIsScanning } from "../hooks/useServerActivity";
 import { useLazyImage } from "../hooks/useLazyImage";
 import type { MediaBadge } from "../utils/media-badges";
 
@@ -81,8 +81,10 @@ function PosterCard({
     index === undefined
       ? 0
       : Math.min(Math.max(0, index), MAX_STAGGER_INDEX) * STAGGER_STEP_MS;
-  const { scanningIds } = useServerActivity();
-  const scanning = scanningProp ?? (ratingKey ? scanningIds.has(ratingKey) : false);
+  // Narrow per-key subscription (prexu-bgz.15): re-renders this card only
+  // when ITS scanning state flips, not on every server-activity change.
+  const isScanningFromServer = useIsScanning(ratingKey);
+  const scanning = scanningProp ?? isScanningFromServer;
   const {
     containerRef,
     imgRef,
