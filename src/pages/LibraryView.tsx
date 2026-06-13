@@ -28,9 +28,8 @@ import {
   isWatched,
   getUnwatchedCount,
 } from "../utils/media-helpers";
-import type { PlexMediaItem, PlexMediaInfo, PlexCollection, LibraryFilters } from "../types/library";
-import { getMediaBadges, extractStreamsForBadges } from "../utils/media-badges";
-import type { MediaBadge } from "../utils/media-badges";
+import type { PlexMediaItem, PlexCollection, LibraryFilters } from "../types/library";
+import { getItemMediaBadges } from "../utils/media-badges";
 import { STORAGE_KEYS } from "../services/storage/backends";
 import {
   getLibrarySortBucket,
@@ -64,14 +63,6 @@ function persistFilters(sectionId: string, state: PersistedLibraryState): void {
   } else {
     localStorage.removeItem(`${STORAGE_KEYS.LIBRARY_FILTERS}:${sectionId}`);
   }
-}
-
-function getItemMediaBadges(item: PlexMediaItem): MediaBadge[] | undefined {
-  const media = (item as { Media?: PlexMediaInfo[] }).Media?.[0];
-  if (!media) return undefined;
-  const { videoStream, audioStream } = extractStreamsForBadges(media);
-  const badges = getMediaBadges(media, videoStream, audioStream);
-  return badges.length > 0 ? badges : undefined;
 }
 
 function LibraryView() {

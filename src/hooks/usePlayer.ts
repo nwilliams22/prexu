@@ -347,7 +347,7 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
             data.reason ? `reason: ${data.reason}` : null,
           ].filter(Boolean).join("\n");
 
-          console.warn(`[HLS Error] ${data.fatal ? "FATAL" : "non-fatal"}`, details);
+          logger.warn("player", `HLS ${data.fatal ? "fatal" : "non-fatal"} error`, details);
 
           if (data.fatal) {
             switch (data.type) {

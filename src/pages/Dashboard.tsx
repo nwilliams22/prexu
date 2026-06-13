@@ -34,21 +34,10 @@ import {
 } from "../utils/media-helpers";
 import type {
   PlexMediaItem,
-  PlexMediaInfo,
   PlexEpisode,
   GroupedRecentItem,
 } from "../types/library";
-import { getMediaBadges, extractStreamsForBadges } from "../utils/media-badges";
-import type { MediaBadge } from "../utils/media-badges";
-
-/** Extract media badges from an item that may have Media[] at runtime */
-function getItemMediaBadges(item: PlexMediaItem): MediaBadge[] | undefined {
-  const media = (item as { Media?: PlexMediaInfo[] }).Media?.[0];
-  if (!media) return undefined;
-  const { videoStream, audioStream } = extractStreamsForBadges(media);
-  const badges = getMediaBadges(media, videoStream, audioStream);
-  return badges.length > 0 ? badges : undefined;
-}
+import { getItemMediaBadges } from "../utils/media-badges";
 
 /** Inline error state for a single dashboard section. */
 function SectionError({

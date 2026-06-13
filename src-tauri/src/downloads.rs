@@ -15,6 +15,47 @@ fn progress_at_end(downloaded: u64, total: u64) -> bool {
     total > 0 && downloaded >= total
 }
 
+/// Validate a path component (rating_key or file_name) that will be joined
+/// onto the downloads directory. Rejects any value that could escape the
+/// intended directory via path traversal or absolute paths.
+///
+/// Allowlist: printable ASCII excluding `/`, `\`, `:`, `*`, `?`, `"`, `<`,
+/// `>`, `|`, and NUL. Also rejects `..` as a component, absolute paths, and
+/// Windows drive-qualified paths (e.g. `C:foo`).
+///
+/// Returns `Ok(())` if the value is safe, or `Err` with a static description.
+fn validate_path_component(value: &str) -> Result<(), &'static str> {
+    if value.is_empty() {
+        return Err("path component must not be empty");
+    }
+    // Reject NUL byte (can truncate OS path strings).
+    if value.contains('\0') {
+        return Err("path component contains NUL byte");
+    }
+    // Reject path separator characters.
+    if value.contains('/') || value.contains('\\') {
+        return Err("path component contains path separator");
+    }
+    // Reject Windows drive qualifiers like "C:" or "C:foo".
+    // A colon in any position is sufficient — it's never valid in a bare name.
+    if value.contains(':') {
+        return Err("path component contains drive qualifier or colon");
+    }
+    // Reject UNC prefix "\\" — already caught above by the backslash check,
+    // but be explicit for clarity. Reject lone "." and ".." traversal segments.
+    if value == ".." || value == "." {
+        return Err("path component is a traversal segment");
+    }
+    // Reject Windows shell-special characters that could be exploited via
+    // later shell invocations or confuse file managers.
+    for ch in ['*', '?', '"', '<', '>', '|'] {
+        if value.contains(ch) {
+            return Err("path component contains a forbidden character");
+        }
+    }
+    Ok(())
+}
+
 /// Manages active downloads with cancellation support.
 pub struct DownloadManager {
     active: Arc<Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>>,
@@ -79,6 +120,18 @@ pub async fn download_media(
     state: tauri::State<'_, DownloadManager>,
 ) -> Result<(), String> {
     validate_server_url(&server_url)?;
+
+    // Guard against path traversal via attacker-influenced rating_key / file_name.
+    // Log a warning on rejection but do NOT echo the raw value into the log
+    // (log-injection risk); only log a fixed label for each parameter.
+    if let Err(reason) = validate_path_component(&rating_key) {
+        log::warn!("[downloads] rejected download request: invalid rating_key — {}", reason);
+        return Err(format!("Invalid rating_key: {}", reason));
+    }
+    if let Err(reason) = validate_path_component(&file_name) {
+        log::warn!("[downloads] rejected download request: invalid file_name — {}", reason);
+        return Err(format!("Invalid file_name: {}", reason));
+    }
 
     let downloads_dir = resolve_downloads_dir().await?;
     let item_dir = downloads_dir.join(&rating_key);
@@ -319,7 +372,7 @@ pub async fn get_local_file_path(
 
 #[cfg(test)]
 mod tests {
-    use super::progress_at_end;
+    use super::{progress_at_end, validate_path_component};
     use crate::util::redact_url;
 
     #[test]
@@ -380,5 +433,78 @@ mod tests {
         // Non-auth URLs (e.g. HLS segment without inline token) must be unchanged.
         let url = "http://192.168.1.5:32400/video/:/transcode/universal/session/1/segments.m3u8";
         assert_eq!(redact_url(url), url);
+    }
+
+    // ── Path-traversal validation ──
+
+    #[test]
+    fn valid_path_components_are_accepted() {
+        // Typical rating_key values from Plex (numeric strings).
+        assert!(validate_path_component("12345").is_ok());
+        assert!(validate_path_component("98765432").is_ok());
+        // Typical file names from Plex media.
+        assert!(validate_path_component("Movie.Title.2024.mkv").is_ok());
+        assert!(validate_path_component("episode-s01e02.mp4").is_ok());
+        assert!(validate_path_component("show_name_720p.avi").is_ok());
+        assert!(validate_path_component("file with spaces.mkv").is_ok());
+    }
+
+    #[test]
+    fn dot_dot_traversal_is_rejected() {
+        assert!(validate_path_component("..").is_err());
+        // A single dot is also rejected.
+        assert!(validate_path_component(".").is_err());
+    }
+
+    #[test]
+    fn forward_slash_traversal_is_rejected() {
+        assert!(validate_path_component("../secret").is_err());
+        assert!(validate_path_component("foo/bar").is_err());
+        assert!(validate_path_component("/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn backslash_traversal_is_rejected() {
+        assert!(validate_path_component("..\\secret").is_err());
+        assert!(validate_path_component("foo\\bar").is_err());
+        assert!(validate_path_component("\\Windows\\System32").is_err());
+    }
+
+    #[test]
+    fn absolute_path_is_rejected() {
+        // Unix absolute path caught by the leading slash check.
+        assert!(validate_path_component("/absolute/path").is_err());
+        // Windows absolute path caught by the backslash check.
+        assert!(validate_path_component("\\absolute\\path").is_err());
+    }
+
+    #[test]
+    fn drive_qualified_path_is_rejected() {
+        // Windows drive letters like "C:" or "C:foo" must be rejected.
+        assert!(validate_path_component("C:").is_err());
+        assert!(validate_path_component("C:foo").is_err());
+        assert!(validate_path_component("C:\\Windows").is_err());
+        assert!(validate_path_component("Z:relative").is_err());
+    }
+
+    #[test]
+    fn nul_byte_is_rejected() {
+        assert!(validate_path_component("file\0name").is_err());
+        assert!(validate_path_component("\0").is_err());
+    }
+
+    #[test]
+    fn empty_string_is_rejected() {
+        assert!(validate_path_component("").is_err());
+    }
+
+    #[test]
+    fn shell_special_characters_are_rejected() {
+        assert!(validate_path_component("file*name").is_err());
+        assert!(validate_path_component("file?name").is_err());
+        assert!(validate_path_component("file\"name").is_err());
+        assert!(validate_path_component("file<name").is_err());
+        assert!(validate_path_component("file>name").is_err());
+        assert!(validate_path_component("file|name").is_err());
     }
 }

@@ -453,6 +453,12 @@ export function useNativePlayer(
   // eslint-disable-next-line react-hooks/exhaustive-deps -- timeline funcs are stable
   }, [initPlayback]);
 
+  // Declared here so the true-unmount effect below can close over it.
+  // Refs are stable (same object throughout the component lifetime) so
+  // moving the declaration above the effect that reads it is always safe.
+  const isFullscreenRef = useRef(isFullscreen);
+  isFullscreenRef.current = isFullscreen;
+
   // True-unmount cleanup: full mpv destroy + fullscreen exit. Empty deps so
   // this only fires when the Player route actually unmounts (back to
   // dashboard, navigate away). Per-episode handoff stays soft (above).
@@ -532,9 +538,6 @@ export function useNativePlayer(
     setIsMuted(next);
     invoke("player_set_muted", { muted: next }).catch(() => {});
   }, []);
-
-  const isFullscreenRef = useRef(isFullscreen);
-  isFullscreenRef.current = isFullscreen;
 
   // Primitive setter — used by both toggleFullscreen and the public
   // setFullscreen method on UsePlayerResult. Optimistically updates React

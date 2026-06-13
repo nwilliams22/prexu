@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, createContext, useContext } from "react";
+import { useState, useEffect, useCallback, useMemo, createContext, useContext } from "react";
 import type { AuthData, ServerData } from "../types/plex";
 import type { ActiveUser } from "../types/home-user";
 import {
@@ -267,18 +267,32 @@ export function useAuthState(): AuthContextValue {
     [authToken]
   );
 
-  return {
-    isLoading,
-    isAuthenticated: authToken !== null,
-    serverSelected: server !== null,
-    serverUnreachable,
-    authToken,
-    server,
-    activeUser,
-    login,
-    logout,
-    selectServer,
-    changeServer,
-    switchUser,
-  };
+  return useMemo<AuthContextValue>(
+    () => ({
+      isLoading,
+      isAuthenticated: authToken !== null,
+      serverSelected: server !== null,
+      serverUnreachable,
+      authToken,
+      server,
+      activeUser,
+      login,
+      logout,
+      selectServer,
+      changeServer,
+      switchUser,
+    }),
+    [
+      isLoading,
+      authToken,
+      server,
+      serverUnreachable,
+      activeUser,
+      login,
+      logout,
+      selectServer,
+      changeServer,
+      switchUser,
+    ],
+  );
 }

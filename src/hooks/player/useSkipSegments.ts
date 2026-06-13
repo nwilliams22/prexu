@@ -132,7 +132,8 @@ export function useSkipSegments(
   // eslint-disable-next-line react-hooks/exhaustive-deps -- segments intentionally excluded; we only want to reset on episode change
   }, [resetKey]);
 
-  // Check if currentTime falls within any segment
+  // Compute which segment the playhead is in (pure derivation — no side effects).
+  // Done in render so downstream memoization can observe the derived key cheaply.
   const currentMs = currentTime * 1000;
   let matchedSegment: ActiveSegment | null = null;
 
@@ -153,22 +154,37 @@ export function useSkipSegments(
     }
   }
 
-  // Only update state when the active segment changes (boundary detection)
+  // Stable key that represents the current boundary identity.
   const matchKey = matchedSegment
     ? `${matchedSegment.type}-${matchedSegment.endTime}`
     : null;
 
-  if (matchKey !== prevActiveRef.current) {
-    logger.debug("player:skip", "active segment transition", {
-      from: prevActiveRef.current,
-      to: matchKey,
-      currentMs,
-      segmentsKnown: segments.length,
-    });
-    prevActiveRef.current = matchKey;
-    // Use queueMicrotask to avoid setState during render
-    queueMicrotask(() => setActiveSegment(matchedSegment));
-  }
+  // Commit the boundary transition as a proper effect (not during render).
+  // Previously this called queueMicrotask inside render, which is a React
+  // violation: scheduling state updates during the render phase is
+  // disallowed in concurrent mode and causes unpredictable tearing. Moving
+  // it into useEffect makes the update synchronous-within-the-commit-phase
+  // which is the correct React idiom for "update state when a derived value
+  // changes". Behaviour is preserved: the activeSegment state still tracks
+  // prevActiveRef and logs the transition; the only observable difference
+  // is that the state update is committed in the same batch as the render
+  // that produced matchKey rather than in an unbounded microtask.
+  useEffect(() => {
+    if (matchKey !== prevActiveRef.current) {
+      logger.debug("player:skip", "active segment transition", {
+        from: prevActiveRef.current,
+        to: matchKey,
+        currentMs,
+        segmentsKnown: segments.length,
+      });
+      prevActiveRef.current = matchKey;
+      setActiveSegment(matchedSegment);
+    }
+  // matchedSegment is derived from matchKey; including both would double-fire.
+  // currentMs and segments.length are included only for the log — they do not
+  // affect the transition guard (matchKey already encodes the identity).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matchKey]);
 
   const dismissSegment = useCallback(() => {
     if (activeSegment) {
