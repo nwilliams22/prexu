@@ -79,21 +79,25 @@ pub async fn player_set_fullscreen(
         }
     }
 
+    // Emit the authoritative fullscreen state immediately — the frontend
+    // no longer needs to wait for the 350 ms settle. The early-sync
+    // closure above has already pushed the host geometry to the correct
+    // position, so React can update isFullscreen within one IPC round-trip.
+    let actual_fs = main.is_fullscreen().unwrap_or(fullscreen);
+    log::info!(
+        "[player:cmd] set_fullscreen: emitting actual_fs={} immediately (before settle delay)",
+        actual_fs
+    );
+    let _ = app.emit("player://fullscreen", actual_fs);
+
     // Keep the transition flag set during Win11's animation to suppress
-    // the Resized event burst. Clear afterwards so normal drag-resize
-    // syncs work again. Still 350 ms — our video is no longer waiting on
-    // this.
-    log::debug!("[player:cmd] set_fullscreen: sleeping 350ms with flag set");
+    // the Resized event burst. Clear AFTER the settle delay so normal
+    // drag-resize syncs resume. The video and the frontend are already
+    // in sync — only the flag clear depends on this wait.
+    log::debug!("[player:cmd] set_fullscreen: sleeping 350ms for settle (flag only)");
     tokio::time::sleep(std::time::Duration::from_millis(350)).await;
     state.set_fullscreen_transition(false);
-    log::info!("[player:cmd] set_fullscreen: transition flag cleared");
-
-    // Emit the authoritative fullscreen state back to the frontend so
-    // React's isFullscreen stays in sync even when ESC or other OS gestures
-    // exit fullscreen without going through toggleFullscreen().
-    let actual_fs = main.is_fullscreen().unwrap_or(fullscreen);
-    log::info!("[player:cmd] set_fullscreen: actual_fs={}, emitting", actual_fs);
-    let _ = app.emit("player://fullscreen", actual_fs);
+    log::info!("[player:cmd] set_fullscreen: transition flag cleared after settle");
 
     fs_result
 }
