@@ -222,6 +222,78 @@ describe("PostPlayScreen", () => {
     expect(onStop).toHaveBeenCalled();
   });
 
+  // ── prexu-bgz.21: input guard ─────────────────────────────────────────────
+
+  it("does NOT call onPlayNext when Enter fires while an <input> is the target", () => {
+    const onPlayNext = vi.fn();
+    render(
+      <PostPlayScreen
+        {...baseProps}
+        nextItem={episodeItem}
+        onPlayNext={onPlayNext}
+        autoPlayEnabled={false}
+      />,
+    );
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    // Fire on the element so it bubbles to window with the correct target.
+    fireEvent.keyDown(input, { key: "Enter", bubbles: true });
+    expect(onPlayNext).not.toHaveBeenCalled();
+    document.body.removeChild(input);
+  });
+
+  it("does NOT call onStop when Escape fires while a <textarea> is the target", () => {
+    const onStop = vi.fn();
+    render(
+      <PostPlayScreen
+        {...baseProps}
+        nextItem={episodeItem}
+        onStop={onStop}
+        autoPlayEnabled={false}
+      />,
+    );
+    const textarea = document.createElement("textarea");
+    document.body.appendChild(textarea);
+    fireEvent.keyDown(textarea, { key: "Escape", bubbles: true });
+    expect(onStop).not.toHaveBeenCalled();
+    document.body.removeChild(textarea);
+  });
+
+  it("does NOT call onPlayNext when Enter fires while a contentEditable is the target", () => {
+    const onPlayNext = vi.fn();
+    render(
+      <PostPlayScreen
+        {...baseProps}
+        nextItem={episodeItem}
+        onPlayNext={onPlayNext}
+        autoPlayEnabled={false}
+      />,
+    );
+    const div = document.createElement("div");
+    div.contentEditable = "true";
+    document.body.appendChild(div);
+    fireEvent.keyDown(div, { key: "Enter", bubbles: true });
+    expect(onPlayNext).not.toHaveBeenCalled();
+    document.body.removeChild(div);
+  });
+
+  it("does NOT call onStop when Escape fires while a <select> is the target", () => {
+    const onStop = vi.fn();
+    render(
+      <PostPlayScreen
+        {...baseProps}
+        nextItem={episodeItem}
+        onStop={onStop}
+        autoPlayEnabled={false}
+      />,
+    );
+    const select = document.createElement("select");
+    document.body.appendChild(select);
+    fireEvent.keyDown(select, { key: "Escape", bubbles: true });
+    expect(onStop).not.toHaveBeenCalled();
+    document.body.removeChild(select);
+  });
+
   it("invokes onPlayNext when Play Now button is clicked", () => {
     const onPlayNext = vi.fn();
     render(

@@ -34,8 +34,22 @@ export default function SkipSegmentButton({
   const showNextEpisode = Boolean(isCredits && hasNextEpisode && onNextEpisode);
 
   // Keyboard: S always triggers the primary skip (intro or credits).
+  // Guard: do not intercept while the user is typing in an input-like element.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        // isContentEditable reflects the computed state; the contentEditable
+        // attribute check covers environments (e.g. jsdom) that don't implement
+        // the computed property.
+        target?.isContentEditable ||
+        target?.contentEditable === "true"
+      ) {
+        return;
+      }
       if (e.key === "s" || e.key === "S") {
         if (e.shiftKey) return; // Shift+S reserved for future bindings
         e.preventDefault();
