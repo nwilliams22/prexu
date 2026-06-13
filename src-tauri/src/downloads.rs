@@ -116,7 +116,9 @@ pub async fn download_media(
         .get(&url)
         .send()
         .await
-        .map_err(|e| format!("Download request failed: {}", e))?;
+        // Strip the URL (contains X-Plex-Token) from reqwest's error before
+        // returning it to the webview or logging it.
+        .map_err(|e| format!("Download request failed: {}", e.without_url()))?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -172,11 +174,14 @@ pub async fn download_media(
                     Some(Err(e)) => {
                         drop(file);
                         let _ = tokio::fs::remove_file(&temp_path).await;
-                        log::error!("[Download] stream error for {}: {:?}", rating_key, e);
-                        emit_progress(downloaded, "error", Some(e.to_string()));
+                        // Strip the URL (contains X-Plex-Token) before logging
+                        // or forwarding to the webview via the progress event.
+                        let safe_err = e.without_url();
+                        log::error!("[downloads] stream error for {}: {:?}", rating_key, safe_err);
+                        emit_progress(downloaded, "error", Some(safe_err.to_string()));
                         let mut active = state.active.lock().await;
                         active.remove(&rating_key);
-                        return Err(format!("Download error: {}", e));
+                        return Err(format!("Download error: {}", safe_err));
                     }
                     None => break, // Stream complete
                 }
@@ -315,6 +320,7 @@ pub async fn get_local_file_path(
 #[cfg(test)]
 mod tests {
     use super::progress_at_end;
+    use crate::util::redact_url;
 
     #[test]
     fn unknown_total_never_signals_at_end() {
@@ -339,5 +345,40 @@ mod tests {
     fn known_total_of_one_byte_works() {
         assert!(!progress_at_end(0, 1));
         assert!(progress_at_end(1, 1));
+    }
+
+    // ── Token redaction in download errors ──
+
+    /// The token that appears in the download URL must never surface in any
+    /// string that flows to a log or to the webview (progress event / Err).
+    #[test]
+    fn redact_url_strips_token_from_download_url() {
+        let url = "http://192.168.1.5:32400/library/parts/42/file.mkv?X-Plex-Token=s3cr3t";
+        let out = redact_url(url);
+        assert!(!out.contains("s3cr3t"), "token must not appear in redacted output");
+        assert!(out.contains("X-Plex-Token=***"), "redaction placeholder must be present");
+    }
+
+    #[test]
+    fn redact_url_handles_token_with_trailing_params() {
+        // Plex sometimes appends extra query params after the token.
+        let url = "http://h/p?quality=high&X-Plex-Token=abc123&format=mkv";
+        let out = redact_url(url);
+        assert!(!out.contains("abc123"));
+        assert!(out.contains("&format=mkv"), "params after token must be preserved");
+    }
+
+    #[test]
+    fn redact_url_is_case_insensitive_on_param_name() {
+        let url = "http://h/p?x-plex-token=SECRETVAL";
+        let out = redact_url(url);
+        assert!(!out.contains("SECRETVAL"), "token value must be redacted regardless of param case");
+    }
+
+    #[test]
+    fn redact_url_passes_through_url_without_token() {
+        // Non-auth URLs (e.g. HLS segment without inline token) must be unchanged.
+        let url = "http://192.168.1.5:32400/video/:/transcode/universal/session/1/segments.m3u8";
+        assert_eq!(redact_url(url), url);
     }
 }

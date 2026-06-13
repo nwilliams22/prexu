@@ -42,30 +42,10 @@ fn validate_header_field(s: &str) -> Result<(), String> {
 }
 
 /// Mask any X-Plex-Token query value, then truncate to 80 chars for logging.
-/// Truncation alone is not enough: with a short server URI the token itself
-/// falls inside the truncation window.
+/// Delegates to the shared implementation in `crate::util` so the logic lives
+/// in exactly one place.
 fn redact_url(url: &str) -> String {
-    let mut out = String::with_capacity(url.len());
-    let mut rest = url;
-    loop {
-        match rest.to_ascii_lowercase().find("x-plex-token=") {
-            Some(idx) => {
-                let val_start = idx + "x-plex-token=".len();
-                out.push_str(&rest[..val_start]);
-                out.push_str("***");
-                let after = &rest[val_start..];
-                rest = match after.find('&') {
-                    Some(amp) => &after[amp..],
-                    None => "",
-                };
-            }
-            None => {
-                out.push_str(rest);
-                break;
-            }
-        }
-    }
-    out.chars().take(80).collect()
+    crate::util::redact_url(url)
 }
 
 #[tauri::command]

@@ -1,5 +1,6 @@
 mod downloads;
 mod player;
+mod util;
 
 use tauri_plugin_log::{Target, TargetKind};
 use tauri::{AppHandle, Manager};
@@ -162,7 +163,9 @@ fn start_proxy(
             let client = client.clone();
             thread::spawn(move || {
                 if let Err(e) = handle_proxy_request(stream, &su, &tk, &client, dl.as_deref()) {
-                    log::error!("[Proxy] Request error: {}", e);
+                    // Redact before logging: the error string may contain the
+                    // target URL (including X-Plex-Token) from reqwest's Display.
+                    log::error!("[Proxy] Request error: {}", crate::util::redact_url(&e.to_string()));
                 }
             });
         }
@@ -311,8 +314,10 @@ fn handle_proxy_request(
         req = req.header("Range", range.as_str());
     }
 
-    // Execute the request to Plex
-    let resp = req.send()?;
+    // Execute the request to Plex.
+    // Strip the URL from any reqwest error before propagating — the URL
+    // contains X-Plex-Token and must not appear in logs or error strings.
+    let resp = req.send().map_err(|e| Box::new(e.without_url()) as Box<dyn std::error::Error>)?;
 
     let status = resp.status();
     let content_type = resp
