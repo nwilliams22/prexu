@@ -30,6 +30,14 @@ use tauri::{AppHandle, Manager};
 /// resize (host extends past or stops short of chrome).
 pub(crate) const GEOMETRY_SYNC_MIN_INTERVAL: Duration = Duration::from_millis(33);
 
+/// How long `report_stopped_on_close` waits for the spawned report thread
+/// before letting window close proceed. Caps shutdown latency: the typical
+/// LAN Plex timeline GET completes in tens of ms (close stays effectively
+/// instant); a dead/slow server costs at most this much instead of the old
+/// main-thread worst case of client construction + 1500ms send. Past this
+/// budget the thread is detached and races process exit (prexu-bgz.9).
+pub(crate) const CLOSE_REPORT_JOIN_BUDGET: Duration = Duration::from_millis(300);
+
 /// Managed state container holding the mpv handle + (on Windows) the native
 /// HWND that mpv renders into. Created lazily on the first `ensure_init`.
 pub struct PlayerState {
@@ -983,14 +991,29 @@ impl PlayerState {
 
     /// Fire the final `state=stopped` timeline report when the window is
     /// closing mid-playback (prexu-50f). Runs on the main thread during
-    /// shutdown with a hard 1.5s network timeout; mpv is still alive here
-    /// (CloseRequested fires before `destroy()`), so the position is read
-    /// straight from `time-pos`. No-op when no playback registered a
-    /// context or the frontend already cleared it after its own report.
+    /// shutdown. mpv is still alive here (CloseRequested fires before
+    /// `destroy()`), so the position is read synchronously from `time-pos`
+    /// on the caller thread; the network send happens on a spawned thread
+    /// so window close is not held hostage by reqwest's blocking client
+    /// (which spins up a private tokio runtime) + up to 1.5s of network
+    /// I/O (prexu-bgz.9).
+    ///
+    /// The caller waits at most `CLOSE_REPORT_JOIN_BUDGET` for the send to
+    /// finish. A fully detached thread would usually be killed before the
+    /// request lands: nothing in the Tauri run loop waits on app exit
+    /// (`lib.rs` has no RunEvent handler — `.run()` returns as soon as the
+    /// last window is destroyed and the process exits, reaping detached
+    /// threads). The bounded wait caps the close delay at 300ms (vs the
+    /// old worst case of runtime spawn + 1500ms send) while still letting
+    /// the typical LAN Plex request (~tens of ms) land. No-op when no
+    /// playback registered a context or the frontend already cleared it
+    /// after its own report.
     pub fn report_stopped_on_close(&self) {
         let Some(ctx) = self.take_timeline_ctx() else {
             return;
         };
+        // time-pos MUST be read here on the caller thread — mpv is torn
+        // down immediately after this returns.
         let pos_ms = match self.with_mpv(|mpv| mpv.get_property::<f64>("time-pos")) {
             Ok(secs) => (secs * 1000.0).max(0.0).round() as u64,
             Err(e) => {
@@ -1003,32 +1026,41 @@ impl PlayerState {
             pos_ms,
             ctx.rating_key
         );
-        let client = match reqwest::blocking::Client::builder()
-            .timeout(Duration::from_millis(1500))
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                log::error!("[player] close report client build failed: {}", e);
-                return;
+        let (url, query) = stopped_report_request(&ctx, pos_ms);
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        std::thread::spawn(move || {
+            // Moved into the closure so it drops when the send finishes
+            // (or panics), unblocking the bounded recv_timeout below.
+            let _completion_guard = tx;
+            let client = match reqwest::blocking::Client::builder()
+                .timeout(Duration::from_millis(1500))
+                .build()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    log::error!("[player] close report client build failed: {}", e);
+                    return;
+                }
+            };
+            let result = client
+                .get(url)
+                .query(&query)
+                .header("Accept", "application/json")
+                .send();
+            match result {
+                Ok(resp) => log::info!("[player] close report sent, status {}", resp.status()),
+                Err(e) => log::warn!("[player] close report failed: {}", e.without_url()),
             }
-        };
-        let result = client
-            .get(format!("{}/:/timeline", ctx.server_uri))
-            .query(&[
-                ("ratingKey", ctx.rating_key.clone()),
-                ("key", format!("/library/metadata/{}", ctx.rating_key)),
-                ("state", "stopped".to_string()),
-                ("time", pos_ms.to_string()),
-                ("duration", ctx.duration_ms.to_string()),
-                ("X-Plex-Client-Identifier", ctx.client_id.clone()),
-                ("X-Plex-Token", ctx.token.clone()),
-            ])
-            .header("Accept", "application/json")
-            .send();
-        match result {
-            Ok(resp) => log::info!("[player] close report sent, status {}", resp.status()),
-            Err(e) => log::warn!("[player] close report failed: {}", e.without_url()),
+        });
+        // Bounded join: Disconnected = sender dropped = thread finished.
+        // Timeout = still in flight; proceed with close and let the thread
+        // race process exit (best-effort — the report may be lost).
+        match rx.recv_timeout(CLOSE_REPORT_JOIN_BUDGET) {
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => log::debug!(
+                "[player] close report still in flight after {:?} — detaching",
+                CLOSE_REPORT_JOIN_BUDGET
+            ),
+            _ => log::debug!("[player] close report thread finished within close budget"),
         }
     }
 
@@ -1136,6 +1168,35 @@ impl Default for PlayerState {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Pure helper: build the URL + query pairs for the final `state=stopped`
+/// timeline GET. Extracted from `report_stopped_on_close` so the network
+/// thread captures only owned plain data (no `&self`) and the request
+/// shape can be unit tested without a live server. reqwest's `.query()`
+/// handles percent-encoding of the values at send time.
+pub(crate) fn stopped_report_request(
+    ctx: &TimelineCtx,
+    pos_ms: u64,
+) -> (String, Vec<(String, String)>) {
+    (
+        format!("{}/:/timeline", ctx.server_uri),
+        vec![
+            ("ratingKey".to_string(), ctx.rating_key.clone()),
+            (
+                "key".to_string(),
+                format!("/library/metadata/{}", ctx.rating_key),
+            ),
+            ("state".to_string(), "stopped".to_string()),
+            ("time".to_string(), pos_ms.to_string()),
+            ("duration".to_string(), ctx.duration_ms.to_string()),
+            (
+                "X-Plex-Client-Identifier".to_string(),
+                ctx.client_id.clone(),
+            ),
+            ("X-Plex-Token".to_string(), ctx.token.clone()),
+        ],
+    )
 }
 
 /// Pure helper: compute the corner-anchored physical-px inset for the mpv
@@ -1246,6 +1307,23 @@ mod tests {
         state.set_timeline_ctx(Some(timeline_ctx()));
         state.report_stopped_on_close();
         assert!(state.take_timeline_ctx().is_none());
+    }
+
+    #[test]
+    fn stopped_report_request_builds_expected_url_and_query() {
+        let ctx = timeline_ctx();
+        let (url, query) = stopped_report_request(&ctx, 123_456);
+        assert_eq!(url, "https://server.example:32400/:/timeline");
+        let expected: Vec<(String, String)> = vec![
+            ("ratingKey".into(), "66324".into()),
+            ("key".into(), "/library/metadata/66324".into()),
+            ("state".into(), "stopped".into()),
+            ("time".into(), "123456".into()),
+            ("duration".into(), "1244200".into()),
+            ("X-Plex-Client-Identifier".into(), "client-id".into()),
+            ("X-Plex-Token".into(), "tok".into()),
+        ];
+        assert_eq!(query, expected);
     }
 
     #[test]
