@@ -241,24 +241,36 @@ pub(crate) fn plan_sync_immediate(
     SyncPlan::Apply(ax, ay, aw, ah)
 }
 
-/// What `sync_geometry_move` should do. `None` means dedup-skip (no host
-/// call); `Some` carries the inset-adjusted position plus the
-/// `last_geometry` write-back to perform AFTER the host call succeeds so a
-/// subsequent resize dedup-compares against the right `(x, y)`.
+/// What `sync_geometry_move` should do with a `WindowEvent::Moved`.
+///
+/// A `Moved` usually means a pure drag (position changes, size constant) — the
+/// fast `set_position` (`SWP_NOSIZE`) path that avoids an mpv swapchain rebuild
+/// per frame. But Windows also fires `Moved` as part of a maximize / restore /
+/// Aero-snap, where the SIZE changes too; treating that as position-only leaves
+/// the host stuck at the old size until the trailing `Resized` lands (the
+/// visible maximize lag — prexu-hia9). When the resolved size differs from
+/// `last_geometry`, plan a full `set_geometry` instead.
 #[cfg(target_os = "windows")]
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct MovePlan {
-    pub(crate) ax: i32,
-    pub(crate) ay: i32,
-    /// `(ax, ay, lw, lh)` to store in `last_geometry` once the move lands,
-    /// reusing the last known size. `None` when no prior geometry exists.
-    pub(crate) write_back: Option<(i32, i32, i32, i32)>,
+pub(crate) enum MovePlan {
+    /// Pure reposition (size unchanged). `write_back` updates `last_geometry`
+    /// position after a successful `set_position`, reusing the known size.
+    Move {
+        ax: i32,
+        ay: i32,
+        write_back: Option<(i32, i32, i32, i32)>,
+    },
+    /// The move carried a size change (maximize/restore/snap, or a top-left /
+    /// corner drag-resize). Signal only: the caller delegates to the throttled
+    /// `sync_geometry` path so a one-shot maximize applies immediately (gate
+    /// open) while a continuous corner-resize is still coalesced to ~30 Hz
+    /// (avoiding the mpv swapchain-rebuild storm the throttle guards against).
+    Resize,
 }
 
 /// Pure decision half of `PlayerState::sync_geometry_move`. Does NOT mutate
-/// `GeomState` — the write-back is returned for the caller to apply after a
-/// successful host call (mirroring production, which only updates
-/// `last_geometry` once `set_position` succeeds).
+/// `GeomState` — the caller applies the resulting `last_geometry` write only
+/// after a successful host call (mirroring production). `None` = dedup-skip.
 #[cfg(target_os = "windows")]
 pub(crate) fn plan_move(
     g: &GeomState,
@@ -267,14 +279,25 @@ pub(crate) fn plan_move(
     width: i32,
     height: i32,
 ) -> Option<MovePlan> {
-    let (ax, ay, _aw, _ah) = apply_minimize_inset_inner(g, x, y, width, height);
-    if let Some((lx, ly, _, _)) = g.last_geometry {
-        if lx == ax && ly == ay {
-            return None;
+    let (ax, ay, aw, ah) = apply_minimize_inset_inner(g, x, y, width, height);
+    match g.last_geometry {
+        Some((lx, ly, lw, lh)) => {
+            if aw != lw || ah != lh {
+                // Size changed — this "move" is really a maximize/restore/snap.
+                Some(MovePlan::Resize)
+            } else if lx == ax && ly == ay {
+                None
+            } else {
+                Some(MovePlan::Move {
+                    ax,
+                    ay,
+                    write_back: Some((ax, ay, lw, lh)),
+                })
+            }
         }
+        // No prior geometry: can't know the size, so just reposition.
+        None => Some(MovePlan::Move { ax, ay, write_back: None }),
     }
-    let write_back = g.last_geometry.map(|(_, _, lw, lh)| (ax, ay, lw, lh));
-    Some(MovePlan { ax, ay, write_back })
 }
 
 // ── Unit tests ───────────────────────────────────────────────────────────────
@@ -523,16 +546,33 @@ mod tests {
         }
     }
 
-    /// Mirror of `PlayerState::sync_geometry_move`: plan, call the host, and
-    /// only on success write the `last_geometry` position back.
+    /// Mirror of `PlayerState::sync_geometry_move`: plan, then either
+    /// reposition-only (Move) or delegate a size-changing move to the throttled
+    /// sync path (Resize), exactly as production does. `now` is only consulted
+    /// on the Resize delegation.
     #[cfg(target_os = "windows")]
-    fn drive_move(g: &mut GeomState, host: &dyn HostSurface, x: i32, y: i32, w: i32, h: i32) {
-        if let Some(p) = plan_move(g, x, y, w, h) {
-            if host.set_position(p.ax, p.ay).is_ok() {
-                if let Some(wb) = p.write_back {
-                    g.last_geometry = Some(wb);
+    fn drive_move(
+        g: &mut GeomState,
+        host: &dyn HostSurface,
+        now: Instant,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+    ) {
+        match plan_move(g, x, y, w, h) {
+            Some(MovePlan::Move { ax, ay, write_back }) => {
+                if host.set_position(ax, ay).is_ok() {
+                    if let Some(wb) = write_back {
+                        g.last_geometry = Some(wb);
+                    }
                 }
             }
+            Some(MovePlan::Resize) => {
+                // Production delegates to the throttled sync_geometry.
+                drive_sync(g, host, now, x, y, w, h);
+            }
+            None => {}
         }
     }
 
@@ -619,8 +659,9 @@ mod tests {
         let mut g = GeomState::new();
         // Seed a prior applied geometry so the move has a size to preserve.
         g.last_geometry = Some((0, 0, 800, 600));
+        let now = g.last_sync + GEOMETRY_SYNC_MIN_INTERVAL + Duration::from_millis(1);
         let host = RecordingHost::new();
-        drive_move(&mut g, &host, 30, 40, 800, 600);
+        drive_move(&mut g, &host, now, 30, 40, 800, 600);
         assert_eq!(host.calls(), vec![HostCall::SetPosition(30, 40)]);
         // Position updated, size preserved for the next resize dedup.
         assert_eq!(g.last_geometry, Some((30, 40, 800, 600)));
@@ -631,9 +672,27 @@ mod tests {
     fn move_dedup_skips_same_position() {
         let mut g = GeomState::new();
         g.last_geometry = Some((30, 40, 800, 600));
+        let now = g.last_sync + GEOMETRY_SYNC_MIN_INTERVAL + Duration::from_millis(1);
         let host = RecordingHost::new();
-        drive_move(&mut g, &host, 30, 40, 800, 600);
+        drive_move(&mut g, &host, now, 30, 40, 800, 600);
         assert!(host.calls().is_empty());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn move_with_size_change_applies_full_geometry() {
+        // A `Moved` that also changes size (maximize/restore) must
+        // set_geometry, not just set_position — otherwise the host lags at the
+        // old size until the trailing Resized lands (prexu-hia9).
+        let mut g = GeomState::new();
+        g.last_geometry = Some((1603, -2129, 1918, 2128)); // restored window
+        let now = g.last_sync + GEOMETRY_SYNC_MIN_INTERVAL + Duration::from_millis(1);
+        let host = RecordingHost::new();
+        drive_move(&mut g, &host, now, 1602, -2137, 3840, 2137); // maximize
+        // Delegates to the throttled sync path; one-shot maximize passes the
+        // gate and applies the full rect at once (not a position-only move).
+        assert_eq!(host.calls(), vec![HostCall::SetGeometry(1602, -2137, 3840, 2137)]);
+        assert_eq!(g.last_geometry, Some((1602, -2137, 3840, 2137)));
     }
 
     #[cfg(target_os = "windows")]
@@ -641,8 +700,9 @@ mod tests {
     fn move_write_back_gated_on_host_success() {
         let mut g = GeomState::new();
         g.last_geometry = Some((0, 0, 800, 600));
+        let now = g.last_sync + GEOMETRY_SYNC_MIN_INTERVAL + Duration::from_millis(1);
         let host = RecordingHost::failing();
-        drive_move(&mut g, &host, 30, 40, 800, 600);
+        drive_move(&mut g, &host, now, 30, 40, 800, 600);
         // The host op was attempted but failed — last_geometry must NOT move.
         assert_eq!(host.calls(), vec![HostCall::SetPosition(30, 40)]);
         assert_eq!(g.last_geometry, Some((0, 0, 800, 600)));

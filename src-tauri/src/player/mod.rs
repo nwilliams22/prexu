@@ -675,19 +675,33 @@ impl PlayerState {
         };
         let Some(plan) = plan else { return };
 
-        // try_lock guards against re-entrancy: SetWindowPos fires
-        // WM_WINDOWPOSCHANGED synchronously on this thread, which can
-        // re-enter sync_geometry_move via the window-event handler.
+        // A move that carried a size change (maximize/restore/snap or a
+        // top-left corner drag-resize) is really a resize: delegate to the
+        // throttled sync_geometry path (prexu-hia9). A one-shot maximize passes
+        // the throttle immediately (gate open), so the host resizes without
+        // waiting for the trailing Resized; a continuous corner-resize stays
+        // coalesced to ~30 Hz, avoiding the mpv swapchain-rebuild storm.
+        let (ax, ay, write_back) = match plan {
+            geometry::MovePlan::Resize => {
+                self.sync_geometry(x, y, width, height);
+                return;
+            }
+            geometry::MovePlan::Move { ax, ay, write_back } => (ax, ay, write_back),
+        };
+
+        // Pure reposition fast path. try_lock guards against re-entrancy:
+        // SetWindowPos fires WM_WINDOWPOSCHANGED synchronously on this thread,
+        // which can re-enter sync_geometry_move via the window-event handler.
         let Ok(guard) = self.inner.try_lock() else { return };
         if let Some(inner) = guard.as_ref() {
             if let Some(host) = inner.host.as_ref() {
-                if let Err(e) = host.set_position(plan.ax, plan.ay) {
+                if let Err(e) = host.set_position(ax, ay) {
                     log::warn!("[player] sync_geometry_move failed: {}", e);
                     return;
                 }
                 // Keep last_geometry's (x, y) in sync so the next
                 // sync_geometry call (resize) dedup-compares correctly.
-                if let Some(write_back) = plan.write_back {
+                if let Some(write_back) = write_back {
                     if let Ok(mut g) = self.geom.lock() {
                         g.last_geometry = Some(write_back);
                     }
