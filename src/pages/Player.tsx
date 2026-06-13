@@ -520,6 +520,33 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     [wt.isInSession, wt.syncStatus, wt.participants.length],
   );
 
+  // Memoized URL builders and derived post-play props — stable across the
+  // per-tick re-renders driven by currentTime, so the PostPlayScreen and
+  // QueuePanel memo boundaries aren't pierced by inline lambdas or fresh
+  // object references on every render. (prexu-bgz.35)
+  const postPlayPosterUrl = useCallback(
+    (path: string) =>
+      server
+        ? getImageUrl(server.uri, server.accessToken, path, 480, 270)
+        : "",
+    [server?.uri, server?.accessToken],
+  );
+  const queuePanelPosterUrl = useCallback(
+    (path: string) =>
+      server
+        ? getImageUrl(server.uri, server.accessToken, path, 100, 68)
+        : "",
+    [server?.uri, server?.accessToken],
+  );
+  const postPlayDetailProps = useMemo(
+    () => derivePostPlayDetailProps(postPlay.postPlayDetail),
+    [postPlay.postPlayDetail],
+  );
+  const upNextSlice = useMemo(
+    () => deriveUpNextSlice(queue),
+    [queue],
+  );
+
   // Auth guards — placed after all hooks to respect React rules of hooks
   if (!isAuthenticated) return <Navigate to="/login" replace />;
   if (!serverSelected) return <Navigate to="/servers" replace />;
@@ -695,19 +722,27 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
           onPrevEpisode={handlePrevEpisode}
           audioEnhancements={audioEnhancements}
           onAudioEnhancementChange={handleAudioEnhancementChange}
-          isPiPActive={pipActive}
-          isPiPSupported={pipSupported}
-          onTogglePiP={togglePiP}
-          isPopOutMode={IS_NATIVE_PLAYER}
-          isMinimizeSupported={IS_NATIVE_PLAYER}
-          isMinimizeActive={playerMinimize.isMinimized}
-          onMinimize={handleMinimize}
-          queueCount={remainingCount}
-          onToggleQueue={toggleQueuePanel}
-          serverUri={server?.uri}
-          serverToken={server?.accessToken}
-          ratingKey={ratingKey}
-          onSubtitleDownloaded={handleSubtitleDownloaded}
+          pip={{
+            isActive: pipActive,
+            isSupported: pipSupported,
+            onToggle: togglePiP,
+            isPopOutMode: IS_NATIVE_PLAYER,
+          }}
+          minimize={IS_NATIVE_PLAYER ? {
+            isSupported: IS_NATIVE_PLAYER,
+            isActive: playerMinimize.isMinimized,
+            onMinimize: handleMinimize,
+          } : undefined}
+          queue={{
+            count: remainingCount,
+            onToggle: toggleQueuePanel,
+          }}
+          subtitleSearch={{
+            serverUri: server?.uri,
+            serverToken: server?.accessToken,
+            ratingKey,
+            onDownloaded: handleSubtitleDownloaded,
+          }}
           onPanelPinChange={setPanelPinned}
           syncIndicator={syncIndicator}
         />
@@ -722,13 +757,13 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
           nextItem={postPlay.nextQueueItem}
           onPlayNext={postPlay.onPlayNext}
           onStop={postPlay.onStop}
-          posterUrl={(path) => getImageUrl(server.uri, server.accessToken, path, 480, 270)}
+          posterUrl={postPlayPosterUrl}
           autoPlayEnabled={pb.autoPlayEnabled}
           onAutoPlayChange={(enabled) =>
             updatePreferences({ playback: { autoPlayEnabled: enabled } })
           }
-          {...derivePostPlayDetailProps(postPlay.postPlayDetail)}
-          upNext={deriveUpNextSlice(queue)}
+          {...postPlayDetailProps}
+          upNext={upNextSlice}
         />
       )}
 
@@ -736,7 +771,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
       {queuePanelOpen && server && (
         <QueuePanel
           onClose={() => setQueuePanelOpen(false)}
-          posterUrl={(path) => getImageUrl(server.uri, server.accessToken, path, 100, 68)}
+          posterUrl={queuePanelPosterUrl}
         />
       )}
     </div>

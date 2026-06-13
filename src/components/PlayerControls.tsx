@@ -14,6 +14,35 @@ import { formatDurationLabel } from "../utils/time-format";
 import ControlsBottomBar from "./player/ControlsBottomBar";
 import SeekBar from "./player/SeekBar";
 
+/** Picture-in-Picture (or pop-out on native). See ControlsBottomBar
+ *  for the `isPopOutMode` semantics. */
+interface PiPProps {
+  isActive?: boolean;
+  isSupported?: boolean;
+  onToggle?: () => void;
+  isPopOutMode?: boolean;
+}
+
+/** In-window minimize (7il.4). Windows-only for now; HTML5 path leaves
+ *  this object undefined so the button doesn't render. */
+interface MinimizeProps {
+  isSupported?: boolean;
+  isActive?: boolean;
+  onMinimize?: () => void;
+}
+
+interface QueueProps {
+  count?: number;
+  onToggle?: () => void;
+}
+
+interface SubtitleSearchProps {
+  serverUri?: string;
+  serverToken?: string;
+  ratingKey?: string;
+  onDownloaded?: () => void;
+}
+
 interface PlayerControlsProps {
   player: UsePlayerResult;
   /** Leave the player route entirely. Wired to the bottom-bar Stop button
@@ -40,30 +69,15 @@ interface PlayerControlsProps {
     normalizationPreset?: NormalizationPreset;
     audioOffsetMs?: number;
   }) => void;
-  /** Picture-in-Picture (or pop-out on native). See ControlsBottomBar
-   *  for the `isPopOutMode` semantics. */
-  isPiPActive?: boolean;
-  isPiPSupported?: boolean;
-  onTogglePiP?: () => void;
-  isPopOutMode?: boolean;
-  /** In-window minimize (7il.4). Windows-only for now; HTML5 path leaves
-   *  the props undefined so the button doesn't render. */
-  isMinimizeSupported?: boolean;
-  isMinimizeActive?: boolean;
-  onMinimize?: () => void;
-  /** Queue */
-  queueCount?: number;
-  onToggleQueue?: () => void;
-  /** Subtitle search */
-  serverUri?: string;
-  serverToken?: string;
-  ratingKey?: string;
-  onSubtitleDownloaded?: () => void;
+  pip?: PiPProps;
+  minimize?: MinimizeProps;
+  queue?: QueueProps;
+  subtitleSearch?: SubtitleSearchProps;
   /** True while any bottom-bar popup is open — pins controls visible. */
   onPanelPinChange?: (pinned: boolean) => void;
 }
 
-function PlayerControls({ player, onExit, onPrevious, visible, suppressTransition, syncIndicator, chapters, onSeek, onActivity, onNextEpisode, onPrevEpisode, audioEnhancements, onAudioEnhancementChange, isPiPActive, isPiPSupported, onTogglePiP, isPopOutMode, isMinimizeSupported, isMinimizeActive, onMinimize, queueCount, onToggleQueue, serverUri, serverToken, ratingKey, onSubtitleDownloaded, onPanelPinChange }: PlayerControlsProps) {
+function PlayerControls({ player, onExit, onPrevious, visible, suppressTransition, syncIndicator, chapters, onSeek, onActivity, onNextEpisode, onPrevEpisode, audioEnhancements, onAudioEnhancementChange, pip, minimize, queue, subtitleSearch, onPanelPinChange }: PlayerControlsProps) {
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
   const [previousHovered, setPreviousHovered] = useState(false);
@@ -178,19 +192,19 @@ function PlayerControls({ player, onExit, onPrevious, visible, suppressTransitio
           onStop={onExit}
           audioEnhancements={audioEnhancements}
           onAudioEnhancementChange={onAudioEnhancementChange}
-          isPiPActive={isPiPActive}
-          isPiPSupported={isPiPSupported}
-          onTogglePiP={onTogglePiP}
-          isPopOutMode={isPopOutMode}
-          isMinimizeSupported={isMinimizeSupported}
-          isMinimizeActive={isMinimizeActive}
-          onMinimize={onMinimize}
-          queueCount={queueCount}
-          onToggleQueue={onToggleQueue}
-          serverUri={serverUri}
-          serverToken={serverToken}
-          ratingKey={ratingKey}
-          onSubtitleDownloaded={onSubtitleDownloaded}
+          isPiPActive={pip?.isActive}
+          isPiPSupported={pip?.isSupported}
+          onTogglePiP={pip?.onToggle}
+          isPopOutMode={pip?.isPopOutMode}
+          isMinimizeSupported={minimize?.isSupported}
+          isMinimizeActive={minimize?.isActive}
+          onMinimize={minimize?.onMinimize}
+          queueCount={queue?.count}
+          onToggleQueue={queue?.onToggle}
+          serverUri={subtitleSearch?.serverUri}
+          serverToken={subtitleSearch?.serverToken}
+          ratingKey={subtitleSearch?.ratingKey}
+          onSubtitleDownloaded={subtitleSearch?.onDownloaded}
           onPanelPinChange={onPanelPinChange}
         />
       </div>
