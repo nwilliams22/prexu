@@ -8,7 +8,8 @@ import {
   reportTimeline,
   reportTimelineBeacon,
 } from "../../services/plex-playback";
-import { markAsUnwatched, getItemMetadata } from "../../services/plex-library";
+import { markAsUnwatched } from "../../services/plex-library";
+import { emitWatchStateChanged } from "../../services/watch-state-events";
 import { logger } from "../../services/logger";
 
 const TIMELINE_INTERVAL_MS = 10_000;
@@ -88,26 +89,14 @@ export function useTimelineReporting(
       });
       const { uri, accessToken } = server;
       markAsUnwatched(uri, accessToken, ratingKey)
-        .then(async () => {
+        .then(() => {
           logger.info("playback", "resume marker cleared (unscrobble ok)", {
             ratingKey,
           });
-          // Verify server-side state so we can tell whether unscrobble actually
-          // cleared the resume offset (server bug) vs the dashboard showing a
-          // stale cache (client bug). Diagnostic — cheap, early-stop only.
-          try {
-            const meta = await getItemMetadata(uri, accessToken, ratingKey);
-            logger.info("playback", "post-unscrobble server state", {
-              ratingKey,
-              viewOffset: (meta as { viewOffset?: number }).viewOffset ?? 0,
-              viewCount: (meta as { viewCount?: number }).viewCount ?? 0,
-            });
-          } catch (err) {
-            logger.warn("playback", "post-unscrobble verify failed", {
-              ratingKey,
-              error: err instanceof Error ? err.message : String(err),
-            });
-          }
+          // Server state is now updated — refresh the dashboard's Continue
+          // Watching shelf (it's an overlay sibling that never remounts, so it
+          // won't refetch on its own).
+          emitWatchStateChanged();
         })
         .catch((err) =>
           logger.warn("playback", "unscrobble failed", {
@@ -127,12 +116,15 @@ export function useTimelineReporting(
       timeMs,
       durationRef.current * 1000,
     )
-      .then(() =>
+      .then(() => {
         logger.info("playback", "stopped beacon delivered", {
           ratingKey,
           timeMs: Math.round(timeMs),
-        }),
-      )
+        });
+        // New resume offset recorded — refresh Continue Watching so the shelf
+        // reflects the updated progress.
+        emitWatchStateChanged();
+      })
       .catch((err) =>
         logger.warn("playback", "stopped beacon failed", {
           ratingKey,

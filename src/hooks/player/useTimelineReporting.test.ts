@@ -8,7 +8,6 @@ vi.mock("../../services/plex-playback", () => ({
 }));
 vi.mock("../../services/plex-library", () => ({
   markAsUnwatched: vi.fn().mockResolvedValue(undefined),
-  getItemMetadata: vi.fn().mockResolvedValue({ viewOffset: 0, viewCount: 0 }),
 }));
 vi.mock("../../services/logger", () => ({
   logger: {
@@ -22,6 +21,7 @@ vi.mock("../../services/logger", () => ({
 
 import { reportTimelineBeacon } from "../../services/plex-playback";
 import { markAsUnwatched } from "../../services/plex-library";
+import { onWatchStateChanged } from "../../services/watch-state-events";
 
 const SERVER = { uri: "https://server:32400", accessToken: "tok" };
 
@@ -91,6 +91,34 @@ describe("useTimelineReporting.reportStopped", () => {
     });
     expect(markAsUnwatched).not.toHaveBeenCalled();
     expect(reportTimelineBeacon).not.toHaveBeenCalled();
+  });
+
+  it("emits a watch-state-changed event after an early-stop clear", async () => {
+    const handler = vi.fn();
+    const off = onWatchStateChanged(handler);
+    const result = setup();
+    act(() => {
+      result.current.ratingKeyRef.current = "66324";
+      result.current.durationRef.current = 1244;
+      result.current.currentTimeRef.current = 3.17;
+      result.current.reportStopped();
+    });
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    off();
+  });
+
+  it("emits a watch-state-changed event after a resume-offset beacon", async () => {
+    const handler = vi.fn();
+    const off = onWatchStateChanged(handler);
+    const result = setup();
+    act(() => {
+      result.current.ratingKeyRef.current = "66324";
+      result.current.durationRef.current = 1244;
+      result.current.currentTimeRef.current = 90; // > 60s threshold
+      result.current.reportStopped();
+    });
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    off();
   });
 
   it("does nothing when there is no server", () => {

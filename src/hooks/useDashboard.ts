@@ -4,6 +4,7 @@ import { useLibrary } from "./useLibrary";
 import { useServerActivity } from "./useServerActivity";
 import { getRecentlyAddedBySection, getOnDeck } from "../services/plex-library";
 import { cacheGet, cacheSet, cacheInvalidate } from "../services/api-cache";
+import { onWatchStateChanged } from "../services/watch-state-events";
 import { groupRecentlyAdded } from "../utils/groupRecentlyAdded";
 import { logger } from "../services/logger";
 import type { PlexMediaItem, GroupedRecentItem, LibrarySection } from "../types/library";
@@ -192,6 +193,14 @@ export function useDashboard(): UseDashboardResult {
     },
     [serverUri],
   );
+
+  // Refresh Continue Watching when playback stops (resume offset cleared on an
+  // early stop, or a new offset recorded). The player overlay never remounts
+  // the dashboard, so without this the On Deck shelf would stay stale until an
+  // app restart.
+  useEffect(() => {
+    return onWatchStateChanged(() => refresh("deck"));
+  }, [refresh]);
 
   // Auto-refresh on server activity completion
   const prevCompletion = useRef(completionCounter);
