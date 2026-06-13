@@ -105,7 +105,7 @@ export default function QueuePanel({ onClose, posterUrl }: QueuePanelProps) {
             const isPast = index < queue.currentIndex;
             return (
               <div
-                key={`${item.ratingKey}-${index}`}
+                key={item.ratingKey}
                 role="listitem"
                 style={{
                   ...styles.item,

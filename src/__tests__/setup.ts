@@ -45,10 +45,12 @@ if (!globalThis.IntersectionObserver) {
       this._callback = callback;
     }
     private _callback: IntersectionObserverCallback;
-    observe() {
-      // Trigger callback immediately with isIntersecting: true
+    observe(target: Element) {
+      // Trigger callback immediately with isIntersecting: true. The entry
+      // carries `target` so consumers that key per-element (the shared
+      // observer in useLazyImage) dispatch to the right callback.
       this._callback(
-        [{ isIntersecting: true } as IntersectionObserverEntry],
+        [{ isIntersecting: true, target } as IntersectionObserverEntry],
         this as unknown as globalThis.IntersectionObserver,
       );
     }

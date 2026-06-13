@@ -136,6 +136,7 @@ function PosterCard({
         ...styles.card,
         width,
         cursor: "pointer",
+        willChange: hovered ? "transform" : undefined,
         transform: active ? "scale(1.0)" : hovered ? "scale(1.04)" : "scale(1)",
         border: isExpanded
           ? "2px solid var(--accent)"
@@ -338,7 +339,6 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "8px",
     overflow: "visible",
     transition: "transform 0.15s ease",
-    willChange: "transform",
     textAlign: "left",
     flexShrink: 0,
     contentVisibility: "auto",
