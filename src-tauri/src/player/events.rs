@@ -68,6 +68,18 @@ pub fn attach_window_handlers(window: &tauri::WebviewWindow, app_handle: AppHand
     > = Arc::new(Mutex::new(None));
     let was_maximized = Arc::new(AtomicBool::new(false));
     let reapplying_rect = Arc::new(AtomicBool::new(false));
+
+    // Start the long-lived trailing-edge flusher task (prexu-bgz.24).
+    // `start_flusher` is idempotent — subsequent calls on the same
+    // `PlayerState` are no-ops, so it is safe to call here even if
+    // `attach_window_handlers` were somehow called more than once.
+    // Must be called BEFORE the `on_window_event` closure captures
+    // `app_handle` by move, so we can still borrow it here.
+    {
+        let state = app_handle.state::<super::PlayerState>();
+        state.start_flusher(app_handle.clone());
+    }
+
     window.on_window_event(move |event| {
         let state = app_handle.state::<super::PlayerState>();
         match event {
@@ -195,26 +207,17 @@ pub fn attach_window_handlers(window: &tauri::WebviewWindow, app_handle: AppHand
                     // ones). claim_trailing_schedule's atomic swap
                     // means subsequent events in the same burst
                     // don't double-spawn. (prexu-hhx)
+                    // Wake the long-lived flusher task on the first event
+                    // of a burst (prexu-bgz.24). `claim_trailing_schedule`'s
+                    // atomic swap dedup is unchanged — only one `notify_one`
+                    // fires per burst; subsequent events lose the race and
+                    // skip this branch. The flusher task parks on
+                    // `notified().await` between bursts (no spinning) and
+                    // sleeps `GEOMETRY_SYNC_MIN_INTERVAL` before dispatching
+                    // `flush_pending_geometry` to the main thread, exactly as
+                    // the old per-burst `std::thread::spawn` did.
                     if state.claim_trailing_schedule() {
-                        let ah_sleep = app_handle.clone();
-                        let ah_closure = app_handle.clone();
-                        std::thread::spawn(move || {
-                            std::thread::sleep(
-                                super::GEOMETRY_SYNC_MIN_INTERVAL,
-                            );
-                            if let Err(e) =
-                                ah_sleep.run_on_main_thread(move || {
-                                    let state = ah_closure
-                                        .state::<super::PlayerState>();
-                                    state.flush_pending_geometry();
-                                })
-                            {
-                                log::warn!(
-                                    "[player] trailing flush dispatch failed: {:?}",
-                                    e
-                                );
-                            }
-                        });
+                        state.wake_flusher();
                     }
                 }
             }

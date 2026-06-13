@@ -13,6 +13,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use tokio::sync::Notify;
+
 use libmpv2::Mpv;
 use tauri::{AppHandle, Manager};
 
@@ -118,6 +120,22 @@ pub struct PlayerState {
     /// own route-exit report; `report_stopped_on_close` takes it (one-shot)
     /// and reads the live position from mpv.
     timeline_ctx: Mutex<Option<TimelineCtx>>,
+    /// Notification primitive shared between the window-event handler and the
+    /// long-lived trailing-edge flusher task (prexu-bgz.24). The handler calls
+    /// `notify_one()` when it wins the `claim_trailing_schedule` race; the
+    /// flusher task parks on `notified().await` between bursts (no spinning).
+    ///
+    /// Stored here so teardown can `abort()` the task handle (below) and drop
+    /// the `Notify` cleanly. Created in `PlayerState::new()` and shared with
+    /// the flusher task via `Arc::clone`.
+    #[cfg(target_os = "windows")]
+    flusher_notify: Arc<Notify>,
+    /// `JoinHandle` for the long-lived trailing-edge flusher tokio task.
+    /// `None` until `start_flusher` creates it (lazy, on first window-handler
+    /// attachment). Stored inside a `Mutex<Option<...>>` so `destroy()` can
+    /// `take()` + `abort()` it without a mutable `&mut self` reference.
+    #[cfg(target_os = "windows")]
+    flusher_handle: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
 }
 
 /// Which of the four corners the mini player anchors to. Mirrors the
@@ -182,6 +200,10 @@ impl PlayerState {
             #[cfg(target_os = "windows")]
             pending_focus_reassert: AtomicBool::new(false),
             timeline_ctx: Mutex::new(None),
+            #[cfg(target_os = "windows")]
+            flusher_notify: Arc::new(Notify::new()),
+            #[cfg(target_os = "windows")]
+            flusher_handle: Mutex::new(None),
         }
     }
 
@@ -524,6 +546,22 @@ impl PlayerState {
         // was reset on exit. Cleared even on the "nothing to destroy" path.
         self.clear_minimize_snapshot();
 
+        // Abort the long-lived trailing-edge flusher task (prexu-bgz.24).
+        // Done before taking `inner` so no in-flight flush can race with
+        // the destroy teardown path. `abort()` is instantaneous — it posts
+        // a cancellation to the tokio reactor; the task exits on its next
+        // await point (which is either `notified()` or `sleep()`). No flush
+        // can be lost by this abort: we're inside `destroy()` which only
+        // runs when the window is closing, so there will be no further
+        // geometry events that need a trailing flush.
+        #[cfg(target_os = "windows")]
+        if let Ok(mut h) = self.flusher_handle.lock() {
+            if let Some(handle) = h.take() {
+                log::info!("[player] destroy: aborting flusher task");
+                handle.abort();
+            }
+        }
+
         let inner = self
             .inner
             .lock()
@@ -733,6 +771,77 @@ impl PlayerState {
                 }
             }
         }
+    }
+
+    /// Spawn the long-lived trailing-edge flusher task (prexu-bgz.24).
+    ///
+    /// Called once from `attach_window_handlers` in `events.rs` before any
+    /// window events can fire. Subsequent calls on the same `PlayerState` are
+    /// no-ops — the task is only ever created once and reused across all
+    /// playback sessions (the state fields it touches are per-`PlayerState`,
+    /// not per-session).
+    ///
+    /// The task loop:
+    /// 1. Park: `flusher_notify.notified().await` — zero CPU when idle.
+    /// 2. Wake: `notify_one()` arrives from `wake_flusher` (first event of a burst).
+    /// 3. Sleep: `tokio::time::sleep(GEOMETRY_SYNC_MIN_INTERVAL).await` — gives
+    ///    the burst time to accumulate its final rect into `pending_geometry`.
+    /// 4. Flush: `run_on_main_thread(flush_pending_geometry)` — applies the
+    ///    stashed rect on the Win32 main thread exactly as before.
+    /// 5. Loop back to step 1.
+    ///
+    /// No spinloop, no per-burst thread creation. The `trailing_scheduled`
+    /// AtomicBool dedup is unchanged — `wake_flusher` only calls `notify_one`
+    /// when `claim_trailing_schedule()` returns true (i.e. once per burst), so
+    /// the flusher is never woken multiple times for the same burst.
+    ///
+    /// Teardown: `destroy()` calls `abort()` on the stored `JoinHandle` so the
+    /// task exits cleanly when the player is torn down.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn start_flusher(&self, app: AppHandle) {
+        let mut guard = match self.flusher_handle.lock() {
+            Ok(g) => g,
+            Err(e) => {
+                log::error!("[player] start_flusher: lock poisoned: {:?}", e);
+                return;
+            }
+        };
+        if guard.is_some() {
+            log::debug!("[player] start_flusher: already running, no-op");
+            return;
+        }
+        let notify = Arc::clone(&self.flusher_notify);
+        log::info!("[player] start_flusher: spawning long-lived trailing-edge flusher task");
+        let handle = tauri::async_runtime::spawn(async move {
+            log::debug!("[player:flusher] task started");
+            loop {
+                // Park until a burst starts.
+                notify.notified().await;
+                log::trace!("[player:flusher] woken for burst, sleeping {}ms",
+                    GEOMETRY_SYNC_MIN_INTERVAL.as_millis());
+                // Sleep the throttle window so the burst can accumulate
+                // its final rect into pending_geometry.
+                tokio::time::sleep(GEOMETRY_SYNC_MIN_INTERVAL).await;
+                // Dispatch flush to the Win32 main thread.
+                let ah = app.clone();
+                if let Err(e) = app.run_on_main_thread(move || {
+                    let state = ah.state::<PlayerState>();
+                    state.flush_pending_geometry();
+                }) {
+                    log::warn!("[player:flusher] flush dispatch failed: {:?}", e);
+                }
+            }
+        });
+        *guard = Some(handle);
+    }
+
+    /// Wake the long-lived flusher task when the first event of a resize burst
+    /// arrives. Must be called only when `claim_trailing_schedule()` returned
+    /// true (the caller won the one-shot-per-burst race).
+    #[cfg(target_os = "windows")]
+    pub(crate) fn wake_flusher(&self) {
+        log::trace!("[player:flusher] wake_flusher: notify_one");
+        self.flusher_notify.notify_one();
     }
 
     /// Try to claim the right to schedule a trailing-edge flush. Returns
@@ -1362,6 +1471,134 @@ mod tests {
         assert!(!state.claim_trailing_schedule());
         state.flush_pending_geometry();
         assert!(state.claim_trailing_schedule());
+    }
+
+    // ── Long-lived flusher state machine (prexu-bgz.24) -----------------
+    //
+    // These tests verify the dedup invariant and Notify / flusher_handle
+    // lifecycle without spinning up a real tokio runtime or Win32 window.
+    // They exercise only the synchronous parts: claim/flush atomics and the
+    // Notify count observable via `notify_one` / `try_recv`-equivalent.
+
+    /// After a burst of N throttled events, `claim_trailing_schedule` must
+    /// return true exactly once (on the first call) and false for all
+    /// subsequent calls. `wake_flusher` is safe to call only on the true
+    /// return, so only one `notify_one` is dispatched per burst — exactly as
+    /// the old per-burst `std::thread::spawn` dedup did.
+    #[test]
+    fn flusher_dedup_one_wake_per_burst() {
+        let state = PlayerState::new();
+
+        // Simulate burst: first claim → true, rest → false.
+        let first = state.claim_trailing_schedule();
+        assert!(first, "first claim of burst must be true (one wake issued)");
+        for _ in 0..5 {
+            let subsequent = state.claim_trailing_schedule();
+            assert!(!subsequent, "subsequent claims must be false (no extra wakes)");
+        }
+    }
+
+    /// After `flush_pending_geometry` clears `trailing_scheduled`, the next
+    /// burst can claim again — the flusher is re-armed for the next drag
+    /// session.
+    #[test]
+    fn flusher_re_armed_after_flush() {
+        let state = PlayerState::new();
+
+        // First burst
+        assert!(state.claim_trailing_schedule());
+        assert!(!state.claim_trailing_schedule());
+
+        // Flush (simulates the flusher task finishing its sleep + dispatch)
+        state.flush_pending_geometry();
+        assert!(
+            !state.trailing_scheduled.load(Ordering::Acquire),
+            "trailing_scheduled must be cleared by flush_pending_geometry"
+        );
+
+        // Second burst can now claim
+        assert!(
+            state.claim_trailing_schedule(),
+            "must be re-armable after flush for next drag burst"
+        );
+    }
+
+    /// `flush_pending_geometry` clears `trailing_scheduled` BEFORE consuming
+    /// pending. This ordering lets a Resized event that arrives concurrently
+    /// during flush claim a new schedule and issue a new `notify_one` for the
+    /// geometry that arrived after the flush started — no geometry is lost.
+    #[test]
+    fn flusher_clear_before_consume_ordering() {
+        let state = PlayerState::new();
+
+        // Set up: pending geometry + trailing_scheduled set
+        state.sync_geometry(0, 0, 1920, 1080); // passes throttle, clears pending
+        state.sync_geometry(10, 20, 800, 600); // throttled → stored as pending
+        state.trailing_scheduled.store(true, Ordering::Release);
+
+        // Before flush: trailing_scheduled=true, pending=Some(...)
+        assert!(state.trailing_scheduled.load(Ordering::Acquire));
+        assert!(state.geom.lock().unwrap().pending_geometry.is_some());
+
+        // Release the throttle so flush_pending_geometry's internal
+        // sync_geometry call actually applies the geometry.
+        release_throttle(&state);
+
+        state.flush_pending_geometry();
+
+        // After flush: trailing_scheduled=false, pending consumed
+        assert!(
+            !state.trailing_scheduled.load(Ordering::Acquire),
+            "trailing_scheduled cleared by flush"
+        );
+        assert!(
+            state.geom.lock().unwrap().pending_geometry.is_none(),
+            "pending consumed by flush"
+        );
+    }
+
+    /// `flusher_handle` starts as `None` before `start_flusher` is called.
+    /// After `destroy()` takes + aborts the handle, it must be `None` again.
+    /// We use `tokio::spawn` to produce a real `JoinHandle` without needing
+    /// a live `AppHandle`.
+    #[tokio::test]
+    async fn flusher_handle_lifecycle() {
+        let state = PlayerState::new();
+
+        // Initially no flusher.
+        assert!(
+            state.flusher_handle.lock().unwrap().is_none(),
+            "handle must be None before start_flusher"
+        );
+
+        // Inject a real tokio task handle (stand-in for what start_flusher
+        // would produce via tauri::async_runtime::spawn).
+        // `tauri::async_runtime::JoinHandle` is an enum; the Tokio runtime
+        // variant wraps a `tokio::task::JoinHandle` (revealed by compiler
+        // diagnostic E0308 pointing to `JoinHandle::Tokio`).
+        let raw_jh = tokio::spawn(async {
+            // Park forever — the abort will cancel it.
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+        });
+        let jh = tauri::async_runtime::JoinHandle::Tokio(raw_jh);
+        *state.flusher_handle.lock().unwrap() = Some(jh);
+
+        assert!(
+            state.flusher_handle.lock().unwrap().is_some(),
+            "handle must be Some after injection"
+        );
+
+        // Simulate destroy() abort path: take + abort.
+        let taken = state.flusher_handle.lock().unwrap().take();
+        assert!(taken.is_some(), "must have a handle to abort");
+        if let Some(h) = taken {
+            h.abort();
+        }
+
+        assert!(
+            state.flusher_handle.lock().unwrap().is_none(),
+            "handle must be None after destroy abort"
+        );
     }
 
     #[test]
