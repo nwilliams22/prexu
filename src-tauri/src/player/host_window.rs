@@ -248,3 +248,19 @@ impl Drop for HostWindow {
         }
     }
 }
+
+/// Conformance impl so the geometry sync engine's [`HostSurface`] interface
+/// (exercised against a recording fake in `geometry.rs` tests) is backed by
+/// the real window. Delegates to the inherent `SetWindowPos` methods; the
+/// hot path in `mod.rs` still calls those inherent methods directly.
+/// Test-only: the trait exists purely to keep the tested call sequence
+/// honest against the real type.
+#[cfg(test)]
+impl super::geometry::HostSurface for HostWindow {
+    fn set_geometry(&self, x: i32, y: i32, width: i32, height: i32) -> Result<(), String> {
+        HostWindow::set_geometry(self, x, y, width, height)
+    }
+    fn set_position(&self, x: i32, y: i32) -> Result<(), String> {
+        HostWindow::set_position(self, x, y)
+    }
+}

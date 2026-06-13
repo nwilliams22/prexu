@@ -147,6 +147,108 @@ pub(crate) fn initial_host_geometry(
     }
 }
 
+// ── Host surface seam ──────────────────────────────────────────────────────
+
+/// The two geometry operations the sync engine performs on the mpv host
+/// window. Abstracted behind a trait so the throttle/dedup/trailing-flush
+/// orchestration can be driven against a recording fake in unit tests
+/// without a live Win32 window (`HostWindow` impls it for production —
+/// see `host_window.rs`).
+///
+/// Production code on the hot path still calls the inherent `HostWindow`
+/// methods directly; this trait exists so the test driver and the real
+/// window share one interface, keeping the tested sequence honest. It is
+/// therefore test-only — the conformance impl for `HostWindow` is compiled
+/// during `cargo test` to prove the real type still satisfies the
+/// interface the fake exercises.
+#[cfg(all(test, target_os = "windows"))]
+pub(crate) trait HostSurface {
+    fn set_geometry(&self, x: i32, y: i32, width: i32, height: i32) -> Result<(), String>;
+    fn set_position(&self, x: i32, y: i32) -> Result<(), String>;
+}
+
+// ── Pure sync planning ─────────────────────────────────────────────────────
+
+/// What `sync_geometry` should do after consulting `GeomState`. Computed
+/// while holding the `geom` lock; the caller drops the lock BEFORE acting
+/// on `Apply` (the freeze-critical invariant — the host `SetWindowPos`
+/// must never run while `geom` is held).
+#[cfg(target_os = "windows")]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum SyncPlan {
+    /// Minimum interval has not elapsed; args stashed in `pending_geometry`.
+    Throttled,
+    /// Resolved rect equals `last_geometry`; nothing to apply.
+    Deduped,
+    /// Apply this physical-px rect via `host.set_geometry`.
+    Apply(i32, i32, i32, i32),
+}
+
+/// Pure decision half of `PlayerState::sync_geometry`. Mutates `GeomState`
+/// (`last_sync` / `pending_geometry` / `last_geometry`) exactly as the
+/// production path does and returns the resulting [`SyncPlan`].
+#[cfg(target_os = "windows")]
+pub(crate) fn plan_sync(
+    g: &mut GeomState,
+    now: Instant,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> SyncPlan {
+    if should_throttle(g.last_sync, now) {
+        // Throttled — store as pending so the trailing edge is never lost.
+        g.pending_geometry = Some((x, y, width, height));
+        return SyncPlan::Throttled;
+    }
+    g.last_sync = now;
+    // The current args are the freshest geometry; clear any stale pending.
+    g.pending_geometry = None;
+    let (ax, ay, aw, ah) = apply_minimize_inset_inner(g, x, y, width, height);
+    let new = (ax, ay, aw, ah);
+    if g.last_geometry == Some(new) {
+        return SyncPlan::Deduped;
+    }
+    g.last_geometry = Some(new);
+    SyncPlan::Apply(ax, ay, aw, ah)
+}
+
+/// What `sync_geometry_move` should do. `None` means dedup-skip (no host
+/// call); `Some` carries the inset-adjusted position plus the
+/// `last_geometry` write-back to perform AFTER the host call succeeds so a
+/// subsequent resize dedup-compares against the right `(x, y)`.
+#[cfg(target_os = "windows")]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) struct MovePlan {
+    pub(crate) ax: i32,
+    pub(crate) ay: i32,
+    /// `(ax, ay, lw, lh)` to store in `last_geometry` once the move lands,
+    /// reusing the last known size. `None` when no prior geometry exists.
+    pub(crate) write_back: Option<(i32, i32, i32, i32)>,
+}
+
+/// Pure decision half of `PlayerState::sync_geometry_move`. Does NOT mutate
+/// `GeomState` — the write-back is returned for the caller to apply after a
+/// successful host call (mirroring production, which only updates
+/// `last_geometry` once `set_position` succeeds).
+#[cfg(target_os = "windows")]
+pub(crate) fn plan_move(
+    g: &GeomState,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> Option<MovePlan> {
+    let (ax, ay, _aw, _ah) = apply_minimize_inset_inner(g, x, y, width, height);
+    if let Some((lx, ly, _, _)) = g.last_geometry {
+        if lx == ax && ly == ay {
+            return None;
+        }
+    }
+    let write_back = g.last_geometry.map(|(_, _, lw, lh)| (ax, ay, lw, lh));
+    Some(MovePlan { ax, ay, write_back })
+}
+
 // ── Unit tests ───────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -322,5 +424,213 @@ mod tests {
     fn initial_host_geometry_inset_respects_dpi_scale() {
         let (_, _, w, h) = initial_host_geometry(Some(DEFAULT), 1.25, 0, 0, 2400, 1350);
         assert_eq!((w, h), (450, 250));
+    }
+
+    // ── Sync engine driven against a recording fake host ─────────────────
+    //
+    // These exercise the full throttle / dedup / trailing-flush / move
+    // orchestration without a live Win32 window. `drive_sync` / `drive_move`
+    // replicate the production lock-free sequence in `PlayerState`
+    // (`mod.rs`): consult the pure planner, drop the (notional) geom lock,
+    // then act on the host. The recording host captures the exact
+    // `SetWindowPos`-equivalent calls and their order.
+
+    #[cfg(target_os = "windows")]
+    use std::cell::RefCell;
+
+    #[cfg(target_os = "windows")]
+    #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+    enum HostCall {
+        SetGeometry(i32, i32, i32, i32),
+        SetPosition(i32, i32),
+    }
+
+    #[cfg(target_os = "windows")]
+    struct RecordingHost {
+        calls: RefCell<Vec<HostCall>>,
+        /// When true, every host op returns Err — used to prove the move
+        /// write-back is gated on host success.
+        fail: bool,
+    }
+
+    #[cfg(target_os = "windows")]
+    impl RecordingHost {
+        fn new() -> Self {
+            Self { calls: RefCell::new(Vec::new()), fail: false }
+        }
+        fn failing() -> Self {
+            Self { calls: RefCell::new(Vec::new()), fail: true }
+        }
+        fn calls(&self) -> Vec<HostCall> {
+            self.calls.borrow().clone()
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    impl HostSurface for RecordingHost {
+        fn set_geometry(&self, x: i32, y: i32, w: i32, h: i32) -> Result<(), String> {
+            self.calls.borrow_mut().push(HostCall::SetGeometry(x, y, w, h));
+            if self.fail { Err("forced".into()) } else { Ok(()) }
+        }
+        fn set_position(&self, x: i32, y: i32) -> Result<(), String> {
+            self.calls.borrow_mut().push(HostCall::SetPosition(x, y));
+            if self.fail { Err("forced".into()) } else { Ok(()) }
+        }
+    }
+
+    /// Mirror of `PlayerState::sync_geometry`'s lock-free sequence: plan
+    /// under the (notional) lock, then act on the host only for `Apply`.
+    #[cfg(target_os = "windows")]
+    fn drive_sync(
+        g: &mut GeomState,
+        host: &dyn HostSurface,
+        now: Instant,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+    ) {
+        if let SyncPlan::Apply(ax, ay, aw, ah) = plan_sync(g, now, x, y, w, h) {
+            let _ = host.set_geometry(ax, ay, aw, ah);
+        }
+    }
+
+    /// Mirror of `PlayerState::sync_geometry_move`: plan, call the host, and
+    /// only on success write the `last_geometry` position back.
+    #[cfg(target_os = "windows")]
+    fn drive_move(g: &mut GeomState, host: &dyn HostSurface, x: i32, y: i32, w: i32, h: i32) {
+        if let Some(p) = plan_move(g, x, y, w, h) {
+            if host.set_position(p.ax, p.ay).is_ok() {
+                if let Some(wb) = p.write_back {
+                    g.last_geometry = Some(wb);
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn sync_first_event_applies_to_host() {
+        let mut g = GeomState::new();
+        let host = RecordingHost::new();
+        let now = g.last_sync + GEOMETRY_SYNC_MIN_INTERVAL + Duration::from_millis(1);
+        drive_sync(&mut g, &host, now, 0, 0, 800, 600);
+        assert_eq!(host.calls(), vec![HostCall::SetGeometry(0, 0, 800, 600)]);
+        assert_eq!(g.last_geometry, Some((0, 0, 800, 600)));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn sync_throttles_rapid_second_event() {
+        let mut g = GeomState::new();
+        let host = RecordingHost::new();
+        let base = g.last_sync + GEOMETRY_SYNC_MIN_INTERVAL + Duration::from_millis(1);
+        drive_sync(&mut g, &host, base, 0, 0, 800, 600);
+        // Second event 5ms later — well inside the throttle window.
+        drive_sync(&mut g, &host, base + Duration::from_millis(5), 0, 0, 801, 600);
+        // Only the first event reached the host; the second is pending.
+        assert_eq!(host.calls(), vec![HostCall::SetGeometry(0, 0, 800, 600)]);
+        assert_eq!(g.pending_geometry, Some((0, 0, 801, 600)));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn trailing_flush_applies_pending_after_interval() {
+        let mut g = GeomState::new();
+        let host = RecordingHost::new();
+        let base = g.last_sync + GEOMETRY_SYNC_MIN_INTERVAL + Duration::from_millis(1);
+        drive_sync(&mut g, &host, base, 0, 0, 800, 600);
+        drive_sync(&mut g, &host, base + Duration::from_millis(5), 0, 0, 801, 600); // throttled
+        let pending = g.pending_geometry.expect("final rect stashed as pending");
+        // The flusher fires one interval later and re-drives the pending rect.
+        let flush_now = base + GEOMETRY_SYNC_MIN_INTERVAL + Duration::from_millis(2);
+        drive_sync(&mut g, &host, flush_now, pending.0, pending.1, pending.2, pending.3);
+        assert_eq!(
+            host.calls(),
+            vec![
+                HostCall::SetGeometry(0, 0, 800, 600),
+                HostCall::SetGeometry(0, 0, 801, 600),
+            ]
+        );
+        assert!(g.pending_geometry.is_none());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn sync_dedup_skips_identical_rect() {
+        let mut g = GeomState::new();
+        let host = RecordingHost::new();
+        let t0 = g.last_sync + GEOMETRY_SYNC_MIN_INTERVAL + Duration::from_millis(1);
+        drive_sync(&mut g, &host, t0, 10, 20, 800, 600);
+        // Same rect, one interval later (passes throttle) — must dedup-skip.
+        let t1 = t0 + GEOMETRY_SYNC_MIN_INTERVAL + Duration::from_millis(1);
+        drive_sync(&mut g, &host, t1, 10, 20, 800, 600);
+        assert_eq!(host.calls(), vec![HostCall::SetGeometry(10, 20, 800, 600)]);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn sync_minimized_applies_inset_region() {
+        let mut g = GeomState::new();
+        g.minimize = Some(DEFAULT);
+        g.scale_factor = 1.0;
+        let host = RecordingHost::new();
+        let now = g.last_sync + GEOMETRY_SYNC_MIN_INTERVAL + Duration::from_millis(1);
+        drive_sync(&mut g, &host, now, 0, 0, 1920, 1080);
+        // Host receives the mini-corner inset rect, not the full client rect.
+        let expected = compute_minimize_inset(DEFAULT, 1.0, 0, 0, 1920, 1080);
+        assert_eq!(
+            host.calls(),
+            vec![HostCall::SetGeometry(expected.0, expected.1, expected.2, expected.3)]
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn move_applies_inset_position_and_writes_back() {
+        let mut g = GeomState::new();
+        // Seed a prior applied geometry so the move has a size to preserve.
+        g.last_geometry = Some((0, 0, 800, 600));
+        let host = RecordingHost::new();
+        drive_move(&mut g, &host, 30, 40, 800, 600);
+        assert_eq!(host.calls(), vec![HostCall::SetPosition(30, 40)]);
+        // Position updated, size preserved for the next resize dedup.
+        assert_eq!(g.last_geometry, Some((30, 40, 800, 600)));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn move_dedup_skips_same_position() {
+        let mut g = GeomState::new();
+        g.last_geometry = Some((30, 40, 800, 600));
+        let host = RecordingHost::new();
+        drive_move(&mut g, &host, 30, 40, 800, 600);
+        assert!(host.calls().is_empty());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn move_write_back_gated_on_host_success() {
+        let mut g = GeomState::new();
+        g.last_geometry = Some((0, 0, 800, 600));
+        let host = RecordingHost::failing();
+        drive_move(&mut g, &host, 30, 40, 800, 600);
+        // The host op was attempted but failed — last_geometry must NOT move.
+        assert_eq!(host.calls(), vec![HostCall::SetPosition(30, 40)]);
+        assert_eq!(g.last_geometry, Some((0, 0, 800, 600)));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn plan_sync_reports_throttled_then_deduped() {
+        let mut g = GeomState::new();
+        let t0 = g.last_sync + GEOMETRY_SYNC_MIN_INTERVAL + Duration::from_millis(1);
+        assert_eq!(plan_sync(&mut g, t0, 0, 0, 800, 600), SyncPlan::Apply(0, 0, 800, 600));
+        assert_eq!(
+            plan_sync(&mut g, t0 + Duration::from_millis(1), 0, 0, 900, 600),
+            SyncPlan::Throttled
+        );
+        let t1 = t0 + GEOMETRY_SYNC_MIN_INTERVAL + Duration::from_millis(1);
+        assert_eq!(plan_sync(&mut g, t1, 0, 0, 800, 600), SyncPlan::Deduped);
     }
 }

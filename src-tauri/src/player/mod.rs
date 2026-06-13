@@ -663,26 +663,17 @@ impl PlayerState {
             return;
         }
 
-        // Acquire geom once to compute the adjusted position and check dedup,
-        // then release before calling inner.try_lock() / SetWindowPos.
-        // A second geom acquisition after SetWindowPos updates last_geometry.
-        // Two acquisitions (not one) are required because we must drop geom
-        // before inner.try_lock() — holding geom across try_lock would cause
-        // the re-entrant call (SetWindowPos fires WM_WINDOWPOSCHANGED → handler
-        // → sync_geometry_move) to deadlock on the geom lock.
-        let (ax, ay, existing_size) = {
+        // Acquire geom once to plan the move (inset + dedup), then release
+        // before calling inner.try_lock() / SetWindowPos. Dropping geom
+        // before try_lock is mandatory: holding it across try_lock would let
+        // the re-entrant call (SetWindowPos fires WM_WINDOWPOSCHANGED →
+        // handler → sync_geometry_move) deadlock on the geom lock.
+        let plan = {
             let Ok(g) = self.geom.lock() else { return };
-            let (ax, ay, _aw, _ah) =
-                geometry::apply_minimize_inset_inner(&g, x, y, width, height);
-            if let Some((lx, ly, _, _)) = g.last_geometry {
-                if lx == ax && ly == ay {
-                    return;
-                }
-            }
-            let existing_size = g.last_geometry.map(|(_, _, lw, lh)| (lw, lh));
-            (ax, ay, existing_size)
+            geometry::plan_move(&g, x, y, width, height)
             // g is dropped here — geom lock released before try_lock on inner
         };
+        let Some(plan) = plan else { return };
 
         // try_lock guards against re-entrancy: SetWindowPos fires
         // WM_WINDOWPOSCHANGED synchronously on this thread, which can
@@ -690,15 +681,15 @@ impl PlayerState {
         let Ok(guard) = self.inner.try_lock() else { return };
         if let Some(inner) = guard.as_ref() {
             if let Some(host) = inner.host.as_ref() {
-                if let Err(e) = host.set_position(ax, ay) {
+                if let Err(e) = host.set_position(plan.ax, plan.ay) {
                     log::warn!("[player] sync_geometry_move failed: {}", e);
                     return;
                 }
                 // Keep last_geometry's (x, y) in sync so the next
                 // sync_geometry call (resize) dedup-compares correctly.
-                if let Some((lw, lh)) = existing_size {
+                if let Some(write_back) = plan.write_back {
                     if let Ok(mut g) = self.geom.lock() {
-                        g.last_geometry = Some((ax, ay, lw, lh));
+                        g.last_geometry = Some(write_back);
                     }
                 }
             }
@@ -725,39 +716,26 @@ impl PlayerState {
         }
 
         // Single geom acquisition: throttle + pending + inset + dedup,
-        // all computed while holding one lock, then released before
-        // inner.try_lock() / SetWindowPos.
-        let apply_geom = {
+        // all computed while holding one lock by plan_sync, then released
+        // before inner.try_lock() / SetWindowPos. The throttle stashes the
+        // current args as pending so the trailing-edge flush never loses the
+        // final rect of a drag-resize burst.
+        let plan = {
             let Ok(mut g) = self.geom.lock() else { return };
-            let now = Instant::now();
-            if geometry::should_throttle(g.last_sync, now) {
-                // Throttled — store as pending so trailing edge is never lost.
-                g.pending_geometry = Some((x, y, width, height));
+            geometry::plan_sync(&mut g, Instant::now(), x, y, width, height)
+            // g is dropped here — geom lock released before try_lock on inner
+        };
+        let (ax, ay, aw, ah) = match plan {
+            geometry::SyncPlan::Throttled => {
                 log::trace!("[player] sync_geometry throttled, pending stored");
                 return;
             }
-            g.last_sync = now;
-            // Apply the CURRENT call's args, not any stored pending geometry.
-            // Pending is cleared so it doesn't apply on a future call, but
-            // the current args are always the freshest known geometry — every
-            // Resized event triggers a new sync_geometry with the latest rect,
-            // so the trailing-edge case is already covered by the next event.
-            g.pending_geometry = None;
-            // Apply the minimize inset. When not minimized this is a
-            // pass-through, so non-minimize playback is unaffected.
-            let (ax, ay, aw, ah) = geometry::apply_minimize_inset_inner(&g, x, y, width, height);
-            // Skip if geometry hasn't changed since last apply.
-            let new = (ax, ay, aw, ah);
-            if g.last_geometry == Some(new) {
+            geometry::SyncPlan::Deduped => {
                 log::trace!("[player] sync_geometry dedup skip");
                 return;
             }
-            g.last_geometry = Some(new);
-            new
-            // g is dropped here — geom lock released before try_lock on inner
+            geometry::SyncPlan::Apply(ax, ay, aw, ah) => (ax, ay, aw, ah),
         };
-
-        let (ax, ay, aw, ah) = apply_geom;
         // try_lock guards against re-entrancy: SetWindowPos fires WM_SIZE
         // synchronously on this thread, which re-enters sync_geometry via
         // the window-event handler. If inner is already held, skip — the
