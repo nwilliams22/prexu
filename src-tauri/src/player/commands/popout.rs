@@ -11,6 +11,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_store::StoreExt;
 
 use crate::player::{MinimizeCorner, PlayerState};
+#[cfg(target_os = "windows")]
+use super::win32_monitor::{decode_device_name, monitor_info, resync_host, work_area_from_info};
 
 /// Path used for the pop-out player store. Kept separate from
 /// `secure-store.json` (which holds auth tokens managed via the JS LazyStore)
@@ -41,6 +43,31 @@ const POPOUT_DEFAULT_WIDTH: u32 = 480;
 #[cfg(target_os = "windows")]
 const POPOUT_DEFAULT_HEIGHT: u32 = 270;
 
+/// Thin accessor for the three pop-out store keys. Wraps the key-string
+/// constants so call sites name what they're reading/writing rather than
+/// repeating raw string literals. All methods are zero-cost (inline).
+///
+/// Testable: `key_*` methods are pure; JSON round-trips are tested in
+/// the `tests` module below.
+#[cfg(target_os = "windows")]
+pub(crate) struct PopoutStore;
+
+#[cfg(target_os = "windows")]
+impl PopoutStore {
+    pub(crate) fn path() -> &'static str {
+        POPOUT_STORE_PATH
+    }
+    pub(crate) fn key_corner() -> &'static str {
+        POPOUT_KEY_CORNER
+    }
+    pub(crate) fn key_size() -> &'static str {
+        POPOUT_KEY_SIZE
+    }
+    pub(crate) fn key_monitor() -> &'static str {
+        POPOUT_KEY_MONITOR
+    }
+}
+
 /// A monitor's device name and work area captured at pop-out exit time.
 /// Used to find the same monitor on re-entry via `EnumDisplayMonitors`.
 #[cfg(target_os = "windows")]
@@ -63,31 +90,19 @@ pub(crate) struct MonitorRecord {
 fn current_work_area(
     main: &tauri::WebviewWindow,
 ) -> Result<(i32, i32, i32, i32), String> {
-    use windows::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-    };
+    use windows::Win32::Graphics::Gdi::{MonitorFromWindow, MONITOR_DEFAULTTONEAREST};
     let hwnd = main
         .hwnd()
         .map_err(|e| format!("get main hwnd failed: {}", e))?;
     unsafe {
-        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        let hmonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
         log::debug!(
             "[player:popout] MonitorFromWindow HWND={:?} -> HMONITOR={:?}",
             hwnd.0,
-            monitor.0
+            hmonitor.0
         );
-        let mut info = MONITORINFO {
-            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-            ..Default::default()
-        };
-        if !GetMonitorInfoW(monitor, &mut info as *mut _).as_bool() {
-            return Err("GetMonitorInfoW failed".to_string());
-        }
-        let r = info.rcWork;
-        let x = r.left;
-        let y = r.top;
-        let w = r.right - r.left;
-        let h = r.bottom - r.top;
+        let info = monitor_info(hmonitor)?;
+        let (x, y, w, h) = work_area_from_info(&info);
         log::debug!(
             "[player:popout] current-monitor work area = ({},{},{}x{})",
             x, y, w, h
@@ -117,50 +132,24 @@ fn current_work_area(
 fn capture_monitor_record(
     main: &tauri::WebviewWindow,
 ) -> Result<MonitorRecord, String> {
-    use windows::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MonitorFromWindow, MONITORINFOEXW, MONITOR_DEFAULTTONEAREST,
-    };
+    use windows::Win32::Graphics::Gdi::{MonitorFromWindow, MONITOR_DEFAULTTONEAREST};
     let hwnd = main
         .hwnd()
         .map_err(|e| format!("get main hwnd failed: {}", e))?;
     unsafe {
-        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        let hmonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
         log::debug!(
             "[player:popout] capture_monitor_record MonitorFromWindow HWND={:?} -> HMONITOR={:?}",
             hwnd.0,
-            monitor.0
+            hmonitor.0
         );
-        // Initialise with cbSize = sizeof(MONITORINFOEXW). The Win32 contract
-        // for GetMonitorInfoW is: if cbSize equals sizeof(MONITORINFOEXW),
-        // the function fills szDevice in addition to the MONITORINFO fields.
-        // This is the standard "Ex" variant pattern — no separate
-        // GetMonitorInfoExW function exists; the size discriminates the call.
-        let mut info = MONITORINFOEXW {
-            monitorInfo: windows::Win32::Graphics::Gdi::MONITORINFO {
-                cbSize: std::mem::size_of::<MONITORINFOEXW>() as u32,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        if !GetMonitorInfoW(
-            monitor,
-            &mut info.monitorInfo as *mut _,
-        )
-        .as_bool()
-        {
-            return Err("GetMonitorInfoW (MONITORINFOEXW) failed".to_string());
-        }
-        let r = info.monitorInfo.rcWork;
-        let work_area = (r.left, r.top, r.right - r.left, r.bottom - r.top);
-
-        // Decode szDevice (null-terminated UTF-16 array).
-        let nul = info
-            .szDevice
-            .iter()
-            .position(|&c| c == 0)
-            .unwrap_or(info.szDevice.len());
-        let device_name =
-            String::from_utf16_lossy(&info.szDevice[..nul]).to_string();
+        // monitor_info fills MONITORINFOEXW (cbSize = sizeof(MONITORINFOEXW)),
+        // which causes Win32 to populate szDevice in addition to the base
+        // MONITORINFO fields. See win32_monitor::monitor_info for the safety
+        // contract.
+        let info = monitor_info(hmonitor)?;
+        let work_area = work_area_from_info(&info);
+        let device_name = decode_device_name(&info.szDevice);
 
         log::info!(
             "[player:popout] captured monitor device_name={:?} work_area=({},{},{}x{})",
@@ -193,9 +182,7 @@ fn capture_monitor_record(
 #[cfg(target_os = "windows")]
 pub(crate) fn find_monitor_by_name(target_name: &str) -> Option<(i32, i32, i32, i32)> {
     use windows::Win32::Foundation::LPARAM;
-    use windows::Win32::Graphics::Gdi::{
-        EnumDisplayMonitors, GetMonitorInfoW, MONITORINFOEXW,
-    };
+    use windows::Win32::Graphics::Gdi::EnumDisplayMonitors;
 
     /// State passed through the EnumDisplayMonitors callback via LPARAM.
     struct SearchState<'a> {
@@ -213,24 +200,15 @@ pub(crate) fn find_monitor_by_name(target_name: &str) -> Option<(i32, i32, i32, 
         // it lives on the stack for the duration of EnumDisplayMonitors.
         let state = &mut *(lparam.0 as *mut SearchState);
 
-        let mut info = MONITORINFOEXW {
-            monitorInfo: windows::Win32::Graphics::Gdi::MONITORINFO {
-                cbSize: std::mem::size_of::<MONITORINFOEXW>() as u32,
-                ..Default::default()
-            },
-            ..Default::default()
+        // monitor_info fills MONITORINFOEXW so we get szDevice + rcWork in
+        // one call. If the call fails for this monitor we skip it and
+        // continue enumeration.
+        let info = match monitor_info(hmonitor) {
+            Ok(i) => i,
+            Err(_) => return windows::core::BOOL(1),
         };
-        if !GetMonitorInfoW(hmonitor, &mut info.monitorInfo as *mut _).as_bool() {
-            // Continue enumeration even if one monitor fails.
-            return windows::core::BOOL(1);
-        }
 
-        let nul = info
-            .szDevice
-            .iter()
-            .position(|&c| c == 0)
-            .unwrap_or(info.szDevice.len());
-        let name = String::from_utf16_lossy(&info.szDevice[..nul]);
+        let name = decode_device_name(&info.szDevice);
 
         log::debug!(
             "[player:popout] EnumDisplayMonitors: device={:?} HMONITOR={:?}",
@@ -239,8 +217,7 @@ pub(crate) fn find_monitor_by_name(target_name: &str) -> Option<(i32, i32, i32, 
         );
 
         if name == state.target {
-            let r = info.monitorInfo.rcWork;
-            state.found = Some((r.left, r.top, r.right - r.left, r.bottom - r.top));
+            state.found = Some(work_area_from_info(&info));
             // Stop enumeration — found what we needed.
             return windows::core::BOOL(0);
         }
@@ -295,8 +272,8 @@ fn load_persisted_popout(app: &AppHandle) -> (MinimizeCorner, u32, u32) {
     let mut corner = MinimizeCorner::BottomRight;
     let mut width = POPOUT_DEFAULT_WIDTH;
     let mut height = POPOUT_DEFAULT_HEIGHT;
-    if let Ok(store) = app.store(POPOUT_STORE_PATH) {
-        if let Some(v) = store.get(POPOUT_KEY_CORNER) {
+    if let Ok(store) = app.store(PopoutStore::path()) {
+        if let Some(v) = store.get(PopoutStore::key_corner()) {
             match serde_json::from_value::<MinimizeCorner>(v.clone()) {
                 Ok(c) => corner = c,
                 Err(e) => log::warn!(
@@ -305,7 +282,7 @@ fn load_persisted_popout(app: &AppHandle) -> (MinimizeCorner, u32, u32) {
                 ),
             }
         }
-        if let Some(v) = store.get(POPOUT_KEY_SIZE) {
+        if let Some(v) = store.get(PopoutStore::key_size()) {
             if let (Some(w), Some(h)) = (
                 v.get("width").and_then(|x| x.as_u64()),
                 v.get("height").and_then(|x| x.as_u64()),
@@ -326,8 +303,8 @@ fn load_persisted_popout(app: &AppHandle) -> (MinimizeCorner, u32, u32) {
 /// Returns `None` when no entry exists (first run) or the entry is malformed.
 #[cfg(target_os = "windows")]
 fn load_persisted_monitor(app: &AppHandle) -> Option<(String, (i32, i32, i32, i32))> {
-    let store = app.store(POPOUT_STORE_PATH).ok()?;
-    let v = store.get(POPOUT_KEY_MONITOR)?;
+    let store = app.store(PopoutStore::path()).ok()?;
+    let v = store.get(PopoutStore::key_monitor())?;
     let device_name = v.get("device_name")?.as_str()?.to_string();
     let wa = v.get("work_area")?;
     let arr = wa.as_array()?;
@@ -680,9 +657,7 @@ pub async fn player_enter_popout(
     // fire from the resize, but it goes through the throttle; an explicit
     // apply guarantees the video window is in place by the time the command
     // returns.
-    if let (Ok(pos), Ok(size)) = (main.inner_position(), main.inner_size()) {
-        state.apply_host_geometry(pos.x, pos.y, size.width as i32, size.height as i32);
-    }
+    resync_host(&main, &state);
 
     // Mark the mpv host window topmost too. Tauri's set_always_on_top on
     // the main window only flips that flag for the WebView's HWND — the
@@ -698,15 +673,15 @@ pub async fn player_enter_popout(
 
     // Persist the chosen corner + size for next session. A failure here is
     // not fatal — the user can re-enter pop-out and we'll save again.
-    match app.store(POPOUT_STORE_PATH) {
+    match app.store(PopoutStore::path()) {
         Ok(store) => {
             // Serialize the enum back to its kebab-case string to keep the
             // on-disk format stable (old user data remains compatible).
             let corner_str = serde_json::to_value(corner)
                 .unwrap_or_else(|_| serde_json::Value::String(POPOUT_DEFAULT_CORNER.to_string()));
-            store.set(POPOUT_KEY_CORNER, corner_str);
+            store.set(PopoutStore::key_corner(), corner_str);
             store.set(
-                POPOUT_KEY_SIZE,
+                PopoutStore::key_size(),
                 serde_json::json!({ "width": w, "height": h }),
             );
             if let Err(e) = store.save() {
@@ -797,16 +772,16 @@ pub async fn player_exit_popout(
                 }
             };
 
-            match app.store(POPOUT_STORE_PATH) {
+            match app.store(PopoutStore::path()) {
                 Ok(store) => {
                     if let Some(corner) = detected_corner {
                         let corner_str = serde_json::to_value(corner).unwrap_or_else(|_| {
                             serde_json::Value::String(POPOUT_DEFAULT_CORNER.to_string())
                         });
-                        store.set(POPOUT_KEY_CORNER, corner_str);
+                        store.set(PopoutStore::key_corner(), corner_str);
                     }
                     store.set(
-                        POPOUT_KEY_SIZE,
+                        PopoutStore::key_size(),
                         serde_json::json!({ "width": rw, "height": rh }),
                     );
                     // prexu-ajn: persist the monitor record so re-entry can
@@ -815,7 +790,7 @@ pub async fn player_exit_popout(
                     if let Some(ref rec) = monitor_record {
                         let wa = &rec.work_area;
                         store.set(
-                            POPOUT_KEY_MONITOR,
+                            PopoutStore::key_monitor(),
                             serde_json::json!({
                                 "device_name": rec.device_name,
                                 "work_area": [wa.0, wa.1, wa.2, wa.3]
@@ -877,9 +852,7 @@ pub async fn player_exit_popout(
         x, y, w, h
     );
 
-    if let (Ok(pos), Ok(size)) = (main.inner_position(), main.inner_size()) {
-        state.apply_host_geometry(pos.x, pos.y, size.width as i32, size.height as i32);
-    }
+    resync_host(&main, &state);
 
     // Transition complete — re-arm the transparent body class. The TS hook
     // defers the re-add by a rAF + sync layout read so WebView2 commits the
@@ -1136,6 +1109,39 @@ mod tests {
         // Window snapped at top-right.
         let c = nearest_corner(1920 + 2560 - 480, 0, 480, 270, 1920, 0, 2560, 1440);
         assert_eq!(c, MinimizeCorner::TopRight);
+    }
+
+    // ---- PopoutStore key mapping -------------------------------------------
+    //
+    // PopoutStore is a pure key-string accessor — fully testable without
+    // Win32 or a Tauri runtime.
+
+    #[test]
+    fn popout_store_path_is_correct_filename() {
+        assert_eq!(PopoutStore::path(), "popout-player.json");
+    }
+
+    #[test]
+    fn popout_store_key_corner_matches_constant() {
+        assert_eq!(PopoutStore::key_corner(), POPOUT_KEY_CORNER);
+    }
+
+    #[test]
+    fn popout_store_key_size_matches_constant() {
+        assert_eq!(PopoutStore::key_size(), POPOUT_KEY_SIZE);
+    }
+
+    #[test]
+    fn popout_store_key_monitor_matches_constant() {
+        assert_eq!(PopoutStore::key_monitor(), POPOUT_KEY_MONITOR);
+    }
+
+    #[test]
+    fn popout_store_keys_are_distinct() {
+        // Guard against accidental aliasing between the three keys.
+        assert_ne!(PopoutStore::key_corner(), PopoutStore::key_size());
+        assert_ne!(PopoutStore::key_corner(), PopoutStore::key_monitor());
+        assert_ne!(PopoutStore::key_size(), PopoutStore::key_monitor());
     }
 
 }

@@ -8,6 +8,8 @@
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::player::{MinimizeCorner, MinimizeState, PlayerState};
+#[cfg(target_os = "windows")]
+use super::win32_monitor::resync_host;
 
 #[cfg(target_os = "windows")]
 const MINIMIZE_DEFAULT_PADDING: u32 = 16;
@@ -98,9 +100,7 @@ pub async fn player_enter_minimize(
 
     // Force resync now so the host shrinks immediately rather than waiting
     // for the next window event. apply_host_geometry honors the inset.
-    if let (Ok(pos), Ok(size)) = (main.inner_position(), main.inner_size()) {
-        state.apply_host_geometry(pos.x, pos.y, size.width as i32, size.height as i32);
-    }
+    resync_host(&main, &state);
 
     // Transition complete — re-arm transparent body (prexu-7d3).
     let _ = app.emit("player://host-window-ready", ());
@@ -147,9 +147,7 @@ pub async fn player_update_mini_geometry(
         return Err("minimize lock poisoned".to_string());
     }
 
-    if let (Ok(pos), Ok(size)) = (main.inner_position(), main.inner_size()) {
-        state.apply_host_geometry(pos.x, pos.y, size.width as i32, size.height as i32);
-    }
+    resync_host(&main, &state);
 
     // Intentionally NO busy/ready emit here — this is a geometry-only
     // update, not a mode transition. Emitting busy/ready on every drag
@@ -176,9 +174,7 @@ pub async fn player_exit_minimize(
         return Err("minimize lock poisoned".to_string());
     }
 
-    if let (Ok(pos), Ok(size)) = (main.inner_position(), main.inner_size()) {
-        state.apply_host_geometry(pos.x, pos.y, size.width as i32, size.height as i32);
-    }
+    resync_host(&main, &state);
     Ok(())
 }
 
