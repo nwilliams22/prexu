@@ -256,13 +256,32 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // Persist any non-initial miniRect change. The initial state is
   // already seeded from localStorage by loadPersistedMiniRect, so
   // writing it back on mount is redundant — skip the first commit.
+  //
+  // The write is debounced 300ms trailing so drag/resize ticks at ~33ms
+  // do not hammer localStorage on every geometry IPC cycle (prexu-bgz.11).
+  // In-memory state updates remain immediate; only the storage write is
+  // deferred.
   const skipFirstSaveRef = useRef(true);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (skipFirstSaveRef.current) {
       skipFirstSaveRef.current = false;
       return;
     }
-    saveMiniRect(miniRect);
+    if (saveTimerRef.current !== null) {
+      clearTimeout(saveTimerRef.current);
+    }
+    saveTimerRef.current = setTimeout(() => {
+      saveTimerRef.current = null;
+      logger.trace("player:minimize", "persisting miniRect to storage", miniRect);
+      saveMiniRect(miniRect);
+    }, 300);
+    return () => {
+      if (saveTimerRef.current !== null) {
+        clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+    };
   }, [miniRect]);
 
   // Track the previous isMinimized value so the geometry effect below can

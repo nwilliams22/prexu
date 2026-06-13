@@ -132,6 +132,42 @@ describe("searchSubtitles", () => {
       "/library/metadata/1/subtitles?language=en",
     );
   });
+
+  it("maps ISO 639-2/B codes to the same 639-1 targets as their /T counterparts", async () => {
+    mockFetchJson.mockResolvedValue({ MediaContainer: { size: 0 } });
+
+    const cases: [string, string][] = [
+      ["fre", "fr"], // French   — /B alias for fra
+      ["ger", "de"], // German   — /B alias for deu
+      ["chi", "zh"], // Chinese  — /B alias for zho
+      ["dut", "nl"], // Dutch    — /B alias for nld
+      ["cze", "cs"], // Czech    — /B alias for ces
+      ["gre", "el"], // Greek    — /B alias for ell
+      ["ice", "is"], // Icelandic — /B alias for isl
+      ["mac", "mk"], // Macedonian — /B alias for mkd
+      ["may", "ms"], // Malay    — /B alias for msa
+      ["bur", "my"], // Burmese  — /B alias for mya
+      ["per", "fa"], // Persian  — /B alias for fas
+      ["rum", "ro"], // Romanian — /B alias for ron
+      ["slo", "sk"], // Slovak   — /B alias for slk
+      ["tib", "bo"], // Tibetan  — /B alias for bod
+      ["wel", "cy"], // Welsh    — /B alias for cym
+      ["arm", "hy"], // Armenian — /B alias for hye
+      ["geo", "ka"], // Georgian — /B alias for kat
+      ["baq", "eu"], // Basque   — /B alias for eus
+      ["alb", "sq"], // Albanian — /B alias for sqi
+    ];
+
+    for (const [b, one] of cases) {
+      mockFetchJson.mockClear();
+      await searchSubtitles(SERVER, TOKEN, "1", b);
+      expect(mockFetchJson).toHaveBeenCalledWith(
+        SERVER,
+        TOKEN,
+        `/library/metadata/1/subtitles?language=${one}`,
+      );
+    }
+  });
 });
 
 describe("downloadSubtitle", () => {

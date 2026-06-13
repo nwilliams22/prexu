@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderHook, act } from "@testing-library/react";
+import { renderHook, act, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import {
   PlayerProvider,
@@ -179,7 +179,7 @@ describe("PlayerContext.miniRect", () => {
     expect(result.current.miniRect.corner).toBe("bottom-right");
   });
 
-  it("updateMiniRect merges, persists, and (while not minimized) does NOT fire IPC", () => {
+  it("updateMiniRect merges, persists, and (while not minimized) does NOT fire IPC", async () => {
     const { result } = renderHook(useBoth, { wrapper });
     act(() => {
       result.current.updateMiniRect({ corner: "top-left" });
@@ -187,10 +187,12 @@ describe("PlayerContext.miniRect", () => {
     expect(result.current.miniRect.corner).toBe("top-left");
     // Other fields stay at defaults.
     expect(result.current.miniRect.width).toBe(360);
-    // Persisted to localStorage.
-    const raw = localStorage.getItem(MINI_RECT_STORAGE_KEY);
-    expect(raw).toBeTruthy();
-    expect(JSON.parse(raw!).corner).toBe("top-left");
+    // Persisted to localStorage after the 300ms debounce (prexu-bgz.11).
+    await waitFor(() => {
+      const raw = localStorage.getItem(MINI_RECT_STORAGE_KEY);
+      expect(raw).toBeTruthy();
+      expect(JSON.parse(raw!).corner).toBe("top-left");
+    });
     // No IPC because we are not in minimize mode.
     expect(playerService.playerEnterMinimize).not.toHaveBeenCalled();
   });

@@ -24,7 +24,8 @@ export {
   getRecentlyAddedBySection,
   getOnDeck,
 } from "./items";
-export { getFilterOptions } from "./filter";
+export { getFilterOptions, getSectionFirstCharacter } from "./filter";
+export type { FirstCharacterBucket } from "./filter";
 export {
   getItemMetadata,
   getItemChildren,

@@ -1,25 +1,31 @@
 /**
- * Bottom bar layout — houses the seek bar row and the controls row
- * (transport buttons left, utility buttons right).
+ * Bottom controls row — transport buttons left, utility buttons right,
+ * plus the track/enhancement/subtitle popup panels.
+ *
+ * Memoized over the tick-stable `PlayerChrome` slice: nothing rendered
+ * here displays the playhead position, so the whole subtree skips the
+ * 4 Hz time-pos re-renders. The seek bar (which does display time) lives
+ * in PlayerControls above. Interaction-time position reads (chapter
+ * skip, hold-to-skip) go through `currentTimeRef`.
  */
 
-import { useState, useEffect } from "react";
-import type { UsePlayerResult } from "../../hooks/usePlayer";
-import type { UseSeekBarResult } from "../../hooks/useSeekBar";
+import { memo, useState, useEffect } from "react";
+import type { PlayerChrome } from "../../hooks/usePlayer";
 import type { AudioEnhancementsResult } from "../../hooks/useAudioEnhancements";
 import type { NormalizationPreset } from "../../types/preferences";
 import type { PlexChapter } from "../../types/library";
-import SeekBar from "./SeekBar";
 import SkipButtons from "./SkipButtons";
 import TrackMenu from "../TrackMenu";
 import AudioEnhancementsPanel from "../AudioEnhancementsPanel";
 import SubtitleSearchPanel from "./SubtitleSearchPanel";
 
 interface ControlsBottomBarProps {
-  player: UsePlayerResult;
-  seekBar: UseSeekBarResult;
+  player: PlayerChrome;
+  /** Live playhead position, kept fresh by PlayerControls (which re-renders
+   *  per time-pos tick). Read at interaction time so this memoized tree
+   *  doesn't need `currentTime` as a prop. */
+  currentTimeRef: React.RefObject<number>;
   seekFn: (time: number) => void;
-  visible: boolean;
   mobile: boolean;
   syncIndicator?: React.ReactNode;
   chapters?: PlexChapter[];
@@ -68,9 +74,8 @@ interface ControlsBottomBarProps {
 
 function ControlsBottomBar({
   player,
-  seekBar,
+  currentTimeRef,
   seekFn,
-  visible,
   mobile,
   syncIndicator,
   chapters,
@@ -113,21 +118,8 @@ function ControlsBottomBar({
 
   return (
     <>
-      <div
-        style={{
-          ...styles.bottomArea,
-          pointerEvents: visible || seekBar.isDragging ? "auto" : "none",
-        }}
-      >
-        <SeekBar
-          seekBar={seekBar}
-          currentTime={player.currentTime}
-          duration={player.duration}
-          mobile={mobile}
-        />
-
-        {/* Controls row */}
-        <div style={styles.controlsRow}>
+      {/* Controls row */}
+      <div style={styles.controlsRow}>
           {/* Left controls — transport */}
           <div
             style={{
@@ -136,7 +128,10 @@ function ControlsBottomBar({
             }}
           >
             <SkipButtons
-              player={player}
+              isPlaying={player.isPlaying}
+              togglePlay={player.togglePlay}
+              duration={player.duration}
+              currentTimeRef={currentTimeRef}
               chapters={chapters}
               seekFn={seekFn}
               onActivity={onActivity}
@@ -420,7 +415,6 @@ function ControlsBottomBar({
               )}
             </button>
           </div>
-        </div>
       </div>
 
       {/* Track selection menus */}
@@ -474,13 +468,6 @@ function ControlsBottomBar({
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  bottomArea: {
-    display: "flex",
-    flexDirection: "column",
-    padding: "0 1.25rem 0.75rem",
-    background: "linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 100%)",
-    paddingTop: "3rem",
-  },
   controlsRow: {
     display: "flex",
     alignItems: "center",
@@ -536,4 +523,4 @@ const styles: Record<string, React.CSSProperties> = {
   },
 };
 
-export default ControlsBottomBar;
+export default memo(ControlsBottomBar);

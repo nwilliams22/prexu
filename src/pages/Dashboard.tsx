@@ -34,21 +34,10 @@ import {
 } from "../utils/media-helpers";
 import type {
   PlexMediaItem,
-  PlexMediaInfo,
   PlexEpisode,
   GroupedRecentItem,
 } from "../types/library";
-import { getMediaBadges, extractStreamsForBadges } from "../utils/media-badges";
-import type { MediaBadge } from "../utils/media-badges";
-
-/** Extract media badges from an item that may have Media[] at runtime */
-function getItemMediaBadges(item: PlexMediaItem): MediaBadge[] | undefined {
-  const media = (item as { Media?: PlexMediaInfo[] }).Media?.[0];
-  if (!media) return undefined;
-  const { videoStream, audioStream } = extractStreamsForBadges(media);
-  const badges = getMediaBadges(media, videoStream, audioStream);
-  return badges.length > 0 ? badges : undefined;
-}
+import { getItemMediaBadges } from "../utils/media-badges";
 
 /** Inline error state for a single dashboard section. */
 function SectionError({
@@ -216,11 +205,35 @@ function Dashboard() {
   }, []);
 
   // Pull-to-refresh (mobile only)
+  //
+  // pullDistanceRef drives the visual indicator via direct DOM style writes
+  // instead of state, eliminating a re-render storm on every touchmove frame
+  // (prexu-bgz.16). isRefreshing remains state because it gates a visible
+  // loading spinner that React needs to mount/unmount.
   const containerRef = useRef<HTMLDivElement>(null);
-  const [pullDistance, setPullDistance] = useState(0);
+  const pullIndicatorRef = useRef<HTMLDivElement>(null);
+  const pullSpinnerRef = useRef<HTMLDivElement>(null);
+  const pullDistanceRef = useRef(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const touchStartY = useRef(0);
   const isPulling = useRef(false);
+
+  /** Apply pullDistance to the indicator DOM node directly (no state update). */
+  const applyPullIndicatorStyle = (dist: number) => {
+    const indicator = pullIndicatorRef.current;
+    if (!indicator) return;
+    if (dist > 0) {
+      indicator.style.display = "flex";
+      indicator.style.padding = `${dist * 0.3}px 0`;
+      const spinner = pullSpinnerRef.current;
+      if (spinner) {
+        spinner.style.opacity = String(dist > 50 ? 1 : dist / 50);
+        spinner.style.transform = `rotate(${dist * 4}deg)`;
+      }
+    } else {
+      indicator.style.display = "none";
+    }
+  };
 
   const handleTouchStart = (e: React.TouchEvent) => {
     if (!mobile || isRefreshing) return;
@@ -234,22 +247,23 @@ function Dashboard() {
     if (!isPulling.current) return;
     const delta = e.touches[0].clientY - touchStartY.current;
     if (delta > 0) {
-      setPullDistance(Math.min(delta * 0.5, 80));
+      pullDistanceRef.current = Math.min(delta * 0.5, 80);
+      applyPullIndicatorStyle(pullDistanceRef.current);
     }
   };
 
   const handleTouchEnd = () => {
     if (!isPulling.current) return;
     isPulling.current = false;
-    if (pullDistance > 50) {
+    const dist = pullDistanceRef.current;
+    pullDistanceRef.current = 0;
+    applyPullIndicatorStyle(0);
+    if (dist > 50) {
       setIsRefreshing(true);
       refresh();
       setTimeout(() => {
         setIsRefreshing(false);
-        setPullDistance(0);
       }, 1000);
-    } else {
-      setPullDistance(0);
     }
   };
 
@@ -277,8 +291,9 @@ function Dashboard() {
   const backdropUrl = (art: string) =>
     getImageUrl(server.uri, server.accessToken, art, 1920, 1080);
 
-  // Build hero slides: Continue Watching items + top-rated unwatched movies
-  const heroSlides: HeroSlide[] = (() => {
+  // Build hero slides: Continue Watching items + top-rated unwatched movies.
+  // Memoised so the filter+sort does not re-run on every render (prexu-bgz.16).
+  const heroSlides = useMemo<HeroSlide[]>(() => {
     const slides: HeroSlide[] = [];
 
     // Continue watching (first 5 — prefer backdrop art, fall back to poster thumb)
@@ -325,7 +340,7 @@ function Dashboard() {
     }
 
     return slides;
-  })();
+  }, [onDeck, recentMovies, dismissedKeys]);
 
   /** Build onDeck-specific extra items (Remove from Continue Watching). */
   const onDeckExtras = (item: PlexMediaItem) => {
@@ -360,20 +375,19 @@ function Dashboard() {
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
     >
-      {/* Pull-to-refresh indicator (mobile) */}
-      {mobile && pullDistance > 0 && (
-        <div style={{
-          display: "flex",
-          justifyContent: "center",
-          padding: `${pullDistance * 0.3}px 0`,
-          transition: isPulling.current ? "none" : "padding 0.2s ease",
-        }}>
+      {/* Pull-to-refresh indicator (mobile) — driven via ref to avoid re-renders */}
+      {mobile && (
+        <div
+          ref={pullIndicatorRef}
+          style={{
+            display: "none",
+            justifyContent: "center",
+            transition: "padding 0.2s ease",
+          }}
+        >
           <div
+            ref={pullSpinnerRef}
             className="loading-spinner"
-            style={{
-              opacity: pullDistance > 50 ? 1 : pullDistance / 50,
-              transform: `rotate(${pullDistance * 4}deg)`,
-            }}
           />
         </div>
       )}

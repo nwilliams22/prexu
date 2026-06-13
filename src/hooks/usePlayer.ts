@@ -13,7 +13,7 @@
  * ternary).
  */
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useAuth } from "./useAuth";
 import { usePreferences } from "./usePreferences";
 import { useHlsLoader } from "./player/useHlsLoader";
@@ -23,16 +23,13 @@ import { useNativePlayer } from "./player/useNativePlayer";
 import { addPendingWatchSync } from "../services/storage";
 import {
   prepareSource,
-  deriveDisplayTitles,
+  applyPreparedMetadata,
+  refreshDownloadedSubtitles,
   buildHlsConfig,
   reportTimeline,
   getSavedVolume,
   saveVolume,
 } from "../services/plex-playback";
-import {
-  setSelectedSubtitleStream,
-  waitForDownloadedSubtitle,
-} from "../services/subtitle-search";
 import type {
   PlexChapter,
   PlexMarker,
@@ -43,7 +40,7 @@ import type {
   SubtitleStylePreferences,
 } from "../types/preferences";
 import { buildSubtitleCss } from "../utils/subtitle-css";
-import { logger } from "../services/logger";
+import { logger, redactUrl } from "../services/logger";
 
 export const IS_NATIVE_PLAYER =
   typeof window !== "undefined" &&
@@ -135,7 +132,28 @@ export interface UsePlayerResult {
     normalizationPreset?: NormalizationPreset;
     audioOffsetMs?: number;
   }) => void;
+
+  /**
+   * Identity-stable slice of this result: everything except the 4 Hz
+   * time-pos values (`currentTime` / `buffered`). Both backends memoize
+   * this object over stable callbacks + rarely-changing state only, so
+   * its identity survives time-pos ticks. Chrome components (buttons,
+   * menus, transport) and effects should consume this slice — or
+   * individual fields/callbacks — instead of the whole result, which
+   * gets a new identity on every tick. Components that genuinely
+   * display time (seek bar, time labels) keep reading `currentTime` /
+   * `buffered` from the full result.
+   */
+  chrome: PlayerChrome;
 }
+
+/**
+ * The tick-stable portion of `UsePlayerResult` — see `UsePlayerResult.chrome`.
+ */
+export type PlayerChrome = Omit<
+  UsePlayerResult,
+  "currentTime" | "buffered" | "chrome"
+>;
 
 export function usePlayer(ratingKey: string, offsetOverride?: number | null): UsePlayerResult {
   // The branch is a module-level constant — React calls the same hook for
@@ -191,6 +209,11 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
 
   // Direct play failure tracking
   const directPlayFailedRef = useRef(false);
+  // Monotonic init generation. Each initPlayback claims the next value and
+  // its async continuations check ownership before touching the video
+  // element or React state; the per-ratingKey cleanup bumps it so a
+  // superseded init stops at its next checkpoint.
+  const initGenRef = useRef(0);
   // Track if current playback is from a local download (for offline watch sync)
   const isLocalPlaybackRef = useRef(false);
   // Media part id of the current file — needed to persist subtitle selection
@@ -212,6 +235,7 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
 
   // ── Initialize playback ──
   const initPlayback = useCallback(async () => {
+    const gen = ++initGenRef.current;
     if (!server || !ratingKey) {
       setIsLoading(false);
       setPlaybackError("No server or media selected");
@@ -231,27 +255,25 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
         directPlayFailed: directPlayFailedRef.current,
         skipCodecCheck: false,
       });
+      if (gen !== initGenRef.current) {
+        logger.debug("player", "initPlayback superseded", { gen });
+        return;
+      }
 
-      const { title: t, subtitle: s } = deriveDisplayTitles(prepared.item);
-      setTitle(t);
-      setSubtitle(s);
-
-      setChapters(prepared.part.Chapter ?? []);
-      partIdRef.current = prepared.part.id;
-      setMarkers(prepared.playable.Marker ?? []);
-      setItemType(prepared.item.type);
-      setParentRatingKey(
-        prepared.item.type === "episode"
-          ? (prepared.playable as import("../types/library").PlexEpisode).parentRatingKey ?? ""
-          : "",
-      );
-
-      streams.setAudioTracks(prepared.categorized.audio);
-      streams.setSubtitleTracks(prepared.categorized.subtitles);
-      streams.setSelectedAudioId(prepared.defaultAudio?.id ?? prepared.categorized.audio[0]?.id ?? null);
-      streams.setSelectedSubtitleId(prepared.defaultSub?.id ?? null);
-
-      isLocalPlaybackRef.current = prepared.isLocal;
+      applyPreparedMetadata(prepared, {
+        setTitle,
+        setSubtitle,
+        setChapters,
+        setMarkers,
+        setItemType,
+        setParentRatingKey,
+        setAudioTracks: streams.setAudioTracks,
+        setSubtitleTracks: streams.setSubtitleTracks,
+        setSelectedAudioId: streams.setSelectedAudioId,
+        setSelectedSubtitleId: streams.setSelectedSubtitleId,
+        setIsLocalPlayback: (v) => { isLocalPlaybackRef.current = v; },
+        setPartId: (v) => { partIdRef.current = v; },
+      });
 
       const video = videoRef.current;
       if (!video) {
@@ -265,6 +287,10 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
 
       if (prepared.sourceKind === "local") {
         const { convertFileSrc } = await import("@tauri-apps/api/core");
+        if (gen !== initGenRef.current) {
+          logger.debug("player", "initPlayback superseded", { gen });
+          return;
+        }
         const localUrl = convertFileSrc(prepared.url);
         hlsLoader.destroyHls();
         video.src = localUrl;
@@ -282,6 +308,10 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
         video.play().catch(() => {});
       } else {
         const Hls = await hlsLoader.loadHls();
+        if (gen !== initGenRef.current) {
+          logger.debug("player", "initPlayback superseded", { gen });
+          return;
+        }
         if (!Hls.isSupported()) {
           throw new Error("HLS playback is not supported in this browser/webview");
         }
@@ -311,13 +341,13 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
             `fatal: ${data.fatal}`,
             `type: ${data.type}`,
             `details: ${data.details}`,
-            data.url ? `url: ${data.url.substring(0, 80)}` : null,
+            data.url ? `url: ${redactUrl(data.url)}` : null,
             data.response ? `response: ${JSON.stringify({ code: data.response.code, text: data.response.text })}` : null,
             data.error ? `error: ${data.error.message ?? data.error}` : null,
             data.reason ? `reason: ${data.reason}` : null,
           ].filter(Boolean).join("\n");
 
-          console.warn(`[HLS Error] ${data.fatal ? "FATAL" : "non-fatal"}`, details);
+          logger.warn("player", `HLS ${data.fatal ? "fatal" : "non-fatal"} error`, details);
 
           if (data.fatal) {
             switch (data.type) {
@@ -352,6 +382,10 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
       timeline.startTimeline();
       setIsLoading(false);
     } catch (err) {
+      if (gen !== initGenRef.current) {
+        logger.debug("player", "initPlayback superseded", { gen });
+        return;
+      }
       setPlaybackError(err instanceof Error ? err.message : "Failed to start playback");
       setIsLoading(false);
     }
@@ -363,6 +397,7 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
     directPlayFailedRef.current = false;
     initPlayback();
     return () => {
+      initGenRef.current++;
       hlsLoader.destroyHls();
       timeline.stopTimeline();
       timeline.reportStopped();
@@ -512,30 +547,16 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
   // at the current position, so playback resumes where it was.
   const refreshSubtitlesAfterDownload = useCallback(async () => {
     if (!server) return;
-    const prevIds = streams.subtitleTracks.map((t) => t.id);
-    const result = await waitForDownloadedSubtitle(
-      server.uri,
-      server.accessToken,
+    await refreshDownloadedSubtitles({
+      server,
       ratingKey,
-      partIdRef.current,
-      prevIds,
-    );
-    if (!result) return;
-    streams.setSubtitleTracks(result.tracks);
-    if (partIdRef.current !== undefined) {
-      try {
-        await setSelectedSubtitleStream(
-          server.uri,
-          server.accessToken,
-          partIdRef.current,
-          result.added.id,
-        );
-      } catch (err) {
-        logger.error("player", "persist downloaded subtitle failed", String(err));
-      }
-    }
-    logger.info("player", "applying downloaded subtitle", { streamId: result.added.id });
-    await streams.selectSubtitleTrack(result.added.id);
+      partIdRef,
+      initGenRef,
+      prevSubIds: streams.subtitleTracks.map((t) => t.id),
+      onTracksUpdated: streams.setSubtitleTracks,
+      // HTML5 path: await so HLS rebuild completes before returning.
+      onSelectSubtitle: (id) => streams.selectSubtitleTrack(id),
+    });
   }, [server, ratingKey, streams]);
 
   // ── Backend dispatch methods ──────────────────────────────────────────────
@@ -603,42 +624,85 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
     };
   }, []);
 
-  return {
-    videoRef,
-    title,
-    subtitle,
-    chapters,
-    markers,
-    itemType,
-    parentRatingKey,
-    isLoading,
-    isPlaying,
-    isBuffering,
-    currentTime,
-    duration,
-    buffered,
-    volume,
-    isMuted,
-    isFullscreen,
-    playbackError,
-    audioTracks: streams.audioTracks,
-    subtitleTracks: streams.subtitleTracks,
-    selectedAudioId: streams.selectedAudioId,
-    selectedSubtitleId: streams.selectedSubtitleId,
-    togglePlay,
-    seek,
-    setVolume,
-    toggleMute,
-    toggleFullscreen,
-    selectAudioTrack: streams.selectAudioTrack,
-    selectSubtitleTrack: streams.selectSubtitleTrack,
-    retry,
-    refreshSubtitlesAfterDownload,
-    pause,
-    unload,
-    setFullscreen,
-    subscribeToEof,
-    applySubtitleStyle,
-    applyAudioEnhancement,
-  };
+  // Tick-stable slice: memoized over stable callbacks + rarely-changing
+  // state only. currentTime/buffered are deliberately excluded so chrome
+  // consumers (transport buttons, menus, effects) don't churn at 4 Hz.
+  const chrome = useMemo<PlayerChrome>(
+    () => ({
+      videoRef,
+      title,
+      subtitle,
+      chapters,
+      markers,
+      itemType,
+      parentRatingKey,
+      isLoading,
+      isPlaying,
+      isBuffering,
+      duration,
+      volume,
+      isMuted,
+      isFullscreen,
+      playbackError,
+      audioTracks: streams.audioTracks,
+      subtitleTracks: streams.subtitleTracks,
+      selectedAudioId: streams.selectedAudioId,
+      selectedSubtitleId: streams.selectedSubtitleId,
+      togglePlay,
+      seek,
+      setVolume,
+      toggleMute,
+      toggleFullscreen,
+      selectAudioTrack: streams.selectAudioTrack,
+      selectSubtitleTrack: streams.selectSubtitleTrack,
+      retry,
+      refreshSubtitlesAfterDownload,
+      pause,
+      unload,
+      setFullscreen,
+      subscribeToEof,
+      applySubtitleStyle,
+      applyAudioEnhancement,
+    }),
+    [
+      title,
+      subtitle,
+      chapters,
+      markers,
+      itemType,
+      parentRatingKey,
+      isLoading,
+      isPlaying,
+      isBuffering,
+      duration,
+      volume,
+      isMuted,
+      isFullscreen,
+      playbackError,
+      streams.audioTracks,
+      streams.subtitleTracks,
+      streams.selectedAudioId,
+      streams.selectedSubtitleId,
+      togglePlay,
+      seek,
+      setVolume,
+      toggleMute,
+      toggleFullscreen,
+      streams.selectAudioTrack,
+      streams.selectSubtitleTrack,
+      retry,
+      refreshSubtitlesAfterDownload,
+      pause,
+      unload,
+      setFullscreen,
+      subscribeToEof,
+      applySubtitleStyle,
+      applyAudioEnhancement,
+    ],
+  );
+
+  return useMemo<UsePlayerResult>(
+    () => ({ ...chrome, currentTime, buffered, chrome }),
+    [chrome, currentTime, buffered],
+  );
 }

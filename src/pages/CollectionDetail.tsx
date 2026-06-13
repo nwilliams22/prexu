@@ -72,19 +72,22 @@ function CollectionDetail() {
       setError(null);
       setDetailedItems(new Map());
       try {
-        const meta = await getItemMetadata<PlexCollection>(
-          server.uri,
-          server.accessToken,
-          collectionKey
-        );
-        if (!cancelled) setCollection(meta);
-
-        const result = await getCollectionItems(
-          server.uri,
-          server.accessToken,
-          collectionKey
-        );
+        // Both fetches are independent — getCollectionItems only needs
+        // collectionKey (already in scope) and does not depend on meta.
+        const [meta, result] = await Promise.all([
+          getItemMetadata<PlexCollection>(
+            server.uri,
+            server.accessToken,
+            collectionKey
+          ),
+          getCollectionItems(
+            server.uri,
+            server.accessToken,
+            collectionKey
+          ),
+        ]);
         if (!cancelled) {
+          setCollection(meta);
           setItems(result.items);
           setTotalSize(result.totalSize);
         }

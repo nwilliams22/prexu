@@ -16,6 +16,38 @@ fn mpv_quote(arg: &str) -> String {
     format!("\"{}\"", escaped)
 }
 
+/// Validate that the URL scheme is http or https (case-insensitive on the
+/// scheme part). Rejects file://, smb://, ffmpeg://, bare paths, and anything
+/// else mpv would accept but a Plex client has no business loading.
+/// Returns `Err` with a safe message on rejection; does NOT include the URL.
+fn validate_url_scheme(url: &str) -> Result<(), String> {
+    let lower = url.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        Ok(())
+    } else {
+        Err("URL scheme must be http:// or https://".into())
+    }
+}
+
+/// Validate a single HTTP header name or value.
+/// Rejects any string containing comma, CR (`\r`), or LF (`\n`) because:
+///  - comma splits mpv's `http-header-fields` list
+///  - CR/LF allow injecting extra HTTP request lines via ffmpeg's net layer
+fn validate_header_field(s: &str) -> Result<(), String> {
+    if s.contains(',') || s.contains('\r') || s.contains('\n') {
+        Err("Header name/value must not contain comma, CR, or LF".into())
+    } else {
+        Ok(())
+    }
+}
+
+/// Mask any X-Plex-Token query value, then truncate to 80 chars for logging.
+/// Delegates to the shared implementation in `crate::util` so the logic lives
+/// in exactly one place.
+fn redact_url(url: &str) -> String {
+    crate::util::redact_url(url)
+}
+
 #[tauri::command]
 pub async fn player_load_url(
     url: String,
@@ -25,13 +57,34 @@ pub async fn player_load_url(
     state: State<'_, PlayerState>,
 ) -> Result<(), String> {
     log::info!("[player:cmd] load_url offset={}ms headers={}", start_offset_ms.unwrap_or(0), headers.len());
+
+    // Security: reject non-http(s) schemes so mpv cannot open local files,
+    // raw ffmpeg:// pipelines, smb://, etc. via a compromised webview.
+    if let Err(e) = validate_url_scheme(&url) {
+        log::warn!("[player:cmd] load_url rejected — {}: url={}", e, redact_url(&url));
+        return Err(e);
+    }
+
+    // Security: reject header names/values containing comma, CR, or LF to
+    // prevent corruption of mpv's http-header-fields list and HTTP header
+    // injection through ffmpeg's net layer.
+    for (k, v) in &headers {
+        if let Err(e) = validate_header_field(k) {
+            log::warn!("[player:cmd] load_url rejected — header name invalid ({}): name={:?}", e, k);
+            return Err(format!("Invalid header name {:?}: {}", k, e));
+        }
+        if let Err(e) = validate_header_field(v) {
+            log::warn!("[player:cmd] load_url rejected — header value invalid ({}): name={:?}", e, k);
+            return Err(format!("Invalid header value for {:?}: {}", k, e));
+        }
+    }
+
     state.ensure_init(&app)?;
     log::debug!("[player:cmd] load_url: ensure_init OK, sending loadfile");
 
     // mpv's `http-header-fields` takes a comma-separated list of "Name: Value"
     // entries. Plex headers (X-Plex-Token, X-Plex-Client-Identifier, …) don't
-    // contain commas so naive joining is safe; if a value ever does contain a
-    // comma we'd need to escape it as `\,` per the mpv string-list format.
+    // contain commas; the validation above hard-rejects any that do.
     let header_str = headers
         .iter()
         .map(|(k, v)| format!("{}: {}", k, v))
@@ -138,8 +191,7 @@ pub async fn player_load_external_sub(
     url: String,
     state: State<'_, PlayerState>,
 ) -> Result<(), String> {
-    let preview = &url[..url.len().min(80)];
-    log::info!("[player:cmd] load_external_sub url={}", preview);
+    log::info!("[player:cmd] load_external_sub url={}", redact_url(&url));
     state.with_mpv(|mpv| mpv.command("sub-add", &[mpv_quote(&url).as_str(), "select"]))
 }
 
@@ -311,7 +363,7 @@ pub async fn player_stop() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{css_font_to_family, mpv_quote};
+    use super::{css_font_to_family, mpv_quote, redact_url, validate_header_field, validate_url_scheme};
 
     #[test]
     fn takes_first_family_and_strips_quotes() {
@@ -353,5 +405,99 @@ mod tests {
             mpv_quote("https://example.com/library/parts/1/file.mkv?X-Plex-Token=t"),
             "\"https://example.com/library/parts/1/file.mkv?X-Plex-Token=t\""
         );
+    }
+
+    #[test]
+    fn redact_url_masks_token_value() {
+        assert_eq!(
+            redact_url("http://192.168.1.5:32400/library/streams/1.srt?X-Plex-Token=secret123"),
+            "http://192.168.1.5:32400/library/streams/1.srt?X-Plex-Token=***"
+        );
+    }
+
+    #[test]
+    fn redact_url_preserves_following_params_and_case() {
+        assert_eq!(
+            redact_url("http://h/p?a=1&x-plex-token=abc&b=2"),
+            "http://h/p?a=1&x-plex-token=***&b=2"
+        );
+    }
+
+    #[test]
+    fn redact_url_truncates_to_80_chars_without_panicking_on_multibyte() {
+        let long = format!("http://h/{}?X-Plex-Token=t", "é".repeat(100));
+        let out = redact_url(&long);
+        assert_eq!(out.chars().count(), 80);
+    }
+
+    #[test]
+    fn redact_url_passes_tokenless_urls_through() {
+        assert_eq!(redact_url("http://h/path"), "http://h/path");
+    }
+
+    // --- validate_url_scheme ---
+
+    #[test]
+    fn scheme_http_and_https_accepted() {
+        assert!(validate_url_scheme("http://192.168.1.5:32400/library/parts/1/file.mkv").is_ok());
+        assert!(validate_url_scheme("https://example.com/stream.mkv?X-Plex-Token=t").is_ok());
+    }
+
+    #[test]
+    fn scheme_https_uppercase_accepted() {
+        // Scheme comparison must be case-insensitive.
+        assert!(validate_url_scheme("HTTPS://example.com/file").is_ok());
+        assert!(validate_url_scheme("HTTP://example.com/file").is_ok());
+    }
+
+    #[test]
+    fn scheme_file_rejected() {
+        assert!(validate_url_scheme("file:///C:/Windows/System32/secret").is_err());
+    }
+
+    #[test]
+    fn scheme_ffmpeg_rejected() {
+        assert!(validate_url_scheme("ffmpeg://pipe:0").is_err());
+    }
+
+    #[test]
+    fn scheme_smb_rejected() {
+        assert!(validate_url_scheme("smb://server/share/movie.mkv").is_err());
+    }
+
+    #[test]
+    fn bare_path_rejected() {
+        assert!(validate_url_scheme(r"C:\Videos\movie.mkv").is_err());
+        assert!(validate_url_scheme("/home/user/movie.mkv").is_err());
+    }
+
+    // --- validate_header_field ---
+
+    #[test]
+    fn valid_plex_header_name_and_value_accepted() {
+        assert!(validate_header_field("X-Plex-Token").is_ok());
+        assert!(validate_header_field("X-Plex-Client-Identifier").is_ok());
+        assert!(validate_header_field("abc123-xyz").is_ok());
+    }
+
+    #[test]
+    fn header_with_comma_rejected() {
+        assert!(validate_header_field("Accept,Encoding").is_err());
+        assert!(validate_header_field("value,with,commas").is_err());
+    }
+
+    #[test]
+    fn header_with_cr_rejected() {
+        assert!(validate_header_field("Name\rInjected").is_err());
+    }
+
+    #[test]
+    fn header_with_lf_rejected() {
+        assert!(validate_header_field("Value\nInjected: evil").is_err());
+    }
+
+    #[test]
+    fn header_with_crlf_rejected() {
+        assert!(validate_header_field("val\r\nX-Injected: pwned").is_err());
     }
 }

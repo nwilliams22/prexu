@@ -28,14 +28,14 @@ import {
   isWatched,
   getUnwatchedCount,
 } from "../utils/media-helpers";
-import type { PlexMediaItem, PlexMediaInfo, PlexCollection, LibraryFilters } from "../types/library";
-import { getMediaBadges, extractStreamsForBadges } from "../utils/media-badges";
-import type { MediaBadge } from "../utils/media-badges";
+import type { PlexMediaItem, PlexCollection, LibraryFilters } from "../types/library";
+import { getItemMediaBadges } from "../utils/media-badges";
 import { STORAGE_KEYS } from "../services/storage/backends";
 import {
   getLibrarySortBucket,
   findFirstIndexForLetter,
 } from "../utils/library-sort";
+import { useFirstCharacter, computeLetterOffsets } from "../hooks/useFirstCharacter";
 import { logger } from "../services/logger";
 
 interface PersistedLibraryState {
@@ -63,14 +63,6 @@ function persistFilters(sectionId: string, state: PersistedLibraryState): void {
   } else {
     localStorage.removeItem(`${STORAGE_KEYS.LIBRARY_FILTERS}:${sectionId}`);
   }
-}
-
-function getItemMediaBadges(item: PlexMediaItem): MediaBadge[] | undefined {
-  const media = (item as { Media?: PlexMediaInfo[] }).Media?.[0];
-  if (!media) return undefined;
-  const { videoStream, audioStream } = extractStreamsForBadges(media);
-  const badges = getMediaBadges(media, videoStream, audioStream);
-  return badges.length > 0 ? badges : undefined;
 }
 
 function LibraryView() {
@@ -134,11 +126,38 @@ function LibraryView() {
     return f;
   }, [searchParams, section]);
 
-  // Load all items at once when sorted alphabetically on movie/show libraries
-  // so the alpha jump bar can access all letters
-  const shouldLoadAll =
+  // Declared early so it can be referenced by both shouldLoadAll and useFirstCharIndex
+  // (both of which must be computed before usePaginatedLibrary is called).
+  const hasActiveFilters =
+    !!filters.genre || !!filters.year || !!filters.contentRating || !!filters.resolution || !!filters.unwatched;
+
+  // Whether alpha-jump bar is applicable for the current sort
+  const isAlphaSortable =
     (section?.type === "movie" || section?.type === "show") &&
     sort.startsWith("titleSort:");
+
+  // Fetch the per-letter bucket index from Plex when on a titleSort view.
+  // This replaces the previous strategy of loading all items just to build
+  // the AlphaJumpBar letter set.
+  const {
+    letters: firstCharLetters,
+    buckets: firstCharBuckets,
+    error: firstCharError,
+  } = useFirstCharacter(sectionId, isAlphaSortable);
+
+  // Whether the firstCharacter index is available and usable.
+  // Falls back to old behaviour (load all) when the endpoint fails or
+  // when any filter is active (offsets from the raw index won't match a
+  // filtered result set).
+  const useFirstCharIndex =
+    isAlphaSortable && !firstCharError && !hasActiveFilters;
+
+  // Only force-load every item when on a non-default sort (non-titleSort)
+  // that has no firstCharacter index support, or when filters are active
+  // and the user is still on a titleSort. For the common default-sort case
+  // with no filters we now rely on the firstCharacter API instead.
+  const shouldLoadAll =
+    isAlphaSortable && hasActiveFilters;
 
   const { items, isLoading, isLoadingMore, hasMore, totalSize, error, loadMore, retry } =
     usePaginatedLibrary(sectionId, sort, filters, {
@@ -217,23 +236,56 @@ function LibraryView() {
     return sorted;
   }, [sectionCollections, collectionSearch, collectionSort, collectionsUnwatchedOnly, collectionWatchedMap, minCollectionSize]);
 
-  // Compute available first-letters from loaded items for the alpha jump bar.
-  // Uses the same normalization as the click handler so letters that have no
-  // findable target are correctly disabled (e.g. "The Matrix" → "M", not "T").
+  // Compute available first-letters for the alpha jump bar.
+  //
+  // When the firstCharacter index is available (default sort, no filters),
+  // use it directly — no items need to be loaded for this.
+  // When filters are active (shouldLoadAll path) or the endpoint failed,
+  // fall back to scanning the loaded items as before.
   const availableLetters = useMemo(() => {
+    if (useFirstCharIndex && firstCharLetters.size > 0) {
+      return firstCharLetters;
+    }
+    // Fallback: derive from whatever items are currently loaded
     const letters = new Set<string>();
     for (const item of filteredItems) {
       letters.add(getLibrarySortBucket(item));
     }
     return letters;
-  }, [filteredItems]);
+  }, [useFirstCharIndex, firstCharLetters, filteredItems]);
+
+  // Precompute letter→offset map from the firstCharacter buckets.
+  // Used by the fast-path jump handler to scroll without scanning items.
+  const letterOffsets = useMemo(
+    () => (useFirstCharIndex ? computeLetterOffsets(firstCharBuckets) : new Map<string, number>()),
+    [useFirstCharIndex, firstCharBuckets],
+  );
 
   // Scroll the grid (virtualized or not) to the first item whose normalized
   // sort key starts with `letter`. Querying the DOM directly fails under
   // virtualization because off-screen rows aren't mounted, so we drive the
   // grid via its imperative scrollToIndex handle instead.
+  //
+  // Fast path: when the firstCharacter index is available, the offset for
+  // each letter is derived from cumulative bucket sizes — no item scan needed
+  // and no items need to be loaded.
+  //
+  // Fallback path: scan the loaded items array (pre-existing behaviour,
+  // used when filters are active or the firstCharacter endpoint failed).
   const handleAlphaJump = useCallback(
     (letter: string) => {
+      if (useFirstCharIndex && letterOffsets.size > 0) {
+        const offset = letterOffsets.get(letter);
+        if (offset === undefined) {
+          void logger.debug("library:scrubber", "alpha jump miss (firstChar)", { letter });
+          return;
+        }
+        void logger.debug("library:scrubber", "alpha jump (firstChar)", { letter, offset });
+        gridApiRef.current?.scrollToIndex(offset);
+        return;
+      }
+
+      // Fallback: linear scan of loaded items
       const index = findFirstIndexForLetter(filteredItems, letter);
       if (index < 0) {
         void logger.debug("library:scrubber", "alpha jump miss", { letter });
@@ -246,15 +298,17 @@ function LibraryView() {
       });
       gridApiRef.current?.scrollToIndex(index);
     },
-    [filteredItems],
+    [useFirstCharIndex, letterOffsets, filteredItems],
   );
 
-  // Show alpha jump bar for movie and show libraries when sorted alphabetically
+  // Show alpha jump bar for movie and show libraries when sorted alphabetically.
+  // When using the firstCharacter index we can show it as soon as the index
+  // is ready (even before any items are loaded). When falling back to item
+  // scanning we need at least one loaded item.
   const showAlphaJump =
     !isLoading &&
-    items.length > 0 &&
-    (section?.type === "movie" || section?.type === "show") &&
-    sort.startsWith("titleSort:");
+    isAlphaSortable &&
+    (useFirstCharIndex ? firstCharLetters.size > 0 : items.length > 0);
 
   useEffect(() => {
     if (section) {
@@ -315,9 +369,6 @@ function LibraryView() {
     },
     [updateSearchParams, sectionId]
   );
-
-  const hasActiveFilters =
-    !!filters.genre || !!filters.year || !!filters.contentRating || !!filters.resolution || !!filters.unwatched;
 
   const posterUrl = useCallback(
     (thumb: string) =>

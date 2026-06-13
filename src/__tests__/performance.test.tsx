@@ -236,7 +236,10 @@ describe.skipIf(IS_CI)("Performance: rendering large grids", () => {
     expect(elapsed).toBeLessThan(5000);
   });
 
-  it("renders 100 PosterCards with full props (progress, badges, watched) in < 3500ms", () => {
+  // Wall-clock render assertion below stays at 3500ms; the harness timeout is
+  // raised separately because getAllByRole + cleanup overhead pushes total test
+  // time past vitest's 5000ms default when the suite runs fully parallel.
+  it("renders 100 PosterCards with full props (progress, badges, watched) in < 3500ms", { timeout: 15000 }, () => {
     const items = generateMovies(100);
 
     const start = performance.now();

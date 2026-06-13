@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { QueueProvider, useQueue } from "./QueueContext";
 import type { QueueItem } from "../types/queue";
@@ -19,6 +19,58 @@ const makeItem = (key: string, title: string): QueueItem => ({
 
 beforeEach(() => {
   localStorage.clear();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("QueueContext — localStorage validation", () => {
+  const STORAGE_KEY = "prexu_playback_queue";
+
+  it("falls back to empty queue when localStorage contains invalid JSON", () => {
+    localStorage.setItem(STORAGE_KEY, "not valid json{{{");
+    const { result } = renderHook(() => useQueue(), { wrapper });
+    expect(result.current.queue.items).toHaveLength(0);
+    expect(result.current.queue.currentIndex).toBe(-1);
+  });
+
+  it("falls back to empty queue when stored data is missing items array", () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ currentIndex: 0 }));
+    const { result } = renderHook(() => useQueue(), { wrapper });
+    expect(result.current.queue.items).toHaveLength(0);
+  });
+
+  it("falls back to empty queue when items contains entries with missing fields", () => {
+    const malformed = {
+      items: [{ ratingKey: "1", title: "A" }], // missing subtitle/thumb/duration/type
+      currentIndex: 0,
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(malformed));
+    const { result } = renderHook(() => useQueue(), { wrapper });
+    expect(result.current.queue.items).toHaveLength(0);
+  });
+
+  it("falls back to empty queue when item type is not movie or episode", () => {
+    const malformed = {
+      items: [{ ratingKey: "1", title: "A", subtitle: "S", thumb: "/t", duration: 1000, type: "album" }],
+      currentIndex: 0,
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(malformed));
+    const { result } = renderHook(() => useQueue(), { wrapper });
+    expect(result.current.queue.items).toHaveLength(0);
+  });
+
+  it("restores a valid persisted queue", () => {
+    const valid = {
+      items: [makeItem("1", "A"), makeItem("2", "B")],
+      currentIndex: 1,
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(valid));
+    const { result } = renderHook(() => useQueue(), { wrapper });
+    expect(result.current.queue.items).toHaveLength(2);
+    expect(result.current.queue.currentIndex).toBe(1);
+  });
 });
 
 describe("QueueContext", () => {

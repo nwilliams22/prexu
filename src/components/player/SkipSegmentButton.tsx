@@ -1,5 +1,6 @@
 import { useEffect, useCallback } from "react";
 import type { ActiveSegment } from "../../hooks/player/useSkipSegments";
+import { resolveSkipPillDecision } from "./skipSegmentDecision";
 
 interface SkipSegmentButtonProps {
   segment: ActiveSegment;
@@ -30,12 +31,29 @@ export default function SkipSegmentButton({
   hasNextEpisode,
   onNextEpisode,
 }: SkipSegmentButtonProps) {
-  const isCredits = segment.type === "credits";
-  const showNextEpisode = Boolean(isCredits && hasNextEpisode && onNextEpisode);
+  const { primaryLabel, showNextEpisode } = resolveSkipPillDecision(
+    segment.type,
+    Boolean(hasNextEpisode),
+    Boolean(onNextEpisode),
+  );
 
   // Keyboard: S always triggers the primary skip (intro or credits).
+  // Guard: do not intercept while the user is typing in an input-like element.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        // isContentEditable reflects the computed state; the contentEditable
+        // attribute check covers environments (e.g. jsdom) that don't implement
+        // the computed property.
+        target?.isContentEditable ||
+        target?.contentEditable === "true"
+      ) {
+        return;
+      }
       if (e.key === "s" || e.key === "S") {
         if (e.shiftKey) return; // Shift+S reserved for future bindings
         e.preventDefault();
@@ -49,8 +67,6 @@ export default function SkipSegmentButton({
   const handleNextEpisodeClick = useCallback(() => {
     if (onNextEpisode) onNextEpisode();
   }, [onNextEpisode]);
-
-  const primaryLabel = isCredits ? "Skip Credits" : "Skip Intro";
 
   return (
     <div style={styles.container}>

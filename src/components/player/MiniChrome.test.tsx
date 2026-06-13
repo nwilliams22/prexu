@@ -551,6 +551,56 @@ describe("MiniChrome scrub + skip", () => {
     expect(onSeek).toHaveBeenCalledWith(600);
   });
 
+  // prexu-bgz.10: scrub pointermove used to call onSeek (a raw player_seek
+  // IPC) on EVERY move with zero throttling, flooding the mpv command queue
+  // during a drag. The fix mirrors the resize path's 33 ms leading-edge
+  // Date.now() gate. A rapid burst of moves must produce at most
+  // ceil(elapsed/33) mid-drag seeks (plus the pointerdown grab seek), and
+  // pointerup must ALWAYS seek with the exact release position even when it
+  // lands inside the throttle window.
+  it("throttles mid-drag scrub seeks to ~30 Hz and always seeks the release position on pointerup", () => {
+    vi.useFakeTimers();
+    try {
+      const onSeek = vi.fn();
+      render(<MiniChrome {...baseProps} onSeek={onSeek} duration={600} />);
+      const scrub = screen.getByTestId("mini-chrome-scrub");
+      const trackDiv = scrub.firstElementChild as HTMLElement | null;
+      if (trackDiv) {
+        // 300px-wide track at x=0 → seconds = (clientX / 300) * 600.
+        vi.spyOn(trackDiv, "getBoundingClientRect").mockReturnValue({
+          left: 0, right: 300, width: 300, top: 0, bottom: 4, height: 4,
+          x: 0, y: 0, toJSON: () => ({}),
+        } as DOMRect);
+      }
+
+      fireEvent.pointerDown(scrub, { button: 0, clientX: 0, pointerId: 1 });
+      // The grab itself seeks once immediately.
+      expect(onSeek).toHaveBeenCalledTimes(1);
+
+      // 30 rapid moves, 5 ms apart (150 ms total) — far faster than 33 ms.
+      const MOVES = 30;
+      const STEP_MS = 5;
+      for (let i = 1; i <= MOVES; i++) {
+        vi.advanceTimersByTime(STEP_MS);
+        fireEvent.pointerMove(scrub, { clientX: i * 5, pointerId: 1 });
+      }
+      const elapsedMs = MOVES * STEP_MS;
+      const midDragSeeks = onSeek.mock.calls.length - 1; // minus the grab seek
+      // Throttled: at most one seek per 33 ms window, NOT one per move.
+      expect(midDragSeeks).toBeLessThanOrEqual(Math.ceil(elapsedMs / 33) + 1);
+      expect(midDragSeeks).toBeLessThan(MOVES);
+      expect(midDragSeeks).toBeGreaterThan(0); // gate opens, it's not a mute
+
+      // Release at x=150 — inside the throttle window (last move was 5 ms
+      // ago) — the final seek must still fire with the exact release
+      // position: (150 / 300) * 600 = 300 s.
+      fireEvent.pointerUp(scrub, { clientX: 150, pointerId: 1 });
+      expect(onSeek).toHaveBeenLastCalledWith(300);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("skip + scrub controls all carry data-mini-no-drag so they don't start an anchor drag", () => {
     render(<MiniChrome {...baseProps} />);
     expect(

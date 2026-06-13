@@ -2,6 +2,8 @@
 
 pub mod commands;
 pub mod events;
+pub(crate) mod geometry;
+pub(crate) mod timeline;
 
 #[cfg(target_os = "windows")]
 pub mod host_window;
@@ -11,8 +13,17 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use tokio::sync::Notify;
+
 use libmpv2::Mpv;
 use tauri::{AppHandle, Manager};
+
+use geometry::GeomState;
+
+// Re-export pure helpers that external callers (commands/, lib.rs) reference
+// via `crate::player::*`.
+pub(crate) use geometry::{compute_minimize_inset, initial_host_geometry};
+pub use timeline::TimelineCtx;
 
 /// Minimum interval between consecutive sync_geometry calls. Drag-resize
 /// fires WM_SIZE at the OS event rate (~60 Hz). Each sync_geometry runs
@@ -30,10 +41,27 @@ use tauri::{AppHandle, Manager};
 /// resize (host extends past or stops short of chrome).
 pub(crate) const GEOMETRY_SYNC_MIN_INTERVAL: Duration = Duration::from_millis(33);
 
+/// How long `report_stopped_on_close` waits for the spawned report thread
+/// before letting window close proceed. Caps shutdown latency: the typical
+/// LAN Plex timeline GET completes in tens of ms (close stays effectively
+/// instant); a dead/slow server costs at most this much instead of the old
+/// main-thread worst case of client construction + 1500ms send. Past this
+/// budget the thread is detached and races process exit (prexu-bgz.9).
+pub(crate) const CLOSE_REPORT_JOIN_BUDGET: Duration = Duration::from_millis(300);
+
 /// Managed state container holding the mpv handle + (on Windows) the native
 /// HWND that mpv renders into. Created lazily on the first `ensure_init`.
 pub struct PlayerState {
     inner: Mutex<Option<Inner>>,
+    /// Serializes `ensure_init` runs. `inner` must NEVER be held across
+    /// host-window creation or mpv construction (~12 s cold hwdec probe):
+    /// main-thread handlers (`Focused`, `CloseRequested`, the fullscreen
+    /// early-sync closure) take `inner` with blocking locks, and host
+    /// creation round-trips through `run_on_main_thread` — a main thread
+    /// parked on `inner` can never service that closure. Initialization
+    /// is therefore guarded by this dedicated lock instead, and `inner`
+    /// is only taken briefly to check/store.
+    init_lock: Mutex<()>,
     /// True while a fullscreen toggle is in flight. The window-event
     /// listener fires Resized many times during Tauri's animated transition;
     /// each one triggers SetWindowPos on the host, which makes mpv's
@@ -42,19 +70,20 @@ pub struct PlayerState {
     /// sync_geometry while this flag is set and do one explicit sync after
     /// the transition settles.
     fullscreen_transition: AtomicBool,
-    /// Last time sync_geometry actually ran. Leading-edge throttle — see
-    /// `GEOMETRY_SYNC_MIN_INTERVAL`. Mutex contention is negligible (only
-    /// the main thread reads/writes).
-    last_sync: Mutex<Instant>,
-    /// (x, y, w, h) of the last sync we actually applied. Lets us skip the
-    /// SetWindowPos call when called with identical args — common during
-    /// drag where position changes but size stays put, or vice versa.
-    pub(crate) last_geometry: Mutex<Option<(i32, i32, i32, i32)>>,
-    /// Trailing-edge pending geometry. When a sync is throttled, the most
-    /// recent requested geometry is stored here. The next event that passes
-    /// the throttle check will apply it, ensuring the final drag position is
-    /// never lost.
-    pending_geometry: Mutex<Option<(i32, i32, i32, i32)>>,
+    /// All geometry-throttle state behind a single mutex, eliminating the
+    /// six-way lock-order hazard of the previous per-field mutexes.
+    ///
+    /// Fields bundled here:
+    /// - `last_sync`        — leading-edge throttle clock
+    /// - `last_geometry`    — dedup cache
+    /// - `pending_geometry` — trailing-edge stash
+    /// - `minimize`         — optional in-window mini-inset (logical px)
+    /// - `scale_factor`     — DPI multiplier for logical→physical
+    ///
+    /// Acquired once per geometry event; dropped before the
+    /// `inner.try_lock()` / `SetWindowPos` call so the Win32 re-entrancy
+    /// guard on `inner` remains separate and non-blocking.
+    geom: Mutex<GeomState>,
     /// True while a trailing-edge flush is scheduled for the pending
     /// geometry. Acts as a one-shot debounce: the first event of a fast
     /// burst spawns a worker thread that sleeps the throttle window and
@@ -73,18 +102,6 @@ pub struct PlayerState {
     /// consumed by `player_exit_popout` to restore the previous geometry.
     /// `None` when not in pop-out mode.
     pub(crate) pre_popout_geometry: Mutex<Option<(i32, i32, u32, u32)>>,
-    /// In-window minimize state: the size+corner of the small player
-    /// region anchored inside the main window's client area.
-    /// `None` when not minimized.
-    ///
-    /// Distinct from pop-out: pop-out shrinks the entire Tauri main
-    /// window, minimize keeps the main window full size and only
-    /// constrains the mpv host to a small inset region so the user can
-    /// navigate the rest of the app underneath / around the video.
-    /// `sync_geometry` and `apply_host_geometry` honor this when set —
-    /// instead of placing the host at the full WebView client rect, they
-    /// place it at the inset corresponding to `corner`.
-    pub(crate) minimize: Mutex<Option<MinimizeState>>,
     /// Latched on `WindowEvent::Focused(false)`, consumed on the next
     /// `WindowEvent::Focused(true)`. Gates `reassert_host_on_focus`
     /// so the host SetWindowPos storm only fires on an actual
@@ -103,34 +120,22 @@ pub struct PlayerState {
     /// own route-exit report; `report_stopped_on_close` takes it (one-shot)
     /// and reads the live position from mpv.
     timeline_ctx: Mutex<Option<TimelineCtx>>,
-    /// Last observed DPI scale factor of the main window. Used by
-    /// `apply_minimize_inset` to convert the logical-px `MinimizeState`
-    /// into physical-px host geometry on every sync.
+    /// Notification primitive shared between the window-event handler and the
+    /// long-lived trailing-edge flusher task (prexu-bgz.24). The handler calls
+    /// `notify_one()` when it wins the `claim_trailing_schedule` race; the
+    /// flusher task parks on `notified().await` between bursts (no spinning).
     ///
-    /// Updated from two places:
-    /// 1. `player_enter_minimize` — when the user enters minimize mode,
-    ///    so the initial conversion uses the live scale of the monitor
-    ///    the main window currently lives on.
-    /// 2. `WindowEvent::ScaleFactorChanged` — when the main window crosses
-    ///    a DPI boundary (e.g. 100% → 125% monitor). The handler stores
-    ///    the new scale BEFORE calling `sync_geometry`, so the very next
-    ///    host placement uses the new scale and the mini region remains
-    ///    visually correct at its anchor corner.
-    pub(crate) scale_factor: Mutex<f64>,
-}
-
-/// Connection + item details for the Rust-side close-time timeline report.
-/// Mirrors the params the TS `reportTimeline` sends; the position comes from
-/// mpv's `time-pos` at close time. The token is held in memory only and is
-/// never logged.
-#[derive(Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TimelineCtx {
-    pub server_uri: String,
-    pub token: String,
-    pub rating_key: String,
-    pub duration_ms: u64,
-    pub client_id: String,
+    /// Stored here so teardown can `abort()` the task handle (below) and drop
+    /// the `Notify` cleanly. Created in `PlayerState::new()` and shared with
+    /// the flusher task via `Arc::clone`.
+    #[cfg(target_os = "windows")]
+    flusher_notify: Arc<Notify>,
+    /// `JoinHandle` for the long-lived trailing-edge flusher tokio task.
+    /// `None` until `start_flusher` creates it (lazy, on first window-handler
+    /// attachment). Stored inside a `Mutex<Option<...>>` so `destroy()` can
+    /// `take()` + `abort()` it without a mutable `&mut self` reference.
+    #[cfg(target_os = "windows")]
+    flusher_handle: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
 }
 
 /// Which of the four corners the mini player anchors to. Mirrors the
@@ -147,13 +152,13 @@ pub enum MinimizeCorner {
 }
 
 /// Logical-pixel parameters of the in-window mini region. Stored in
-/// `PlayerState::minimize` so `apply_minimize_inset` can produce the
+/// `GeomState::minimize` so `apply_minimize_inset_inner` can produce the
 /// correct host geometry on every Resized event.
 ///
 /// Width / height / padding are CSS (logical) pixels, matching what the
 /// React side sends across the IPC. The conversion to physical pixels
-/// happens lazily inside `apply_minimize_inset` against the latest
-/// `PlayerState::scale_factor` — this lets cross-monitor DPI changes
+/// happens lazily inside the geometry path against the latest
+/// `GeomState::scale_factor` — this lets cross-monitor DPI changes
 /// (`WindowEvent::ScaleFactorChanged`) recompute the host rect at the
 /// new scale without re-firing `player_enter_minimize` from the frontend.
 #[derive(Debug, Clone, Copy)]
@@ -187,91 +192,41 @@ impl PlayerState {
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(None),
+            init_lock: Mutex::new(()),
             fullscreen_transition: AtomicBool::new(false),
-            // Initial value is `now` so the very first sync passes through
-            // immediately (Instant arithmetic is monotonic).
-            last_sync: Mutex::new(
-                Instant::now()
-                    .checked_sub(GEOMETRY_SYNC_MIN_INTERVAL)
-                    .unwrap_or_else(Instant::now),
-            ),
-            last_geometry: Mutex::new(None),
-            pending_geometry: Mutex::new(None),
+            geom: Mutex::new(GeomState::new()),
             trailing_scheduled: AtomicBool::new(false),
             pre_popout_geometry: Mutex::new(None),
             #[cfg(target_os = "windows")]
             pending_focus_reassert: AtomicBool::new(false),
-            minimize: Mutex::new(None),
             timeline_ctx: Mutex::new(None),
-            // 1.0 is the safe default — single-monitor 100% DPI. The very
-            // first `player_enter_minimize` overwrites this with the real
-            // scale before applying the inset; `WindowEvent::ScaleFactorChanged`
-            // keeps it fresh thereafter.
-            scale_factor: Mutex::new(1.0),
+            #[cfg(target_os = "windows")]
+            flusher_notify: Arc::new(Notify::new()),
+            #[cfg(target_os = "windows")]
+            flusher_handle: Mutex::new(None),
         }
     }
 
     /// Update the stored DPI scale factor. Called from the
     /// `ScaleFactorChanged` window-event handler and from
-    /// `player_enter_minimize` so `apply_minimize_inset` always converts
-    /// the logical-px `MinimizeState` against the live scale.
+    /// `player_enter_minimize` so geometry conversions use the live scale.
     #[cfg(target_os = "windows")]
     pub(crate) fn set_scale_factor(&self, scale: f64) {
-        if let Ok(mut sf) = self.scale_factor.lock() {
-            if (*sf - scale).abs() > f64::EPSILON {
+        if let Ok(mut g) = self.geom.lock() {
+            if (g.scale_factor - scale).abs() > f64::EPSILON {
                 log::info!(
                     "[player:host] scale factor {:.3} → {:.3}",
-                    *sf,
+                    g.scale_factor,
                     scale
                 );
-                *sf = scale;
+                g.scale_factor = scale;
             }
         }
-    }
-
-    /// Read the stored DPI scale factor. Defaults to 1.0 if the mutex is
-    /// poisoned (which should never happen in practice — we only ever
-    /// hold this lock for the duration of a read or single write).
-    #[cfg(target_os = "windows")]
-    pub(crate) fn current_scale_factor(&self) -> f64 {
-        self.scale_factor.lock().map(|sf| *sf).unwrap_or(1.0)
     }
 
     pub(crate) fn set_fullscreen_transition(&self, in_progress: bool) {
         self.fullscreen_transition
             .store(in_progress, Ordering::Release);
-    }
-
-    /// Transform a desired host geometry `(x, y, width, height)` — which
-    /// normally matches the Tauri main window's inner (client) rect — to
-    /// the corner-anchored inset when minimize mode is active.
-    /// Pass-through when minimize is `None`.
-    ///
-    /// The inset stays anchored to `MinimizeState::corner` of the client
-    /// rect: when the user resizes the main window, the host re-snaps to
-    /// the chosen corner on each Resized event, so the small video region
-    /// always tracks the corner regardless of window size.
-    ///
-    /// `MinimizeState` is stored in CSS (logical) pixels — width / height /
-    /// padding are multiplied here by `current_scale_factor()` so the host
-    /// rect is always sized against the live DPI of whichever monitor the
-    /// main window currently lives on. This is what makes cross-monitor
-    /// DPI changes (`WindowEvent::ScaleFactorChanged`) Just Work — the
-    /// handler refreshes the stored scale before calling `sync_geometry`.
-    #[cfg(target_os = "windows")]
-    fn apply_minimize_inset(
-        &self,
-        x: i32,
-        y: i32,
-        width: i32,
-        height: i32,
-    ) -> (i32, i32, i32, i32) {
-        let snapshot = self.minimize.lock().ok().and_then(|g| *g);
-        let Some(state) = snapshot else {
-            return (x, y, width, height);
-        };
-        let scale = self.current_scale_factor();
-        compute_minimize_inset(state, scale, x, y, width, height)
     }
 
     /// Drop the in-window minimize snapshot so the next `ensure_init` builds
@@ -281,12 +236,12 @@ impl PlayerState {
     /// snapshot lives on `PlayerState` (per-process), so an exit-while-minimized
     /// would otherwise leak the mini rect into the following session.
     pub(crate) fn clear_minimize_snapshot(&self) -> bool {
-        match self.minimize.lock() {
-            Ok(mut mz) => {
-                let had = mz.is_some();
+        match self.geom.lock() {
+            Ok(mut g) => {
+                let had = g.minimize.is_some();
                 if had {
                     log::info!("[player] clearing leftover minimize snapshot on teardown");
-                    *mz = None;
+                    g.minimize = None;
                 }
                 had
             }
@@ -315,10 +270,45 @@ impl PlayerState {
     /// affect playback or geometry sync. Revisit on a tao version bump.
     pub(crate) fn ensure_init(&self, app: &AppHandle) -> Result<(), String> {
         log::info!("[player] ensure_init called");
-        let mut guard = self.inner.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
-        if guard.is_some() {
-            log::debug!("[player] ensure_init: already initialized");
-            return Ok(());
+        {
+            let guard = self.inner.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
+            if guard.is_some() {
+                log::debug!("[player] ensure_init: already initialized");
+                return Ok(());
+            }
+        }
+
+        // Serialize initializers on `init_lock`, not `inner` — see the
+        // field doc on `init_lock` for why `inner` must stay free during
+        // construction. Concurrent callers (warmup thread vs an early
+        // player_load_url) must WAIT here rather than fail: load_url
+        // errors surface to the user as a fatal playback error, and the
+        // warmup race is by design (see app_ready in lib.rs).
+        let _init_guard = match self.init_lock.try_lock() {
+            Ok(g) => g,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                log::warn!(
+                    "[player] ensure_init: init already in progress on another thread; waiting"
+                );
+                self.init_lock
+                    .lock()
+                    .map_err(|e| format!("Init lock poisoned: {}", e))?
+            }
+            Err(std::sync::TryLockError::Poisoned(e)) => {
+                log::error!("[player] ensure_init: init lock poisoned: {:?}", e);
+                return Err(format!("Init lock poisoned: {}", e));
+            }
+        };
+
+        // Re-check under the init lock: a concurrent caller may have
+        // finished (or failed — in which case we retry below) while we
+        // waited for the lock.
+        {
+            let guard = self.inner.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
+            if guard.is_some() {
+                log::info!("[player] ensure_init: completed by concurrent caller");
+                return Ok(());
+            }
         }
 
         // Snapshot minimize state + DPI scale BEFORE the run_on_main_thread
@@ -333,8 +323,10 @@ impl PlayerState {
         // SetWindowPos that would also trigger a swapchain rebuild.
         #[cfg(target_os = "windows")]
         let (minimize_snapshot, scale_snapshot) = {
-            let snap = self.minimize.lock().ok().and_then(|g| *g);
-            (snap, self.current_scale_factor())
+            let g = self.geom.lock().ok();
+            let snap = g.as_ref().and_then(|g| g.minimize);
+            let scale = g.as_ref().map(|g| g.scale_factor).unwrap_or(1.0);
+            (snap, scale)
         };
 
         // On Windows, create the native host window on the MAIN THREAD.
@@ -448,14 +440,15 @@ impl PlayerState {
 
         let mpv = Arc::new(mpv);
         let event_pump = events::spawn_event_pump(Arc::clone(&mpv), app.clone())?;
-        log::info!("[player] event pump spawned, init complete");
 
+        let mut guard = self.inner.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
         *guard = Some(Inner {
             mpv,
             event_pump: Some(event_pump),
             #[cfg(target_os = "windows")]
             host: Some(host),
         });
+        log::info!("[player] event pump spawned, init complete");
         Ok(())
     }
 
@@ -553,6 +546,22 @@ impl PlayerState {
         // was reset on exit. Cleared even on the "nothing to destroy" path.
         self.clear_minimize_snapshot();
 
+        // Abort the long-lived trailing-edge flusher task (prexu-bgz.24).
+        // Done before taking `inner` so no in-flight flush can race with
+        // the destroy teardown path. `abort()` is instantaneous — it posts
+        // a cancellation to the tokio reactor; the task exits on its next
+        // await point (which is either `notified()` or `sleep()`). No flush
+        // can be lost by this abort: we're inside `destroy()` which only
+        // runs when the window is closing, so there will be no further
+        // geometry events that need a trailing flush.
+        #[cfg(target_os = "windows")]
+        if let Ok(mut h) = self.flusher_handle.lock() {
+            if let Some(handle) = h.take() {
+                log::info!("[player] destroy: aborting flusher task");
+                handle.abort();
+            }
+        }
+
         let inner = self
             .inner
             .lock()
@@ -641,7 +650,7 @@ impl PlayerState {
     /// minimize-inset corner computation depends on the parent's
     /// dimensions to anchor the mini region. width/height are NOT used
     /// to resize the host — `SWP_NOSIZE` preserves the existing host
-    /// size — they only feed `apply_minimize_inset`.
+    /// size — they only feed the inset computation.
     ///
     /// Still suppressed during fullscreen transitions, same as
     /// `sync_geometry`, so the transition's burst of resize events
@@ -653,25 +662,36 @@ impl PlayerState {
             log::trace!("[player] sync_geometry_move suppressed — fullscreen transition");
             return;
         }
-        // Apply minimize inset to get the host's target position. When
-        // not minimized this is a pass-through of (x, y).
-        let (ax, ay, _aw, _ah) = self.apply_minimize_inset(x, y, width, height);
 
-        // Dedup: if position hasn't moved (and a prior apply has a
-        // recorded size), skip the syscall. Compare against just the
-        // x,y component of last_geometry so size-only-stale entries
-        // still allow a position update.
-        if let Ok(last_geom) = self.last_geometry.lock() {
-            if let Some((lx, ly, _, _)) = *last_geom {
-                if lx == ax && ly == ay {
-                    return;
-                }
+        // Acquire geom once to plan the move (inset + dedup), then release
+        // before calling inner.try_lock() / SetWindowPos. Dropping geom
+        // before try_lock is mandatory: holding it across try_lock would let
+        // the re-entrant call (SetWindowPos fires WM_WINDOWPOSCHANGED →
+        // handler → sync_geometry_move) deadlock on the geom lock.
+        let plan = {
+            let Ok(g) = self.geom.lock() else { return };
+            geometry::plan_move(&g, x, y, width, height)
+            // g is dropped here — geom lock released before try_lock on inner
+        };
+        let Some(plan) = plan else { return };
+
+        // A move that carried a size change (maximize/restore/snap or a
+        // top-left corner drag-resize) is really a resize: delegate to the
+        // throttled sync_geometry path (prexu-hia9). A one-shot maximize passes
+        // the throttle immediately (gate open), so the host resizes without
+        // waiting for the trailing Resized; a continuous corner-resize stays
+        // coalesced to ~30 Hz, avoiding the mpv swapchain-rebuild storm.
+        let (ax, ay, write_back) = match plan {
+            geometry::MovePlan::Resize => {
+                self.sync_geometry(x, y, width, height);
+                return;
             }
-        }
+            geometry::MovePlan::Move { ax, ay, write_back } => (ax, ay, write_back),
+        };
 
-        // try_lock guards against re-entrancy: SetWindowPos fires
-        // WM_WINDOWPOSCHANGED synchronously on this thread, which can
-        // re-enter sync_geometry_move via the window-event handler.
+        // Pure reposition fast path. try_lock guards against re-entrancy:
+        // SetWindowPos fires WM_WINDOWPOSCHANGED synchronously on this thread,
+        // which can re-enter sync_geometry_move via the window-event handler.
         let Ok(guard) = self.inner.try_lock() else { return };
         if let Some(inner) = guard.as_ref() {
             if let Some(host) = inner.host.as_ref() {
@@ -681,9 +701,9 @@ impl PlayerState {
                 }
                 // Keep last_geometry's (x, y) in sync so the next
                 // sync_geometry call (resize) dedup-compares correctly.
-                if let Ok(mut lg) = self.last_geometry.lock() {
-                    if let Some((_, _, lw, lh)) = *lg {
-                        *lg = Some((ax, ay, lw, lh));
+                if let Some(write_back) = write_back {
+                    if let Ok(mut g) = self.geom.lock() {
+                        g.last_geometry = Some(write_back);
                     }
                 }
             }
@@ -708,43 +728,28 @@ impl PlayerState {
             log::trace!("[player] sync_geometry suppressed — fullscreen transition");
             return;
         }
-        {
-            let now = Instant::now();
-            let Ok(mut last) = self.last_sync.lock() else {
-                return;
-            };
-            if now.duration_since(*last) < GEOMETRY_SYNC_MIN_INTERVAL {
-                // Throttled — store as pending so trailing edge is never lost.
-                if let Ok(mut pending) = self.pending_geometry.lock() {
-                    *pending = Some((x, y, width, height));
-                }
+
+        // Single geom acquisition: throttle + pending + inset + dedup,
+        // all computed while holding one lock by plan_sync, then released
+        // before inner.try_lock() / SetWindowPos. The throttle stashes the
+        // current args as pending so the trailing-edge flush never loses the
+        // final rect of a drag-resize burst.
+        let plan = {
+            let Ok(mut g) = self.geom.lock() else { return };
+            geometry::plan_sync(&mut g, Instant::now(), x, y, width, height)
+            // g is dropped here — geom lock released before try_lock on inner
+        };
+        let (ax, ay, aw, ah) = match plan {
+            geometry::SyncPlan::Throttled => {
                 log::trace!("[player] sync_geometry throttled, pending stored");
                 return;
             }
-            *last = now;
-        }
-        // Apply the CURRENT call's args, not any stored pending geometry.
-        // Pending is cleared so it doesn't apply on a future call, but
-        // the current args are always the freshest known geometry — every
-        // Resized event triggers a new sync_geometry with the latest rect,
-        // so the trailing-edge case is already covered by the next event.
-        // Worst case: a drag that ends within the 50 ms throttle window
-        // may miss the final ~50 ms of motion, which is imperceptible.
-        if let Ok(mut pending) = self.pending_geometry.lock() {
-            pending.take();
-        }
-        // Apply the minimize inset. When not minimized this is a
-        // pass-through, so non-minimize playback is unaffected.
-        let (ax, ay, aw, ah) = self.apply_minimize_inset(x, y, width, height);
-        // Skip if geometry hasn't changed since last apply.
-        let new = (ax, ay, aw, ah);
-        if let Ok(mut last_geom) = self.last_geometry.lock() {
-            if *last_geom == Some(new) {
+            geometry::SyncPlan::Deduped => {
                 log::trace!("[player] sync_geometry dedup skip");
                 return;
             }
-            *last_geom = Some(new);
-        }
+            geometry::SyncPlan::Apply(ax, ay, aw, ah) => (ax, ay, aw, ah),
+        };
         // try_lock guards against re-entrancy: SetWindowPos fires WM_SIZE
         // synchronously on this thread, which re-enters sync_geometry via
         // the window-event handler. If inner is already held, skip — the
@@ -758,6 +763,111 @@ impl PlayerState {
                 }
             }
         }
+    }
+
+    /// Immediate, throttle-bypassing geometry sync for discrete window-state
+    /// transitions (maximize / restore / un-minimize). The regular
+    /// `sync_geometry` throttle exists to coalesce continuous drag-resize
+    /// bursts; a one-shot maximize is not a burst, and routing it through the
+    /// throttle (plus waiting for the DWM-animation-delayed `WM_SIZE`) is what
+    /// makes the host lag the chrome. Applies the supplied client rect at once.
+    /// (prexu-hia9)
+    #[cfg(target_os = "windows")]
+    pub(crate) fn sync_geometry_now(&self, x: i32, y: i32, width: i32, height: i32) {
+        log::debug!(
+            "[player] sync_geometry_now (state transition) ({},{},{}x{})",
+            x, y, width, height
+        );
+        if self.fullscreen_transition.load(Ordering::Acquire) {
+            log::trace!("[player] sync_geometry_now suppressed — fullscreen transition");
+            return;
+        }
+        let plan = {
+            let Ok(mut g) = self.geom.lock() else { return };
+            geometry::plan_sync_immediate(&mut g, Instant::now(), x, y, width, height)
+            // g dropped before inner.try_lock() — same invariant as sync_geometry
+        };
+        let geometry::SyncPlan::Apply(ax, ay, aw, ah) = plan else { return };
+        let Ok(guard) = self.inner.try_lock() else { return };
+        if let Some(inner) = guard.as_ref() {
+            if let Some(host) = inner.host.as_ref() {
+                log::debug!("[player] sync_geometry_now applied ({},{},{}x{})", ax, ay, aw, ah);
+                if let Err(e) = host.set_geometry(ax, ay, aw, ah) {
+                    log::warn!("[player] sync_geometry_now failed: {}", e);
+                }
+            }
+        }
+    }
+
+    /// Spawn the long-lived trailing-edge flusher task (prexu-bgz.24).
+    ///
+    /// Called once from `attach_window_handlers` in `events.rs` before any
+    /// window events can fire. Subsequent calls on the same `PlayerState` are
+    /// no-ops — the task is only ever created once and reused across all
+    /// playback sessions (the state fields it touches are per-`PlayerState`,
+    /// not per-session).
+    ///
+    /// The task loop:
+    /// 1. Park: `flusher_notify.notified().await` — zero CPU when idle.
+    /// 2. Wake: `notify_one()` arrives from `wake_flusher` (first event of a burst).
+    /// 3. Sleep: `tokio::time::sleep(GEOMETRY_SYNC_MIN_INTERVAL).await` — gives
+    ///    the burst time to accumulate its final rect into `pending_geometry`.
+    /// 4. Flush: `run_on_main_thread(flush_pending_geometry)` — applies the
+    ///    stashed rect on the Win32 main thread exactly as before.
+    /// 5. Loop back to step 1.
+    ///
+    /// No spinloop, no per-burst thread creation. The `trailing_scheduled`
+    /// AtomicBool dedup is unchanged — `wake_flusher` only calls `notify_one`
+    /// when `claim_trailing_schedule()` returns true (i.e. once per burst), so
+    /// the flusher is never woken multiple times for the same burst.
+    ///
+    /// Teardown: `destroy()` calls `abort()` on the stored `JoinHandle` so the
+    /// task exits cleanly when the player is torn down.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn start_flusher(&self, app: AppHandle) {
+        let mut guard = match self.flusher_handle.lock() {
+            Ok(g) => g,
+            Err(e) => {
+                log::error!("[player] start_flusher: lock poisoned: {:?}", e);
+                return;
+            }
+        };
+        if guard.is_some() {
+            log::debug!("[player] start_flusher: already running, no-op");
+            return;
+        }
+        let notify = Arc::clone(&self.flusher_notify);
+        log::info!("[player] start_flusher: spawning long-lived trailing-edge flusher task");
+        let handle = tauri::async_runtime::spawn(async move {
+            log::debug!("[player:flusher] task started");
+            loop {
+                // Park until a burst starts.
+                notify.notified().await;
+                log::trace!("[player:flusher] woken for burst, sleeping {}ms",
+                    GEOMETRY_SYNC_MIN_INTERVAL.as_millis());
+                // Sleep the throttle window so the burst can accumulate
+                // its final rect into pending_geometry.
+                tokio::time::sleep(GEOMETRY_SYNC_MIN_INTERVAL).await;
+                // Dispatch flush to the Win32 main thread.
+                let ah = app.clone();
+                if let Err(e) = app.run_on_main_thread(move || {
+                    let state = ah.state::<PlayerState>();
+                    state.flush_pending_geometry();
+                }) {
+                    log::warn!("[player:flusher] flush dispatch failed: {:?}", e);
+                }
+            }
+        });
+        *guard = Some(handle);
+    }
+
+    /// Wake the long-lived flusher task when the first event of a resize burst
+    /// arrives. Must be called only when `claim_trailing_schedule()` returned
+    /// true (the caller won the one-shot-per-burst race).
+    #[cfg(target_os = "windows")]
+    pub(crate) fn wake_flusher(&self) {
+        log::trace!("[player:flusher] wake_flusher: notify_one");
+        self.flusher_notify.notify_one();
     }
 
     /// Try to claim the right to schedule a trailing-edge flush. Returns
@@ -783,10 +893,10 @@ impl PlayerState {
     pub(crate) fn flush_pending_geometry(&self) {
         self.trailing_scheduled.store(false, Ordering::Release);
         let pending = self
-            .pending_geometry
+            .geom
             .lock()
             .ok()
-            .and_then(|mut p| p.take());
+            .and_then(|mut g| g.pending_geometry.take());
         match pending {
             Some((x, y, w, h)) => {
                 log::debug!(
@@ -937,53 +1047,39 @@ impl PlayerState {
 
     /// Fire the final `state=stopped` timeline report when the window is
     /// closing mid-playback (prexu-50f). Runs on the main thread during
-    /// shutdown with a hard 1.5s network timeout; mpv is still alive here
-    /// (CloseRequested fires before `destroy()`), so the position is read
-    /// straight from `time-pos`. No-op when no playback registered a
-    /// context or the frontend already cleared it after its own report.
+    /// shutdown. mpv is still alive here (CloseRequested fires before
+    /// `destroy()`), so the position is read synchronously from `time-pos`
+    /// on the caller thread; the network send happens on a spawned thread
+    /// so window close is not held hostage by reqwest's blocking client
+    /// (which spins up a private tokio runtime) + up to 1.5s of network
+    /// I/O (prexu-bgz.9).
+    ///
+    /// The caller waits at most `CLOSE_REPORT_JOIN_BUDGET` for the send to
+    /// finish. A fully detached thread would usually be killed before the
+    /// request lands: nothing in the Tauri run loop waits on app exit
+    /// (`lib.rs` has no RunEvent handler — `.run()` returns as soon as the
+    /// last window is destroyed and the process exits, reaping detached
+    /// threads). The bounded wait caps the close delay at 300ms (vs the
+    /// old worst case of runtime spawn + 1500ms send) while still letting
+    /// the typical LAN Plex request (~tens of ms) land. No-op when no
+    /// playback registered a context or the frontend already cleared it
+    /// after its own report.
     pub fn report_stopped_on_close(&self) {
-        let Some(ctx) = self.take_timeline_ctx() else {
-            return;
-        };
-        let pos_ms = match self.with_mpv(|mpv| mpv.get_property::<f64>("time-pos")) {
-            Ok(secs) => (secs * 1000.0).max(0.0).round() as u64,
-            Err(e) => {
-                log::warn!("[player] close report skipped — time-pos unavailable: {}", e);
-                return;
+        let ctx = self.take_timeline_ctx();
+        // time-pos MUST be read here on the caller thread — mpv is torn
+        // down immediately after this returns.
+        let pos_ms_opt = if ctx.is_some() {
+            match self.with_mpv(|mpv| mpv.get_property::<f64>("time-pos")) {
+                Ok(secs) => Some((secs * 1000.0).max(0.0).round() as u64),
+                Err(e) => {
+                    log::warn!("[player] close report skipped — time-pos unavailable: {}", e);
+                    None
+                }
             }
+        } else {
+            None
         };
-        log::info!(
-            "[player] close report: state=stopped time={}ms ratingKey={}",
-            pos_ms,
-            ctx.rating_key
-        );
-        let client = match reqwest::blocking::Client::builder()
-            .timeout(Duration::from_millis(1500))
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                log::error!("[player] close report client build failed: {}", e);
-                return;
-            }
-        };
-        let result = client
-            .get(format!("{}/:/timeline", ctx.server_uri))
-            .query(&[
-                ("ratingKey", ctx.rating_key.clone()),
-                ("key", format!("/library/metadata/{}", ctx.rating_key)),
-                ("state", "stopped".to_string()),
-                ("time", pos_ms.to_string()),
-                ("duration", ctx.duration_ms.to_string()),
-                ("X-Plex-Client-Identifier", ctx.client_id.clone()),
-                ("X-Plex-Token", ctx.token.clone()),
-            ])
-            .header("Accept", "application/json")
-            .send();
-        match result {
-            Ok(resp) => log::info!("[player] close report sent, status {}", resp.status()),
-            Err(e) => log::warn!("[player] close report failed: {}", e),
-        }
+        timeline::fire_stopped_report(ctx, pos_ms_opt);
     }
 
     /// Apply host geometry directly, bypassing the fullscreen-transition
@@ -995,24 +1091,25 @@ impl PlayerState {
     /// path — this is a one-off forced apply.
     #[cfg(target_os = "windows")]
     pub(crate) fn apply_host_geometry(&self, x: i32, y: i32, width: i32, height: i32) {
-        let Ok(guard) = self.inner.lock() else {
-            return;
+        // Acquire geom to apply inset + update last_geometry, then release
+        // before calling inner.lock() / SetWindowPos.
+        let adjusted = {
+            let Ok(mut g) = self.geom.lock() else { return };
+            let (ax, ay, aw, ah) = geometry::apply_minimize_inset_inner(&g, x, y, width, height);
+            // Update last_geometry so the throttled sync_geometry doesn't
+            // re-apply the same value right after this.
+            g.last_geometry = Some((ax, ay, aw, ah));
+            (ax, ay, aw, ah)
+            // g dropped here
         };
-        // Honor the minimize inset. When not minimized this is a
-        // pass-through, so fullscreen + popout call sites get the full
-        // client rect they pass in.
-        let (ax, ay, aw, ah) = self.apply_minimize_inset(x, y, width, height);
+        let (ax, ay, aw, ah) = adjusted;
+        let Ok(guard) = self.inner.lock() else { return };
         if let Some(inner) = guard.as_ref() {
             if let Some(host) = inner.host.as_ref() {
                 log::debug!(
                     "[player] apply_host_geometry force ({},{},{}x{})",
                     ax, ay, aw, ah
                 );
-                // Update last_geometry so the throttled sync_geometry doesn't
-                // re-apply the same value right after this.
-                if let Ok(mut lg) = self.last_geometry.lock() {
-                    *lg = Some((ax, ay, aw, ah));
-                }
                 if let Err(e) = host.set_geometry(ax, ay, aw, ah) {
                     log::warn!("[player] apply_host_geometry failed: {}", e);
                 }
@@ -1084,87 +1181,20 @@ impl PlayerState {
             }
         }
     }
+
+    /// Write the minimize state. Used by minimize commands and popout enter.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn set_minimize(&self, state: Option<MinimizeState>) -> Result<(), String> {
+        self.geom
+            .lock()
+            .map(|mut g| g.minimize = state)
+            .map_err(|_| "minimize lock poisoned".to_string())
+    }
 }
 
 impl Default for PlayerState {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Pure helper: compute the corner-anchored physical-px inset for the mpv
-/// host given a logical-px `MinimizeState`, a DPI scale factor, and the
-/// physical-px Tauri inner rect.
-///
-/// Extracted from `PlayerState::apply_minimize_inset` so it can be unit
-/// tested without spinning up a real `PlayerState` + Win32 host window.
-/// Returns the host `(x, y, w, h)` in physical pixels.
-#[cfg(target_os = "windows")]
-pub(crate) fn compute_minimize_inset(
-    state: MinimizeState,
-    scale: f64,
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
-) -> (i32, i32, i32, i32) {
-    // Round the logical → physical conversion to the nearest pixel. Using
-    // floor or ceil would drift cumulatively across DPI changes; round
-    // gives the same value coming back from a logical → physical → logical
-    // round-trip (within ±0.5 px per dimension).
-    let mw = ((state.width as f64) * scale).round() as i32;
-    let mh = ((state.height as f64) * scale).round() as i32;
-    let pad = ((state.padding as f64) * scale).round() as i32;
-    // Right-anchored corners: offset is `clientWidth - miniWidth
-    // - padding` so the inset hugs the right edge with `pad`
-    // pixels of gutter. Left-anchored: simply `pad` from x.
-    // Same vertical math for top/bottom. The .max(0) clamps
-    // protect against pathological cases where the client
-    // rect is narrower than the requested inset (e.g. user
-    // shrinks the window below the mini width); the inset
-    // collapses to the top-left of the client area rather
-    // than producing negative offsets that would put the
-    // host off-screen.
-    let off_x = match state.corner {
-        MinimizeCorner::TopLeft | MinimizeCorner::BottomLeft => pad,
-        MinimizeCorner::TopRight | MinimizeCorner::BottomRight => {
-            (width - mw - pad).max(0)
-        }
-    };
-    let off_y = match state.corner {
-        MinimizeCorner::TopLeft | MinimizeCorner::TopRight => pad,
-        MinimizeCorner::BottomLeft | MinimizeCorner::BottomRight => {
-            (height - mh - pad).max(0)
-        }
-    };
-    (x + off_x, y + off_y, mw, mh)
-}
-
-/// Pure helper: initial host geometry for `ensure_init`. Returns the
-/// mini-inset rect when a `MinimizeState` snapshot is present, otherwise
-/// passes the full client rect through. Pre-snapshotting + this helper
-/// let the (Send + 'static) `run_on_main_thread` closure produce the
-/// correct first-frame geometry without capturing `&self`.
-///
-/// Why this matters (prexu-may): when an in-mini autoplay handoff calls
-/// `unload` → `load_url`, `ensure_init` builds a fresh host_window + mpv.
-/// If the host were sized to the full WebView rect on its first
-/// `set_geometry`, mpv's vo would lock its D3D11 swapchain to that rect.
-/// The subsequent `sync_geometry` shrink to the mini inset rebuilds the
-/// HWND but leaves mpv rendering against the stale full-rect viewport,
-/// producing the black/clipped frame the bug reports.
-#[cfg(target_os = "windows")]
-pub(crate) fn initial_host_geometry(
-    snapshot: Option<MinimizeState>,
-    scale: f64,
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
-) -> (i32, i32, i32, i32) {
-    match snapshot {
-        Some(state) => compute_minimize_inset(state, scale, x, y, width, height),
-        None => (x, y, width, height),
     }
 }
 
@@ -1200,6 +1230,24 @@ mod tests {
         state.set_timeline_ctx(Some(timeline_ctx()));
         state.report_stopped_on_close();
         assert!(state.take_timeline_ctx().is_none());
+    }
+
+    #[test]
+    fn stopped_report_request_builds_expected_url_and_query() {
+        use crate::player::timeline::stopped_report_request;
+        let ctx = timeline_ctx();
+        let (url, query) = stopped_report_request(&ctx, 123_456);
+        assert_eq!(url, "https://server.example:32400/:/timeline");
+        let expected: Vec<(String, String)> = vec![
+            ("ratingKey".into(), "66324".into()),
+            ("key".into(), "/library/metadata/66324".into()),
+            ("state".into(), "stopped".into()),
+            ("time".into(), "123456".into()),
+            ("duration".into(), "1244200".into()),
+            ("X-Plex-Client-Identifier".into(), "client-id".into()),
+            ("X-Plex-Token".into(), "tok".into()),
+        ];
+        assert_eq!(query, expected);
     }
 
     #[test]
@@ -1266,15 +1314,9 @@ mod tests {
     }
 
     // ---- initial_host_geometry (prexu-may) -----------------------------
-    //
-    // `ensure_init` must size the host to the mini inset on its FIRST
-    // set_geometry when an autoplay handoff lands during in-mini playback.
-    // Otherwise mpv's vo locks its swapchain to a full-rect host and the
-    // subsequent shrink leaves the first frame black/clipped.
 
     #[test]
     fn initial_host_geometry_passthrough_when_no_minimize() {
-        // None snapshot → full client rect passes through untouched.
         let (x, y, w, h) =
             initial_host_geometry(None, 1.0, 100, 50, 1920, 1080);
         assert_eq!((x, y, w, h), (100, 50, 1920, 1080));
@@ -1282,9 +1324,6 @@ mod tests {
 
     #[test]
     fn initial_host_geometry_applies_inset_when_minimize_present() {
-        // Some snapshot → result matches compute_minimize_inset for the
-        // same args, so the first host frame is the mini rect not the
-        // full WebView rect.
         let snap = Some(DEFAULT);
         let got = initial_host_geometry(snap, 1.0, 0, 0, 1920, 1080);
         let expected = compute_minimize_inset(DEFAULT, 1.0, 0, 0, 1920, 1080);
@@ -1294,22 +1333,12 @@ mod tests {
 
     #[test]
     fn initial_host_geometry_inset_respects_dpi_scale() {
-        // 1.25× DPI snapshot → inset is scaled, not the logical-px values.
         let (_, _, w, h) =
             initial_host_geometry(Some(DEFAULT), 1.25, 0, 0, 2400, 1350);
         assert_eq!((w, h), (450, 250));
     }
 
     // ---- Focus-restore host reassert guard (prexu-5l5) -----------------
-    //
-    // `reassert_host_on_focus` fires in every player mode (full,
-    // fullscreen, popout, mini) — the gate is `is_initialised()`, not
-    // popout-specific, because the transparent-video-on-alt-tab-back
-    // bug repros in full player too. `is_in_popout()` is still used
-    // internally to decide whether to set WS_EX_TOPMOST (popout) or
-    // leave it clear (other modes). These tests exercise both
-    // predicates; the SetWindowPos path is covered by manual repro
-    // (same convention as the other Win32-bound geometry tests).
 
     #[test]
     fn is_in_popout_false_on_fresh_state() {
@@ -1369,31 +1398,17 @@ mod tests {
     }
 
     // ---- Soft stop (prexu-7fe) -----------------------------------------
-    //
-    // `stop_playback` operates on an initialised mpv handle. The only
-    // purely-testable surface without a real mpv is the no-op return
-    // when inner is None. The mpv `stop` command + mute property set
-    // path is covered by manual repro (same convention as other
-    // mpv-bound tests in this module).
 
     #[test]
     fn stop_playback_is_noop_when_mpv_not_init() {
         let state = PlayerState::new();
         assert!(!state.is_initialised());
-        // Must return Ok (so TS doesn't need to gate before calling it
-        // during init-race scenarios) and must not panic on the missing
-        // inner.
         assert!(state.stop_playback().is_ok());
         assert!(!state.is_initialised());
     }
 
     #[test]
     fn reassert_host_on_focus_is_noop_when_mpv_not_init() {
-        // No mpv → method returns before touching inner mutex / Win32.
-        // Documents the contract: Focused events during dashboard
-        // navigation (before any playback) must not run the reassert
-        // path, otherwise every page focus event would pay three
-        // SetWindowPos calls for no reason.
         let state = PlayerState::new();
         assert!(!state.is_initialised());
         let fake_parent = windows::Win32::Foundation::HWND(std::ptr::null_mut());
@@ -1402,23 +1417,14 @@ mod tests {
     }
 
     // ---- Trailing-edge geometry flush (prexu-hhx) ----------------------
-    //
-    // PlayerState::sync_geometry / flush_pending_geometry are exercised
-    // here without an initialised mpv host: `inner` stays `None`, so the
-    // SetWindowPos branch is skipped and we only assert on the throttle/
-    // pending state machine. That is exactly the surface area being
-    // changed in prexu-hhx; the host-side application of the geometry is
-    // covered by the existing manual-test plan.
 
     /// Force the throttle clock far enough in the past that the next
-    /// `sync_geometry` call is guaranteed to pass the throttle gate. Used
-    /// in tests where we want to simulate "throttle window has elapsed"
-    /// without actually sleeping.
+    /// `sync_geometry` call is guaranteed to pass the throttle gate.
     fn release_throttle(state: &PlayerState) {
         let past = Instant::now()
             .checked_sub(GEOMETRY_SYNC_MIN_INTERVAL * 2)
             .unwrap_or_else(Instant::now);
-        *state.last_sync.lock().unwrap() = past;
+        state.geom.lock().unwrap().last_sync = past;
     }
 
     #[test]
@@ -1427,11 +1433,11 @@ mod tests {
         // First call passes the throttle (new() sets last_sync to
         // now - interval) and resets the clock to now.
         state.sync_geometry(0, 0, 1920, 1080);
-        assert!(state.pending_geometry.lock().unwrap().is_none());
+        assert!(state.geom.lock().unwrap().pending_geometry.is_none());
         // Second call immediately after is throttled → stored as pending.
         state.sync_geometry(10, 20, 800, 600);
         assert_eq!(
-            *state.pending_geometry.lock().unwrap(),
+            state.geom.lock().unwrap().pending_geometry,
             Some((10, 20, 800, 600))
         );
     }
@@ -1443,9 +1449,8 @@ mod tests {
         state.sync_geometry(1, 1, 100, 100); // throttled → pending
         state.sync_geometry(2, 2, 200, 200); // throttled → overwrites
         state.sync_geometry(3, 3, 300, 300); // throttled → overwrites again
-        // Only the most recent geometry survives — last writer wins.
         assert_eq!(
-            *state.pending_geometry.lock().unwrap(),
+            state.geom.lock().unwrap().pending_geometry,
             Some((3, 3, 300, 300))
         );
     }
@@ -1456,25 +1461,18 @@ mod tests {
         state.sync_geometry(0, 0, 1920, 1080); // passes throttle
         state.sync_geometry(50, 60, 400, 300); // throttled → pending
         assert_eq!(
-            *state.pending_geometry.lock().unwrap(),
+            state.geom.lock().unwrap().pending_geometry,
             Some((50, 60, 400, 300))
         );
-        // Simulate the throttle window having elapsed (what the worker
-        // thread does by sleeping GEOMETRY_SYNC_MIN_INTERVAL before
-        // dispatching this call to the main thread).
         release_throttle(&state);
-        state.trailing_scheduled
-            .store(true, Ordering::Release);
+        state.trailing_scheduled.store(true, Ordering::Release);
 
         state.flush_pending_geometry();
 
-        // After flush: pending taken, trailing_scheduled cleared, and the
-        // (50,60,400,300) geometry made it all the way through
-        // sync_geometry's apply path so last_geometry now reflects it.
-        assert!(state.pending_geometry.lock().unwrap().is_none());
+        assert!(state.geom.lock().unwrap().pending_geometry.is_none());
         assert!(!state.trailing_scheduled.load(Ordering::Acquire));
         assert_eq!(
-            *state.last_geometry.lock().unwrap(),
+            state.geom.lock().unwrap().last_geometry,
             Some((50, 60, 400, 300))
         );
     }
@@ -1482,30 +1480,151 @@ mod tests {
     #[test]
     fn flush_with_no_pending_is_noop() {
         let state = PlayerState::new();
-        // Pretend a worker is scheduled but nothing was ever throttled
-        // (e.g. all events naturally spaced > 50ms apart). The flush
-        // should silently clear the flag and not touch last_geometry.
-        state.trailing_scheduled
-            .store(true, Ordering::Release);
+        state.trailing_scheduled.store(true, Ordering::Release);
 
         state.flush_pending_geometry();
 
-        assert!(state.pending_geometry.lock().unwrap().is_none());
+        assert!(state.geom.lock().unwrap().pending_geometry.is_none());
         assert!(!state.trailing_scheduled.load(Ordering::Acquire));
-        assert!(state.last_geometry.lock().unwrap().is_none());
+        assert!(state.geom.lock().unwrap().last_geometry.is_none());
     }
 
     #[test]
     fn claim_trailing_schedule_is_one_shot_until_flushed() {
         let state = PlayerState::new();
-        // First claimer wins.
         assert!(state.claim_trailing_schedule());
-        // Subsequent claims lose while the flag is set.
         assert!(!state.claim_trailing_schedule());
         assert!(!state.claim_trailing_schedule());
-        // Flush clears the flag → next claim wins again.
         state.flush_pending_geometry();
         assert!(state.claim_trailing_schedule());
+    }
+
+    // ── Long-lived flusher state machine (prexu-bgz.24) -----------------
+    //
+    // These tests verify the dedup invariant and Notify / flusher_handle
+    // lifecycle without spinning up a real tokio runtime or Win32 window.
+    // They exercise only the synchronous parts: claim/flush atomics and the
+    // Notify count observable via `notify_one` / `try_recv`-equivalent.
+
+    /// After a burst of N throttled events, `claim_trailing_schedule` must
+    /// return true exactly once (on the first call) and false for all
+    /// subsequent calls. `wake_flusher` is safe to call only on the true
+    /// return, so only one `notify_one` is dispatched per burst — exactly as
+    /// the old per-burst `std::thread::spawn` dedup did.
+    #[test]
+    fn flusher_dedup_one_wake_per_burst() {
+        let state = PlayerState::new();
+
+        // Simulate burst: first claim → true, rest → false.
+        let first = state.claim_trailing_schedule();
+        assert!(first, "first claim of burst must be true (one wake issued)");
+        for _ in 0..5 {
+            let subsequent = state.claim_trailing_schedule();
+            assert!(!subsequent, "subsequent claims must be false (no extra wakes)");
+        }
+    }
+
+    /// After `flush_pending_geometry` clears `trailing_scheduled`, the next
+    /// burst can claim again — the flusher is re-armed for the next drag
+    /// session.
+    #[test]
+    fn flusher_re_armed_after_flush() {
+        let state = PlayerState::new();
+
+        // First burst
+        assert!(state.claim_trailing_schedule());
+        assert!(!state.claim_trailing_schedule());
+
+        // Flush (simulates the flusher task finishing its sleep + dispatch)
+        state.flush_pending_geometry();
+        assert!(
+            !state.trailing_scheduled.load(Ordering::Acquire),
+            "trailing_scheduled must be cleared by flush_pending_geometry"
+        );
+
+        // Second burst can now claim
+        assert!(
+            state.claim_trailing_schedule(),
+            "must be re-armable after flush for next drag burst"
+        );
+    }
+
+    /// `flush_pending_geometry` clears `trailing_scheduled` BEFORE consuming
+    /// pending. This ordering lets a Resized event that arrives concurrently
+    /// during flush claim a new schedule and issue a new `notify_one` for the
+    /// geometry that arrived after the flush started — no geometry is lost.
+    #[test]
+    fn flusher_clear_before_consume_ordering() {
+        let state = PlayerState::new();
+
+        // Set up: pending geometry + trailing_scheduled set
+        state.sync_geometry(0, 0, 1920, 1080); // passes throttle, clears pending
+        state.sync_geometry(10, 20, 800, 600); // throttled → stored as pending
+        state.trailing_scheduled.store(true, Ordering::Release);
+
+        // Before flush: trailing_scheduled=true, pending=Some(...)
+        assert!(state.trailing_scheduled.load(Ordering::Acquire));
+        assert!(state.geom.lock().unwrap().pending_geometry.is_some());
+
+        // Release the throttle so flush_pending_geometry's internal
+        // sync_geometry call actually applies the geometry.
+        release_throttle(&state);
+
+        state.flush_pending_geometry();
+
+        // After flush: trailing_scheduled=false, pending consumed
+        assert!(
+            !state.trailing_scheduled.load(Ordering::Acquire),
+            "trailing_scheduled cleared by flush"
+        );
+        assert!(
+            state.geom.lock().unwrap().pending_geometry.is_none(),
+            "pending consumed by flush"
+        );
+    }
+
+    /// `flusher_handle` starts as `None` before `start_flusher` is called.
+    /// After `destroy()` takes + aborts the handle, it must be `None` again.
+    /// We use `tokio::spawn` to produce a real `JoinHandle` without needing
+    /// a live `AppHandle`.
+    #[tokio::test]
+    async fn flusher_handle_lifecycle() {
+        let state = PlayerState::new();
+
+        // Initially no flusher.
+        assert!(
+            state.flusher_handle.lock().unwrap().is_none(),
+            "handle must be None before start_flusher"
+        );
+
+        // Inject a real tokio task handle (stand-in for what start_flusher
+        // would produce via tauri::async_runtime::spawn).
+        // `tauri::async_runtime::JoinHandle` is an enum; the Tokio runtime
+        // variant wraps a `tokio::task::JoinHandle` (revealed by compiler
+        // diagnostic E0308 pointing to `JoinHandle::Tokio`).
+        let raw_jh = tokio::spawn(async {
+            // Park forever — the abort will cancel it.
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+        });
+        let jh = tauri::async_runtime::JoinHandle::Tokio(raw_jh);
+        *state.flusher_handle.lock().unwrap() = Some(jh);
+
+        assert!(
+            state.flusher_handle.lock().unwrap().is_some(),
+            "handle must be Some after injection"
+        );
+
+        // Simulate destroy() abort path: take + abort.
+        let taken = state.flusher_handle.lock().unwrap().take();
+        assert!(taken.is_some(), "must have a handle to abort");
+        if let Some(h) = taken {
+            h.abort();
+        }
+
+        assert!(
+            state.flusher_handle.lock().unwrap().is_none(),
+            "handle must be None after destroy abort"
+        );
     }
 
     #[test]
@@ -1527,24 +1646,15 @@ mod tests {
             serde_json::from_str::<MinimizeCorner>(r#""bottom-right""#).unwrap(),
             BottomRight
         );
-        // Unknown string is a hard error, not a silent fallback.
         assert!(serde_json::from_str::<MinimizeCorner>(r#""diagonal""#).is_err());
     }
 
     // ── Pop-out enter/exit state transitions ─────────────────────────────
-    //
-    // The Tauri commands (player_enter_popout / player_exit_popout) do Win32
-    // I/O that is untestable without a runtime. Their pure-state side-effects
-    // — stashing pre_popout_geometry on enter, consuming it on exit, and
-    // clearing any leftover minimize inset on enter — are tested here by
-    // directly manipulating PlayerState, consistent with the is_in_popout
-    // tests above.
 
     #[test]
     fn popout_enter_stashes_pre_popout_geometry() {
         let state = PlayerState::new();
         assert!(state.pre_popout_geometry.lock().unwrap().is_none());
-        // Simulate the stash that player_enter_popout writes.
         *state.pre_popout_geometry.lock().unwrap() = Some((100, 200, 1280, 800));
         let stash = *state.pre_popout_geometry.lock().unwrap();
         assert_eq!(stash, Some((100, 200, 1280, 800)));
@@ -1557,7 +1667,6 @@ mod tests {
         *state.pre_popout_geometry.lock().unwrap() = Some((100, 200, 1280, 800));
         assert!(state.is_in_popout());
 
-        // Simulate the take() that player_exit_popout does.
         let taken = state
             .pre_popout_geometry
             .lock()
@@ -1570,9 +1679,6 @@ mod tests {
 
     #[test]
     fn popout_exit_without_prior_enter_returns_none_stash() {
-        // player_exit_popout has an early-return path when no stash is
-        // present (called without a prior enter). Verify the take() yields
-        // None and is_in_popout stays false.
         let state = PlayerState::new();
         assert!(!state.is_in_popout());
         let taken = state
@@ -1586,92 +1692,72 @@ mod tests {
 
     #[test]
     fn clear_minimize_snapshot_drops_leftover_inset_on_teardown() {
-        // prexu-ta9: after exit-while-minimized, destroy() must clear the
-        // per-process minimize snapshot so a fresh ensure_init builds the host
-        // at full geometry instead of the stale mini inset (which made replays
-        // launch in mini). clear_minimize_snapshot is the teardown hook destroy
-        // calls; verify it nulls a present snapshot and reports it was present.
         let state = PlayerState::new();
-        *state.minimize.lock().unwrap() = Some(MinimizeState {
+        state.set_minimize(Some(MinimizeState {
             width: 959,
             height: 720,
             padding: 16,
             corner: MinimizeCorner::BottomLeft,
-        });
-        assert!(state.minimize.lock().unwrap().is_some());
+        })).unwrap();
+        assert!(state.geom.lock().unwrap().minimize.is_some());
 
         let had = state.clear_minimize_snapshot();
         assert!(had, "snapshot should have been present before teardown");
         assert!(
-            state.minimize.lock().unwrap().is_none(),
+            state.geom.lock().unwrap().minimize.is_none(),
             "minimize snapshot must be cleared so next session starts full"
         );
 
-        // Idempotent: a second teardown (e.g. the redundant unload on replay)
-        // is a no-op and reports no snapshot was present.
         assert!(!state.clear_minimize_snapshot());
-        assert!(state.minimize.lock().unwrap().is_none());
+        assert!(state.geom.lock().unwrap().minimize.is_none());
     }
 
     #[test]
     fn popout_enter_clears_leftover_minimize_inset() {
-        // player_enter_popout clears state.minimize to None before applying
-        // popout geometry. This prevents a frontend race (concurrent
-        // playerExitMinimize + playerEnterPopOut) from leaving a stale
-        // minimize inset that would shrink the host into the corner of the
-        // new popout window.
         let state = PlayerState::new();
-        *state.minimize.lock().unwrap() = Some(MinimizeState {
+        state.set_minimize(Some(MinimizeState {
             width: 360,
             height: 200,
             padding: 16,
             corner: MinimizeCorner::BottomRight,
-        });
-        assert!(state.minimize.lock().unwrap().is_some());
+        })).unwrap();
+        assert!(state.geom.lock().unwrap().minimize.is_some());
 
-        // Simulate what player_enter_popout does: clear minimize before
-        // any geometry work.
-        *state.minimize.lock().unwrap() = None;
-
-        assert!(state.minimize.lock().unwrap().is_none());
+        // Simulate what player_enter_popout does: clear minimize.
+        state.set_minimize(None).unwrap();
+        assert!(state.geom.lock().unwrap().minimize.is_none());
     }
 
     #[test]
     fn popout_enter_is_noop_on_minimize_when_already_none() {
-        // Guard: if minimize is already None on enter, clearing it again
-        // must not panic or corrupt other state.
         let state = PlayerState::new();
-        assert!(state.minimize.lock().unwrap().is_none());
-        *state.minimize.lock().unwrap() = None;
-        assert!(state.minimize.lock().unwrap().is_none());
+        assert!(state.geom.lock().unwrap().minimize.is_none());
+        state.set_minimize(None).unwrap();
+        assert!(state.geom.lock().unwrap().minimize.is_none());
         assert!(!state.is_in_popout());
     }
 
     #[test]
     fn popout_enter_then_exit_round_trips_without_minimize_leaking() {
-        // Full enter → exit cycle: pre_popout_geometry is set and then
-        // consumed; minimize is cleared on enter and must still be None
-        // after exit (exit does not restore minimize — that's correct,
-        // the frontend re-arms minimize separately if needed).
         let state = PlayerState::new();
-        *state.minimize.lock().unwrap() = Some(MinimizeState {
+        state.set_minimize(Some(MinimizeState {
             width: 360,
             height: 200,
             padding: 16,
             corner: MinimizeCorner::BottomRight,
-        });
+        })).unwrap();
 
         // enter: clear minimize + stash geometry
-        *state.minimize.lock().unwrap() = None;
+        state.set_minimize(None).unwrap();
         *state.pre_popout_geometry.lock().unwrap() = Some((50, 50, 1920, 1080));
 
         assert!(state.is_in_popout());
-        assert!(state.minimize.lock().unwrap().is_none());
+        assert!(state.geom.lock().unwrap().minimize.is_none());
 
         // exit: consume stash
         let taken = state.pre_popout_geometry.lock().unwrap().take();
         assert_eq!(taken, Some((50, 50, 1920, 1080)));
         assert!(!state.is_in_popout());
-        assert!(state.minimize.lock().unwrap().is_none());
+        assert!(state.geom.lock().unwrap().minimize.is_none());
     }
 }
