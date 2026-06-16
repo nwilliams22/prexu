@@ -8,6 +8,9 @@ pub(crate) mod timeline;
 #[cfg(target_os = "windows")]
 pub mod host_window;
 
+#[cfg(target_os = "windows")]
+pub mod taskbar_preview;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -1030,6 +1033,24 @@ impl PlayerState {
             .as_ref()
             .ok_or_else(|| "mpv not initialised".to_string())?;
         f(&inner.mpv).map_err(|e| format!("mpv error: {:?}", e))
+    }
+
+    /// Capture the current mpv video frame as a tightly-packed top-down BGRA
+    /// buffer (alpha forced opaque), for the DWM iconic taskbar/alt-tab
+    /// preview. Returns `None` when mpv is uninitialised or no decoded frame
+    /// is available (e.g. idle/loading) — the caller then supplies a fallback
+    /// card so the preview is never the black punch-through (prexu-2k7p).
+    ///
+    /// Runs on the UI thread (subclass WndProc). `screenshot-raw` is mpv-side
+    /// serialised and thread-safe; the only contention is the brief `inner`
+    /// lock, held just for the synchronous FFI call.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn screenshot_bgra(&self) -> Option<taskbar_preview::RawFrame> {
+        let guard = self.inner.lock().ok()?;
+        let inner = guard.as_ref()?;
+        // SAFETY: `ctx` is a live mpv_handle for as long as `inner` (and thus
+        // the lock guard) is held; `capture_mpv_frame` only reads from it.
+        unsafe { taskbar_preview::capture_mpv_frame(inner.mpv.ctx.as_ptr()) }
     }
 
     /// Store (or clear, with `None`) the close-time timeline report context.
