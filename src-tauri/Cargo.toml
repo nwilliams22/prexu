@@ -36,11 +36,17 @@ url = "2"
 libmpv2 = { version = "4", features = ["build_libmpv"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+# Raw libmpv FFI for `screenshot-raw` (mpv_command_ret → mpv_node), used to
+# source frames for the DWM iconic taskbar/alt-tab preview. Must resolve to
+# the same version libmpv2 pins transitively so `Mpv::ctx`'s `mpv_handle`
+# type is identical.
+libmpv2-sys = "4"
 # Pin to the same major.minor as Tauri's transitive `windows` dep so HWND
 # types are interchangeable. Bumping requires Tauri to bump too.
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Dwm",
 ] }
