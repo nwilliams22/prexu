@@ -498,6 +498,10 @@ pub fn run() {
                     // resize/maximize-restore, DPI/scale, focus reassert,
                     // teardown) via the extracted handler (prexu-bgz.30).
                     player::events::attach_window_handlers(&window, app_handle);
+
+                    // Register custom DWM iconic bitmaps so alt-tab/taskbar
+                    // previews show the mpv video instead of black (prexu-2k7p).
+                    player::taskbar_preview::enable(&window, app.handle().clone());
                 }
             }
             Ok(())
