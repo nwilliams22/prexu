@@ -33,7 +33,7 @@ use std::ptr;
 
 use tauri::{AppHandle, Manager, WebviewWindow};
 use windows::core::BOOL;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
     DwmInvalidateIconicBitmaps, DwmSetIconicLivePreviewBitmap, DwmSetIconicThumbnail,
     DwmSetWindowAttribute, DWMWA_FORCE_ICONIC_REPRESENTATION, DWMWA_HAS_ICONIC_BITMAP,
@@ -44,9 +44,7 @@ use windows::Win32::Graphics::Gdi::{
     HGDIOBJ, SRCCOPY,
 };
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
-use windows::Win32::UI::WindowsAndMessaging::{
-    GetClientRect, KillTimer, SetTimer, WM_NCDESTROY, WM_TIMER,
-};
+use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer, WM_NCDESTROY, WM_TIMER};
 
 use crate::player::PlayerState;
 
@@ -194,44 +192,54 @@ unsafe fn heartbeat(hwnd: HWND, state: &PreviewState) {
 }
 
 unsafe fn on_thumbnail(hwnd: HWND, state: &PreviewState, max_w: i32, max_h: i32) {
-    let bmp = match state.app.state::<PlayerState>().screenshot_bgra() {
+    // DIAGNOSTIC (prexu-6iyp): confirm whether Win11 Alt+Tab actually pulls the
+    // iconic thumbnail. If these lines never appear when opening Alt+Tab, the
+    // switcher is using live window capture and the iconic path can't fix it.
+    let frame = state.app.state::<PlayerState>().screenshot_bgra();
+    let (bmp, dims) = match frame {
         Some(frame) => {
             let (tw, th) = fit(frame.w, frame.h, max_w, max_h);
-            render_frame(&frame, tw, th)
+            (render_frame(&frame, tw, th), (tw, th))
         }
-        None => solid_dib(max_w, max_h),
+        None => (solid_dib(max_w, max_h), (max_w, max_h)),
     };
-    if let Some(bmp) = bmp {
-        if let Err(e) = DwmSetIconicThumbnail(hwnd, bmp, 0) {
-            log::trace!("[player:preview] DwmSetIconicThumbnail failed: {:?}", e);
+    match bmp {
+        Some(bmp) => {
+            let res = DwmSetIconicThumbnail(hwnd, bmp, 0);
+            log::trace!(
+                "[player:preview] thumbnail req max={}x{} bitmap={}x{} set={:?}",
+                max_w, max_h, dims.0, dims.1, res
+            );
+            let _ = DeleteObject(HGDIOBJ(bmp.0));
         }
-        let _ = DeleteObject(HGDIOBJ(bmp.0));
+        None => log::warn!(
+            "[player:preview] thumbnail req max={}x{} — bitmap build failed",
+            max_w, max_h
+        ),
     }
 }
 
 unsafe fn on_live_preview(hwnd: HWND, state: &PreviewState) {
-    // Match the preview bitmap to the window's client size (capped), so the
-    // hover preview looks like the window. Fall back to a small default if the
-    // client rect is unavailable.
-    let mut rc = RECT::default();
-    let (mut cw, mut ch) = (1280, 720);
-    if GetClientRect(hwnd, &mut rc).is_ok() {
-        let (w, h) = (rc.right - rc.left, rc.bottom - rc.top);
-        if w > 0 && h > 0 {
-            let (w, h) = cap(w, h, LIVE_MAX_DIM);
-            cw = w;
-            ch = h;
+    // Size the preview to the *video's* own aspect (capped), not the window
+    // outline — the window is often a different shape (e.g. portrait on a
+    // vertical monitor), and the user wants a media-style preview like Plex
+    // rather than a letterboxed window snapshot (prexu-6iyp).
+    let frame = state.app.state::<PlayerState>().screenshot_bgra();
+    let bmp = match &frame {
+        Some(frame) => {
+            let (w, h) = cap(frame.w, frame.h, LIVE_MAX_DIM);
+            render_frame(frame, w, h)
         }
-    }
-
-    let bmp = match state.app.state::<PlayerState>().screenshot_bgra() {
-        Some(frame) => render_frame(&frame, cw, ch),
-        None => solid_dib(cw, ch),
+        // No decoded frame: a small navy card rather than black.
+        None => solid_dib(640, 360),
     };
     if let Some(bmp) = bmp {
-        if let Err(e) = DwmSetIconicLivePreviewBitmap(hwnd, bmp, None, 0) {
-            log::trace!("[player:preview] DwmSetIconicLivePreviewBitmap failed: {:?}", e);
-        }
+        let res = DwmSetIconicLivePreviewBitmap(hwnd, bmp, None, 0);
+        log::trace!(
+            "[player:preview] live-preview req frame={} set={:?}",
+            frame.is_some(),
+            res
+        );
         let _ = DeleteObject(HGDIOBJ(bmp.0));
     }
 }
