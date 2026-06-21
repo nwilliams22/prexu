@@ -396,7 +396,12 @@ mod mpv_bridge {
 
     pub fn load_file(mpv: &Mpv, path: &Path) -> Result<(), String> {
         let p = path.to_string_lossy().to_string();
-        mpv.command("loadfile", &[p.as_str()])
+        // libmpv2's command() joins args into one flat mpv_command_string, so a
+        // path with spaces/backslashes must be double-quoted + escaped or mpv
+        // rejects it with MPV_ERROR_INVALID_PARAMETER (-4). Mirrors the app's
+        // mpv_quote (src-tauri/src/player/commands/playback.rs).
+        let quoted = format!("\"{}\"", p.replace('\\', "\\\\").replace('"', "\\\""));
+        mpv.command("loadfile", &[quoted.as_str()])
             .map_err(|e| format!("loadfile failed: {e:?}"))?;
         log::info!("[spike:mpv] loadfile {p}");
         Ok(())
