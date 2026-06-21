@@ -1,0 +1,56 @@
+# THROWAWAY feasibility spike — beads prexu-jjbk / Path C0.
+#
+# Proves whether mpv video rendered onto a DirectComposition visual on a PLAIN
+# top-level window is captured by Windows.Graphics.Capture (the same surface
+# Alt+Tab previews). Standalone crate so it does not touch the app. DO NOT SHIP.
+#
+# Crate versions are pinned to match src-tauri/Cargo.toml so the mpv_handle /
+# HWND / D3D11 types line up with what the real app would use.
+[package]
+name = "dcomp-capture-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "dcomp_capture"
+path = "src/main.rs"
+
+[dependencies]
+log = "0.4"
+env_logger = "0.11"
+
+# Same as src-tauri: safe mpv wrapper + raw sys, both v4.x, build_libmpv so the
+# spike links its own libmpv (no system install needed).
+libmpv2 = { version = "4", features = ["build_libmpv"] }
+libmpv2-sys = "4"
+
+# EGL via ANGLE, loaded dynamically at runtime from libEGL.dll (ANGLE).
+khronos-egl = { version = "6", features = ["dynamic"] }
+libloading = "0.8"
+
+# Same major.minor as src-tauri so HWND/D3D11 types are interchangeable with the
+# app, plus the extra graphics + WinRT capture features this spike needs.
+[target.'cfg(target_os = "windows")'.dependencies.windows]
+version = "0.61"
+features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_DirectComposition",
+    # WinRT capture (self-verification leg)
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
+    "Foundation",
+    "Foundation_Metadata",
+    # interop: CreateDirect3D11DeviceFromDXGIDevice / IDirect3DDxgiInterfaceAccess
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+]
