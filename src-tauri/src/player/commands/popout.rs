@@ -415,6 +415,9 @@ fn write_window_rect(
 /// if its own top-left happens to be closer to TopRight in absolute
 /// distance. This matches what a user means by "I dragged it to that
 /// corner."
+// reason: geometry helper taking window + work-area rect endpoints; grouping
+// into structs would obscure the endpoint-by-endpoint corner comparison
+#[allow(clippy::too_many_arguments)]
 #[cfg(target_os = "windows")]
 fn nearest_corner(
     x: i32,

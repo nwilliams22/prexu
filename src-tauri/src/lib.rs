@@ -225,8 +225,7 @@ fn handle_proxy_request(
     }
 
     // Serve local downloaded files via /local/{ratingKey}
-    if path.starts_with("/local/") {
-        let rating_key = &path[7..]; // strip "/local/"
+    if let Some(rating_key) = path.strip_prefix("/local/") {
         if let Some(dl_dir) = downloads_dir {
             let item_dir = std::path::Path::new(dl_dir).join(rating_key);
             // Find the first non-.part file
