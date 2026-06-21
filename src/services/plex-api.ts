@@ -617,7 +617,7 @@ export async function getHomeUsers(authToken: string): Promise<HomeUser[]> {
       protected: (u.protected as boolean) ?? false,
     }));
   } catch (err) {
-    console.warn("[plex-api] Could not fetch home users:", err);
+    void logger.warn("api", "could not fetch home users", err);
     return [];
   }
 }
