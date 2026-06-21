@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket};
 use futures::{SinkExt, StreamExt};
@@ -19,7 +20,9 @@ const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1);
 /// Handle a single WebSocket connection.
 pub async fn handle_connection(ws: WebSocket, state: SharedState) {
     let (mut ws_sender, mut ws_receiver) = ws.split();
-    let (tx, mut rx) = mpsc::channel::<String>(crate::state::CHANNEL_CAPACITY);
+    // Writer channel carries `Arc<String>` so session broadcasts share one
+    // allocation across all participants (see `session::broadcast_to_session`).
+    let (tx, mut rx) = mpsc::channel::<Arc<String>>(crate::state::CHANNEL_CAPACITY);
 
     // Phase 1: Auth handshake (must receive auth within 10 seconds)
     let auth_result = tokio::time::timeout(Duration::from_secs(10), async {
@@ -84,7 +87,7 @@ pub async fn handle_connection(ws: WebSocket, state: SharedState) {
         plex_username: username.clone(),
     };
     if let Ok(json) = serde_json::to_string(&auth_ok) {
-        let _ = tx.try_send(json);
+        let _ = tx.try_send(Arc::new(json));
     }
 
     // Deliver any pending invites
@@ -92,7 +95,7 @@ pub async fn handle_connection(ws: WebSocket, state: SharedState) {
         if !invites.is_empty() {
             let msg = ServerMessage::PendingInvites { invites };
             if let Ok(json) = serde_json::to_string(&msg) {
-                let _ = tx.try_send(json);
+                let _ = tx.try_send(Arc::new(json));
             }
         }
     }
@@ -100,7 +103,13 @@ pub async fn handle_connection(ws: WebSocket, state: SharedState) {
     // Phase 2: Spawn writer task (channel rx → WebSocket)
     let writer_handle = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            if ws_sender.send(Message::Text(msg.into())).await.is_err() {
+            // `msg` is `Arc<String>`; borrow the inner str for the frame so a
+            // shared broadcast payload is not cloned again on the way out.
+            if ws_sender
+                .send(Message::Text(msg.as_str().into()))
+                .await
+                .is_err()
+            {
                 break;
             }
         }
@@ -129,7 +138,7 @@ pub async fn handle_connection(ws: WebSocket, state: SharedState) {
                                 reason: "Rate limit exceeded".into(),
                             };
                             if let Ok(json) = serde_json::to_string(&err) {
-                                let _ = tx.try_send(json);
+                                let _ = tx.try_send(Arc::new(json));
                             }
                             break;
                         }
@@ -150,7 +159,7 @@ pub async fn handle_connection(ws: WebSocket, state: SharedState) {
             _ = keepalive.tick() => {
                 let pong = ServerMessage::Pong;
                 if let Ok(json) = serde_json::to_string(&pong) {
-                    if tx.try_send(json).is_err() {
+                    if tx.try_send(Arc::new(json)).is_err() {
                         break;
                     }
                 }
@@ -171,7 +180,7 @@ fn handle_client_message(
     username: &str,
     thumb: &str,
     raw: &str,
-    sender: &mpsc::Sender<String>,
+    sender: &mpsc::Sender<Arc<String>>,
 ) {
     let msg: ClientMessage = match serde_json::from_str(raw) {
         Ok(m) => m,
@@ -303,7 +312,7 @@ fn handle_client_message(
         ClientMessage::Ping => {
             let pong = ServerMessage::Pong;
             if let Ok(json) = serde_json::to_string(&pong) {
-                let _ = sender.try_send(json);
+                let _ = sender.try_send(Arc::new(json));
             }
         }
     }

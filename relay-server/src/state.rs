@@ -2,6 +2,10 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+// NOTE: per-connection writer channels carry `Arc<String>` rather than `String`
+// so a session broadcast clones a cheap refcount bump per participant instead
+// of reallocating the serialized JSON N times (see `session::broadcast_to_session`).
+
 use dashmap::DashMap;
 use tokio::sync::mpsc;
 
@@ -24,6 +28,12 @@ pub struct AppState {
     pub pending_invites: DashMap<String, Vec<PendingInviteInfo>>,
     /// Global request timestamps for TMDb proxy rate limiting
     tmdb_timestamps: Mutex<VecDeque<Instant>>,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AppState {
@@ -79,7 +89,7 @@ pub struct Participant {
     pub plex_thumb: String,
     pub is_host: bool,
     pub state: String,
-    pub sender: mpsc::Sender<String>,
+    pub sender: mpsc::Sender<Arc<String>>,
 }
 
 #[allow(dead_code)]
@@ -87,7 +97,7 @@ pub struct ConnectionHandle {
     pub plex_username: String,
     pub plex_thumb: String,
     pub session_id: Option<String>,
-    pub sender: mpsc::Sender<String>,
+    pub sender: mpsc::Sender<Arc<String>>,
 }
 
 /// Get current unix timestamp in milliseconds.
