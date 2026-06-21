@@ -2,13 +2,9 @@
  * Library item listing, recently added, and on-deck.
  */
 
-import { fetchJson } from "./base";
+import { fetchMetadata } from "./base";
 import { getLibraryItems as getItems } from "./filter";
-import type {
-  LibrarySection,
-  PlexMediaContainer,
-  PlexMediaItem,
-} from "../../types/library";
+import type { LibrarySection, PlexMediaItem } from "../../types/library";
 
 // Re-export getLibraryItems from filter module for barrel
 export { getLibraryItems } from "./filter";
@@ -20,12 +16,12 @@ export async function getRecentlyAdded(
   serverToken: string,
   limit: number = 50
 ): Promise<PlexMediaItem[]> {
-  const data = await fetchJson<PlexMediaContainer<PlexMediaItem>>(
+  return fetchMetadata(
     serverUri,
     serverToken,
-    `/library/recentlyAdded?X-Plex-Container-Size=${limit}`
+    `/library/recentlyAdded?X-Plex-Container-Size=${limit}`,
+    "getRecentlyAdded",
   );
-  return data.MediaContainer.Metadata ?? [];
 }
 
 /**
@@ -68,10 +64,5 @@ export async function getOnDeck(
   serverUri: string,
   serverToken: string
 ): Promise<PlexMediaItem[]> {
-  const data = await fetchJson<PlexMediaContainer<PlexMediaItem>>(
-    serverUri,
-    serverToken,
-    "/library/onDeck"
-  );
-  return data.MediaContainer.Metadata ?? [];
+  return fetchMetadata(serverUri, serverToken, "/library/onDeck", "getOnDeck");
 }

@@ -24,7 +24,8 @@ export function findFirstIndexForLetter(
 ): number {
   const target = letter.toUpperCase();
   for (let i = 0; i < items.length; i++) {
-    if (getLibrarySortBucket(items[i]) === target) return i;
+    const item = items[i];
+    if (item && getLibrarySortBucket(item) === target) return i;
   }
   return -1;
 }

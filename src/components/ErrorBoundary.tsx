@@ -22,7 +22,6 @@ class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error("[ErrorBoundary] Uncaught error:", error, info.componentStack);
     void logger.error("error-boundary", "uncaught error in component tree", {
       name: error.name,
       message: error.message,

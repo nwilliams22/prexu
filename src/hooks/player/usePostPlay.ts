@@ -217,7 +217,7 @@ export function usePostPlay({
   const nextQueueItem = useMemo(() => {
     const { items, currentIndex } = queue;
     const nextIdx = currentIndex + 1;
-    return nextIdx < items.length ? items[nextIdx] : null;
+    return nextIdx < items.length ? items[nextIdx]! : null;
   }, [queue]);
 
   // Fetch enriched metadata for the next item when PostPlay is about to show

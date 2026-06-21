@@ -111,7 +111,7 @@ export function useItemDetailData(): ItemDetailData {
             );
             if (!cancelled) {
               if (seasonList.length === 1 && preferences.appearance.skipSingleSeason) {
-                navigate(`/item/${seasonList[0].ratingKey}`, { replace: true });
+                navigate(`/item/${seasonList[0]!.ratingKey}`, { replace: true });
                 return;
               }
               setSeasons(seasonList);
@@ -231,7 +231,7 @@ export function useItemDetailData(): ItemDetailData {
     if (!collectionTags || collectionTags.length === 0) return;
 
     let cancelled = false;
-    const collectionName = collectionTags[0].tag;
+    const collectionName = collectionTags[0]!.tag;
 
     // Search all movie sections for the matching collection
     const movieSections = sections.filter((s) => s.type === "movie");

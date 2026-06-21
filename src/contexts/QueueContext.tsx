@@ -145,6 +145,7 @@ export function QueueProvider({ children }: { children: ReactNode }) {
       setQueueState((prev) => {
         const items = [...prev.items];
         const [moved] = items.splice(fromIndex, 1);
+        if (!moved) return prev;
         items.splice(toIndex, 0, moved);
         // Adjust currentIndex if needed
         let ci = prev.currentIndex;
@@ -165,7 +166,7 @@ export function QueueProvider({ children }: { children: ReactNode }) {
     if (nextIdx >= prev.items.length) return null;
     const nextItem = prev.items[nextIdx];
     setQueueAndPersist({ ...prev, currentIndex: nextIdx });
-    return nextItem;
+    return nextItem ?? null;
   }, [setQueueAndPersist]);
 
   const playPrev = useCallback((): QueueItem | null => {
@@ -174,7 +175,7 @@ export function QueueProvider({ children }: { children: ReactNode }) {
     if (prevIdx < 0) return null;
     const prevItem = prev.items[prevIdx];
     setQueueAndPersist({ ...prev, currentIndex: prevIdx });
-    return prevItem;
+    return prevItem ?? null;
   }, [setQueueAndPersist]);
 
   const clearQueue = useCallback(() => {

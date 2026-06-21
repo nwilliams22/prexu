@@ -82,8 +82,9 @@ class wsService {
     }
   }
 
-  /** Send a message to the relay server. */
-  send(message: Record<string, unknown>): void {
+  /** Send a message to the relay server. Accepts any JSON-serialisable
+   *  object (typed message shapes with optional fields included). */
+  send(message: object): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       logger.warn("ws", "Cannot send — not connected");
       return;

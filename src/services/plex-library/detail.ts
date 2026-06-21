@@ -18,10 +18,11 @@ export async function getItemMetadata<T extends PlexMediaItem>(
     `/library/metadata/${ratingKey}?includeRatings=1&includeMarkers=1`
   );
   const items = data.MediaContainer.Metadata;
-  if (!items || items.length === 0) {
+  const first = items?.[0];
+  if (!first) {
     throw new Error(`No metadata found for ratingKey ${ratingKey}`);
   }
-  return items[0];
+  return first;
 }
 
 /**

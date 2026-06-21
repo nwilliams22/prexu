@@ -40,8 +40,10 @@ function HeroSlideshow({ slides, onDismiss, onPlay }: HeroSlideshowProps) {
   useEffect(() => {
     if (slides.length <= 1) return;
     const nextIdx = (activeIndex + 1) % slides.length;
+    const nextSlide = slides[nextIdx];
+    if (!nextSlide) return;
     const img = new Image();
-    img.src = slides[nextIdx].backdropUrl;
+    img.src = nextSlide.backdropUrl;
   }, [activeIndex, slides]);
 
   // Auto-rotation
@@ -68,6 +70,7 @@ function HeroSlideshow({ slides, onDismiss, onPlay }: HeroSlideshowProps) {
   if (slides.length === 0) return null;
 
   const slide = slides[activeIndex];
+  if (!slide) return null;
   const heroHeight = mobile ? 380 : tablet ? 500 : 620;
 
   const goTo = (idx: number) => {

@@ -16,6 +16,7 @@
 //! only while mpv is alive), and answer DWM's pull requests:
 //!   - `WM_DWMSENDICONICTHUMBNAIL`   → one scaled frame (alt-tab tile).
 //!   - `WM_DWMSENDICONICLIVEPREVIEW` → a frame for the taskbar/Aero-Peek hover.
+//!
 //! A ~10 Hz `DwmInvalidateIconicBitmaps` heartbeat (only while playing) makes
 //! the live preview update so the user can watch by hovering, like VLC/Plex.
 //! Invalidation is pull-based: DWM only re-requests a bitmap while one is
@@ -278,7 +279,7 @@ unsafe fn make_dib(w: i32, h: i32) -> Option<(HBITMAP, *mut u8)> {
             biHeight: -h, // negative => top-down, matching screenshot-raw rows
             biPlanes: 1,
             biBitCount: 32,
-            biCompression: BI_RGB.0 as u32,
+            biCompression: BI_RGB.0,
             ..Default::default()
         },
         ..Default::default()
