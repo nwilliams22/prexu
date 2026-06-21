@@ -26,7 +26,6 @@ import type {
 } from "../types/library";
 import { detailStyles } from "../utils/detail-styles";
 import { isWatched } from "../utils/media-helpers";
-import type { PlexMediaItem } from "../types/library";
 
 function ItemDetail() {
   const { server, activeUser } = useAuth();
@@ -102,12 +101,11 @@ function ItemDetail() {
       <div key={actor.name} style={styles.section}>
         <HorizontalRow title={`More with ${actor.name}`}>
           {actor.items.map((m) => {
-            const meta = m as unknown as { childCount?: number; year?: number };
             let subtitle = "";
-            if (meta.childCount) {
-              subtitle = `${meta.childCount} season${meta.childCount !== 1 ? "s" : ""}`;
-            } else if (meta.year) {
-              subtitle = String(meta.year);
+            if (m.childCount) {
+              subtitle = `${m.childCount} season${m.childCount !== 1 ? "s" : ""}`;
+            } else if (m.year) {
+              subtitle = String(m.year);
             }
             return (
               <PosterCard
@@ -118,7 +116,7 @@ function ItemDetail() {
                 srcSet={posterSrcSet(m.thumb)}
                 title={m.title}
                 subtitle={subtitle}
-                watched={isWatched(m as unknown as PlexMediaItem)}
+                watched={isWatched(m)}
                 width={230}
                 onClick={() => navigate(`/item/${m.ratingKey}`)}
               />
@@ -180,14 +178,13 @@ function ItemDetail() {
       <div style={styles.section}>
         <HorizontalRow title={title}>
           {related.map((r) => {
-            const asShow = r as { childCount?: number; leafCount?: number; year?: number };
             let subtitle = "";
-            if (asShow.childCount) {
-              subtitle = `${asShow.childCount} season${asShow.childCount !== 1 ? "s" : ""}`;
-            } else if (asShow.leafCount) {
-              subtitle = `${asShow.leafCount} episodes`;
-            } else if (asShow.year) {
-              subtitle = String(asShow.year);
+            if (r.childCount) {
+              subtitle = `${r.childCount} season${r.childCount !== 1 ? "s" : ""}`;
+            } else if (r.leafCount) {
+              subtitle = `${r.leafCount} episodes`;
+            } else if (r.year) {
+              subtitle = String(r.year);
             }
             return (
               <PosterCard
@@ -198,7 +195,7 @@ function ItemDetail() {
                 srcSet={posterSrcSet(r.thumb)}
                 title={r.title}
                 subtitle={subtitle}
-                watched={isWatched(r as unknown as PlexMediaItem)}
+                watched={isWatched(r)}
                 width={230}
                 onClick={() => navigate(`/item/${r.ratingKey}`)}
               />
@@ -263,7 +260,6 @@ function ItemDetail() {
           <div style={styles.section}>
             <HorizontalRow title={`In This Collection — ${collectionItems.items.length + 1} items`}>
               {collectionItems.items.map((ci) => {
-                const asMovie = ci as unknown as { year?: number };
                 return (
                   <PosterCard
                     key={ci.ratingKey}
@@ -272,8 +268,8 @@ function ItemDetail() {
                     placeholderUrl={posterPlaceholder(ci.thumb)}
                     srcSet={posterSrcSet(ci.thumb)}
                     title={ci.title}
-                    subtitle={asMovie.year ? String(asMovie.year) : ""}
-                    watched={isWatched(ci as unknown as PlexMediaItem)}
+                    subtitle={ci.year ? String(ci.year) : ""}
+                    watched={isWatched(ci)}
                     width={230}
                     onClick={() => navigate(`/item/${ci.ratingKey}`)}
                   />

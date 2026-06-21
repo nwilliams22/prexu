@@ -94,7 +94,7 @@ export function useQueueAutoPopulate(
               (s) => s.ratingKey === ep.parentRatingKey,
             );
             if (currentSeasonIdx >= 0 && currentSeasonIdx < seasons.length - 1) {
-              const nextSeason = seasons[currentSeasonIdx + 1];
+              const nextSeason = seasons[currentSeasonIdx + 1]!;
               const nextSeasonEps = await getItemChildren<PlexEpisode>(
                 serverUri,
                 serverToken,

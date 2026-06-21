@@ -91,8 +91,9 @@ export function usePlexActorMedia(
 
           for (let i = 0; i < titleSearches.length; i++) {
             const result = titleSearches[i];
-            if (result.status !== "fulfilled") continue;
-            const searchTitle = (missingTitles[i].title ?? missingTitles[i].name ?? "").toLowerCase();
+            if (result?.status !== "fulfilled") continue;
+            const missing = missingTitles[i]!;
+            const searchTitle = (missing.title ?? missing.name ?? "").toLowerCase();
             for (const hub of result.value) {
               if (hub.Metadata) {
                 for (const item of hub.Metadata) {
@@ -109,8 +110,8 @@ export function usePlexActorMedia(
         }
 
         const byYear = (a: PlexMediaItem, b: PlexMediaItem) => {
-          const ay = (a as unknown as { year?: number }).year ?? 0;
-          const by = (b as unknown as { year?: number }).year ?? 0;
+          const ay = a.year ?? 0;
+          const by = b.year ?? 0;
           return by - ay;
         };
         movieItems.sort(byYear);

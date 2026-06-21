@@ -38,7 +38,13 @@ export function shuffleArray<T>(arr: T[]): T[] {
   const result = [...arr];
   for (let i = result.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
-    [result[i], result[j]] = [result[j], result[i]];
+    // i and j are provably in-bounds (i in [1, len-1], j in [0, i]), so the
+    // reads cannot be out-of-range "undefined". Using `!` here preserves swap
+    // semantics for any T (a guard-and-skip would mishandle T that includes
+    // undefined as a legitimate value).
+    const tmp = result[i]!;
+    result[i] = result[j]!;
+    result[j] = tmp;
   }
   return result;
 }

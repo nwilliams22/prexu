@@ -44,7 +44,7 @@ export function useRequestSubmission(): UseRequestSubmissionReturn {
         const online = allServers.filter((s) => s.status === "online");
         setServers(online);
         if (online.length === 1) {
-          setSelectedServerId(online[0].clientIdentifier);
+          setSelectedServerId(online[0]!.clientIdentifier);
         }
       } catch {
         // Non-critical -- just won't show server picker

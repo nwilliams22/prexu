@@ -6,6 +6,7 @@
  */
 
 import { z } from "zod";
+import { logger } from "./logger";
 
 // ── Validation Helper ──
 
@@ -16,8 +17,9 @@ export function validateResponse<T>(
 ): T {
   const result = schema.safeParse(data);
   if (!result.success) {
-    console.warn(
-      `[validation] ${label}: response shape mismatch`,
+    void logger.warn(
+      "validation",
+      `${label}: response shape mismatch`,
       result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`),
     );
     return data as T;

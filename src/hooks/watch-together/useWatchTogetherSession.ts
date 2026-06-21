@@ -7,6 +7,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../useAuth";
 import { watchSync } from "../../services/watch-sync";
 import { getPlexUser } from "../../services/plex-api";
+import { logger } from "../../services/logger";
 
 export type SyncStatus = "synced" | "syncing" | "disconnected";
 
@@ -56,8 +57,9 @@ export function useWatchTogetherSession(
             });
           });
         } catch (err) {
-          console.error(
-            "[useWatchTogetherSession] Failed to connect via invite relay URL:",
+          void logger.error(
+            "ws",
+            "failed to connect via invite relay URL",
             err
           );
           if (!cancelled) setSyncStatus("disconnected");

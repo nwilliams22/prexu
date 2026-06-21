@@ -166,7 +166,7 @@ export function useContentRequestState(
         target_server_name: params.targetServerName,
         target_server_id: params.targetServerId,
       };
-      watchSync.send(message as unknown as Record<string, unknown>);
+      watchSync.send(message);
 
       // Also store locally so the requester can see their own request
       const localRequest: ContentRequest = {
@@ -209,7 +209,7 @@ export function useContentRequestState(
         status,
         admin_note: note,
       };
-      watchSync.send(message as unknown as Record<string, unknown>);
+      watchSync.send(message);
     },
     [],
   );

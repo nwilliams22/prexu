@@ -18,6 +18,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: Setup Node
         uses: actions/setup-node@v5
@@ -28,14 +30,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Lint (oxlint)
+        run: npm run lint
+
       - name: TypeScript type check
         run: npx tsc --noEmit
 
       - name: Unit tests
         run: npx vitest run
 
-      - name: Relay server cargo check
-        run: cd relay-server && cargo check
+      - name: Relay server clippy
+        run: cd relay-server && cargo clippy --all-targets -- -D warnings
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
@@ -66,6 +71,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       # Fetch ONLY the runtime DLL from a pinned, checksummed mpv dev release and
       # drop it beside the vendored mpv.lib + headers to complete MPV_SOURCE/64.
@@ -97,6 +104,14 @@ jobs:
 
       # MPV_SOURCE points libmpv2-sys's build script at the vendored mpv.lib +
       # headers; build.rs also copies libmpv-2.dll to target\debug\ for runtime.
+      # Clippy must run here, not in the ubuntu `ci` job: src-tauri links libmpv2
+      # (build_libmpv) and needs MPV_SOURCE, which is only set up on this runner.
+      - name: src-tauri clippy
+        working-directory: src-tauri
+        env:
+          MPV_SOURCE: ${{ github.workspace }}\src-tauri\ci\mpv
+        run: cargo clippy --all-targets -- -D warnings
+
       - name: Build headless_mpv test binary
         working-directory: src-tauri
         env:

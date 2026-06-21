@@ -56,9 +56,9 @@ function ContextMenu({ items, position, onClose }: ContextMenuProps) {
       if (items.length === 0) return;
       const idx = items.indexOf(document.activeElement as HTMLElement);
       if (e.key === "ArrowDown") {
-        items[(idx + 1) % items.length].focus();
+        items[(idx + 1) % items.length]?.focus();
       } else {
-        items[(idx - 1 + items.length) % items.length].focus();
+        items[(idx - 1 + items.length) % items.length]?.focus();
       }
     };
     document.addEventListener("keydown", handleKey);

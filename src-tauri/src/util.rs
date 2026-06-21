@@ -1,4 +1,4 @@
-/// Shared utility functions for the Prexu Tauri backend.
+//! Shared utility functions for the Prexu Tauri backend.
 
 /// Mask any X-Plex-Token query value in a URL, then truncate to 80 chars for
 /// logging. Truncation alone is insufficient: with a short server URI the

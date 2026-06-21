@@ -40,7 +40,7 @@ export function deriveRelayUrl(serverUri: string): string {
     // .plex.direct hostnames encode the IP as e.g. "192-168-1-50.abc123.plex.direct"
     // Extract the actual IP so the relay is reachable without DNS
     if (host.endsWith(".plex.direct")) {
-      const ipPart = host.split(".")[0];
+      const ipPart = host.split(".")[0] ?? "";
       const ip = ipPart.replace(/-/g, ".");
       // Validate it looks like an IP (4 octets)
       if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) {

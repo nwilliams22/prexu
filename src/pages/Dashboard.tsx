@@ -112,7 +112,7 @@ function getSeasonLabel(group: GroupedRecentItem): string {
 function getGroupSubtitle(group: GroupedRecentItem): string {
   const seasonLabel = getSeasonLabel(group);
   if (group.episodes.length === 1) {
-    const ep = group.episodes[0];
+    const ep = group.episodes[0]!;
     return `S${String(ep.parentIndex).padStart(2, "0")}E${String(ep.index).padStart(2, "0")} · ${ep.title}`;
   }
   if (group.episodes.length > 1) {
@@ -237,15 +237,18 @@ function Dashboard() {
 
   const handleTouchStart = (e: React.TouchEvent) => {
     if (!mobile || isRefreshing) return;
-    if (containerRef.current && containerRef.current.scrollTop <= 0) {
-      touchStartY.current = e.touches[0].clientY;
+    const touch = e.touches[0];
+    if (touch && containerRef.current && containerRef.current.scrollTop <= 0) {
+      touchStartY.current = touch.clientY;
       isPulling.current = true;
     }
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
     if (!isPulling.current) return;
-    const delta = e.touches[0].clientY - touchStartY.current;
+    const touch = e.touches[0];
+    if (!touch) return;
+    const delta = touch.clientY - touchStartY.current;
     if (delta > 0) {
       pullDistanceRef.current = Math.min(delta * 0.5, 80);
       applyPullIndicatorStyle(pullDistanceRef.current);
@@ -312,7 +315,7 @@ function Dashboard() {
         backdropUrl: backdropUrl(art),
         summary: item.summary,
         progress: getProgress(item),
-        rating: (item as unknown as { rating?: number }).rating,
+        rating: item.rating,
         category: "Continue Watching",
       });
     }
@@ -320,21 +323,16 @@ function Dashboard() {
     // Top-rated unwatched movies (fill up to 10 total)
     const unwatchedMovies = recentMovies
       .filter((m) => !isWatched(m) && (m.art || m.thumb) && !dismissedKeys.has(m.ratingKey))
-      .sort((a, b) =>
-        ((b as unknown as { rating?: number }).rating ?? 0) -
-        ((a as unknown as { rating?: number }).rating ?? 0)
-      );
+      .sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
     for (const movie of unwatchedMovies) {
       if (slides.length >= 10) break;
       slides.push({
         ratingKey: movie.ratingKey,
         title: movie.title,
-        subtitle: (movie as { year?: number }).year
-          ? String((movie as { year?: number }).year)
-          : undefined,
+        subtitle: movie.year ? String(movie.year) : undefined,
         backdropUrl: backdropUrl((movie.art || movie.thumb)!),
         summary: movie.summary,
-        rating: (movie as unknown as { rating?: number }).rating,
+        rating: movie.rating,
         category: "Recommended for You",
       });
     }

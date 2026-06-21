@@ -101,6 +101,7 @@ function ActorDetail() {
       .sort((a, b) => (b.vote_average ?? 0) - (a.vote_average ?? 0));
     if (serverCredits.length === 0) return null;
     const c = serverCredits[0];
+    if (!c) return null;
     const title = c.title ?? c.name ?? "";
     const plexItem = plex.serverItemMap.get(title.toLowerCase());
     return { credit: c, title, plexItem };
@@ -237,7 +238,7 @@ function ActorDetail() {
             <div style={styles.section}>
               <HorizontalRow title={`Movies on Server (${plex.movies.length})`}>
                 {plex.movies.map((m) => {
-                  const year = (m as unknown as { year?: number }).year;
+                  const year = m.year;
                   return (
                     <PosterCard
                       key={m.ratingKey}
@@ -245,7 +246,7 @@ function ActorDetail() {
                       imageUrl={posterUrl(m.thumb)}
                       title={m.title}
                       subtitle={year ? String(year) : ""}
-                      watched={isWatched(m as unknown as PlexMediaItem)}
+                      watched={isWatched(m)}
                       width={200}
                       onClick={() => navigate(`/item/${m.ratingKey}`)}
                     />
@@ -260,15 +261,11 @@ function ActorDetail() {
             <div style={styles.section}>
               <HorizontalRow title={`TV Shows on Server (${plex.shows.length})`}>
                 {plex.shows.map((s) => {
-                  const meta = s as unknown as {
-                    year?: number;
-                    childCount?: number;
-                  };
                   let subtitle = "";
-                  if (meta.childCount) {
-                    subtitle = `${meta.childCount} season${meta.childCount !== 1 ? "s" : ""}`;
-                  } else if (meta.year) {
-                    subtitle = String(meta.year);
+                  if (s.childCount) {
+                    subtitle = `${s.childCount} season${s.childCount !== 1 ? "s" : ""}`;
+                  } else if (s.year) {
+                    subtitle = String(s.year);
                   }
                   return (
                     <PosterCard
@@ -277,7 +274,7 @@ function ActorDetail() {
                       imageUrl={posterUrl(s.thumb)}
                       title={s.title}
                       subtitle={subtitle}
-                      watched={isWatched(s as unknown as PlexMediaItem)}
+                      watched={isWatched(s)}
                       width={200}
                       onClick={() => navigate(`/item/${s.ratingKey}`)}
                     />

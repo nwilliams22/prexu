@@ -108,6 +108,8 @@ pub async fn get_downloads_dir(
 }
 
 /// Download a media file from Plex to local storage.
+// reason: tauri command; args map 1:1 to the frontend download invocation
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn download_media(
     app: AppHandle,

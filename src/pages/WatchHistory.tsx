@@ -39,7 +39,7 @@ function WatchHistory() {
 
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting && hasMore && !isLoadingMore) {
+        if (entries[0]?.isIntersecting && hasMore && !isLoadingMore) {
           loadMore();
         }
       },

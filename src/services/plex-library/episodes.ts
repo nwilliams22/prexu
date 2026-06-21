@@ -41,16 +41,17 @@ export async function getNextEpisode(
       (s) => s.ratingKey === currentEpisode.parentRatingKey
     );
 
-    if (currentSeasonIdx >= 0 && currentSeasonIdx < seasons.length - 1) {
-      const nextSeason = seasons[currentSeasonIdx + 1];
+    const nextSeason =
+      currentSeasonIdx >= 0 && currentSeasonIdx < seasons.length - 1
+        ? seasons[currentSeasonIdx + 1]
+        : undefined;
+    if (nextSeason) {
       const nextSeasonEpisodes = await getItemChildren<PlexEpisode>(
         serverUri,
         serverToken,
         nextSeason.ratingKey
       );
-      if (nextSeasonEpisodes.length > 0) {
-        return nextSeasonEpisodes[0];
-      }
+      return nextSeasonEpisodes[0] ?? null;
     }
 
     return null;
@@ -95,15 +96,15 @@ export async function getPreviousEpisode(
       (s) => s.ratingKey === currentEpisode.parentRatingKey
     );
 
-    if (currentSeasonIdx > 0) {
-      const prevSeason = seasons[currentSeasonIdx - 1];
+    const prevSeason = currentSeasonIdx > 0 ? seasons[currentSeasonIdx - 1] : undefined;
+    if (prevSeason) {
       const prevSeasonEpisodes = await getItemChildren<PlexEpisode>(
         serverUri,
         serverToken,
         prevSeason.ratingKey
       );
       if (prevSeasonEpisodes.length > 0) {
-        return prevSeasonEpisodes[prevSeasonEpisodes.length - 1];
+        return prevSeasonEpisodes[prevSeasonEpisodes.length - 1] ?? null;
       }
     }
 

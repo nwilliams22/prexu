@@ -88,11 +88,13 @@ export async function findByImdbId(
 ): Promise<TmdbSearchResult | null> {
   const data = await relayFetch<TmdbFindResponse>(`/tmdb/find/${imdbId}`);
 
-  if (data.movie_results.length > 0) {
-    return { ...data.movie_results[0], media_type: "movie" };
+  const movie = data.movie_results[0];
+  if (movie) {
+    return { ...movie, media_type: "movie" };
   }
-  if (data.tv_results.length > 0) {
-    return { ...data.tv_results[0], media_type: "tv" };
+  const tv = data.tv_results[0];
+  if (tv) {
+    return { ...tv, media_type: "tv" };
   }
 
   return null;
@@ -178,7 +180,7 @@ export async function searchTmdbPerson(
   const data = await relayFetch<{ results: TmdbPersonSearchResult[] }>(
     `/tmdb/search/person?${params}`,
   );
-  return data.results.length > 0 ? data.results[0] : null;
+  return data.results[0] ?? null;
 }
 
 /** Get detailed person info from TMDB by person ID. */

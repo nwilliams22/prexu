@@ -586,7 +586,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
         // Win32 HWND BEHIND this transparent webview. Painting black here
         // would occlude it. HTML5 path keeps black so the <video> letterbox
         // stays cinema-style.
-        background: IS_NATIVE_PLAYER ? "transparent" : styles.container.background,
+        background: IS_NATIVE_PLAYER ? "transparent" : styles.container?.background,
         cursor: chromeVisible ? "default" : "none",
       }}
       onMouseMove={() => {

@@ -1,0 +1,25 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "error"
+  },
+  "ignorePatterns": [
+    "dist",
+    "node_modules",
+    "src-tauri/target",
+    "relay-server/target"
+  ],
+  "rules": {
+    "no-unused-vars": "warn",
+    "no-unsafe-optional-chaining": "warn",
+    "no-this-alias": "warn"
+  },
+  "overrides": [
+    {
+      "files": ["**/*.test.ts", "**/*.test.tsx", "**/__tests__/**", "src/test/**"],
+      "rules": {
+        "no-unused-vars": "off"
+      }
+    }
+  ]
+}

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use tracing::{info, warn};
 
 use crate::messages::{ParticipantInfo, PendingInviteInfo, ServerMessage};
@@ -7,7 +9,7 @@ use crate::state::{now_ms, Participant, Session, SharedState};
 fn send_to_user(state: &SharedState, username: &str, msg: &ServerMessage) {
     if let Some(conn) = state.connections.get(username) {
         if let Ok(json) = serde_json::to_string(msg) {
-            if conn.sender.try_send(json).is_err() {
+            if conn.sender.try_send(Arc::new(json)).is_err() {
                 warn!(user = %username, "Failed to deliver message (channel full or closed)");
             }
         }
@@ -15,6 +17,11 @@ fn send_to_user(state: &SharedState, username: &str, msg: &ServerMessage) {
 }
 
 /// Broadcast a message to all participants in a session, optionally excluding one user.
+///
+/// The serialized JSON is allocated once and shared via `Arc<String>`; each
+/// participant send clones the `Arc` (a refcount bump) instead of reallocating
+/// the whole payload, so a broadcast to N participants does O(1) allocations
+/// rather than O(N).
 fn broadcast_to_session(
     state: &SharedState,
     session_id: &str,
@@ -23,14 +30,14 @@ fn broadcast_to_session(
 ) {
     if let Some(session) = state.sessions.get(session_id) {
         let json = match serde_json::to_string(msg) {
-            Ok(j) => j,
+            Ok(j) => Arc::new(j),
             Err(_) => return,
         };
         for entry in session.participants.iter() {
             if Some(entry.key().as_str()) == exclude {
                 continue;
             }
-            if entry.value().sender.try_send(json.clone()).is_err() {
+            if entry.value().sender.try_send(Arc::clone(&json)).is_err() {
                 warn!(user = %entry.key(), "Broadcast message dropped (channel full or closed)");
             }
         }
@@ -38,6 +45,8 @@ fn broadcast_to_session(
 }
 
 /// Create a new watch session. The creator becomes the host.
+// reason: session entry point; args map 1:1 to the create-session protocol message
+#[allow(clippy::too_many_arguments)]
 pub fn create_session(
     state: &SharedState,
     session_id: String,
@@ -46,7 +55,7 @@ pub fn create_session(
     media_title: String,
     media_rating_key: String,
     media_type: String,
-    sender: tokio::sync::mpsc::Sender<String>,
+    sender: tokio::sync::mpsc::Sender<Arc<String>>,
 ) {
     // Check if session already exists
     if state.sessions.contains_key(&session_id) {
@@ -105,7 +114,7 @@ pub fn join_session(
     session_id: &str,
     username: &str,
     plex_thumb: &str,
-    sender: tokio::sync::mpsc::Sender<String>,
+    sender: tokio::sync::mpsc::Sender<Arc<String>>,
 ) {
     let session = match state.sessions.get(session_id) {
         Some(s) => s,
@@ -235,6 +244,8 @@ pub fn leave_session(state: &SharedState, username: &str) {
 }
 
 /// Handle an invite: push to target if connected, otherwise store as pending.
+// reason: invite entry point; args map 1:1 to the invite protocol message
+#[allow(clippy::too_many_arguments)]
 pub fn handle_invite(
     state: &SharedState,
     target_username: &str,

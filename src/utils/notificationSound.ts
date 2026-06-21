@@ -8,6 +8,7 @@ import {
   getInviteVolume,
   getInviteSoundConfig,
 } from "../services/storage";
+import { logger } from "../services/logger";
 
 let audioCtx: AudioContext | null = null;
 
@@ -146,7 +147,7 @@ async function playCustomFromDataUrl(ctx: AudioContext, volume: number, dataUrl:
     gain.connect(ctx.destination);
     source.start(0);
   } catch (err) {
-    console.warn("[NotificationSound] Failed to play custom sound, falling back to chime:", err);
+    void logger.warn("audio", "failed to play custom sound, falling back to chime", err);
     playChime(ctx, volume);
   }
 }

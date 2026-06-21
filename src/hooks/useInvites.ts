@@ -3,6 +3,7 @@ import { watchSync } from "../services/watch-sync";
 import { getPlexUser } from "../services/plex-api";
 import { getRelayUrl } from "../services/storage";
 import { playNotificationSound } from "../utils/notificationSound";
+import { logger } from "../services/logger";
 import type { WatchInvite } from "../types/watch-together";
 
 export interface InviteContextValue {
@@ -47,7 +48,7 @@ export function useInviteState(
 
       watchSync.connect(relayUrl, authToken, user.username, user.thumb);
     } catch (err) {
-      console.error("[useInvites] Failed to connect to relay:", err);
+      void logger.error("ws", "failed to connect to relay", err);
     }
   }, [authToken, serverUri]);
 

@@ -85,11 +85,12 @@ export function useHomeUsersState(): HomeUsersContextValue {
         const servers = await discoverServers(newToken);
         const onlineServers = servers.filter((s) => s.status === "online");
         if (onlineServers.length === 1) {
+          const onlineServer = onlineServers[0]!;
           await selectServer({
-            name: onlineServers[0].name,
-            clientIdentifier: onlineServers[0].clientIdentifier,
-            accessToken: onlineServers[0].accessToken,
-            uri: onlineServers[0].uri,
+            name: onlineServer.name,
+            clientIdentifier: onlineServer.clientIdentifier,
+            accessToken: onlineServer.accessToken,
+            uri: onlineServer.uri,
           });
         }
         // If multiple servers, the route guard redirects to /servers

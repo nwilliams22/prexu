@@ -22,7 +22,7 @@ function ServerSelect() {
         // Auto-select if there's exactly one online server
         const onlineServers = discovered.filter((s) => s.status === "online");
         if (onlineServers.length === 1) {
-          const server = onlineServers[0];
+          const server = onlineServers[0]!;
           await selectServer({
             name: server.name,
             clientIdentifier: server.clientIdentifier,

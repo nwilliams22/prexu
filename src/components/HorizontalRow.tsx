@@ -27,11 +27,13 @@ function HorizontalRow({ title, children, onSeeAll }: HorizontalRowProps) {
     if (!isTouchDevice) return;
     const el = scrollRef.current;
     if (!el) return;
-    touchStartX.current = e.touches[0].clientX;
+    const touch = e.touches[0];
+    if (!touch) return;
+    touchStartX.current = touch.clientX;
     touchStartScrollLeft.current = el.scrollLeft;
     isSwiping.current = true;
     swipeVelocity.current = 0;
-    lastTouchX.current = e.touches[0].clientX;
+    lastTouchX.current = touch.clientX;
     lastTouchTime.current = Date.now();
   }, [isTouchDevice]);
 
@@ -39,7 +41,9 @@ function HorizontalRow({ title, children, onSeeAll }: HorizontalRowProps) {
     if (!isSwiping.current) return;
     const el = scrollRef.current;
     if (!el) return;
-    const currentX = e.touches[0].clientX;
+    const touch = e.touches[0];
+    if (!touch) return;
+    const currentX = touch.clientX;
     const diff = touchStartX.current - currentX;
     el.scrollLeft = touchStartScrollLeft.current + diff;
 
@@ -154,6 +158,7 @@ function HorizontalRow({ title, children, onSeeAll }: HorizontalRowProps) {
             const next = e.key === "ArrowRight"
               ? focusable[Math.min(idx + 1, focusable.length - 1)]
               : focusable[Math.max(idx - 1, 0)];
+            if (!next) return;
             next.focus();
             next.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
           }}

@@ -247,6 +247,7 @@ function VirtualizedLibraryGrid<T>({
       >
         {virtualizer.getVirtualItems().map((virtualRow) => {
           const row = rows[virtualRow.index];
+          if (!row) return null;
 
           if (row.type === "expansion") {
             return (

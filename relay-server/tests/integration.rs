@@ -177,9 +177,9 @@ async fn test_invalid_auth_message() {
     // The server ignores non-auth messages during auth phase and eventually
     // times out. We just verify no auth_ok is received quickly.
     let resp = ws_try_recv(&mut ws, Duration::from_millis(500)).await;
-    match resp {
-        Some(val) => assert_ne!(val["type"], "auth_ok", "should not get auth_ok for non-auth message"),
-        None => {} // Expected: no response yet (waiting for auth)
+    // None is expected: no response yet (waiting for auth).
+    if let Some(val) = resp {
+        assert_ne!(val["type"], "auth_ok", "should not get auth_ok for non-auth message");
     }
 }
 

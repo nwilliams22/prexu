@@ -124,8 +124,10 @@ export async function buildTranscodeUrl(
   const clientId = await getClientIdentifier();
   const sessionId = crypto.randomUUID();
 
+  // "1080p" is a known literal key always present in QUALITY_PRESETS, so the
+  // fallback is provably defined.
   const preset =
-    QUALITY_PRESETS[options?.quality ?? "1080p"] ?? QUALITY_PRESETS["1080p"];
+    QUALITY_PRESETS[options?.quality ?? "1080p"] ?? QUALITY_PRESETS["1080p"]!;
 
   // Only direct-stream audio if the codec is browser-compatible (e.g., AAC, MP3, AC3)
   // DTS, TrueHD, and other exotic codecs must be transcoded to AAC
@@ -377,6 +379,9 @@ export async function prepareSource(args: PrepareSourceArgs): Promise<PreparedSo
     throw new Error("No playable media found");
   }
   const part = media.Part[0];
+  if (!part) {
+    throw new Error("No playable media found");
+  }
 
   const categorized = categorizeStreams(part);
 

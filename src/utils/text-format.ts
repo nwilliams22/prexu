@@ -5,8 +5,10 @@
 /** Get initials from a name (first letter of first + last name). */
 export function getInitials(name: string): string {
   const parts = name.trim().split(/\s+/);
-  if (parts.length === 1) return parts[0][0]?.toUpperCase() ?? "";
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  const first = parts[0] ?? "";
+  if (parts.length === 1) return first[0]?.toUpperCase() ?? "";
+  const last = parts[parts.length - 1] ?? "";
+  return ((first[0] ?? "") + (last[0] ?? "")).toUpperCase();
 }
 
 /** Format a date string (YYYY-MM-DD) to a readable locale format. */

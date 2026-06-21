@@ -71,8 +71,8 @@ export function estimateCreditsLengthMs(episodes: PlexEpisode[]): number | null 
   // For odd counts: middle element. For even counts: average of the two
   // straddling the middle (standard median definition).
   return lengths.length % 2 === 0
-    ? Math.round((lengths[mid - 1] + lengths[mid]) / 2)
-    : lengths[mid];
+    ? Math.round((lengths[mid - 1]! + lengths[mid]!) / 2)
+    : lengths[mid]!;
 }
 
 function readCache(parentRatingKey: string): number | null {
@@ -150,7 +150,7 @@ export function useShowCreditsLength(
         const stride = Math.max(1, Math.floor(stub.length / MAX_SAMPLE_FETCHES));
         const sampleKeys: string[] = [];
         for (let i = 0; i < stub.length && sampleKeys.length < MAX_SAMPLE_FETCHES; i += stride) {
-          sampleKeys.push(stub[i].ratingKey);
+          sampleKeys.push(stub[i]!.ratingKey);
         }
 
         const settled = await Promise.allSettled(

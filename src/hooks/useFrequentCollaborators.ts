@@ -57,7 +57,7 @@ export function useFrequentCollaborators(
 
       for (let i = 0; i < detailResults.length; i++) {
         const result = detailResults[i];
-        if (result.status !== "fulfilled" || !result.value) continue;
+        if (result?.status !== "fulfilled" || !result.value) continue;
         const detail = result.value;
         const cast = detail.credits?.cast ?? [];
         const creditTitle =

@@ -156,9 +156,11 @@ function SearchBar() {
           : recentSearches;
 
         if (activeIndex < filteredRecents.length) {
-          navigateToSearch(filteredRecents[activeIndex]);
+          const recent = filteredRecents[activeIndex];
+          if (recent) navigateToSearch(recent);
         } else if (activeIndex < filteredRecents.length + suggestions.length) {
-          navigateToItem(suggestions[activeIndex - filteredRecents.length]);
+          const suggestion = suggestions[activeIndex - filteredRecents.length];
+          if (suggestion) navigateToItem(suggestion);
         } else {
           // "Search all" item
           navigateToSearch(trimmed);

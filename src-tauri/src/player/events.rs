@@ -49,6 +49,7 @@ use tauri::{AppHandle, Emitter, Manager};
 ///    `mark_focus_lost` / `reassert_host_on_focus` (prexu-5l5)
 /// 5. **Teardown** — `WindowEvent::CloseRequested | Destroyed` →
 ///    `report_stopped_on_close` + `destroy` (prexu-50f)
+///
 /// Disable DWM maximize/minimize/restore transition animations on the main
 /// window. The mpv host is a separate top-level window that can't ride the
 /// chrome's ~250ms grow/shrink animation, so the two visibly mismatch during
@@ -87,7 +88,7 @@ fn disable_window_transitions(window: &tauri::WebviewWindow) {
 
 #[cfg(target_os = "windows")]
 pub fn attach_window_handlers(window: &tauri::WebviewWindow, app_handle: AppHandle) {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::AtomicBool;
     use std::sync::Mutex;
     use tauri::WindowEvent;
 
@@ -102,9 +103,11 @@ pub fn attach_window_handlers(window: &tauri::WebviewWindow, app_handle: AppHand
     // rect as its restore target either. We remember the last
     // non-maximized / non-fullscreen / non-minimized rect and
     // re-apply it when the window is restored from maximize.
-    let last_normal_rect: Arc<
-        Mutex<Option<(tauri::PhysicalPosition<i32>, tauri::PhysicalSize<u32>)>>,
-    > = Arc::new(Mutex::new(None));
+    // Shared "last non-maximized rect" tracker; factored into an alias to keep
+    // the binding readable (clippy::type_complexity).
+    type LastNormalRect =
+        Arc<Mutex<Option<(tauri::PhysicalPosition<i32>, tauri::PhysicalSize<u32>)>>>;
+    let last_normal_rect: LastNormalRect = Arc::new(Mutex::new(None));
     let was_maximized = Arc::new(AtomicBool::new(false));
     // Track fullscreen/minimized too so a maximize/restore/un-minimize state
     // transition can be detected and synced immediately (prexu-hia9).
@@ -160,133 +163,16 @@ pub fn attach_window_handlers(window: &tauri::WebviewWindow, app_handle: AppHand
             // rebuild bursts crash gpu-next vo. Throttle
             // + trailing-edge flush preserved.
             WindowEvent::Resized(_) => {
-                // prexu-w9j: keep the snapped/normal rect as the
-                // restore target so maximize→restore returns to it
-                // instead of the OS's stale pre-snap rect. Guarded
-                // by `reapplying_rect` so our own set_size/
-                // set_position re-entrant WM_SIZE doesn't recurse.
-                //
-                // prexu-bgz.23: batch ALL window-state and geometry
-                // queries into one block so they run AT MOST ONCE per
-                // non-reapplying Resized event instead of up to five
-                // separate syscalls. The `reapplying_rect=true` path
-                // (our own SetWindowPos re-fired) skips sync_geometry
-                // entirely because the size we just set is already
-                // the correct target — a re-entrant sync would be
-                // wasteful and could race with the reapplying flag.
-                if reapplying_rect.load(Ordering::Relaxed) {
-                    log::trace!("[window] Resized skipped — reapplying_rect (cache hit)");
-                    return;
-                }
-
-                // Batch all window-state reads in one block.
-                let maxed = win_clone.is_maximized().unwrap_or(false);
-                let fs = win_clone.is_fullscreen().unwrap_or(false);
-                let min = win_clone.is_minimized().unwrap_or(false);
-                let inner_pos = win_clone.inner_position();
-                let inner_sz = win_clone.inner_size();
-
-                let was_max = was_maximized.swap(maxed, Ordering::Relaxed);
-                // A discrete maximize / restore / fullscreen / un-minimize is a
-                // one-shot state change, not a drag-resize burst — detect it so
-                // the host can be synced immediately (prexu-hia9).
-                let was_fs = was_fullscreen.swap(fs, Ordering::Relaxed);
-                let was_min = was_minimized.swap(min, Ordering::Relaxed);
-                let state_transition = maxed != was_max || fs != was_fs || min != was_min;
-                if is_restore_from_maximize(was_max, maxed, fs, min) {
-                    // Just un-maximized — the OS restored to the
-                    // stale pre-snap rect. Re-apply our captured
-                    // snapped/normal rect.
-                    let target = *last_normal_rect.lock().unwrap();
-                    if let Some((opos, isize)) = target {
-                        reapplying_rect.store(true, Ordering::Relaxed);
-                        let _ = win_clone
-                            .set_size(tauri::Size::Physical(isize));
-                        let _ = win_clone
-                            .set_position(tauri::Position::Physical(opos));
-                        reapplying_rect.store(false, Ordering::Relaxed);
-                        log::info!(
-                            "[window] restore-from-maximize: reapplied snapped rect ({},{} {}x{})",
-                            opos.x, opos.y, isize.width, isize.height
-                        );
-                    }
-                } else if is_normal_resize(maxed, fs, min) {
-                    // Normal drag-resize or Aero-Snap — this is
-                    // the size a future restore should return to.
-                    // Reuse the already-queried outer_position +
-                    // inner_size (batched above, prexu-bgz.23).
-                    if let (Ok(pos), Ok(size)) = (win_clone.outer_position(), &inner_sz) {
-                        *last_normal_rect.lock().unwrap() =
-                            Some((pos, *size));
-                    }
-                }
-                if let (Ok(pos), Ok(size)) = (inner_pos, inner_sz) {
-                    log::trace!("[window] Resized to ({},{},{}x{})", pos.x, pos.y, size.width, size.height);
-                    // Tell the frontend the OS-level WM_SIZE
-                    // fired. AppLayout's resize hook listens
-                    // for this and triggers a forced React
-                    // commit + synchronous layout read, so
-                    // dashboard content stays in lockstep
-                    // with the new client area even when
-                    // WebView2 batches its own resize event
-                    // (prexu-uzk follow-up). Payload is the
-                    // new (width, height) so the receiver
-                    // can dedup against the last value.
-                    let _ = app_handle.emit(
-                        "window://resized",
-                        (size.width, size.height),
-                    );
-                    // On a discrete maximize/restore/un-minimize, apply the new
-                    // client rect immediately (throttle-bypassing) so the mpv
-                    // host doesn't lag the chrome through the maximize
-                    // animation. Skipped while minimized (host is hidden /
-                    // zero-size). The throttled sync_geometry below then
-                    // dedup-skips the identical rect. (prexu-hia9)
-                    if state_transition && !min {
-                        log::debug!(
-                            "[window] state transition (max={} fs={} min={}) — immediate host sync",
-                            maxed, fs, min
-                        );
-                        state.sync_geometry_now(
-                            pos.x,
-                            pos.y,
-                            size.width as i32,
-                            size.height as i32,
-                        );
-                    }
-                    state.sync_geometry(
-                        pos.x,
-                        pos.y,
-                        size.width as i32,
-                        size.height as i32,
-                    );
-                    // Schedule a trailing-edge flush on the first
-                    // event of a burst. A fast drag-resize whose
-                    // final WM_SIZE lands inside the 50ms throttle
-                    // window leaves the host stuck at stale
-                    // geometry — sync_geometry stashes the final
-                    // rect in pending, but no further event arrives
-                    // to consume it. The worker sleeps the throttle
-                    // window, then dispatches back to the main
-                    // thread to apply whatever pending holds at
-                    // that moment (which is always the most recent
-                    // rect, since later events overwrite earlier
-                    // ones). claim_trailing_schedule's atomic swap
-                    // means subsequent events in the same burst
-                    // don't double-spawn. (prexu-hhx)
-                    // Wake the long-lived flusher task on the first event
-                    // of a burst (prexu-bgz.24). `claim_trailing_schedule`'s
-                    // atomic swap dedup is unchanged — only one `notify_one`
-                    // fires per burst; subsequent events lose the race and
-                    // skip this branch. The flusher task parks on
-                    // `notified().await` between bursts (no spinning) and
-                    // sleeps `GEOMETRY_SYNC_MIN_INTERVAL` before dispatching
-                    // `flush_pending_geometry` to the main thread, exactly as
-                    // the old per-burst `std::thread::spawn` did.
-                    if state.claim_trailing_schedule() {
-                        state.wake_flusher();
-                    }
-                }
+                handle_resized(
+                    &win_clone,
+                    &app_handle,
+                    &state,
+                    &last_normal_rect,
+                    &was_maximized,
+                    &was_fullscreen,
+                    &was_minimized,
+                    &reapplying_rect,
+                );
             }
             // Cross-monitor DPI change: tao gives us the new
             // physical size directly to dodge a stale read.
@@ -376,6 +262,141 @@ pub fn attach_window_handlers(window: &tauri::WebviewWindow, app_handle: AppHand
             _ => {}
         }
     });
+}
+
+/// Handle a `WindowEvent::Resized` (WM_SIZE: drag-resize, snap,
+/// maximize/restore, fullscreen toggle). Extracted from the `on_window_event`
+/// closure (prexu-nlqf.8) to shrink that closure; logic and logging are
+/// unchanged from the inline arm.
+///
+/// Goes through the throttled `sync_geometry` path because each SetWindowPos
+/// with a size change rebuilds mpv's D3D11 swapchain; 60 Hz rebuild bursts
+/// crash the gpu-next vo. Throttle + trailing-edge flush preserved.
+///
+/// prexu-w9j: keeps the snapped/normal rect as the restore target so
+/// maximize→restore returns to it instead of the OS's stale pre-snap rect.
+/// Guarded by `reapplying_rect` so our own set_size/set_position re-entrant
+/// WM_SIZE doesn't recurse.
+///
+/// prexu-bgz.23: batches ALL window-state and geometry queries into one block
+/// so they run AT MOST ONCE per non-reapplying Resized event instead of up to
+/// five separate syscalls. The `reapplying_rect=true` path (our own
+/// SetWindowPos re-fired) skips sync_geometry entirely because the size we just
+/// set is already the correct target — a re-entrant sync would be wasteful and
+/// could race with the reapplying flag.
+#[cfg(target_os = "windows")]
+#[allow(clippy::too_many_arguments)]
+fn handle_resized(
+    win_clone: &tauri::WebviewWindow,
+    app_handle: &AppHandle,
+    state: &super::PlayerState,
+    last_normal_rect: &std::sync::Mutex<
+        Option<(tauri::PhysicalPosition<i32>, tauri::PhysicalSize<u32>)>,
+    >,
+    was_maximized: &std::sync::atomic::AtomicBool,
+    was_fullscreen: &std::sync::atomic::AtomicBool,
+    was_minimized: &std::sync::atomic::AtomicBool,
+    reapplying_rect: &std::sync::atomic::AtomicBool,
+) {
+    use std::sync::atomic::Ordering;
+
+    if reapplying_rect.load(Ordering::Relaxed) {
+        log::trace!("[window] Resized skipped — reapplying_rect (cache hit)");
+        return;
+    }
+
+    // Batch all window-state reads in one block.
+    let maxed = win_clone.is_maximized().unwrap_or(false);
+    let fs = win_clone.is_fullscreen().unwrap_or(false);
+    let min = win_clone.is_minimized().unwrap_or(false);
+    let inner_pos = win_clone.inner_position();
+    let inner_sz = win_clone.inner_size();
+
+    let was_max = was_maximized.swap(maxed, Ordering::Relaxed);
+    // A discrete maximize / restore / fullscreen / un-minimize is a
+    // one-shot state change, not a drag-resize burst — detect it so
+    // the host can be synced immediately (prexu-hia9).
+    let was_fs = was_fullscreen.swap(fs, Ordering::Relaxed);
+    let was_min = was_minimized.swap(min, Ordering::Relaxed);
+    let state_transition = maxed != was_max || fs != was_fs || min != was_min;
+    if is_restore_from_maximize(was_max, maxed, fs, min) {
+        // Just un-maximized — the OS restored to the
+        // stale pre-snap rect. Re-apply our captured
+        // snapped/normal rect.
+        let target = *last_normal_rect.lock().unwrap();
+        if let Some((opos, isize)) = target {
+            reapplying_rect.store(true, Ordering::Relaxed);
+            let _ = win_clone.set_size(tauri::Size::Physical(isize));
+            let _ = win_clone.set_position(tauri::Position::Physical(opos));
+            reapplying_rect.store(false, Ordering::Relaxed);
+            log::info!(
+                "[window] restore-from-maximize: reapplied snapped rect ({},{} {}x{})",
+                opos.x, opos.y, isize.width, isize.height
+            );
+        }
+    } else if is_normal_resize(maxed, fs, min) {
+        // Normal drag-resize or Aero-Snap — this is
+        // the size a future restore should return to.
+        // Reuse the already-queried outer_position +
+        // inner_size (batched above, prexu-bgz.23).
+        if let (Ok(pos), Ok(size)) = (win_clone.outer_position(), &inner_sz) {
+            *last_normal_rect.lock().unwrap() = Some((pos, *size));
+        }
+    }
+    if let (Ok(pos), Ok(size)) = (inner_pos, inner_sz) {
+        log::trace!("[window] Resized to ({},{},{}x{})", pos.x, pos.y, size.width, size.height);
+        // Tell the frontend the OS-level WM_SIZE
+        // fired. AppLayout's resize hook listens
+        // for this and triggers a forced React
+        // commit + synchronous layout read, so
+        // dashboard content stays in lockstep
+        // with the new client area even when
+        // WebView2 batches its own resize event
+        // (prexu-uzk follow-up). Payload is the
+        // new (width, height) so the receiver
+        // can dedup against the last value.
+        let _ = app_handle.emit("window://resized", (size.width, size.height));
+        // On a discrete maximize/restore/un-minimize, apply the new
+        // client rect immediately (throttle-bypassing) so the mpv
+        // host doesn't lag the chrome through the maximize
+        // animation. Skipped while minimized (host is hidden /
+        // zero-size). The throttled sync_geometry below then
+        // dedup-skips the identical rect. (prexu-hia9)
+        if state_transition && !min {
+            log::debug!(
+                "[window] state transition (max={} fs={} min={}) — immediate host sync",
+                maxed, fs, min
+            );
+            state.sync_geometry_now(pos.x, pos.y, size.width as i32, size.height as i32);
+        }
+        state.sync_geometry(pos.x, pos.y, size.width as i32, size.height as i32);
+        // Schedule a trailing-edge flush on the first
+        // event of a burst. A fast drag-resize whose
+        // final WM_SIZE lands inside the 50ms throttle
+        // window leaves the host stuck at stale
+        // geometry — sync_geometry stashes the final
+        // rect in pending, but no further event arrives
+        // to consume it. The worker sleeps the throttle
+        // window, then dispatches back to the main
+        // thread to apply whatever pending holds at
+        // that moment (which is always the most recent
+        // rect, since later events overwrite earlier
+        // ones). claim_trailing_schedule's atomic swap
+        // means subsequent events in the same burst
+        // don't double-spawn. (prexu-hhx)
+        // Wake the long-lived flusher task on the first event
+        // of a burst (prexu-bgz.24). `claim_trailing_schedule`'s
+        // atomic swap dedup is unchanged — only one `notify_one`
+        // fires per burst; subsequent events lose the race and
+        // skip this branch. The flusher task parks on
+        // `notified().await` between bursts (no spinning) and
+        // sleeps `GEOMETRY_SYNC_MIN_INTERVAL` before dispatching
+        // `flush_pending_geometry` to the main thread, exactly as
+        // the old per-burst `std::thread::spawn` did.
+        if state.claim_trailing_schedule() {
+            state.wake_flusher();
+        }
+    }
 }
 
 // ── Unit tests for pure window-state helpers (prexu-bgz.23) ─────────────────

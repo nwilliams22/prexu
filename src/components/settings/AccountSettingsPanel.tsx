@@ -12,6 +12,7 @@ import {
 } from "../../services/storage";
 import type { BuiltinSound, NotificationSoundConfig } from "../../services/storage";
 import { previewSound, previewCustomDataUrl } from "../../utils/notificationSound";
+import { logger } from "../../services/logger";
 import { open } from "@tauri-apps/plugin-shell";
 import { styles } from "./settingsStyles";
 
@@ -94,7 +95,7 @@ export function AccountSettingsPanel({
       const bytes = new Uint8Array(arrayBuffer);
       let binary = "";
       for (let i = 0; i < bytes.length; i++) {
-        binary += String.fromCharCode(bytes[i]);
+        binary += String.fromCharCode(bytes[i]!);
       }
       const base64 = btoa(binary);
       const dataUrl = `data:${file.type || "audio/mpeg"};base64,${base64}`;
@@ -108,7 +109,7 @@ export function AccountSettingsPanel({
       saveInviteSoundConfig(newConfig);
       previewCustomDataUrl(dataUrl, inviteVolume);
     } catch (err) {
-      console.error("[Settings] Failed to load custom sound:", err);
+      void logger.error("settings", "failed to load custom sound", err);
     }
 
     // Reset input so the same file can be re-selected

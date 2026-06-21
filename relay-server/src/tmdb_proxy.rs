@@ -23,26 +23,34 @@ fn default_page() -> u32 {
 
 const TMDB_API_BASE: &str = "https://api.themoviedb.org/3";
 
+/// Boxed error response. Boxing keeps the `Result` `Err`-variant small
+/// (axum's `Response` is ~128 bytes), satisfying clippy's `result_large_err`.
+type ProxyError = Box<Response>;
+
 /// Check global TMDb rate limit. Returns an error response if exceeded.
-fn check_rate_limit(state: &SharedState) -> Result<(), Response> {
+fn check_rate_limit(state: &SharedState) -> Result<(), ProxyError> {
     if !state.check_tmdb_rate_limit() {
-        return Err((
-            StatusCode::TOO_MANY_REQUESTS,
-            "Rate limit exceeded for TMDb proxy (60 requests/minute)",
-        )
-            .into_response());
+        return Err(Box::new(
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                "Rate limit exceeded for TMDb proxy (60 requests/minute)",
+            )
+                .into_response(),
+        ));
     }
     Ok(())
 }
 
 /// Get the TMDb API key from environment, or return a 503 error.
-fn get_api_key() -> Result<String, Response> {
+fn get_api_key() -> Result<String, ProxyError> {
     std::env::var("TMDB_API_KEY").map_err(|_| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "TMDb API key not configured on relay server",
+        Box::new(
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "TMDb API key not configured on relay server",
+            )
+                .into_response(),
         )
-            .into_response()
     })
 }
 
@@ -95,8 +103,8 @@ pub async fn search_movie(
 
     Query(params): Query<SearchParams>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    check_rate_limit(&state)?;
-    let api_key = get_api_key()?;
+    check_rate_limit(&state).map_err(|e| *e)?;
+    let api_key = get_api_key().map_err(|e| *e)?;
     let client = reqwest::Client::new();
     let url = format!(
         "{}/search/movie?query={}&page={}&include_adult=false&language=en-US",
@@ -113,8 +121,8 @@ pub async fn search_tv(
 
     Query(params): Query<SearchParams>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    check_rate_limit(&state)?;
-    let api_key = get_api_key()?;
+    check_rate_limit(&state).map_err(|e| *e)?;
+    let api_key = get_api_key().map_err(|e| *e)?;
     let client = reqwest::Client::new();
     let url = format!(
         "{}/search/tv?query={}&page={}&include_adult=false&language=en-US",
@@ -131,8 +139,8 @@ pub async fn search_person(
 
     Query(params): Query<SearchParams>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    check_rate_limit(&state)?;
-    let api_key = get_api_key()?;
+    check_rate_limit(&state).map_err(|e| *e)?;
+    let api_key = get_api_key().map_err(|e| *e)?;
     let client = reqwest::Client::new();
     let url = format!(
         "{}/search/person?query={}&include_adult=false&language=en-US",
@@ -148,8 +156,8 @@ pub async fn find_by_external_id(
 
     Path(external_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    check_rate_limit(&state)?;
-    let api_key = get_api_key()?;
+    check_rate_limit(&state).map_err(|e| *e)?;
+    let api_key = get_api_key().map_err(|e| *e)?;
     let client = reqwest::Client::new();
     let url = format!(
         "{}/find/{}?external_source=imdb_id&language=en-US",
@@ -164,8 +172,8 @@ pub async fn person_detail(
 
     Path(person_id): Path<u64>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    check_rate_limit(&state)?;
-    let api_key = get_api_key()?;
+    check_rate_limit(&state).map_err(|e| *e)?;
+    let api_key = get_api_key().map_err(|e| *e)?;
     let client = reqwest::Client::new();
     let url = format!("{}/person/{}?language=en-US", TMDB_API_BASE, person_id);
     proxy_tmdb(&client, &url, &api_key).await
@@ -177,8 +185,8 @@ pub async fn person_credits(
 
     Path(person_id): Path<u64>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    check_rate_limit(&state)?;
-    let api_key = get_api_key()?;
+    check_rate_limit(&state).map_err(|e| *e)?;
+    let api_key = get_api_key().map_err(|e| *e)?;
     let client = reqwest::Client::new();
     let url = format!(
         "{}/person/{}/combined_credits?language=en-US",
@@ -193,8 +201,8 @@ pub async fn movie_detail(
 
     Path(movie_id): Path<u64>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    check_rate_limit(&state)?;
-    let api_key = get_api_key()?;
+    check_rate_limit(&state).map_err(|e| *e)?;
+    let api_key = get_api_key().map_err(|e| *e)?;
     let client = reqwest::Client::new();
     let url = format!(
         "{}/movie/{}?language=en-US&append_to_response=credits",
@@ -209,8 +217,8 @@ pub async fn tv_detail(
 
     Path(tv_id): Path<u64>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    check_rate_limit(&state)?;
-    let api_key = get_api_key()?;
+    check_rate_limit(&state).map_err(|e| *e)?;
+    let api_key = get_api_key().map_err(|e| *e)?;
     let client = reqwest::Client::new();
     let url = format!(
         "{}/tv/{}?language=en-US&append_to_response=credits",

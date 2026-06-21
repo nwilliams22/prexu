@@ -99,6 +99,15 @@ export interface PlexMediaInfo {
 
 // ── Base media item ──
 
+/**
+ * Base shape for any Plex metadata item. Identity/display fields are required;
+ * type-specific fields are optional so a value typed as `PlexMediaItem` can be
+ * read for `year`, `rating`, watch-state, or hierarchy without an unsafe cast —
+ * narrow on `type` (or check the field) before relying on a type-specific one.
+ *
+ * Kept structurally in sync with `plexMetadataSchema` in
+ * `src/services/plex-schemas.ts` (the runtime validator at the API boundary).
+ */
 export interface PlexMediaItem {
   ratingKey: string;
   key: string;
@@ -111,6 +120,48 @@ export interface PlexMediaItem {
   updatedAt: number;
   /** Present only when item is inside a playlist — used for reorder/remove operations */
   playlistItemID?: number;
+
+  // ── Commonly-read optional fields (present on a subset of item types) ──
+  year?: number;
+  rating?: number;
+  audienceRating?: number;
+  ratingImage?: string;
+  audienceRatingImage?: string;
+  contentRating?: string;
+  duration?: number;
+  studio?: string;
+  tagline?: string;
+  subtype?: string;
+  originallyAvailableAt?: string;
+
+  // Watch state
+  viewOffset?: number;
+  viewCount?: number;
+  lastViewedAt?: number;
+  viewedLeafCount?: number;
+  leafCount?: number;
+  childCount?: number;
+
+  // Hierarchy (seasons / episodes / albums)
+  index?: number;
+  parentIndex?: number;
+  parentRatingKey?: string;
+  parentTitle?: string;
+  parentThumb?: string;
+  grandparentRatingKey?: string;
+  grandparentTitle?: string;
+  grandparentThumb?: string;
+  grandparentArt?: string;
+
+  // Rich sub-collections
+  Genre?: PlexTag[];
+  Director?: PlexTag[];
+  Writer?: PlexTag[];
+  Collection?: PlexTag[];
+  Role?: PlexRole[];
+  Rating?: PlexRating[];
+  Media?: PlexMediaInfo[];
+  Marker?: PlexMarker[];
 }
 
 /** Individual rating entry from Plex (returned when includeRatings=1) */
@@ -248,7 +299,9 @@ export interface PlexHub {
 
 export interface GroupedRecentItem {
   kind: "movie" | "show-group";
-  representativeItem: PlexEpisode | PlexMovie;
+  /** The card-representative item. May be a movie, episode, or season
+   *  (the recentlyAdded endpoint returns seasons for TV). */
+  representativeItem: PlexMediaItem;
   groupKey: string;
   title: string;
   thumb: string;
