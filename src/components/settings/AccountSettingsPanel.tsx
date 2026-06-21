@@ -95,7 +95,7 @@ export function AccountSettingsPanel({
       const bytes = new Uint8Array(arrayBuffer);
       let binary = "";
       for (let i = 0; i < bytes.length; i++) {
-        binary += String.fromCharCode(bytes[i]);
+        binary += String.fromCharCode(bytes[i]!);
       }
       const base64 = btoa(binary);
       const dataUrl = `data:${file.type || "audio/mpeg"};base64,${base64}`;

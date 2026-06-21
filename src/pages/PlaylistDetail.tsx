@@ -154,14 +154,14 @@ function PlaylistDetail() {
     const queueItems = buildQueueFromItems(items);
     if (queueItems.length === 0) return;
     setQueue(queueItems, 0, false, "user-built");
-    play(queueItems[0].ratingKey);
+    play(queueItems[0]!.ratingKey);
   }, [items, setQueue, play]);
 
   const handleShuffle = useCallback(() => {
     const queueItems = shuffleArray(buildQueueFromItems(items));
     if (queueItems.length === 0) return;
     setQueue(queueItems, 0, true, "user-built");
-    play(queueItems[0].ratingKey);
+    play(queueItems[0]!.ratingKey);
   }, [items, setQueue, play]);
 
   // ── Edit ──
@@ -256,13 +256,13 @@ function PlaylistDetail() {
         afterId = -1; // Move to first
       } else if (direction === "up") {
         if (idx <= 0) return;
-        afterId = idx >= 2 ? items[idx - 2].playlistItemID! : -1;
+        afterId = idx >= 2 ? items[idx - 2]!.playlistItemID! : -1;
       } else if (direction === "down") {
         if (idx >= items.length - 1) return;
-        afterId = items[idx + 1].playlistItemID!;
+        afterId = items[idx + 1]!.playlistItemID!;
       } else {
         // bottom
-        afterId = items[items.length - 1].playlistItemID!;
+        afterId = items[items.length - 1]!.playlistItemID!;
       }
 
       try {
@@ -565,6 +565,7 @@ function PlaylistDetail() {
           groups.map((group) => {
             if (group.type === "movie") {
               const item = group.items[0];
+              if (!item) return null;
               const flatIndex = items.indexOf(item);
               return (
                 <PosterCard

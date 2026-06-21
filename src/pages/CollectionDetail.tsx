@@ -131,8 +131,9 @@ function CollectionDetail() {
         );
         for (let j = 0; j < results.length; j++) {
           const result = results[j];
-          if (result.status === "fulfilled") {
-            map.set(chunk[j].ratingKey, result.value);
+          const chunkItem = chunk[j];
+          if (result?.status === "fulfilled" && chunkItem) {
+            map.set(chunkItem.ratingKey, result.value);
           }
         }
         // Update progressively so rows appear as data loads
@@ -167,14 +168,14 @@ function CollectionDetail() {
     const queueItems = buildQueueFromItems(items);
     if (queueItems.length === 0) return;
     setQueue(queueItems, 0, false, "user-built");
-    play(queueItems[0].ratingKey);
+    play(queueItems[0]!.ratingKey);
   }, [items, setQueue, play]);
 
   const handleShuffle = useCallback(() => {
     const queueItems = shuffleArray(buildQueueFromItems(items));
     if (queueItems.length === 0) return;
     setQueue(queueItems, 0, true, "user-built");
-    play(queueItems[0].ratingKey);
+    play(queueItems[0]!.ratingKey);
   }, [items, setQueue, play]);
 
   if (!server) return null;

@@ -175,9 +175,11 @@ export function useSeekBar({
   const handleTouchStart = useCallback(
     (e: React.TouchEvent) => {
       e.preventDefault();
+      const touch = e.touches[0];
+      if (!touch) return;
       setIsDragging(true);
       onActivity?.();
-      const time = getSeekTime(e.touches[0].clientX);
+      const time = getSeekTime(touch.clientX);
       setDragTime(time);
       performSeek(time);
     },
@@ -187,7 +189,9 @@ export function useSeekBar({
   const handleTouchMove = useCallback(
     (e: React.TouchEvent) => {
       // isDragging check not needed — touchmove only fires after touchstart
-      const t = getSeekTime(e.touches[0].clientX);
+      const touch = e.touches[0];
+      if (!touch) return;
+      const t = getSeekTime(touch.clientX);
       setDragTime(t);
       throttledDragSeek(t);
     },

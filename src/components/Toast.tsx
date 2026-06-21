@@ -140,10 +140,12 @@ export default function ToastContainer() {
   useEffect(() => {
     if (toasts.length > prevCountRef.current) {
       const latest = toasts[toasts.length - 1];
-      announce(
-        latest.message,
-        latest.variant === "error" ? "assertive" : "polite",
-      );
+      if (latest) {
+        announce(
+          latest.message,
+          latest.variant === "error" ? "assertive" : "polite",
+        );
+      }
     }
     prevCountRef.current = toasts.length;
   }, [toasts, announce]);

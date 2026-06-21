@@ -101,6 +101,7 @@ function ActorDetail() {
       .sort((a, b) => (b.vote_average ?? 0) - (a.vote_average ?? 0));
     if (serverCredits.length === 0) return null;
     const c = serverCredits[0];
+    if (!c) return null;
     const title = c.title ?? c.name ?? "";
     const plexItem = plex.serverItemMap.get(title.toLowerCase());
     return { credit: c, title, plexItem };

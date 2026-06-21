@@ -73,8 +73,8 @@ function parseSeasonEpisodeBadge(subtitle: string | undefined): string | null {
   const match = subtitle.match(/S(\d+)\s*E(\d+)/i);
   if (!match) return null;
   // Strip leading zeros for a cleaner badge ("S01E02" → "S1 E2").
-  const season = String(parseInt(match[1], 10));
-  const episode = String(parseInt(match[2], 10));
+  const season = String(parseInt(match[1] ?? "0", 10));
+  const episode = String(parseInt(match[2] ?? "0", 10));
   return `S${season} E${episode}`;
 }
 

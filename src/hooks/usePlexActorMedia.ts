@@ -91,8 +91,9 @@ export function usePlexActorMedia(
 
           for (let i = 0; i < titleSearches.length; i++) {
             const result = titleSearches[i];
-            if (result.status !== "fulfilled") continue;
-            const searchTitle = (missingTitles[i].title ?? missingTitles[i].name ?? "").toLowerCase();
+            if (result?.status !== "fulfilled") continue;
+            const missing = missingTitles[i]!;
+            const searchTitle = (missing.title ?? missing.name ?? "").toLowerCase();
             for (const hub of result.value) {
               if (hub.Metadata) {
                 for (const item of hub.Metadata) {

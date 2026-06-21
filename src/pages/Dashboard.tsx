@@ -112,7 +112,7 @@ function getSeasonLabel(group: GroupedRecentItem): string {
 function getGroupSubtitle(group: GroupedRecentItem): string {
   const seasonLabel = getSeasonLabel(group);
   if (group.episodes.length === 1) {
-    const ep = group.episodes[0];
+    const ep = group.episodes[0]!;
     return `S${String(ep.parentIndex).padStart(2, "0")}E${String(ep.index).padStart(2, "0")} · ${ep.title}`;
   }
   if (group.episodes.length > 1) {
@@ -237,15 +237,18 @@ function Dashboard() {
 
   const handleTouchStart = (e: React.TouchEvent) => {
     if (!mobile || isRefreshing) return;
-    if (containerRef.current && containerRef.current.scrollTop <= 0) {
-      touchStartY.current = e.touches[0].clientY;
+    const touch = e.touches[0];
+    if (touch && containerRef.current && containerRef.current.scrollTop <= 0) {
+      touchStartY.current = touch.clientY;
       isPulling.current = true;
     }
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
     if (!isPulling.current) return;
-    const delta = e.touches[0].clientY - touchStartY.current;
+    const touch = e.touches[0];
+    if (!touch) return;
+    const delta = touch.clientY - touchStartY.current;
     if (delta > 0) {
       pullDistanceRef.current = Math.min(delta * 0.5, 80);
       applyPullIndicatorStyle(pullDistanceRef.current);
