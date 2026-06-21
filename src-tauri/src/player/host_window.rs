@@ -13,13 +13,13 @@
 use std::sync::Once;
 
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{COLORREF, HWND};
+use windows::Win32::Foundation::{COLORREF, HWND, RECT};
 use windows::Win32::Graphics::Gdi::CreateSolidBrush;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassExW, SetWindowPos, ShowWindow,
-    CS_HREDRAW, CS_VREDRAW, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOCOPYBITS,
-    SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNA, WNDCLASSEXW,
-    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, RegisterClassExW, SetWindowPos,
+    ShowWindow, CS_HREDRAW, CS_VREDRAW, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE,
+    SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNA,
+    WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_POPUP,
 };
 
 const CLASS_NAME: PCWSTR = w!("PrexuMpvHost");
@@ -64,6 +64,13 @@ fn ensure_class_registered() {
 /// PlayerState design enforces.
 pub struct HostWindow {
     hwnd: HWND,
+    /// Path A spike (prexu-ga3x.1): when `Some`, this host is a real Win32
+    /// `WS_CHILD` of the main window (true parent), not a z-anchored
+    /// `WS_POPUP` sibling. In child mode `set_geometry` fills the parent's
+    /// client rect (child coords are parent-relative) and z/anchor/topmost
+    /// ops become no-ops. Gated by env `PREXU_MPV_CHILD`; default builds keep
+    /// `None` and the shipping popup behaviour is unchanged.
+    child_parent: Option<HWND>,
 }
 
 unsafe impl Send for HostWindow {}
@@ -108,7 +115,52 @@ impl HostWindow {
             );
         }
 
-        Ok(Self { hwnd })
+        Ok(Self { hwnd, child_parent: None })
+    }
+
+    /// Path A spike (prexu-ga3x.1): create the host as a real `WS_CHILD` of
+    /// the Tauri main window so its pixels become part of the main window's
+    /// DWM-composed surface — the prerequisite for Alt+Tab / WGC capture to
+    /// include the video. Gated by env `PREXU_MPV_CHILD`.
+    ///
+    /// KNOWN TRADE-OFF (Win32 airspace): a child HWND does not alpha-blend
+    /// with its sibling (wry's WebView2 container). This host is created
+    /// last, so it stacks ABOVE the webview and the React controls are hidden
+    /// where it covers them. The spike validates capture inclusion only; it
+    /// is NOT a shippable overlay (that requires the Path C single-surface
+    /// DComp rewrite). Geometry fills the parent client rect.
+    pub fn create_child(parent: HWND) -> Result<Self, String> {
+        ensure_class_registered();
+
+        let hwnd = unsafe {
+            CreateWindowExW(
+                WS_EX_NOACTIVATE,
+                CLASS_NAME,
+                w!("Prexu MPV Host (child)"),
+                WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+                0,
+                0,
+                1280,
+                720,
+                Some(parent),
+                None,
+                None,
+                None,
+            )
+        }
+        .map_err(|e| format!("CreateWindowExW (child) failed: {:?}", e))?;
+
+        log::info!(
+            "[player:host] HostWindow::create_child HWND={:?}, WS_CHILD parent={:?}",
+            hwnd.0, parent.0
+        );
+
+        Ok(Self { hwnd, child_parent: Some(parent) })
+    }
+
+    /// True when this host is a `WS_CHILD` of the main window (spike mode).
+    pub fn is_child(&self) -> bool {
+        self.child_parent.is_some()
     }
 
     pub fn hwnd_as_i64(&self) -> i64 {
@@ -120,6 +172,11 @@ impl HostWindow {
     /// Tauri main window even if `ShowWindow` perturbed z-order despite
     /// `WS_EX_NOACTIVATE` / `SW_SHOWNA`.
     pub fn anchor_below(&self, parent: HWND) -> Result<(), String> {
+        if self.child_parent.is_some() {
+            // Child mode: z-order is managed by the parent's composition;
+            // anchoring a child relative to its own parent is invalid.
+            return Ok(());
+        }
         unsafe {
             SetWindowPos(
                 self.hwnd,
@@ -148,6 +205,32 @@ impl HostWindow {
     /// flag, mpv's present is the first paint at the new size; brief
     /// blank possible but no ghost.
     pub fn set_geometry(&self, x: i32, y: i32, width: i32, height: i32) -> Result<(), String> {
+        // Child mode (spike): coords are parent-relative. Ignore the
+        // screen-space geometry the sync engine feeds and instead fill the
+        // parent's client rect at (0,0). Keeps the video full-window while
+        // the host is embedded; the sync engine still drives WHEN we resize.
+        if let Some(parent) = self.child_parent {
+            let mut rc = RECT::default();
+            unsafe { GetClientRect(parent, &mut rc) }
+                .map_err(|e| format!("GetClientRect(parent) failed: {:?}", e))?;
+            let (cw, ch) = (rc.right - rc.left, rc.bottom - rc.top);
+            if cw <= 0 || ch <= 0 {
+                return Ok(());
+            }
+            log::debug!("[player:host] set_geometry(child) fill parent client {}x{} HWND={:?}", cw, ch, self.hwnd.0);
+            return unsafe {
+                SetWindowPos(
+                    self.hwnd,
+                    None,
+                    0,
+                    0,
+                    cw,
+                    ch,
+                    SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOCOPYBITS,
+                )
+            }
+            .map_err(|e| format!("SetWindowPos (child) failed: {:?}", e));
+        }
         if width <= 0 || height <= 0 {
             log::trace!("[player:host] set_geometry skipped — zero dim ({}x{})", width, height);
             return Ok(());
@@ -175,6 +258,11 @@ impl HostWindow {
     /// a full set_geometry call and safe to dispatch at 60+ Hz without
     /// starving the Win32 message queue.
     pub fn set_position(&self, x: i32, y: i32) -> Result<(), String> {
+        // Child mode: position is fixed at parent client origin; re-fill on
+        // any move so a parent resize-during-drag keeps the video covering.
+        if self.child_parent.is_some() {
+            return self.set_geometry(0, 0, 0, 0);
+        }
         log::trace!("[player:host] set_position({},{}) HWND={:?}", x, y, self.hwnd.0);
         unsafe {
             SetWindowPos(
@@ -200,6 +288,11 @@ impl HostWindow {
     /// the main window in z-order so the WebView still overlays the video
     /// region.
     pub fn set_topmost(&self, topmost: bool) -> Result<(), String> {
+        if self.child_parent.is_some() {
+            // Child mode: a child cannot be independently topmost; it follows
+            // the parent. Pop-out behaviour is out of scope for the spike.
+            return Ok(());
+        }
         let after = if topmost { HWND_TOPMOST } else { HWND_NOTOPMOST };
         log::debug!(
             "[player:host] set_topmost({}) HWND={:?}",
