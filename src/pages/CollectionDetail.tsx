@@ -1,13 +1,14 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { usePlayerSession } from "../contexts/PlayerContext";
 import { useAuth } from "../hooks/useAuth";
 import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
 import { useMediaContextMenu } from "../hooks/useMediaContextMenu";
 import { usePlayAction } from "../hooks/usePlayAction";
 import { useScrollRestoration } from "../hooks/useScrollRestoration";
-import { useQueue } from "../contexts/QueueContext";
-import { buildQueueFromItems, shuffleArray } from "../utils/queue-helpers";
+import { useDetailItems } from "../hooks/useDetailItems";
+import type { PlexServerLike } from "../hooks/useDetailItems";
+import { useItemDetails } from "../hooks/useItemDetails";
+import { usePlayAll } from "../hooks/usePlayAll";
 import {
   getItemMetadata,
   getCollectionItems,
@@ -19,13 +20,13 @@ import ProgressBar from "../components/ProgressBar";
 import SectionHeader from "../components/SectionHeader";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
+import DetailPageShell from "../components/detail/DetailPageShell";
 import { isWatched, decodeHtmlEntities } from "../utils/media-helpers";
 import { detailStyles } from "../utils/detail-styles";
 import type {
   PlexMediaItem,
   PlexCollection,
   PlexMovie,
-  PlexShow,
   PlexRole,
   PlexTag,
 } from "../types/library";
@@ -44,139 +45,42 @@ function CollectionDetail() {
   const { collectionKey } = useParams<{ collectionKey: string }>();
   const { server } = useAuth();
   const navigate = useNavigate();
-  const { play } = usePlayerSession();
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
   useScrollRestoration();
   const { openContextMenu, overlays: menuOverlays } = useMediaContextMenu();
   const { getPlayHandler, playOverlay } = usePlayAction();
-  const { setQueue } = useQueue();
 
-  const [collection, setCollection] = useState<PlexCollection | null>(null);
-  const [items, setItems] = useState<PlexMediaItem[]>([]);
-  const [detailedItems, setDetailedItems] = useState<
-    Map<string, PlexMovie | PlexShow>
-  >(new Map());
-  const [totalSize, setTotalSize] = useState(0);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isLoadingDetails, setIsLoadingDetails] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    metadata: collection,
+    items,
+    totalSize,
+    isMetadataLoading,
+    isItemsLoading,
+    isError,
+    error,
+    refetch,
+  } = useDetailItems<PlexCollection, PlexMediaItem>({
+    containerKey: collectionKey,
+    queryKey: "collection-detail",
+    fetchMetadata: (s: PlexServerLike, key) =>
+      getItemMetadata<PlexCollection>(s.uri, s.accessToken, key),
+    fetchItems: (s, key) => getCollectionItems(s.uri, s.accessToken, key),
+  });
 
-  // Fetch collection metadata and items
-  useEffect(() => {
-    if (!server || !collectionKey) return;
-    let cancelled = false;
+  // Progressive per-item metadata (cast, crew, genres) — rows fill in as each
+  // item's detail query resolves.
+  const { details: detailedItems, isLoading: isLoadingDetails } =
+    useItemDetails(items);
 
-    (async () => {
-      setIsLoading(true);
-      setError(null);
-      setDetailedItems(new Map());
-      try {
-        // Both fetches are independent — getCollectionItems only needs
-        // collectionKey (already in scope) and does not depend on meta.
-        const [meta, result] = await Promise.all([
-          getItemMetadata<PlexCollection>(
-            server.uri,
-            server.accessToken,
-            collectionKey
-          ),
-          getCollectionItems(
-            server.uri,
-            server.accessToken,
-            collectionKey
-          ),
-        ]);
-        if (!cancelled) {
-          setCollection(meta);
-          setItems(result.items);
-          setTotalSize(result.totalSize);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(
-            err instanceof Error ? err.message : "Failed to load collection"
-          );
-        }
-      } finally {
-        if (!cancelled) setIsLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [server, collectionKey]);
-
-  // Batch-fetch detailed metadata for all items (cast, crew, genres, etc.)
-  useEffect(() => {
-    if (!server || items.length === 0) return;
-    let cancelled = false;
-
-    (async () => {
-      setIsLoadingDetails(true);
-      const map = new Map<string, PlexMovie | PlexShow>();
-      const CHUNK_SIZE = 6;
-
-      for (let i = 0; i < items.length; i += CHUNK_SIZE) {
-        if (cancelled) break;
-        const chunk = items.slice(i, i + CHUNK_SIZE);
-        const results = await Promise.allSettled(
-          chunk.map((item) =>
-            getItemMetadata<PlexMovie | PlexShow>(
-              server.uri,
-              server.accessToken,
-              item.ratingKey
-            )
-          )
-        );
-        for (let j = 0; j < results.length; j++) {
-          const result = results[j];
-          const chunkItem = chunk[j];
-          if (result?.status === "fulfilled" && chunkItem) {
-            map.set(chunkItem.ratingKey, result.value);
-          }
-        }
-        // Update progressively so rows appear as data loads
-        if (!cancelled) setDetailedItems(new Map(map));
-      }
-
-      if (!cancelled) setIsLoadingDetails(false);
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [server, items]);
+  const { hasPlayableItems, playAll, shuffle } = usePlayAll(items);
 
   useEffect(() => {
     if (collection?.title) document.title = `${collection.title} - Prexu`;
   }, [collection?.title]);
 
   // Compute watch progress
-  const watchedCount = useMemo(
-    () => items.filter(isWatched).length,
-    [items]
-  );
-
-  // Check if collection has playable items (movies or episodes, not shows)
-  const hasPlayableItems = useMemo(
-    () => items.some((i) => i.type === "movie" || i.type === "episode"),
-    [items]
-  );
-
-  const handlePlayAll = useCallback(() => {
-    const queueItems = buildQueueFromItems(items);
-    if (queueItems.length === 0) return;
-    setQueue(queueItems, 0, false, "user-built");
-    play(queueItems[0]!.ratingKey);
-  }, [items, setQueue, play]);
-
-  const handleShuffle = useCallback(() => {
-    const queueItems = shuffleArray(buildQueueFromItems(items));
-    if (queueItems.length === 0) return;
-    setQueue(queueItems, 0, true, "user-built");
-    play(queueItems[0]!.ratingKey);
-  }, [items, setQueue, play]);
+  const watchedCount = items.filter(isWatched).length;
 
   if (!server) return null;
 
@@ -296,11 +200,11 @@ function CollectionDetail() {
             <div style={styles.rowMeta}>
               {genres.length > 0 && (
                 <span style={styles.genreText}>
-                  {genres.map((g) => g.tag).join(" \u00B7 ")}
+                  {genres.map((g) => g.tag).join(" · ")}
                 </span>
               )}
               {genres.length > 0 && duration && (
-                <span style={styles.metaSeparator}>{"\u00B7"}</span>
+                <span style={styles.metaSeparator}>{"·"}</span>
               )}
               {duration && (
                 <span style={styles.durationText}>
@@ -388,7 +292,7 @@ function CollectionDetail() {
                     <span style={styles.castRole}> as {role.role}</span>
                   )}
                   {i < topCast.length - 1 && (
-                    <span style={styles.castSeparator}>{"\u00B7"}</span>
+                    <span style={styles.castSeparator}>{"·"}</span>
                   )}
                 </span>
               ))}
@@ -440,8 +344,9 @@ function CollectionDetail() {
     );
   };
 
-  // Loading state
-  if (isLoading && !collection) {
+  // Loading state — no metadata yet means we have nothing to frame the page
+  // with, so show a centered spinner (matches the original first-load UX).
+  if (isMetadataLoading && !collection) {
     return (
       <div style={styles.container}>
         <div style={styles.loadingContainer}>
@@ -451,172 +356,156 @@ function CollectionDetail() {
     );
   }
 
-  return (
-    <div style={styles.container}>
-      {/* Background art (or blurred poster fallback) */}
-      {collection && (
-        <>
-          <img
-            src={
-              collection.art
-                ? artUrl(collection.art)
-                : collection.thumb
-                  ? posterUrl(collection.thumb)
-                  : ""
-            }
-            alt=""
-            loading="lazy"
-            style={
-              collection.art ? styles.pageBgArt : styles.pageBgArtFallback
-            }
-          />
-          <div style={styles.pageBgOverlay} />
-        </>
-      )}
+  const background = collection ? (
+    <>
+      <img
+        src={
+          collection.art
+            ? artUrl(collection.art)
+            : collection.thumb
+              ? posterUrl(collection.thumb)
+              : ""
+        }
+        alt=""
+        loading="lazy"
+        style={collection.art ? styles.pageBgArt : styles.pageBgArtFallback}
+      />
+      <div style={styles.pageBgOverlay} />
+    </>
+  ) : null;
 
-      {/* Hero section — full-page like ItemDetail */}
-      {collection && (
-        <div
+  const header = collection ? (
+    <div
+      style={{
+        ...styles.heroContent,
+        paddingTop: mobile ? "2rem" : "4rem",
+        paddingBottom: mobile ? "2rem" : "3rem",
+        alignItems: "center",
+        ...(mobile
+          ? { flexDirection: "column", justifyContent: "center" }
+          : {}),
+      }}
+    >
+      {/* Collection poster */}
+      {collection.thumb && (
+        <img
+          src={posterUrl(collection.thumb)}
+          alt={collection.title}
           style={{
-            ...styles.heroContent,
-            paddingTop: mobile ? "2rem" : "4rem",
-            paddingBottom: mobile ? "2rem" : "3rem",
-            alignItems: "center",
-            ...(mobile
-              ? { flexDirection: "column", justifyContent: "center" }
-              : {}),
+            ...styles.heroPoster,
+            width: mobile ? "160px" : bp === "large" ? "280px" : "240px",
+            height: "auto",
+            ...(mobile ? { alignSelf: "center" } : {}),
           }}
-        >
-          {/* Collection poster */}
-          {collection.thumb && (
-            <img
-              src={posterUrl(collection.thumb)}
-              alt={collection.title}
-              style={{
-                ...styles.heroPoster,
-                width: mobile ? "160px" : bp === "large" ? "280px" : "240px",
-                height: "auto",
-                ...(mobile ? { alignSelf: "center" } : {}),
-              }}
-            />
-          )}
-
-          {/* Info section */}
-          <div
-            style={{
-              ...styles.heroInfo,
-              ...(mobile ? { alignItems: "center" } : {}),
-            }}
-          >
-            <h1
-              style={{
-                ...styles.heroTitle,
-                fontSize: mobile
-                  ? "1.6rem"
-                  : bp === "large"
-                    ? "2.8rem"
-                    : "2.4rem",
-                ...(mobile ? { textAlign: "center" as const } : {}),
-              }}
-            >
-              {collection.title}
-            </h1>
-
-            {/* Meta row */}
-            <div
-              style={{
-                ...styles.metaRow,
-                ...(mobile ? { justifyContent: "center" } : {}),
-              }}
-            >
-              <span style={styles.subtypeBadge}>{subtypeLabel}</span>
-              <span>
-                {totalSize} item{totalSize !== 1 ? "s" : ""}
-              </span>
-              {totalSize > 0 && (
-                <span>
-                  {watchedCount} of {totalSize} watched
-                </span>
-              )}
-            </div>
-
-            {/* Watch progress bar */}
-            {totalSize > 0 && (
-              <ProgressBar value={watchedCount / totalSize} />
-            )}
-
-            {/* Play All / Shuffle buttons */}
-            {hasPlayableItems && items.length > 0 && (
-              <div
-                style={{
-                  ...styles.playActions,
-                  ...(mobile ? { justifyContent: "center" } : {}),
-                }}
-              >
-                <button onClick={handlePlayAll} style={styles.playAllButton}>
-                  <svg width={16} height={16} viewBox="0 0 24 24" fill="currentColor">
-                    <polygon points="5,3 19,12 5,21" />
-                  </svg>
-                  Play All
-                </button>
-                <button onClick={handleShuffle} style={styles.shuffleButton}>
-                  <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="16 3 21 3 21 8" />
-                    <line x1={4} y1={20} x2={21} y2={3} />
-                    <polyline points="21 16 21 21 16 21" />
-                    <line x1={15} y1={15} x2={21} y2={21} />
-                    <line x1={4} y1={4} x2={9} y2={9} />
-                  </svg>
-                  Shuffle
-                </button>
-              </div>
-            )}
-
-            {/* Summary */}
-            {collection.summary && (
-              <p
-                style={{
-                  ...styles.summary,
-                  ...(mobile ? { textAlign: "center" as const } : {}),
-                }}
-              >
-                {decodeHtmlEntities(collection.summary)}
-              </p>
-            )}
-
-            {/* Added date */}
-            {addedDate && (
-              <span style={styles.addedDate}>Added {addedDate}</span>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Error state */}
-      {error && (
-        <ErrorState
-          message={error}
-          onRetry={() => window.location.reload()}
         />
       )}
 
-      {/* Item detail rows */}
-      {!isLoading && !error && items.length > 0 && (
-        <div style={styles.itemsSection}>
-          <SectionHeader title="In This Collection" count={totalSize} />
-          <div style={styles.itemsList}>{items.map(renderItemRow)}</div>
-        </div>
-      )}
+      {/* Info section */}
+      <div
+        style={{
+          ...styles.heroInfo,
+          ...(mobile ? { alignItems: "center" } : {}),
+        }}
+      >
+        <h1
+          style={{
+            ...styles.heroTitle,
+            fontSize: mobile
+              ? "1.6rem"
+              : bp === "large"
+                ? "2.8rem"
+                : "2.4rem",
+            ...(mobile ? { textAlign: "center" as const } : {}),
+          }}
+        >
+          {collection.title}
+        </h1>
 
-      {/* Loading skeletons for items */}
-      {isLoading && collection && (
-        <div style={styles.itemsSection}>
-          <LoadingGrid count={12} />
+        {/* Meta row */}
+        <div
+          style={{
+            ...styles.metaRow,
+            ...(mobile ? { justifyContent: "center" } : {}),
+          }}
+        >
+          <span style={styles.subtypeBadge}>{subtypeLabel}</span>
+          <span>
+            {totalSize} item{totalSize !== 1 ? "s" : ""}
+          </span>
+          {totalSize > 0 && (
+            <span>
+              {watchedCount} of {totalSize} watched
+            </span>
+          )}
         </div>
-      )}
 
-      {/* Empty state */}
-      {!isLoading && !error && items.length === 0 && (
+        {/* Watch progress bar */}
+        {totalSize > 0 && <ProgressBar value={watchedCount / totalSize} />}
+
+        {/* Play All / Shuffle buttons */}
+        {hasPlayableItems && items.length > 0 && (
+          <div
+            style={{
+              ...styles.playActions,
+              ...(mobile ? { justifyContent: "center" } : {}),
+            }}
+          >
+            <button onClick={playAll} style={styles.playAllButton}>
+              <svg width={16} height={16} viewBox="0 0 24 24" fill="currentColor">
+                <polygon points="5,3 19,12 5,21" />
+              </svg>
+              Play All
+            </button>
+            <button onClick={shuffle} style={styles.shuffleButton}>
+              <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="16 3 21 3 21 8" />
+                <line x1={4} y1={20} x2={21} y2={3} />
+                <polyline points="21 16 21 21 16 21" />
+                <line x1={15} y1={15} x2={21} y2={21} />
+                <line x1={4} y1={4} x2={9} y2={9} />
+              </svg>
+              Shuffle
+            </button>
+          </div>
+        )}
+
+        {/* Summary */}
+        {collection.summary && (
+          <p
+            style={{
+              ...styles.summary,
+              ...(mobile ? { textAlign: "center" as const } : {}),
+            }}
+          >
+            {decodeHtmlEntities(collection.summary)}
+          </p>
+        )}
+
+        {/* Added date */}
+        {addedDate && <span style={styles.addedDate}>Added {addedDate}</span>}
+      </div>
+    </div>
+  ) : null;
+
+  return (
+    <DetailPageShell
+      style={styles.container}
+      background={background}
+      header={header}
+      isError={isError}
+      errorSlot={
+        <ErrorState message={error ?? ""} onRetry={() => refetch()} />
+      }
+      isLoading={isItemsLoading}
+      loadingSlot={
+        collection ? (
+          <div style={styles.itemsSection}>
+            <LoadingGrid count={12} />
+          </div>
+        ) : null
+      }
+      isEmpty={items.length === 0}
+      emptySlot={
         <EmptyState
           icon={
             <svg
@@ -640,11 +529,19 @@ function CollectionDetail() {
             onClick: () => navigate(-1),
           }}
         />
-      )}
-
-      {menuOverlays}
-      {playOverlay}
-    </div>
+      }
+      overlays={
+        <>
+          {menuOverlays}
+          {playOverlay}
+        </>
+      }
+    >
+      <div style={styles.itemsSection}>
+        <SectionHeader title="In This Collection" count={totalSize} />
+        <div style={styles.itemsList}>{items.map(renderItemRow)}</div>
+      </div>
+    </DetailPageShell>
   );
 }
 

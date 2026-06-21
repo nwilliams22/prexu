@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { usePlayerSession } from "../contexts/PlayerContext";
 import { useAuth } from "../hooks/useAuth";
 import {
   getPlaylistItems,
@@ -15,13 +14,15 @@ import { cacheInvalidate } from "../services/api-cache";
 import { useMediaContextMenu } from "../hooks/useMediaContextMenu";
 import { usePlayAction } from "../hooks/usePlayAction";
 import { useScrollRestoration } from "../hooks/useScrollRestoration";
-import { useQueue } from "../contexts/QueueContext";
-import { buildQueueFromItems, shuffleArray } from "../utils/queue-helpers";
+import { useDetailItems } from "../hooks/useDetailItems";
+import type { PlexServerLike } from "../hooks/useDetailItems";
+import { usePlayAll } from "../hooks/usePlayAll";
 import LibraryGrid from "../components/LibraryGrid";
 import PosterCard from "../components/PosterCard";
 import SkeletonCard from "../components/SkeletonCard";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
+import DetailPageShell from "../components/detail/DetailPageShell";
 import { decodeHtmlEntities, isWatched } from "../utils/media-helpers";
 import {
   getMediaTitle,
@@ -43,20 +44,35 @@ interface PlaylistGroup {
   episodeCount: number;
 }
 
+/** Fetch the playlist's metadata by matching against the playlists list. */
+async function fetchPlaylistMeta(
+  server: PlexServerLike,
+  key: string,
+): Promise<PlexPlaylist | null> {
+  const all = await getPlaylists(server.uri, server.accessToken);
+  return all.find((p) => p.ratingKey === key) ?? null;
+}
+
 function PlaylistDetail() {
   const { playlistKey } = useParams<{ playlistKey: string }>();
   const { server } = useAuth();
   const navigate = useNavigate();
-  const { play } = usePlayerSession();
   useScrollRestoration();
-  const { setQueue } = useQueue();
 
-  const [playlist, setPlaylist] = useState<PlexPlaylist | null>(null);
-  const [items, setItems] = useState<PlexMediaItem[]>([]);
-  const [totalSize, setTotalSize] = useState(0);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [refreshKey, setRefreshKey] = useState(0);
+  const { metadata, items, totalSize, isLoading, error, refetch } =
+    useDetailItems<PlexPlaylist | null, PlexMediaItem>({
+      containerKey: playlistKey,
+      queryKey: "playlist-detail",
+      fetchMetadata: fetchPlaylistMeta,
+      fetchItems: (s, key) =>
+        getPlaylistItems(s.uri, s.accessToken, key),
+    });
+
+  // Local overlay over the fetched metadata so edits/errors reflect instantly
+  // without waiting for a refetch (mirrors the original optimistic update).
+  const [metaOverride, setMetaOverride] = useState<PlexPlaylist | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const playlist = metaOverride ?? metadata;
 
   // Edit mode
   const [isEditing, setIsEditing] = useState(false);
@@ -75,69 +91,16 @@ function PlaylistDetail() {
   const titleInputRef = useRef<HTMLInputElement>(null);
 
   const refreshItems = useCallback(() => {
-    setRefreshKey((k) => k + 1);
-  }, []);
+    refetch();
+  }, [refetch]);
 
   const { openContextMenu, overlays: menuOverlays } = useMediaContextMenu({
     onRefresh: refreshItems,
   });
   const { getPlayHandler, playOverlay } = usePlayAction();
+  const { hasPlayableItems, playAll, shuffle } = usePlayAll(items);
 
-  // Fetch playlist items
-  useEffect(() => {
-    if (!server || !playlistKey) return;
-    let cancelled = false;
-
-    (async () => {
-      setIsLoading(true);
-      setError(null);
-      try {
-        const result = await getPlaylistItems(
-          server.uri,
-          server.accessToken,
-          playlistKey
-        );
-        if (!cancelled) {
-          setItems(result.items);
-          setTotalSize(result.totalSize);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(
-            err instanceof Error ? err.message : "Failed to load playlist"
-          );
-        }
-      } finally {
-        if (!cancelled) setIsLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [server, playlistKey, refreshKey]);
-
-  // Fetch playlist metadata separately for title/summary
-  useEffect(() => {
-    if (!server || !playlistKey) return;
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const all = await getPlaylists(server.uri, server.accessToken);
-        if (!cancelled) {
-          const match = all.find((p) => p.ratingKey === playlistKey);
-          if (match) setPlaylist(match);
-        }
-      } catch {
-        // Non-critical — title falls back to "Playlist"
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [server, playlistKey, refreshKey]);
+  const displayError = actionError ?? error;
 
   useEffect(() => {
     if (playlist) document.title = `${playlist.title} - Prexu`;
@@ -147,22 +110,6 @@ function PlaylistDetail() {
   useEffect(() => {
     if (isEditing) titleInputRef.current?.focus();
   }, [isEditing]);
-
-  // ── Play All / Shuffle ──
-
-  const handlePlayAll = useCallback(() => {
-    const queueItems = buildQueueFromItems(items);
-    if (queueItems.length === 0) return;
-    setQueue(queueItems, 0, false, "user-built");
-    play(queueItems[0]!.ratingKey);
-  }, [items, setQueue, play]);
-
-  const handleShuffle = useCallback(() => {
-    const queueItems = shuffleArray(buildQueueFromItems(items));
-    if (queueItems.length === 0) return;
-    setQueue(queueItems, 0, true, "user-built");
-    play(queueItems[0]!.ratingKey);
-  }, [items, setQueue, play]);
 
   // ── Edit ──
 
@@ -185,20 +132,21 @@ function PlaylistDetail() {
         summary: editSummary.trim(),
       });
       cacheInvalidate("playlists:all");
-      setPlaylist((prev) =>
-        prev
-          ? { ...prev, title: editTitle.trim(), summary: editSummary.trim() }
-          : prev
-      );
+      setMetaOverride((prev) => {
+        const base = prev ?? metadata;
+        return base
+          ? { ...base, title: editTitle.trim(), summary: editSummary.trim() }
+          : base;
+      });
       setIsEditing(false);
     } catch (err) {
-      setError(
+      setActionError(
         err instanceof Error ? err.message : "Failed to update playlist"
       );
     } finally {
       setIsSaving(false);
     }
-  }, [server, playlistKey, editTitle, editSummary]);
+  }, [server, playlistKey, editTitle, editSummary, metadata]);
 
   // ── Delete ──
 
@@ -210,7 +158,7 @@ function PlaylistDetail() {
       cacheInvalidate("playlists:all");
       navigate("/playlists", { replace: true });
     } catch (err) {
-      setError(
+      setActionError(
         err instanceof Error ? err.message : "Failed to delete playlist"
       );
       setIsDeleting(false);
@@ -233,7 +181,7 @@ function PlaylistDetail() {
         cacheInvalidate("playlists:all");
         refreshItems();
       } catch (err) {
-        setError(
+        setActionError(
           err instanceof Error ? err.message : "Failed to remove item"
         );
       }
@@ -275,7 +223,7 @@ function PlaylistDetail() {
         );
         refreshItems();
       } catch (err) {
-        setError(
+        setActionError(
           err instanceof Error ? err.message : "Failed to move item"
         );
       }
@@ -319,15 +267,6 @@ function PlaylistDetail() {
       return extras;
     },
     [handleRemoveItem, handleMoveItem, items.length]
-  );
-
-  if (!server) return null;
-
-  const posterUrl = (thumb: string) =>
-    getImageUrl(server.uri, server.accessToken, thumb, 300, 450);
-
-  const hasPlayableItems = items.some(
-    (i) => i.type === "movie" || i.type === "episode"
   );
 
   // Group episodes by show, keep movies as individual entries
@@ -383,83 +322,78 @@ function PlaylistDetail() {
     [items],
   );
 
-  return (
-    <div style={styles.container}>
-      {/* Title — editable or static */}
-      {isEditing ? (
-        <div style={styles.editSection}>
-          <input
-            ref={titleInputRef}
-            type="text"
-            value={editTitle}
-            onChange={(e) => setEditTitle(e.target.value)}
-            style={styles.editTitleInput}
-            placeholder="Playlist title"
-            aria-label="Playlist title"
-          />
-          <textarea
-            value={editSummary}
-            onChange={(e) => setEditSummary(e.target.value)}
-            style={styles.editSummaryInput}
-            placeholder="Description (optional)"
-            aria-label="Playlist description"
-            rows={3}
-          />
-          <div style={styles.editActions}>
-            <button
-              onClick={handleSaveEdit}
-              disabled={isSaving || !editTitle.trim()}
-              style={{
-                ...styles.saveButton,
-                opacity: isSaving || !editTitle.trim() ? 0.5 : 1,
-              }}
-            >
-              {isSaving ? "Saving..." : "Save"}
-            </button>
-            <button onClick={handleCancelEdit} style={styles.cancelButton}>
-              Cancel
-            </button>
-          </div>
-        </div>
-      ) : (
-        <>
-          <h2 style={styles.title}>{playlist?.title || "Playlist"}</h2>
-          {playlist?.summary && (
-            <p style={styles.summary}>
-              {decodeHtmlEntities(playlist.summary)}
-            </p>
-          )}
-        </>
-      )}
+  if (!server) return null;
 
-      {error && (
-        <ErrorState
-          message={error}
-          onRetry={() => {
-            setError(null);
-            refreshItems();
-          }}
+  const posterUrl = (thumb: string) =>
+    getImageUrl(server.uri, server.accessToken, thumb, 300, 450);
+
+  const header =
+    isEditing ? (
+      <div style={styles.editSection}>
+        <input
+          ref={titleInputRef}
+          type="text"
+          value={editTitle}
+          onChange={(e) => setEditTitle(e.target.value)}
+          style={styles.editTitleInput}
+          placeholder="Playlist title"
+          aria-label="Playlist title"
         />
-      )}
+        <textarea
+          value={editSummary}
+          onChange={(e) => setEditSummary(e.target.value)}
+          style={styles.editSummaryInput}
+          placeholder="Description (optional)"
+          aria-label="Playlist description"
+          rows={3}
+        />
+        <div style={styles.editActions}>
+          <button
+            onClick={handleSaveEdit}
+            disabled={isSaving || !editTitle.trim()}
+            style={{
+              ...styles.saveButton,
+              opacity: isSaving || !editTitle.trim() ? 0.5 : 1,
+            }}
+          >
+            {isSaving ? "Saving..." : "Save"}
+          </button>
+          <button onClick={handleCancelEdit} style={styles.cancelButton}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    ) : (
+      <>
+        <h2 style={styles.title}>{playlist?.title || "Playlist"}</h2>
+        {playlist?.summary && (
+          <p style={styles.summary}>
+            {decodeHtmlEntities(playlist.summary)}
+          </p>
+        )}
+      </>
+    );
 
-      {!isLoading && !error && totalSize > 0 && (
+  const toolbar = (
+    <>
+      {!isLoading && !displayError && totalSize > 0 && (
         <p style={styles.count}>
           {totalSize.toLocaleString()} item{totalSize !== 1 ? "s" : ""}
         </p>
       )}
 
       {/* Action buttons */}
-      {!isLoading && !error && !isEditing && items.length > 0 && (
+      {!isLoading && !displayError && !isEditing && items.length > 0 && (
         <div style={styles.actions}>
           {hasPlayableItems && (
             <>
-              <button onClick={handlePlayAll} style={styles.playAllButton}>
+              <button onClick={playAll} style={styles.playAllButton}>
                 <svg width={16} height={16} viewBox="0 0 24 24" fill="currentColor">
                   <polygon points="5,3 19,12 5,21" />
                 </svg>
                 Play All
               </button>
-              <button onClick={handleShuffle} style={styles.shuffleButton}>
+              <button onClick={shuffle} style={styles.shuffleButton}>
                 <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="16 3 21 3 21 8" />
                   <line x1={4} y1={20} x2={21} y2={3} />
@@ -534,11 +468,58 @@ function PlaylistDetail() {
           </div>
         </div>
       )}
+    </>
+  );
 
+  return (
+    <DetailPageShell
+      style={styles.container}
+      header={header}
+      toolbar={toolbar}
+      isError={Boolean(displayError)}
+      errorSlot={
+        <ErrorState
+          message={displayError ?? ""}
+          onRetry={() => {
+            setActionError(null);
+            refreshItems();
+          }}
+        />
+      }
+      isLoading={isLoading}
+      loadingSlot={
+        <LibraryGrid>
+          {Array.from({ length: 24 }).map((_, i) => (
+            <SkeletonCard key={i} />
+          ))}
+        </LibraryGrid>
+      }
+      isEmpty={items.length === 0}
+      emptySlot={
+        <EmptyState
+          icon={
+            <svg width={48} height={48} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+              <line x1={8} y1={6} x2={21} y2={6} />
+              <line x1={8} y1={12} x2={21} y2={12} />
+              <line x1={8} y1={18} x2={21} y2={18} />
+              <line x1={3} y1={6} x2={3.01} y2={6} />
+              <line x1={3} y1={12} x2={3.01} y2={12} />
+              <line x1={3} y1={18} x2={3.01} y2={18} />
+            </svg>
+          }
+          title="Empty playlist"
+          subtitle="This playlist doesn't have any items yet."
+          action={{ label: "Back to Playlists", onClick: () => navigate("/playlists") }}
+        />
+      }
+      overlays={
+        <>
+          {menuOverlays}
+          {playOverlay}
+        </>
+      }
+    >
       <LibraryGrid>
-        {isLoading &&
-          Array.from({ length: 24 }).map((_, i) => <SkeletonCard key={i} />)}
-
         {!grouped &&
           items.map((item, index) => (
             <PosterCard
@@ -653,28 +634,7 @@ function PlaylistDetail() {
           </div>
         );
       })()}
-
-      {!isLoading && !error && items.length === 0 && (
-        <EmptyState
-          icon={
-            <svg width={48} height={48} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-              <line x1={8} y1={6} x2={21} y2={6} />
-              <line x1={8} y1={12} x2={21} y2={12} />
-              <line x1={8} y1={18} x2={21} y2={18} />
-              <line x1={3} y1={6} x2={3.01} y2={6} />
-              <line x1={3} y1={12} x2={3.01} y2={12} />
-              <line x1={3} y1={18} x2={3.01} y2={18} />
-            </svg>
-          }
-          title="Empty playlist"
-          subtitle="This playlist doesn't have any items yet."
-          action={{ label: "Back to Playlists", onClick: () => navigate("/playlists") }}
-        />
-      )}
-
-      {menuOverlays}
-      {playOverlay}
-    </div>
+    </DetailPageShell>
   );
 }
 
