@@ -235,7 +235,7 @@ export function useMediaContextMenu(options: UseMediaContextMenuOptions = {}) {
             }),
         });
       } else if (isAdmin && item.type === "season") {
-        const season = item as unknown as PlexSeason;
+        const season = item as PlexSeason;
         items.push({
           label: "Fix Match...",
           dividerAbove: true,

@@ -109,8 +109,8 @@ export function usePlexActorMedia(
         }
 
         const byYear = (a: PlexMediaItem, b: PlexMediaItem) => {
-          const ay = (a as unknown as { year?: number }).year ?? 0;
-          const by = (b as unknown as { year?: number }).year ?? 0;
+          const ay = a.year ?? 0;
+          const by = b.year ?? 0;
           return by - ay;
         };
         movieItems.sort(byYear);

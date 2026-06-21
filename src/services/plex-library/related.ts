@@ -2,14 +2,10 @@
  * Related items, extras, actor media, and search.
  */
 
-import { fetchJson } from "./base";
+import { fetchMetadata, fetchHubs } from "./base";
 import { getLibrarySections } from "./base";
 import { logger } from "../logger";
-import type {
-  PlexMediaContainer,
-  PlexMediaItem,
-  PlexHub,
-} from "../../types/library";
+import type { PlexMediaItem, PlexHub } from "../../types/library";
 
 // ── Related Items ──
 
@@ -32,41 +28,36 @@ export async function getRelatedItems(
 
   // Try the /library/metadata/{id}/similar endpoint first (most reliable)
   try {
-    const data = await fetchJson<PlexMediaContainer<PlexMediaItem>>(
+    const items = await fetchMetadata(
       serverUri,
       serverToken,
-      `/library/metadata/${ratingKey}/similar`
+      `/library/metadata/${ratingKey}/similar`,
+      "getRelatedItems:similar",
     );
-    const items = data.MediaContainer.Metadata ?? [];
     if (items.length > 0) return items;
   } catch {
     // Fall through
   }
   // Try /related endpoint
   try {
-    const data = await fetchJson<PlexMediaContainer<PlexMediaItem>>(
+    const items = await fetchMetadata(
       serverUri,
       serverToken,
-      `/library/metadata/${ratingKey}/related`
+      `/library/metadata/${ratingKey}/related`,
+      "getRelatedItems:related",
     );
-    const items = data.MediaContainer.Metadata ?? [];
     if (items.length > 0) return items;
   } catch {
     // Fall through to hubs endpoint
   }
   // Fallback: use /hubs/metadata endpoint which returns recommendation hubs
   try {
-    const data = await fetchJson<{
-      MediaContainer: {
-        Hub?: Array<{
-          type: string;
-          hubIdentifier: string;
-          title: string;
-          Metadata?: PlexMediaItem[];
-        }>;
-      };
-    }>(serverUri, serverToken, `/hubs/metadata/${ratingKey}`);
-    const hubs = data.MediaContainer.Hub ?? [];
+    const hubs = await fetchHubs(
+      serverUri,
+      serverToken,
+      `/hubs/metadata/${ratingKey}`,
+      "getRelatedItems:hubs",
+    );
     // Collect items from all relevant hubs (similar, related, recommendations)
     const items: PlexMediaItem[] = [];
     for (const hub of hubs) {
@@ -106,12 +97,12 @@ export async function getExtras(
   serverToken: string,
   ratingKey: string
 ): Promise<PlexMediaItem[]> {
-  const data = await fetchJson<PlexMediaContainer<PlexMediaItem>>(
+  return fetchMetadata(
     serverUri,
     serverToken,
-    `/library/metadata/${ratingKey}/extras`
+    `/library/metadata/${ratingKey}/extras`,
+    "getExtras",
   );
-  return data.MediaContainer.Metadata ?? [];
 }
 
 /**
@@ -142,12 +133,7 @@ export async function getMediaByActor(
         params.set("type", "2");
       }
       const path = `/library/sections/${section.key}/all?${params.toString()}`;
-      const data = await fetchJson<PlexMediaContainer<PlexMediaItem>>(
-        serverUri,
-        serverToken,
-        path
-      );
-      return data.MediaContainer.Metadata ?? [];
+      return fetchMetadata(serverUri, serverToken, path, "getMediaByActor");
     })
   );
 
@@ -176,10 +162,10 @@ export async function searchLibrary(
   limit: number = 10
 ): Promise<PlexHub[]> {
   const params = new URLSearchParams({ query, limit: String(limit) });
-  const data = await fetchJson<PlexMediaContainer<never>>(
+  return fetchHubs(
     serverUri,
     serverToken,
-    `/hubs/search?${params.toString()}`
+    `/hubs/search?${params.toString()}`,
+    "searchLibrary",
   );
-  return data.MediaContainer.Hub ?? [];
 }

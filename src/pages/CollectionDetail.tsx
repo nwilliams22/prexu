@@ -420,7 +420,7 @@ function CollectionDetail() {
             onClick={(e) => {
               e.stopPropagation();
               const handler = getPlayHandler(item);
-              if (handler) handler(e as unknown as React.MouseEvent);
+              if (handler) handler(e);
             }}
             title={`Play ${item.title}`}
             aria-label={`Play ${item.title}`}
@@ -636,7 +636,7 @@ function CollectionDetail() {
           subtitle="This collection doesn't have any items yet."
           action={{
             label: "Back to Collections",
-            onClick: () => navigate(-1 as unknown as string),
+            onClick: () => navigate(-1),
           }}
         />
       )}

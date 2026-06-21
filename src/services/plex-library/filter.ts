@@ -3,6 +3,7 @@
  */
 
 import { fetchJson } from "./base";
+import { directoryContainerSchema, safeParsePlex } from "../plex-schemas";
 import type {
   PlexMediaContainer,
   PlexMediaItem,
@@ -79,14 +80,21 @@ export async function getFilterOptions(
   sectionId: string,
   filterType: "genre" | "year" | "contentRating" | "resolution"
 ): Promise<FilterOption[]> {
-  const data = await fetchJson<PlexMediaContainer<never>>(
+  const raw = await fetchJson<unknown>(
     serverUri,
     serverToken,
     `/library/sections/${sectionId}/${filterType}`
   );
-  return (
-    (data.MediaContainer.Directory as unknown as { key: string; title: string }[]) ?? []
-  ).map((d) => ({ key: d.key, title: d.title }));
+  const data = safeParsePlex(
+    directoryContainerSchema,
+    raw,
+    "getFilterOptions",
+    { MediaContainer: { Directory: [] } },
+  );
+  return (data.MediaContainer.Directory ?? []).map((d) => ({
+    key: d.key,
+    title: d.title ?? "",
+  }));
 }
 
 // ── First-Character Index ──
@@ -115,18 +123,21 @@ export async function getSectionFirstCharacter(
   serverToken: string,
   sectionId: string
 ): Promise<FirstCharacterBucket[]> {
-  const data = await fetchJson<PlexMediaContainer<never>>(
+  const raw = await fetchJson<unknown>(
     serverUri,
     serverToken,
     `/library/sections/${sectionId}/firstCharacter`
   );
-  const dirs = data.MediaContainer.Directory as unknown as Array<{
-    key: string;
-    size: string | number;
-  }> | undefined;
+  const data = safeParsePlex(
+    directoryContainerSchema,
+    raw,
+    "getSectionFirstCharacter",
+    { MediaContainer: { Directory: [] } },
+  );
+  const dirs = data.MediaContainer.Directory;
   if (!Array.isArray(dirs)) return [];
   return dirs.map((d) => ({
     key: d.key,
-    size: typeof d.size === "number" ? d.size : parseInt(String(d.size), 10) || 0,
+    size: typeof d.size === "number" ? d.size : parseInt(String(d.size ?? ""), 10) || 0,
   }));
 }

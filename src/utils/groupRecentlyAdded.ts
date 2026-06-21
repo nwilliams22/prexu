@@ -76,7 +76,7 @@ export function groupRecentlyAdded(
       } else {
         const group: GroupedRecentItem = {
           kind: "show-group",
-          representativeItem: season as unknown as PlexEpisode,
+          representativeItem: season,
           groupKey: showKey,
           title: season.parentTitle || item.title,
           thumb: season.parentThumb || item.thumb,

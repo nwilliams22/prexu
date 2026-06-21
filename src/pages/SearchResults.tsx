@@ -9,7 +9,6 @@ import SkeletonCard from "../components/SkeletonCard";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
 import { getMediaSubtitleShort, isWatched } from "../utils/media-helpers";
-import type { PlexMediaItem } from "../types/library";
 import { useScrollRestoration } from "../hooks/useScrollRestoration";
 
 function SearchResults() {
@@ -74,7 +73,7 @@ function SearchResults() {
                 subtitle={getMediaSubtitleShort(item)}
                 width={isEpisodeHub(hub.type) ? 230 : 190}
                 aspectRatio={isEpisodeHub(hub.type) ? 0.5625 : 1.5}
-                watched={isWatched(item as unknown as PlexMediaItem)}
+                watched={isWatched(item)}
                 onClick={() => navigate(`/item/${item.ratingKey}`)}
               />
             ))}

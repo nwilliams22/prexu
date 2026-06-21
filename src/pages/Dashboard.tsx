@@ -312,7 +312,7 @@ function Dashboard() {
         backdropUrl: backdropUrl(art),
         summary: item.summary,
         progress: getProgress(item),
-        rating: (item as unknown as { rating?: number }).rating,
+        rating: item.rating,
         category: "Continue Watching",
       });
     }
@@ -320,21 +320,16 @@ function Dashboard() {
     // Top-rated unwatched movies (fill up to 10 total)
     const unwatchedMovies = recentMovies
       .filter((m) => !isWatched(m) && (m.art || m.thumb) && !dismissedKeys.has(m.ratingKey))
-      .sort((a, b) =>
-        ((b as unknown as { rating?: number }).rating ?? 0) -
-        ((a as unknown as { rating?: number }).rating ?? 0)
-      );
+      .sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
     for (const movie of unwatchedMovies) {
       if (slides.length >= 10) break;
       slides.push({
         ratingKey: movie.ratingKey,
         title: movie.title,
-        subtitle: (movie as { year?: number }).year
-          ? String((movie as { year?: number }).year)
-          : undefined,
+        subtitle: movie.year ? String(movie.year) : undefined,
         backdropUrl: backdropUrl((movie.art || movie.thumb)!),
         summary: movie.summary,
-        rating: (movie as unknown as { rating?: number }).rating,
+        rating: movie.rating,
         category: "Recommended for You",
       });
     }
