@@ -17,7 +17,7 @@ use windows::Win32::Foundation::{COLORREF, HWND, RECT};
 use windows::Win32::Graphics::Gdi::CreateSolidBrush;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, RegisterClassExW, SetWindowPos,
-    ShowWindow, CS_HREDRAW, CS_VREDRAW, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE,
+    ShowWindow, CS_HREDRAW, CS_VREDRAW, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SWP_NOACTIVATE,
     SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNA,
     WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_POPUP,
 };
@@ -161,6 +161,28 @@ impl HostWindow {
     /// True when this host is a `WS_CHILD` of the main window (spike mode).
     pub fn is_child(&self) -> bool {
         self.child_parent.is_some()
+    }
+
+    /// Path A spike (prexu-ga3x.1): raise this child ABOVE its siblings
+    /// (wry's WebView2 container) so mpv's pixels paint over the webview.
+    /// This intentionally hides the React controls — the test isolates the
+    /// linchpin question: does a *visible* child HWND appear in the main
+    /// window's Alt+Tab / WGC capture? (Overlay is impossible with siblings
+    /// regardless — that needs Path C.)
+    pub fn raise_to_top(&self) -> Result<(), String> {
+        log::debug!("[player:host] raise_to_top(child) HWND={:?}", self.hwnd.0);
+        unsafe {
+            SetWindowPos(
+                self.hwnd,
+                Some(HWND_TOP),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )
+        }
+        .map_err(|e| format!("raise_to_top SetWindowPos failed: {:?}", e))
     }
 
     pub fn hwnd_as_i64(&self) -> i64 {

@@ -96,6 +96,13 @@ pub(super) fn create_host_window(
             }
             let _ = host.set_visible(true);
             log::debug!("[player:host] set visible");
+            if host.is_child() {
+                // Spike: force the child above wry's webview sibling so mpv
+                // pixels are actually visible (covers controls by design).
+                if let Err(e) = host.raise_to_top() {
+                    log::warn!("[player:host] raise_to_top failed: {}", e);
+                }
+            }
             // Re-anchor z-order below main. SW_SHOWNA shouldn't
             // raise it, but this is belt-and-suspenders to ensure
             // the host never covers the WebView.
