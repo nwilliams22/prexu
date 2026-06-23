@@ -1,0 +1,57 @@
+# THROWAWAY feasibility spike — beads prexu-tfip / Path C1.
+#
+# Proves the OTHER half of Path C (the C0 spike proved DComp video capture):
+# a WebView2 hosted in VISUAL mode (CreateCoreWebView2CompositionController +
+# SetRootVisualTarget) is (a) CLICKABLE via forwarded input and (b) TRANSPARENT
+# so a solid-colored DComp visual BEHIND it shows through — i.e. NO airspace,
+# the failure that killed Path A/B windowed hosting. Standalone crate so it does
+# not touch the app. DO NOT SHIP.
+#
+# Crate versions pinned to match src-tauri/Cargo.lock so the HWND / D3D11 /
+# WebView2 COM types line up with what the real app already links (Tauri 2.10
+# transitively resolves webview2-com 0.38.2 + windows 0.61.3).
+[package]
+name = "webview2-hosting-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "webview2_hosting"
+path = "src/main.rs"
+
+[dependencies]
+log = "0.4"
+env_logger = "0.11"
+
+# High-level WebView2 COM wrapper: re-exports the generated sys bindings
+# (webview2_com::Microsoft::Web::WebView2::Win32::*) and the async completed/
+# event callback handler helpers used to drive environment + controller creation.
+webview2-com = "0.38.2"
+
+# Same major.minor as src-tauri so HWND / D3D11 / DComp types are interchangeable
+# with webview2-com's bindings, plus the graphics + WinRT-capture features this
+# spike needs for the self-verifying WGC screenshot.
+[target.'cfg(target_os = "windows")'.dependencies.windows]
+version = "0.61"
+features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_DirectComposition",
+    # WinRT capture (self-verification leg, copied from the C0 spike)
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
+    "Foundation",
+    "Foundation_Metadata",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+]
