@@ -66,17 +66,8 @@ pub(super) fn create_host_window(
             let parent = main
                 .hwnd()
                 .map_err(|e| format!("Failed to get main HWND: {}", e))?;
-            // Path A spike (prexu-ga3x.1): PREXU_MPV_CHILD swaps the shipping
-            // WS_POPUP sibling for a real WS_CHILD of the main window, so mpv
-            // joins the main window's DWM surface (Alt+Tab/WGC capture test).
-            let spike_child = std::env::var_os("PREXU_MPV_CHILD").is_some();
-            let host = if spike_child {
-                log::warn!("[player:host] PREXU_MPV_CHILD set — WS_CHILD spike mode (controls hidden by airspace; capture-test only)");
-                host_window::HostWindow::create_child(parent)?
-            } else {
-                host_window::HostWindow::create(parent)?
-            };
-            log::info!("[player:host] created on main, parent={:?}, child={}", parent.0, host.is_child());
+            let host = host_window::HostWindow::create(parent)?;
+            log::info!("[player:host] created on main, parent={:?}", parent.0);
 
             if let (Ok(pos), Ok(size)) = (main.inner_position(), main.inner_size()) {
                 let (gx, gy, gw, gh) = initial_host_geometry(
@@ -96,13 +87,6 @@ pub(super) fn create_host_window(
             }
             let _ = host.set_visible(true);
             log::debug!("[player:host] set visible");
-            if host.is_child() {
-                // Spike: force the child above wry's webview sibling so mpv
-                // pixels are actually visible (covers controls by design).
-                if let Err(e) = host.raise_to_top() {
-                    log::warn!("[player:host] raise_to_top failed: {}", e);
-                }
-            }
             // Re-anchor z-order below main. SW_SHOWNA shouldn't
             // raise it, but this is belt-and-suspenders to ensure
             // the host never covers the WebView.
