@@ -19,21 +19,27 @@
 //! render loop that actually drives all three lands in Inc3, at which point the
 //! module-level `dead_code` allow below comes off.
 #![cfg(target_os = "windows")]
-// Inc2 scaffolding: AngleGl + the shared-texture import path are consumed by the
-// mpv render thread in Inc3. Remove when that thread lands.
+// Inc3 lands the full render path (AngleGl + render thread + surface hand-off).
+// Its consumer — `ensure_init`/`destroy` calling `VideoRenderThread::start`/`stop`
+// and `take_surfaces` — lands in Inc4; remove this allow when that wiring goes in.
 #![allow(dead_code)]
 
 use std::ffi::c_void;
-use std::sync::OnceLock;
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 use khronos_egl as egl;
 use libloading::Library;
+use libmpv2::render::{OpenGLInitParams, RenderContext, RenderParam, RenderParamApiType};
+use libmpv2::Mpv;
 
 use windows::core::{Interface, BOOL};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Graphics::Direct3D11::{
-    ID3D11Device, ID3D11Texture2D, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE,
-    D3D11_RESOURCE_MISC_SHARED, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+    ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_BIND_RENDER_TARGET,
+    D3D11_BIND_SHADER_RESOURCE, D3D11_RESOURCE_MISC_SHARED, D3D11_TEXTURE2D_DESC,
+    D3D11_USAGE_DEFAULT,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
@@ -341,4 +347,265 @@ impl AngleGl {
             finish();
         }
     }
+}
+
+// ── Surface hand-off: main thread → render thread ─────────────────────────────
+//
+// The DComp tree, swapchain, and shared texture are all built on the MAIN thread
+// (in `composition_host::install`, at window-creation time). The mpv render
+// thread is spawned later, from `ensure_init` on a tokio worker (first playback).
+// This slot carries the GPU surfaces across that gap. `windows` COM interfaces
+// are `Send + Sync`; only `HANDLE` is not, so the bundle gets a manual `Send`.
+
+/// GPU surfaces the render thread needs: our D3D11 device (for the immediate
+/// context that copies frames), the composition swapchain it presents into, the
+/// shared texture mpv draws into via ANGLE, and that texture's share handle.
+pub struct VideoSurfaces {
+    pub device: ID3D11Device,
+    pub swapchain: IDXGISwapChain1,
+    pub shared_tex: ID3D11Texture2D,
+    pub share_handle: HANDLE,
+    pub width: u32,
+    pub height: u32,
+}
+
+// SAFETY: the COM interfaces are `Send`; `HANDLE` is a global D3D share handle
+// that is valid process-wide and only read on the render thread. The bundle is
+// produced on the main thread and consumed once on the render thread — never
+// aliased across threads simultaneously.
+unsafe impl Send for VideoSurfaces {}
+
+/// Set by `composition_host::install` (main thread), taken by `ensure_init`
+/// (worker) when it starts the render thread. `None` until install runs.
+static PENDING_SURFACES: Mutex<Option<VideoSurfaces>> = Mutex::new(None);
+
+/// Publish the GPU surfaces for the render thread to claim. Overwrites any prior
+/// (a re-install replaces stale surfaces).
+pub fn publish_surfaces(surfaces: VideoSurfaces) {
+    match PENDING_SURFACES.lock() {
+        Ok(mut slot) => {
+            *slot = Some(surfaces);
+            log::info!("[player:video] surfaces published for render thread");
+        }
+        Err(e) => log::error!("[player:video] publish_surfaces lock poisoned: {e}"),
+    }
+}
+
+/// Claim the published GPU surfaces. Returns `None` if composition hosting never
+/// installed them (e.g. install failed), in which case the caller has no video
+/// target and should log + skip the render thread.
+pub fn take_surfaces() -> Option<VideoSurfaces> {
+    match PENDING_SURFACES.lock() {
+        Ok(mut slot) => slot.take(),
+        Err(e) => {
+            log::error!("[player:video] take_surfaces lock poisoned: {e}");
+            None
+        }
+    }
+}
+
+// ── Render thread ─────────────────────────────────────────────────────────────
+
+/// Composition-swapchain frames are not flipped at present time (unlike a
+/// windowed swapchain), so mpv must NOT flip either. Settled in the C0/C3b spike.
+const RENDER_FLIP: bool = false;
+
+/// Fallback wait so a missed wake (or a stop racing a wake) can never hang
+/// teardown longer than this.
+const WAIT_TIMEOUT: Duration = Duration::from_millis(100);
+
+/// mpv resolves GL entry points through this (a plain `fn`, no captured state) →
+/// the process-global ANGLE resolver.
+fn get_proc_address(_ctx: &(), name: &str) -> *mut c_void {
+    resolve_gl_proc(name)
+}
+
+/// Cross-thread wake/stop signal for the render loop. mpv's render-update
+/// callback raises `wake`; teardown raises `stop`.
+struct RenderSignal {
+    state: Mutex<SignalState>,
+    cv: Condvar,
+}
+
+struct SignalState {
+    wake: bool,
+    stop: bool,
+}
+
+#[derive(PartialEq, Eq)]
+enum WaitVerdict {
+    Frame,
+    Stop,
+}
+
+impl RenderSignal {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(SignalState { wake: false, stop: false }),
+            cv: Condvar::new(),
+        }
+    }
+
+    /// Raised by mpv's update callback (any thread). MUST NOT call any mpv API —
+    /// it only flips a flag and notifies, per the libmpv render-callback contract.
+    fn wake(&self) {
+        if let Ok(mut s) = self.state.lock() {
+            s.wake = true;
+            self.cv.notify_one();
+        }
+    }
+
+    fn request_stop(&self) {
+        if let Ok(mut s) = self.state.lock() {
+            s.stop = true;
+            self.cv.notify_one();
+        }
+    }
+
+    /// Block until a frame is signalled or stop is requested.
+    fn wait(&self) -> WaitVerdict {
+        let Ok(mut s) = self.state.lock() else {
+            return WaitVerdict::Stop;
+        };
+        loop {
+            if s.stop {
+                return WaitVerdict::Stop;
+            }
+            if s.wake {
+                s.wake = false;
+                return WaitVerdict::Frame;
+            }
+            match self.cv.wait_timeout(s, WAIT_TIMEOUT) {
+                Ok((guard, _)) => s = guard,
+                Err(_) => return WaitVerdict::Stop,
+            }
+        }
+    }
+}
+
+/// Owns the mpv→DComp render thread. Drop (or [`stop`](Self::stop)) signals the
+/// loop and joins it, which frees the `RenderContext` before the caller releases
+/// its `Arc<Mpv>` — the ordering `mpv_render_context_free` before
+/// `mpv_terminate_destroy` requires.
+pub struct VideoRenderThread {
+    signal: Arc<RenderSignal>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl VideoRenderThread {
+    /// Spawn the render thread. `mpv` is cloned so the thread keeps mpv alive
+    /// for as long as its `RenderContext` exists; teardown stops+joins this
+    /// thread before the final `Arc<Mpv>` drops.
+    pub fn start(mpv: Arc<Mpv>, surfaces: VideoSurfaces) -> Self {
+        let signal = Arc::new(RenderSignal::new());
+        let signal_for_thread = Arc::clone(&signal);
+        let handle = std::thread::Builder::new()
+            .name("prexu-video-render".to_string())
+            .spawn(move || {
+                if let Err(e) = render_loop(mpv, surfaces, signal_for_thread) {
+                    log::error!("[player:video] render thread error: {e}");
+                }
+                log::info!("[player:video] render thread exited");
+            })
+            .map_err(|e| log::error!("[player:video] spawn render thread failed: {e}"))
+            .ok();
+        Self { signal, handle }
+    }
+
+    /// Signal stop and join. Idempotent-safe via `Drop`.
+    pub fn stop(mut self) {
+        self.shutdown();
+    }
+
+    fn shutdown(&mut self) {
+        self.signal.request_stop();
+        if let Some(h) = self.handle.take() {
+            if h.join().is_err() {
+                log::warn!("[player:video] render thread join failed (panicked)");
+            }
+        }
+    }
+}
+
+impl Drop for VideoRenderThread {
+    fn drop(&mut self) {
+        if self.handle.is_some() {
+            self.shutdown();
+        }
+    }
+}
+
+/// The render thread body: own the ANGLE GL context + mpv `RenderContext`, then
+/// each woken frame: `update` → `render` into the shared texture → `CopyResource`
+/// into the swapchain backbuffer → `Present`. Presenting a composition swapchain
+/// updates the DComp video visual without a per-frame `Commit`.
+fn render_loop(
+    mpv: Arc<Mpv>,
+    surfaces: VideoSurfaces,
+    signal: Arc<RenderSignal>,
+) -> Result<(), String> {
+    let VideoSurfaces { device, swapchain, shared_tex, share_handle, width, height } = surfaces;
+
+    // The immediate context is used ONLY on this thread (the main thread never
+    // touches it after resource creation), so single-threaded use is sound even
+    // though ID3D11DeviceContext is not free-threaded.
+    let ctx: ID3D11DeviceContext =
+        unsafe { device.GetImmediateContext() }.map_err(|e| format!("GetImmediateContext: {e:?}"))?;
+
+    // ANGLE GL context is thread-affine — created and driven entirely here.
+    let mut gl = AngleGl::create(width as i32, height as i32)?;
+    let fbo = gl.import_share_handle_as_fbo(share_handle.0 as *mut c_void)?;
+
+    // RenderContext over the live mpv handle. The handle is internally
+    // synchronized and `mpv` outlives this thread (our Arc clone keeps it alive;
+    // teardown joins us before its final Arc drops), so aliasing it here is sound.
+    let mut render = {
+        let handle = unsafe { &mut *mpv.ctx.as_ptr() };
+        RenderContext::new(
+            handle,
+            vec![
+                RenderParam::ApiType(RenderParamApiType::OpenGl),
+                RenderParam::InitParams(OpenGLInitParams { get_proc_address, ctx: () }),
+            ],
+        )
+        .map_err(|e| format!("RenderContext::new: {e:?}"))?
+    };
+
+    // Wake this loop whenever mpv has a new frame or needs a redraw.
+    {
+        let sig = Arc::clone(&signal);
+        render.set_update_callback(move || sig.wake());
+    }
+    log::info!("[player:video] render thread up ({width}x{height}, fbo={fbo})");
+
+    while signal.wait() == WaitVerdict::Frame {
+        let flags = match render.update() {
+            Ok(f) => f,
+            Err(e) => {
+                log::warn!("[player:video] render update failed: {e:?}");
+                continue;
+            }
+        };
+        if flags & libmpv2_sys::mpv_render_update_flag_MPV_RENDER_UPDATE_FRAME == 0 {
+            continue;
+        }
+        if let Err(e) = render.render::<()>(fbo, width as i32, height as i32, RENDER_FLIP) {
+            log::warn!("[player:video] render failed: {e:?}");
+            continue;
+        }
+        gl.finish();
+        match unsafe { swapchain.GetBuffer::<ID3D11Texture2D>(0) } {
+            Ok(back) => {
+                unsafe { ctx.CopyResource(&back, &shared_tex) };
+                let _ = unsafe { swapchain.Present(1, Default::default()) }.ok();
+            }
+            Err(e) => log::warn!("[player:video] swapchain GetBuffer failed: {e:?}"),
+        }
+    }
+
+    // Free the mpv render context HERE, before we drop our `Arc<Mpv>` clone, so
+    // mpv_render_context_free runs before any mpv_terminate_destroy.
+    log::info!("[player:video] render thread stopping; freeing RenderContext");
+    drop(render);
+    Ok(())
 }

@@ -138,6 +138,18 @@ pub fn install(hwnd: HWND, controller: &ICoreWebView2Controller) -> windows::cor
     install_input_forwarding(hwnd, &composition);
     subscribe_cursor_changed(&composition);
 
+    // Hand the GPU surfaces to the (later-spawned) mpv render thread. Clones
+    // share the underlying COM objects by refcount; the originals stay here to
+    // keep the DComp tree alive. Inc4 claims these in `ensure_init`.
+    crate::player::video_render::publish_surfaces(crate::player::video_render::VideoSurfaces {
+        device: d3d.clone(),
+        swapchain: video_swapchain.clone(),
+        shared_tex: shared_tex.clone(),
+        share_handle,
+        width,
+        height,
+    });
+
     HOST.with(|h| {
         *h.borrow_mut() = Some(CompositionHost {
             _d3d: d3d,
