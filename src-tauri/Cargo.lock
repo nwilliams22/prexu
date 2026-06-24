@@ -3127,7 +3127,9 @@ dependencies = [
  "tauri-plugin-window-state",
  "tokio",
  "url",
+ "webview2-com",
  "windows",
+ "wry",
 ]
 
 [[package]]

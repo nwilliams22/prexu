@@ -49,7 +49,21 @@ windows = { version = "0.61", features = [
     "Win32_UI_Shell",
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Dwm",
+    # Path C3c (prexu-60mz.3): DirectComposition tree on the main HWND that hosts
+    # the visual-hosted WebView2 (and, later, the mpv video visual in C3d).
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_DirectComposition",
+    "Win32_System_Com",
 ] }
+# Path C3c: ICoreWebView2CompositionController + SetRootVisualTarget, matching
+# the version Tauri 2.10 resolves so the controller handed back by
+# tauri PlatformWebview::controller() casts cleanly.
+webview2-com = "0.38"
+# Direct dep purely for `wry::set_pending_composition_hosting` (the composition
+# opt-in added to the vendored fork); resolves to vendor/wry via [patch].
+wry = "0.54"
 
 # Path C3c (prexu-60mz.3): vendored fork of wry to add a WebView2 composition-
 # controller hosting path (CreateCoreWebView2CompositionController +

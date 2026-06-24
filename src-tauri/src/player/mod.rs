@@ -12,6 +12,9 @@ pub mod host_window;
 #[cfg(target_os = "windows")]
 pub mod taskbar_preview;
 
+#[cfg(target_os = "windows")]
+pub mod composition_host;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;

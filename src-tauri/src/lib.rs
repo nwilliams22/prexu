@@ -397,6 +397,15 @@ fn write_error(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Path C3c (prexu-60mz.3): flag-gated. Must run BEFORE the config `main`
+    // window is built (inside Builder::run below), on this same main thread, so
+    // the vendored-wry opt-in is consumed by that window's webview. The DComp
+    // tree is then attached in `.setup()` once the HWND exists.
+    #[cfg(target_os = "windows")]
+    if player::composition_host::enabled() {
+        player::composition_host::request_hosting();
+    }
+
     tauri::Builder::default()
         .manage(ProxyState::new())
         .manage(downloads::DownloadManager::new())
@@ -501,6 +510,32 @@ pub fn run() {
                     // Register custom DWM iconic bitmaps so alt-tab/taskbar
                     // previews show the mpv video instead of black (prexu-2k7p).
                     player::taskbar_preview::enable(&window, app.handle().clone());
+
+                    // Path C3c: attach the DComp tree to the (already
+                    // composition-hosted) main webview. Flag-gated; no-op on
+                    // default startup. HWND is passed as isize because the
+                    // with_webview closure must be Send (HWND is not).
+                    if player::composition_host::enabled() {
+                        match window.hwnd() {
+                            Ok(hwnd) => {
+                                let hwnd_isize = hwnd.0 as isize;
+                                let res = window.with_webview(move |pw| {
+                                    let hwnd =
+                                        windows::Win32::Foundation::HWND(hwnd_isize as *mut _);
+                                    let controller = pw.controller();
+                                    if let Err(e) =
+                                        player::composition_host::install(hwnd, &controller)
+                                    {
+                                        log::error!("[player:comp] install failed: {:?}", e);
+                                    }
+                                });
+                                if let Err(e) = res {
+                                    log::error!("[player:comp] with_webview failed: {:?}", e);
+                                }
+                            }
+                            Err(e) => log::error!("[player:comp] main hwnd unavailable: {:?}", e),
+                        }
+                    }
                 }
             }
             Ok(())
