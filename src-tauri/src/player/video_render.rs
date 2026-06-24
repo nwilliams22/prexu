@@ -38,11 +38,12 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_USAGE_DEFAULT,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
+    DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
     IDXGIDevice, IDXGIFactory2, IDXGIResource, IDXGISwapChain1, DXGI_SCALING_STRETCH,
-    DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_USAGE_RENDER_TARGET_OUTPUT,
+    DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+    DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
 
 use crate::player::angle_loader;
@@ -134,8 +135,10 @@ const GL_FRAMEBUFFER_COMPLETE: GLenumT = 0x8CD5;
 
 type PfnGenTextures = extern "system" fn(GLsizeiT, *mut GLuintT);
 type PfnBindTexture = extern "system" fn(GLenumT, GLuintT);
+type PfnDeleteTextures = extern "system" fn(GLsizeiT, *const GLuintT);
 type PfnGenFramebuffers = extern "system" fn(GLsizeiT, *mut GLuintT);
 type PfnBindFramebuffer = extern "system" fn(GLenumT, GLuintT);
+type PfnDeleteFramebuffers = extern "system" fn(GLsizeiT, *const GLuintT);
 type PfnFramebufferTexture2D = extern "system" fn(GLenumT, GLenumT, GLenumT, GLuintT, GLintT);
 type PfnCheckFramebufferStatus = extern "system" fn(GLenumT) -> GLenumT;
 type PfnFinish = extern "system" fn();
@@ -224,9 +227,12 @@ pub struct AngleGl {
     context: egl::Context,
     width: i32,
     height: i32,
-    // Kept alive (not read) so the texture-backed pbuffer the FBO draws into
-    // outlives rendering; populated by import_share_handle_as_fbo.
-    _pbuffer: Option<egl::Surface>,
+    // Current render target, rebuilt on resize. `0` means none yet.
+    fbo: GLuintT,
+    tex: GLuintT,
+    // The texture-backed pbuffer the FBO draws into; must outlive rendering and
+    // be destroyed before re-importing at a new size.
+    pbuffer: Option<egl::Surface>,
 }
 
 impl AngleGl {
@@ -281,17 +287,31 @@ impl AngleGl {
             context,
             width,
             height,
-            _pbuffer: None,
+            fbo: 0,
+            tex: 0,
+            pbuffer: None,
         })
     }
 
-    /// Import the D3D11 shared texture into ANGLE as a texture-backed pbuffer,
-    /// bind it to a GL texture, attach to a new FBO, and return the FBO id.
+    /// Import a D3D11 shared texture (size `w`x`h`) into ANGLE as a texture-backed
+    /// pbuffer, bind it to a GL texture, attach to a new FBO, and return the FBO
+    /// id. Re-runnable: any previous target (fbo/tex/pbuffer) is released first,
+    /// so this doubles as the resize path.
     ///
     /// `share_handle` is the HANDLE from `IDXGIResource::GetSharedHandle` cast to
     /// a pointer (the EGLClientBuffer ANGLE expects for buftype
     /// `EGL_D3D_TEXTURE_2D_SHARE_HANDLE_ANGLE`).
-    pub fn import_share_handle_as_fbo(&mut self, share_handle: *mut c_void) -> Result<i32, String> {
+    pub fn import_share_handle_as_fbo(
+        &mut self,
+        share_handle: *mut c_void,
+        w: i32,
+        h: i32,
+    ) -> Result<i32, String> {
+        // Drop any prior target before importing the new one (resize).
+        self.release_target();
+        self.width = w;
+        self.height = h;
+
         #[rustfmt::skip]
         let surf_attrs = [
             egl::WIDTH,          self.width,
@@ -311,7 +331,6 @@ impl AngleGl {
                 &surf_attrs,
             )
             .map_err(|e| format!("eglCreatePbufferFromClientBuffer (ANGLE D3D share): {e}"))?;
-        log::info!("[player:video] imported D3D shared texture as texture-backed pbuffer");
 
         // Make the imported pbuffer current so GL calls + eglBindTexImage hit the
         // right surface/context.
@@ -346,10 +365,34 @@ impl AngleGl {
                 "FBO incomplete: status=0x{status:04X} glError=0x{err:04X}"
             ));
         }
-        log::info!("[player:video] FBO {fbo} complete over shared texture (glError=0x{err:04X})");
+        log::info!("[player:video] FBO {fbo} complete over shared texture {w}x{h} (glError=0x{err:04X})");
 
-        self._pbuffer = Some(pbuffer);
+        self.tex = tex;
+        self.fbo = fbo;
+        self.pbuffer = Some(pbuffer);
         Ok(fbo as i32)
+    }
+
+    /// Delete the current FBO + GL texture and release/destroy the pbuffer.
+    /// Safe to call with nothing imported. The context must be current on the
+    /// calling (render) thread — it is, throughout the render loop.
+    fn release_target(&mut self) {
+        if self.fbo != 0 {
+            if let Ok(del) = load::<PfnDeleteFramebuffers>("glDeleteFramebuffers") {
+                del(1, &self.fbo);
+            }
+            self.fbo = 0;
+        }
+        if let Some(pb) = self.pbuffer.take() {
+            let _ = self.egl.release_tex_image(self.display, pb, egl::BACK_BUFFER);
+            let _ = self.egl.destroy_surface(self.display, pb);
+        }
+        if self.tex != 0 {
+            if let Ok(del) = load::<PfnDeleteTextures>("glDeleteTextures") {
+                del(1, &self.tex);
+            }
+            self.tex = 0;
+        }
     }
 
     /// Flush GL so mpv's draw completes before the swapchain `CopyResource`.
@@ -367,12 +410,10 @@ impl Drop for AngleGl {
     /// pbuffer over the shared texture. The EGL instance/display are global and
     /// intentionally kept (reused by the next render thread).
     fn drop(&mut self) {
+        self.release_target();
         let _ = self.egl.make_current(self.display, None, None, None);
-        if let Some(pb) = self._pbuffer.take() {
-            let _ = self.egl.destroy_surface(self.display, pb);
-        }
         let _ = self.egl.destroy_context(self.display, self.context);
-        log::debug!("[player:video] AngleGl released (context + pbuffer)");
+        log::debug!("[player:video] AngleGl released (context + target)");
     }
 }
 
@@ -463,6 +504,9 @@ struct RenderSignal {
 struct SignalState {
     wake: bool,
     stop: bool,
+    /// Latest requested client size (physical px). Coalesced: only the most
+    /// recent matters, so a resize burst collapses to one rebuild.
+    pending_resize: Option<(u32, u32)>,
 }
 
 #[derive(PartialEq, Eq)]
@@ -474,7 +518,7 @@ enum WaitVerdict {
 impl RenderSignal {
     fn new() -> Self {
         Self {
-            state: Mutex::new(SignalState { wake: false, stop: false }),
+            state: Mutex::new(SignalState { wake: false, stop: false, pending_resize: None }),
             cv: Condvar::new(),
         }
     }
@@ -486,6 +530,21 @@ impl RenderSignal {
             s.wake = true;
             self.cv.notify_one();
         }
+    }
+
+    /// Request the render thread rebuild its surfaces at `w`x`h` (main thread,
+    /// from the throttled geometry path). Coalesces; wakes the loop.
+    fn request_resize(&self, w: u32, h: u32) {
+        if let Ok(mut s) = self.state.lock() {
+            s.pending_resize = Some((w, h));
+            s.wake = true;
+            self.cv.notify_one();
+        }
+    }
+
+    /// Take the latest pending resize, if any (render thread).
+    fn take_resize(&self) -> Option<(u32, u32)> {
+        self.state.lock().ok().and_then(|mut s| s.pending_resize.take())
     }
 
     fn request_stop(&self) {
@@ -545,6 +604,12 @@ impl VideoRenderThread {
         Self { signal, handle }
     }
 
+    /// Ask the render thread to rebuild its surfaces at the new client size.
+    /// Cheap + coalesced; safe to call at the geometry event rate.
+    pub fn request_resize(&self, width: u32, height: u32) {
+        self.signal.request_resize(width, height);
+    }
+
     /// Signal stop and join. Idempotent-safe via `Drop`.
     pub fn stop(mut self) {
         self.shutdown();
@@ -577,7 +642,10 @@ fn render_loop(
     surfaces: VideoSurfaces,
     signal: Arc<RenderSignal>,
 ) -> Result<(), String> {
-    let VideoSurfaces { device, swapchain, shared_tex, share_handle, width, height } = surfaces;
+    let VideoSurfaces { device, swapchain, mut shared_tex, share_handle, width, height } = surfaces;
+    let mut cur_w = width;
+    let mut cur_h = height;
+    let mut fbo;
 
     // The immediate context is used ONLY on this thread (the main thread never
     // touches it after resource creation), so single-threaded use is sound even
@@ -587,7 +655,7 @@ fn render_loop(
 
     // ANGLE GL context is thread-affine — created and driven entirely here.
     let mut gl = AngleGl::create(width as i32, height as i32)?;
-    let fbo = gl.import_share_handle_as_fbo(share_handle.0 as *mut c_void)?;
+    fbo = gl.import_share_handle_as_fbo(share_handle.0 as *mut c_void, width as i32, height as i32)?;
 
     // RenderContext over the live mpv handle. The handle is internally
     // synchronized and `mpv` outlives this thread (our Arc clone keeps it alive;
@@ -612,6 +680,26 @@ fn render_loop(
     log::info!("[player:video] render thread up ({width}x{height}, fbo={fbo})");
 
     while signal.wait() == WaitVerdict::Frame {
+        // Apply the latest pending resize (coalesced) before rendering, and force
+        // a redraw afterwards so the resized swapchain shows the current frame
+        // even if mpv has no new one queued.
+        let mut force_render = false;
+        if let Some((nw, nh)) = signal.take_resize() {
+            if nw > 0 && nh > 0 && (nw, nh) != (cur_w, cur_h) {
+                match resize_surfaces(&device, &swapchain, &mut gl, nw, nh) {
+                    Ok((tex, new_fbo)) => {
+                        shared_tex = tex;
+                        fbo = new_fbo;
+                        cur_w = nw;
+                        cur_h = nh;
+                        force_render = true;
+                        log::debug!("[player:video] resized surfaces to {nw}x{nh} (fbo={fbo})");
+                    }
+                    Err(e) => log::error!("[player:video] resize to {nw}x{nh} failed: {e}"),
+                }
+            }
+        }
+
         let flags = match render.update() {
             Ok(f) => f,
             Err(e) => {
@@ -619,10 +707,11 @@ fn render_loop(
                 continue;
             }
         };
-        if flags & libmpv2_sys::mpv_render_update_flag_MPV_RENDER_UPDATE_FRAME == 0 {
+        let have_frame = flags & libmpv2_sys::mpv_render_update_flag_MPV_RENDER_UPDATE_FRAME != 0;
+        if !have_frame && !force_render {
             continue;
         }
-        if let Err(e) = render.render::<()>(fbo, width as i32, height as i32, RENDER_FLIP) {
+        if let Err(e) = render.render::<()>(fbo, cur_w as i32, cur_h as i32, RENDER_FLIP) {
             log::warn!("[player:video] render failed: {e:?}");
             continue;
         }
@@ -641,4 +730,26 @@ fn render_loop(
     log::info!("[player:video] render thread stopping; freeing RenderContext");
     drop(render);
     Ok(())
+}
+
+/// Rebuild the render surfaces at a new client size (render thread): resize the
+/// swapchain buffers in place (keeps the same swapchain object the DComp video
+/// visual points at, so the tree is untouched), allocate a fresh shared texture,
+/// and re-import it into ANGLE as the new FBO. Returns the new (texture, fbo).
+fn resize_surfaces(
+    device: &ID3D11Device,
+    swapchain: &IDXGISwapChain1,
+    gl: &mut AngleGl,
+    w: u32,
+    h: u32,
+) -> Result<(ID3D11Texture2D, i32), String> {
+    unsafe {
+        swapchain.ResizeBuffers(0, w, h, DXGI_FORMAT_UNKNOWN, DXGI_SWAP_CHAIN_FLAG(0))
+    }
+    .map_err(|e| format!("ResizeBuffers({w}x{h}): {e:?}"))?;
+
+    let (tex, handle) = create_shared_texture(device, w, h)
+        .map_err(|e| format!("recreate shared texture: {e:?}"))?;
+    let fbo = gl.import_share_handle_as_fbo(handle.0 as *mut c_void, w as i32, h as i32)?;
+    Ok((tex, fbo))
 }

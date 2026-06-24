@@ -714,6 +714,13 @@ impl PlayerState {
                 if let Err(e) = host.set_geometry(ax, ay, aw, ah) {
                     log::warn!("[player] sync_geometry failed: {}", e);
                 }
+            } else if let Some(vr) = inner.video_render.as_ref() {
+                // Composition mode: no host HWND — the video DComp visual follows
+                // the window automatically; only its swapchain pixel size tracks.
+                if aw > 0 && ah > 0 {
+                    log::trace!("[player] sync_geometry -> video resize {}x{}", aw, ah);
+                    vr.request_resize(aw as u32, ah as u32);
+                }
             }
         }
     }
@@ -747,6 +754,11 @@ impl PlayerState {
                 log::debug!("[player] sync_geometry_now applied ({},{},{}x{})", ax, ay, aw, ah);
                 if let Err(e) = host.set_geometry(ax, ay, aw, ah) {
                     log::warn!("[player] sync_geometry_now failed: {}", e);
+                }
+            } else if let Some(vr) = inner.video_render.as_ref() {
+                if aw > 0 && ah > 0 {
+                    log::debug!("[player] sync_geometry_now -> video resize {}x{}", aw, ah);
+                    vr.request_resize(aw as u32, ah as u32);
                 }
             }
         }
@@ -1083,6 +1095,13 @@ impl PlayerState {
                 );
                 if let Err(e) = host.set_geometry(ax, ay, aw, ah) {
                     log::warn!("[player] apply_host_geometry failed: {}", e);
+                }
+            } else if let Some(vr) = inner.video_render.as_ref() {
+                // Fullscreen instant-apply path under composition: resize the
+                // swapchain immediately so video tracks the overlay within a frame.
+                if aw > 0 && ah > 0 {
+                    log::debug!("[player] apply_host_geometry -> video resize {}x{}", aw, ah);
+                    vr.request_resize(aw as u32, ah as u32);
                 }
             }
         }
