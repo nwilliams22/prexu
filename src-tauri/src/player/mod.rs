@@ -715,11 +715,14 @@ impl PlayerState {
                     log::warn!("[player] sync_geometry failed: {}", e);
                 }
             } else if let Some(vr) = inner.video_render.as_ref() {
-                // Composition mode: no host HWND — the video DComp visual follows
-                // the window automatically; only its swapchain pixel size tracks.
+                // Composition mode: no host HWND. The swapchain tracks the inset
+                // SIZE (aw,ah); the video DComp visual is OFFSET to the inset's
+                // client-relative corner (ax-x, ay-y) — (0,0) = full-window video,
+                // a corner = mini player. Runs on the main thread (window event).
                 if aw > 0 && ah > 0 {
-                    log::trace!("[player] sync_geometry -> video resize {}x{}", aw, ah);
+                    log::trace!("[player] sync_geometry -> video {}x{} @ ({},{})", aw, ah, ax - x, ay - y);
                     vr.request_resize(aw as u32, ah as u32);
+                    composition_host::set_video_offset(ax - x, ay - y);
                 }
             }
         }
@@ -757,8 +760,9 @@ impl PlayerState {
                 }
             } else if let Some(vr) = inner.video_render.as_ref() {
                 if aw > 0 && ah > 0 {
-                    log::debug!("[player] sync_geometry_now -> video resize {}x{}", aw, ah);
+                    log::debug!("[player] sync_geometry_now -> video {}x{} @ ({},{})", aw, ah, ax - x, ay - y);
                     vr.request_resize(aw as u32, ah as u32);
+                    composition_host::set_video_offset(ax - x, ay - y);
                 }
             }
         }
@@ -1097,11 +1101,13 @@ impl PlayerState {
                     log::warn!("[player] apply_host_geometry failed: {}", e);
                 }
             } else if let Some(vr) = inner.video_render.as_ref() {
-                // Fullscreen instant-apply path under composition: resize the
-                // swapchain immediately so video tracks the overlay within a frame.
+                // Composition instant-apply (fullscreen toggle, minimize/popout
+                // resync). Size -> swapchain, corner -> visual offset. Caller runs
+                // this on the main thread (see resync_host / fullscreen command).
                 if aw > 0 && ah > 0 {
-                    log::debug!("[player] apply_host_geometry -> video resize {}x{}", aw, ah);
+                    log::debug!("[player] apply_host_geometry -> video {}x{} @ ({},{})", aw, ah, ax - x, ay - y);
                     vr.request_resize(aw as u32, ah as u32);
+                    composition_host::set_video_offset(ax - x, ay - y);
                 }
             }
         }

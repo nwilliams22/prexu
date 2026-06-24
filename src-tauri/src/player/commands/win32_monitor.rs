@@ -108,8 +108,27 @@ pub(crate) fn resync_host(
     main: &tauri::WebviewWindow,
     state: &crate::player::PlayerState,
 ) {
-    if let (Ok(pos), Ok(size)) = (main.inner_position(), main.inner_size()) {
-        state.apply_host_geometry(pos.x, pos.y, size.width as i32, size.height as i32);
+    let Ok(pos) = main.inner_position() else { return };
+    let Ok(size) = main.inner_size() else { return };
+    let (x, y, w, h) = (pos.x, pos.y, size.width as i32, size.height as i32);
+
+    // Composition mode applies a DComp visual offset, which MUST run on the UI
+    // thread (the device is apartment-threaded). This command runs on a tokio
+    // worker, so dispatch the apply to the main thread. The legacy host path is
+    // unchanged — its SetWindowPos is cross-thread-safe and stays inline.
+    if crate::player::composition_host::enabled() {
+        use tauri::Manager;
+        let app = main.app_handle().clone();
+        let app_for_closure = app.clone();
+        if let Err(e) = app.run_on_main_thread(move || {
+            app_for_closure
+                .state::<crate::player::PlayerState>()
+                .apply_host_geometry(x, y, w, h);
+        }) {
+            log::warn!("[player:cmd] resync_host main-thread dispatch failed: {:?}", e);
+        }
+    } else {
+        state.apply_host_geometry(x, y, w, h);
     }
 }
 

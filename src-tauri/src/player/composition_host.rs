@@ -166,6 +166,26 @@ pub fn install(hwnd: HWND, controller: &ICoreWebView2Controller) -> windows::cor
     Ok(())
 }
 
+/// Position the video DComp visual at `(off_x, off_y)` client-relative pixels.
+/// The visual's content (the swapchain) is sized to the inset by the render
+/// thread; this places it — `(0,0)` = full-window video, a corner offset = the
+/// mini player. MUST run on the main/UI thread (the DComp device is apartment-
+/// threaded); callers guarantee that. No-op if composition isn't installed.
+pub fn set_video_offset(off_x: i32, off_y: i32) {
+    HOST.with(|h| {
+        if let Some(host) = h.borrow().as_ref() {
+            unsafe {
+                let _ = host._video_visual.SetOffsetX2(off_x as f32);
+                let _ = host._video_visual.SetOffsetY2(off_y as f32);
+                if let Err(e) = host._device.Commit() {
+                    log::warn!("[player:comp] set_video_offset commit failed: {:?}", e);
+                }
+            }
+            log::trace!("[player:comp] video visual offset -> ({off_x},{off_y})");
+        }
+    });
+}
+
 /// Client-area size of `hwnd` in pixels, floored at 1x1 so swapchain/texture
 /// creation never sees a zero dimension (e.g. a minimized window at install).
 fn client_size(hwnd: HWND) -> (u32, u32) {
