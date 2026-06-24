@@ -18,6 +18,9 @@ pub mod composition_host;
 #[cfg(target_os = "windows")]
 pub mod angle_loader;
 
+#[cfg(target_os = "windows")]
+pub mod video_render;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;

@@ -21,19 +21,20 @@ use std::cell::RefCell;
 use webview2_com::Microsoft::Web::WebView2::Win32::*;
 use webview2_com::CursorChangedEventHandler;
 use windows::core::{w, Interface, PCWSTR};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11CreateDevice, ID3D11Device, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION,
+    D3D11CreateDevice, ID3D11Device, ID3D11Texture2D, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+    D3D11_SDK_VERSION,
 };
 use windows::Win32::Graphics::DirectComposition::{
     DCompositionCreateDevice, IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,
 };
-use windows::Win32::Graphics::Dxgi::IDXGIDevice;
+use windows::Win32::Graphics::Dxgi::{IDXGIDevice, IDXGISwapChain1};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowExW, LoadCursorW, SetCursor, HCURSOR, HTCLIENT, IDC_ARROW,
+    FindWindowExW, GetClientRect, LoadCursorW, SetCursor, HCURSOR, HTCLIENT, IDC_ARROW,
     WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
     WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL,
     WM_NCDESTROY, WM_RBUTTONDBLCLK, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_XBUTTONDBLCLK,
@@ -64,7 +65,16 @@ struct CompositionHost {
     _d3d: ID3D11Device,
     _device: IDCompositionDevice,
     _target: IDCompositionTarget,
+    _root_visual: IDCompositionVisual,
     _webview_visual: IDCompositionVisual,
+    // C3d Inc2: the video visual sits *below* the webview. Its content is the
+    // composition swapchain that the mpv render thread (Inc3) presents into. The
+    // shared texture + its handle are mpv's draw target (ANGLE imports the handle
+    // as a GL FBO); kept alive here, consumed by the render thread in Inc3.
+    _video_visual: IDCompositionVisual,
+    _video_swapchain: IDXGISwapChain1,
+    _shared_tex: ID3D11Texture2D,
+    _share_handle: HANDLE,
 }
 
 /// Whether composition hosting is requested for this run.
@@ -92,15 +102,34 @@ pub fn install(hwnd: HWND, controller: &ICoreWebView2Controller) -> windows::cor
     let dxgi: IDXGIDevice = d3d.cast()?;
     let device: IDCompositionDevice = unsafe { DCompositionCreateDevice(Some(&dxgi))? };
     let target: IDCompositionTarget = unsafe { device.CreateTargetForHwnd(hwnd, true)? };
+
+    // C3d Inc2: one DComp tree — root -> [ video (bottom), webview (top) ].
+    // The webview is transparent where the React app doesn't paint, so the mpv
+    // video visual below shows through. (Inc3 drives mpv into the swapchain.)
+    let root_visual: IDCompositionVisual = unsafe { device.CreateVisual()? };
+    let video_visual: IDCompositionVisual = unsafe { device.CreateVisual()? };
     let webview_visual: IDCompositionVisual = unsafe { device.CreateVisual()? };
 
-    unsafe { target.SetRoot(&webview_visual)? };
+    // Size the video surfaces to the window's current client area. Inc4 resizes
+    // them on WM_SIZE; Inc2 just needs a valid swapchain to attach.
+    let (width, height) = client_size(hwnd);
+    let (shared_tex, share_handle) =
+        crate::player::video_render::create_shared_texture(&d3d, width, height)?;
+    let video_swapchain =
+        crate::player::video_render::create_video_swapchain(&d3d, width, height)?;
+    unsafe { video_visual.SetContent(&video_swapchain)? };
+
+    unsafe { root_visual.AddVisual(&video_visual, true, None)? }; // video at bottom
+    unsafe { root_visual.AddVisual(&webview_visual, true, &video_visual)? }; // webview above
+    unsafe { target.SetRoot(&root_visual)? };
     unsafe { composition.SetRootVisualTarget(&webview_visual)? };
     unsafe { device.Commit()? };
 
     log::info!(
-        "[player:comp] DComp tree committed on HWND={:?}; webview visual-hosted (video visual pending C3d)",
-        hwnd.0
+        "[player:comp] DComp tree committed on HWND={:?}; root -> [video({}x{}), webview]",
+        hwnd.0,
+        width,
+        height
     );
 
     // Composition-hosted webviews receive NO input automatically (windowed mode
@@ -114,10 +143,29 @@ pub fn install(hwnd: HWND, controller: &ICoreWebView2Controller) -> windows::cor
             _d3d: d3d,
             _device: device,
             _target: target,
+            _root_visual: root_visual,
             _webview_visual: webview_visual,
+            _video_visual: video_visual,
+            _video_swapchain: video_swapchain,
+            _shared_tex: shared_tex,
+            _share_handle: share_handle,
         });
     });
     Ok(())
+}
+
+/// Client-area size of `hwnd` in pixels, floored at 1x1 so swapchain/texture
+/// creation never sees a zero dimension (e.g. a minimized window at install).
+fn client_size(hwnd: HWND) -> (u32, u32) {
+    let mut rc = RECT::default();
+    if unsafe { GetClientRect(hwnd, &mut rc) }.is_ok() {
+        let w = (rc.right - rc.left).max(1) as u32;
+        let h = (rc.bottom - rc.top).max(1) as u32;
+        (w, h)
+    } else {
+        log::warn!("[player:comp] GetClientRect failed; defaulting video surface to 1x1");
+        (1, 1)
+    }
 }
 
 /// Hardware D3D11 device with BGRA support (required by DirectComposition).
