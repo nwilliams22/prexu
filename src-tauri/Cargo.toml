@@ -50,3 +50,12 @@ windows = { version = "0.61", features = [
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Dwm",
 ] }
+
+# Path C3c (prexu-60mz.3): vendored fork of wry to add a WebView2 composition-
+# controller hosting path (CreateCoreWebView2CompositionController +
+# SetRootVisualTarget) so the React webview can live as a transparent
+# DirectComposition visual above the mpv video visual on the main Tauri HWND.
+# Pinned to the exact version Tauri 2.10 resolves (0.54.2); the patch must stay
+# API-compatible with what Tauri calls. Re-base on wry bumps when Tauri bumps.
+[patch.crates-io]
+wry = { path = "vendor/wry" }
