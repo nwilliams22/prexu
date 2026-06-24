@@ -516,7 +516,17 @@ pub fn run() {
 
                     // Register custom DWM iconic bitmaps so alt-tab/taskbar
                     // previews show the mpv video instead of black (prexu-2k7p).
-                    player::taskbar_preview::enable(&window, app.handle().clone());
+                    //
+                    // Path C3d/C3f: the iconic workaround exists ONLY because the
+                    // legacy WS_POPUP host left a transparent hole that DWM
+                    // thumbnailed as black. Under composition hosting the video
+                    // lives on the main HWND's own composited surface, which DWM
+                    // captures natively — and `FORCE_ICONIC_REPRESENTATION` would
+                    // OVERRIDE that live capture with a static bitmap (the cause
+                    // of the black Alt+Tab tile). So skip it in composition mode.
+                    if !player::composition_host::enabled() {
+                        player::taskbar_preview::enable(&window, app.handle().clone());
+                    }
 
                     // Path C3c: attach the DComp tree to the (already
                     // composition-hosted) main webview. Flag-gated; no-op on
