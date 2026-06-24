@@ -194,6 +194,27 @@ fn load<T: Copy>(name: &str) -> Result<T, String> {
     Ok(unsafe { std::mem::transmute_copy::<*mut c_void, T>(&p) })
 }
 
+/// Load ANGLE (securely) and publish the process-global EGL resolver, once.
+/// Idempotent: returns the existing instance on every call after the first, so
+/// repeated player init/destroy cycles each get a usable EGL instance instead of
+/// failing on a second set. If two threads race, the loser drops its instance
+/// and uses the winner's.
+fn ensure_resolver() -> Result<&'static egl::DynamicInstance<egl::EGL1_4>, String> {
+    if let Some(r) = RESOLVER.get() {
+        return Ok(&r.egl);
+    }
+    // SECURE load: absolute path + SHA-256 pin + Authenticode, no bare name.
+    let (egl_lib, glesv2) = angle_loader::load_verified_angle()?;
+    let egl_lib: Library = egl_lib.into();
+    let glesv2: Library = glesv2.into();
+    let egl_inst = unsafe { egl::DynamicInstance::<egl::EGL1_4>::load_required_from(egl_lib) }
+        .map_err(|e| format!("DynamicInstance load: {e}"))?;
+    // Ignore a set race: another thread winning is fine — we use whatever's set.
+    let _ = RESOLVER.set(ProcResolver { egl: egl_inst, glesv2 });
+    log::info!("[player:video] ANGLE libEGL/libGLESv2 loaded (verified)");
+    Ok(&RESOLVER.get().unwrap().egl)
+}
+
 /// ANGLE EGL/GLES context bound to the shared D3D11 texture as a GL FBO. Owns
 /// the GL context (thread-affine — construct and drive from one thread).
 pub struct AngleGl {
@@ -212,18 +233,11 @@ impl AngleGl {
     /// Load ANGLE (securely), get the default (D3D11) display, init, choose an
     /// ES2-capable pbuffer config, and create the context.
     pub fn create(width: i32, height: i32) -> Result<Self, String> {
-        // SECURE load: absolute path + SHA-256 pin + Authenticode, no bare name.
-        let (egl_lib, glesv2) = angle_loader::load_verified_angle()?;
-        let egl_lib: Library = egl_lib.into();
-        let glesv2: Library = glesv2.into();
-        let egl_inst = unsafe { egl::DynamicInstance::<egl::EGL1_4>::load_required_from(egl_lib) }
-            .map_err(|e| format!("DynamicInstance load: {e}"))?;
-
-        RESOLVER
-            .set(ProcResolver { egl: egl_inst, glesv2 })
-            .map_err(|_| "RESOLVER already set".to_string())?;
-        let egl = &RESOLVER.get().unwrap().egl;
-        log::info!("[player:video] ANGLE libEGL/libGLESv2 loaded (verified)");
+        // The ANGLE libraries + EGL instance are process-global and loaded once
+        // (idempotent): a player can init→destroy→re-init many times (warmup
+        // probe, then each playback), and every render thread builds a fresh
+        // context over the SAME EGL instance.
+        let egl = ensure_resolver()?;
 
         // EGL_DEFAULT_DISPLAY == null native display.
         let default_display: egl::NativeDisplayType = std::ptr::null_mut();
@@ -346,6 +360,22 @@ impl AngleGl {
     }
 }
 
+impl Drop for AngleGl {
+    /// Release the EGL context + imported pbuffer. Runs on the render thread that
+    /// owns the (thread-affine) context, when `render_loop` returns at teardown.
+    /// Without this, each player init→destroy cycle would leak a context + a
+    /// pbuffer over the shared texture. The EGL instance/display are global and
+    /// intentionally kept (reused by the next render thread).
+    fn drop(&mut self) {
+        let _ = self.egl.make_current(self.display, None, None, None);
+        if let Some(pb) = self._pbuffer.take() {
+            let _ = self.egl.destroy_surface(self.display, pb);
+        }
+        let _ = self.egl.destroy_context(self.display, self.context);
+        log::debug!("[player:video] AngleGl released (context + pbuffer)");
+    }
+}
+
 // ── Surface hand-off: main thread → render thread ─────────────────────────────
 //
 // The DComp tree, swapchain, and shared texture are all built on the MAIN thread
@@ -357,6 +387,11 @@ impl AngleGl {
 /// GPU surfaces the render thread needs: our D3D11 device (for the immediate
 /// context that copies frames), the composition swapchain it presents into, the
 /// shared texture mpv draws into via ANGLE, and that texture's share handle.
+///
+/// `Clone` is a COM refcount bump (+ a `Copy` of the share handle), so each
+/// player init can cheaply claim its own references while the originals stay
+/// alive in the DComp tree.
+#[derive(Clone)]
 pub struct VideoSurfaces {
     pub device: ID3D11Device,
     pub swapchain: IDXGISwapChain1,
@@ -388,14 +423,15 @@ pub fn publish_surfaces(surfaces: VideoSurfaces) {
     }
 }
 
-/// Claim the published GPU surfaces. Returns `None` if composition hosting never
-/// installed them (e.g. install failed), in which case the caller has no video
-/// target and should log + skip the render thread.
-pub fn take_surfaces() -> Option<VideoSurfaces> {
+/// Claim a clone of the published GPU surfaces, LEAVING them in place so the
+/// next player init (warmup probe, then each playback) can claim again. Returns
+/// `None` only if composition hosting never installed them (install failed/didn't
+/// run), in which case the caller has no video target and skips the render thread.
+pub fn claim_surfaces() -> Option<VideoSurfaces> {
     match PENDING_SURFACES.lock() {
-        Ok(mut slot) => slot.take(),
+        Ok(slot) => slot.clone(),
         Err(e) => {
-            log::error!("[player:video] take_surfaces lock poisoned: {e}");
+            log::error!("[player:video] claim_surfaces lock poisoned: {e}");
             None
         }
     }

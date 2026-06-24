@@ -394,7 +394,7 @@ impl PlayerState {
         // with no video output rather than failing init.
         #[cfg(target_os = "windows")]
         let video_render = if composition {
-            match video_render::take_surfaces() {
+            match video_render::claim_surfaces() {
                 Some(surfaces) => {
                     log::info!("[player] starting video render thread (composition mode)");
                     Some(video_render::VideoRenderThread::start(Arc::clone(&mpv), surfaces))
