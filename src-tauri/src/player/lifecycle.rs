@@ -145,6 +145,14 @@ pub(super) fn configure_mpv_properties(wid: Option<i64>) -> Result<Mpv, String> 
         // through the transparent webview alongside our custom seek bar.
         init.set_property("osd-level", 0_i64)?;
         init.set_property("osd-bar", "no")?;
+        // Never let mpv hide the OS cursor. mpv's `cursor-autohide` (default
+        // 1000ms) calls ShowCursor(FALSE) on idle, driving the GLOBAL cursor
+        // visibility counter negative. Under composition hosting (Path C) the
+        // mpv host window never receives mouse moves, so it hides the cursor
+        // once and never restores it — and our WebView2 SetCursor only sets the
+        // cursor SHAPE, which cannot override ShowCursor visibility. The React
+        // UI owns cursor show/hide (CSS `cursor: none`), so mpv must not touch it.
+        init.set_property("cursor-autohide", "no")?;
 
         // ── Playback perf tuning ──
         // Bigger forward demuxer cache absorbs network hiccups on
