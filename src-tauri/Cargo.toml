@@ -54,9 +54,21 @@ windows = { version = "0.61", features = [
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D11",
     "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_DirectComposition",
     "Win32_System_Com",
+    # Path C3d: harden the process DLL search path + Authenticode-verify the
+    # ANGLE DLLs before loading (no sideloading/planting).
+    "Win32_System_LibraryLoader",
+    "Win32_Security_WinTrust",
+    "Win32_Security_Cryptography",
 ] }
+# Path C3d: mpv libmpv2 RenderContext over ANGLE (OpenGL ES). khronos-egl is the
+# EGL binding; libloading loads the (Authenticode-verified, absolute-path) ANGLE
+# DLLs; sha2 pins their exact bytes.
+khronos-egl = { version = "6", features = ["dynamic"] }
+libloading = "0.8"
+sha2 = "0.10"
 # Path C3c: ICoreWebView2CompositionController + SetRootVisualTarget, matching
 # the version Tauri 2.10 resolves so the controller handed back by
 # tauri PlatformWebview::controller() casts cleanly.

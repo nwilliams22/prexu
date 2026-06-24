@@ -15,6 +15,9 @@ pub mod taskbar_preview;
 #[cfg(target_os = "windows")]
 pub mod composition_host;
 
+#[cfg(target_os = "windows")]
+pub mod angle_loader;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;

@@ -397,6 +397,13 @@ fn write_error(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Security (Path C3d): drop CWD/PATH from the process DLL search order
+    // before anything loads a third-party DLL — defeats DLL planting/sideloading
+    // for ANGLE and every other dynamically-loaded module. Keeps app dir +
+    // System32 so libmpv/WebView2 still resolve.
+    #[cfg(target_os = "windows")]
+    player::angle_loader::harden_dll_search_path();
+
     // Path C3c (prexu-60mz.3): flag-gated. Must run BEFORE the config `main`
     // window is built (inside Builder::run below), on this same main thread, so
     // the vendored-wry opt-in is consumed by that window's webview. The DComp

@@ -44,7 +44,9 @@
       }
     },
     "resources": {
-      "bin/libmpv-2.dll": "libmpv-2.dll"
+      "bin/libmpv-2.dll": "libmpv-2.dll",
+      "bin/libEGL.dll": "libEGL.dll",
+      "bin/libGLESv2.dll": "libGLESv2.dll"
     },
     "createUpdaterArtifacts": true
   },
