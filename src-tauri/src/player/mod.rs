@@ -199,6 +199,11 @@ struct Inner {
     /// DestroyWindow) back to the main thread.
     #[cfg(target_os = "windows")]
     host: Option<host_window::HostWindow>,
+    /// Path C3d: the mpv→DComp render thread, present only in composition mode.
+    /// `destroy()` stops+joins it BEFORE the final `Arc<Mpv>` drops so the
+    /// libmpv2 `RenderContext` is freed before `mpv_terminate_destroy` runs.
+    #[cfg(target_os = "windows")]
+    video_render: Option<video_render::VideoRenderThread>,
 }
 
 impl PlayerState {
@@ -342,15 +347,28 @@ impl PlayerState {
             (snap, scale)
         };
 
-        // On Windows, create the native host window on the MAIN THREAD.
-        // See `lifecycle::create_host_window` for the thread-affinity
-        // rationale (host WndProc must run on the message-pumping main
-        // thread, or cross-thread SetWindowPos deadlocks).
+        // Path C3d: under composition hosting, mpv renders through a libmpv2
+        // RenderContext into the DComp video visual (no host window, no `wid`).
+        // The legacy `wid` host-window path is the default when the flag is off.
         #[cfg(target_os = "windows")]
-        let host = lifecycle::create_host_window(app, minimize_snapshot, scale_snapshot)?;
+        let composition = composition_host::enabled();
+
+        // On Windows (legacy path only), create the native host window on the
+        // MAIN THREAD. See `lifecycle::create_host_window` for the thread-affinity
+        // rationale (host WndProc must run on the message-pumping main thread, or
+        // cross-thread SetWindowPos deadlocks). In composition mode there is no
+        // host window — `Inner.host` stays `None` and every geometry/fullscreen
+        // call (all guarded on `host.as_ref()`) becomes a no-op until the DComp
+        // transform rewire (C3e).
+        #[cfg(target_os = "windows")]
+        let host = if composition {
+            None
+        } else {
+            Some(lifecycle::create_host_window(app, minimize_snapshot, scale_snapshot)?)
+        };
 
         #[cfg(target_os = "windows")]
-        let wid = host.hwnd_as_i64();
+        let wid = host.as_ref().map(|h| h.hwnd_as_i64());
 
         // Marker for cold-start latency attribution. The gap between this
         // log and the first "FileLoaded" event covers: (a) mpv handle
@@ -359,23 +377,48 @@ impl PlayerState {
         log::info!("[player:init] starting mpv init (hwdec=auto-safe)");
 
         #[cfg(target_os = "windows")]
-        let mpv = lifecycle::configure_mpv_properties(Some(wid))?;
+        let mpv = lifecycle::configure_mpv_properties(wid, composition)?;
         #[cfg(not(target_os = "windows"))]
-        let mpv = lifecycle::configure_mpv_properties(None)?;
+        let mpv = lifecycle::configure_mpv_properties(None, false)?;
         #[cfg(target_os = "windows")]
-        log::info!("[player] mpv created with wid={}", wid);
+        log::info!("[player] mpv created (composition={}, wid={:?})", composition, wid);
         #[cfg(not(target_os = "windows"))]
         log::info!("[player] mpv created");
 
         let mpv = Arc::new(mpv);
         let event_pump = events::spawn_event_pump(Arc::clone(&mpv), app.clone())?;
 
+        // In composition mode, claim the GPU surfaces published by
+        // `composition_host::install` and spawn the mpv render thread. If the
+        // surfaces are missing (install failed/didn't run) we log and continue
+        // with no video output rather than failing init.
+        #[cfg(target_os = "windows")]
+        let video_render = if composition {
+            match video_render::take_surfaces() {
+                Some(surfaces) => {
+                    log::info!("[player] starting video render thread (composition mode)");
+                    Some(video_render::VideoRenderThread::start(Arc::clone(&mpv), surfaces))
+                }
+                None => {
+                    log::error!(
+                        "[player] composition enabled but no GPU surfaces published; \
+                         video will not render (composition_host::install did not run?)"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         let mut guard = self.inner.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
         *guard = Some(Inner {
             mpv,
             event_pump: Some(event_pump),
             #[cfg(target_os = "windows")]
-            host: Some(host),
+            host,
+            #[cfg(target_os = "windows")]
+            video_render,
         });
         log::info!("[player] event pump spawned, init complete");
         Ok(())
@@ -497,11 +540,22 @@ impl PlayerState {
             .map_err(|e| format!("Lock poisoned: {}", e))?
             .take();
 
-        let Some(inner) = inner else {
+        let Some(mut inner) = inner else {
             log::debug!("[player] destroy: nothing to destroy");
             return Ok(());
         };
         log::info!("[player] destroy: Inner taken, Arc strong_count={}", Arc::strong_count(&inner.mpv));
+
+        // Path C3d: stop the video render thread FIRST (composition mode only).
+        // `stop()` signals + joins it, which frees the libmpv2 RenderContext and
+        // releases the thread's `Arc<Mpv>` clone — both must happen before the
+        // final Arc drop in the teardown task triggers `mpv_terminate_destroy`.
+        #[cfg(target_os = "windows")]
+        if let Some(rt) = inner.video_render.take() {
+            log::info!("[player] destroy: stopping video render thread");
+            rt.stop();
+            log::info!("[player] destroy: video render thread stopped");
+        }
 
         // SYNCHRONOUS silence — mute first so audio cuts immediately, then
         // pause + queue stop/quit. Mute is the only piece the caller has

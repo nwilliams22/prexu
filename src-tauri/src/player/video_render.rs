@@ -19,10 +19,6 @@
 //! render loop that actually drives all three lands in Inc3, at which point the
 //! module-level `dead_code` allow below comes off.
 #![cfg(target_os = "windows")]
-// Inc3 lands the full render path (AngleGl + render thread + surface hand-off).
-// Its consumer — `ensure_init`/`destroy` calling `VideoRenderThread::start`/`stop`
-// and `take_surfaces` — lands in Inc4; remove this allow when that wiring goes in.
-#![allow(dead_code)]
 
 use std::ffi::c_void;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
@@ -207,8 +203,9 @@ pub struct AngleGl {
     context: egl::Context,
     width: i32,
     height: i32,
-    // populated by import_share_handle_as_fbo
-    pbuffer: Option<egl::Surface>,
+    // Kept alive (not read) so the texture-backed pbuffer the FBO draws into
+    // outlives rendering; populated by import_share_handle_as_fbo.
+    _pbuffer: Option<egl::Surface>,
 }
 
 impl AngleGl {
@@ -270,7 +267,7 @@ impl AngleGl {
             context,
             width,
             height,
-            pbuffer: None,
+            _pbuffer: None,
         })
     }
 
@@ -337,7 +334,7 @@ impl AngleGl {
         }
         log::info!("[player:video] FBO {fbo} complete over shared texture (glError=0x{err:04X})");
 
-        self.pbuffer = Some(pbuffer);
+        self._pbuffer = Some(pbuffer);
         Ok(fbo as i32)
     }
 

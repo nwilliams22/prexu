@@ -127,15 +127,28 @@ pub(super) fn create_host_window(
 /// properties (hwdec, vo, keep-open, OSD-off, cache tuning) are platform
 /// independent and match the inline `ensure_init` config exactly.
 ///
+/// `composition` (Path C3d) selects the render path:
+///   - `false` (default): `vo=gpu-next` rendering into the host `wid` window.
+///   - `true`: `vo=libmpv`, no `wid` — frames are pulled by a libmpv2
+///     `RenderContext` on the video render thread and composited into the DComp
+///     video visual. The `wid` argument is ignored in this mode.
+/// Every other property (hwdec, keep-open, OSD, cursor, cache, af, subs) is
+/// identical across both paths — only the video-output backend changes.
+///
 /// Splitting this out keeps the (long, comment-heavy) property block readable in
 /// isolation; the perf-tuning rationale lives with the properties it explains.
-pub(super) fn configure_mpv_properties(wid: Option<i64>) -> Result<Mpv, String> {
+pub(super) fn configure_mpv_properties(wid: Option<i64>, composition: bool) -> Result<Mpv, String> {
     Mpv::with_initializer(|init| {
-        if let Some(wid) = wid {
-            init.set_property("wid", wid)?;
+        if composition {
+            // Render-context path: mpv outputs through libmpv (no OS window).
+            init.set_property("vo", "libmpv")?;
+        } else {
+            if let Some(wid) = wid {
+                init.set_property("wid", wid)?;
+            }
+            init.set_property("vo", "gpu-next")?;
         }
         init.set_property("hwdec", "auto-safe")?;
-        init.set_property("vo", "gpu-next")?;
         init.set_property("keep-open", "always")?;
         init.set_property("force-window", "no")?;
         init.set_property("volume-max", 200_i64)?;
