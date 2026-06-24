@@ -394,12 +394,20 @@ pub use wkwebview::{PrintMargin, PrintOptions, WryWebView};
 pub(crate) mod webview2;
 #[cfg(target_os = "windows")]
 pub use self::webview2::ScrollBarStyle;
+/// Path C3c (prexu-60mz.3): opt the next top-level webview into composition hosting.
+#[cfg(target_os = "windows")]
+pub use self::webview2::set_pending_composition_hosting;
 #[cfg(target_os = "windows")]
 use self::webview2::*;
 #[cfg(target_os = "windows")]
 use webview2_com::Microsoft::Web::WebView2::Win32::{
-  ICoreWebView2, ICoreWebView2Controller, ICoreWebView2Environment,
+  ICoreWebView2, ICoreWebView2CompositionController, ICoreWebView2Controller,
+  ICoreWebView2Environment,
 };
+// Path C3c: `Interface::cast` for the windowed->composition controller QI in
+// `WebViewExtWindows::set_root_visual_target`.
+#[cfg(target_os = "windows")]
+use windows::core::Interface as _;
 
 use std::{borrow::Cow, collections::HashMap, path::PathBuf, rc::Rc};
 
@@ -2263,12 +2271,27 @@ pub trait WebViewExtWindows {
 
   /// Attaches this webview to the given HWND and removes it from the current one.
   fn reparent(&self, hwnd: isize) -> Result<()>;
+
+  /// Path C3c (prexu-60mz.3): set the DirectComposition root visual target for a
+  /// composition-hosted webview (one built after [`set_pending_composition_hosting`]).
+  ///
+  /// `visual` must be an `IDCompositionVisual` (passed as its `IUnknown`) that
+  /// lives in the app-owned composition tree; the webview's pixels are then
+  /// composed into that visual. Returns an error for windowed webviews (the
+  /// underlying controller does not implement `ICoreWebView2CompositionController`).
+  fn set_root_visual_target(&self, visual: &windows::core::IUnknown) -> Result<()>;
 }
 
 #[cfg(target_os = "windows")]
 impl WebViewExtWindows for WebView {
   fn controller(&self) -> ICoreWebView2Controller {
     self.webview.controller.clone()
+  }
+
+  fn set_root_visual_target(&self, visual: &windows::core::IUnknown) -> Result<()> {
+    let composition: ICoreWebView2CompositionController = self.webview.controller.cast()?;
+    unsafe { composition.SetRootVisualTarget(visual)? };
+    Ok(())
   }
 
   fn environment(&self) -> ICoreWebView2Environment {

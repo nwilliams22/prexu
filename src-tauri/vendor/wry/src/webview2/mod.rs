@@ -41,6 +41,28 @@ const PARENT_DESTROY_MESSAGE: u32 = WM_USER + 0x65;
 const MAIN_THREAD_DISPATCHER_SUBCLASS_ID: u32 = WM_USER + 0x66;
 static EXEC_MSG_ID: Lazy<u32> = Lazy::new(|| unsafe { RegisterWindowMessageA(s!("Wry::ExecMsg")) });
 
+thread_local! {
+  /// Path C3c (prexu-60mz.3): when set, the NEXT top-level webview built on the
+  /// current thread is hosted via `CreateCoreWebView2CompositionController`
+  /// instead of a windowed controller, so the embedding app can
+  /// `SetRootVisualTarget` it into its own DirectComposition tree (transparent
+  /// React UI above the mpv video visual). Per-thread + consumed once so
+  /// non-player windows keep the default windowed hosting.
+  static PENDING_COMPOSITION_HOSTING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Request composition hosting for the next top-level webview created on the
+/// current thread. Must be called immediately before building the window whose
+/// webview should be visual-hosted. See [`PENDING_COMPOSITION_HOSTING`].
+pub fn set_pending_composition_hosting(enabled: bool) {
+  PENDING_COMPOSITION_HOSTING.with(|c| c.set(enabled));
+}
+
+/// Reads and clears the pending composition-hosting request.
+fn take_pending_composition_hosting() -> bool {
+  PENDING_COMPOSITION_HOSTING.with(|c| c.replace(false))
+}
+
 impl From<webview2_com::Error> for Error {
   fn from(err: webview2_com::Error) -> Self {
     Error::WebView2Error(err)
@@ -135,7 +157,14 @@ impl InnerWebView {
     } else {
       Self::create_environment(&attributes, pl_attrs.clone())?
     };
-    let controller = Self::create_controller(hwnd, &env, attributes.incognito, background_color)?;
+    // Path C3c: top-level webviews may opt into composition hosting (a visual
+    // target the app drives) instead of windowed hosting. Child webviews always
+    // stay windowed.
+    let controller = if !is_child && take_pending_composition_hosting() {
+      Self::create_composition_controller(hwnd, &env, attributes.incognito, background_color)?
+    } else {
+      Self::create_controller(hwnd, &env, attributes.incognito, background_color)?
+    };
     let webview = Self::init_webview(
       parent,
       hwnd,
@@ -409,6 +438,44 @@ impl InnerWebView {
     }
 
     webview2_com::wait_with_pump(rx)?.map_err(Into::into)
+  }
+
+  /// Path C3c: create a WebView2 controller in **composition** mode.
+  ///
+  /// `CreateCoreWebView2CompositionController` produces an
+  /// `ICoreWebView2CompositionController` whose pixels are NOT presented to the
+  /// `hwnd` directly — they go to a DirectComposition visual the app supplies
+  /// via `SetRootVisualTarget`. The returned object QIs to the ordinary
+  /// `ICoreWebView2Controller` that every other wry code path uses (SetBounds,
+  /// CoreWebView2, visibility, focus), so hosting mode is transparent to them.
+  /// The app recovers the composition controller via
+  /// `WebViewExtWindows::controller().cast()` (or `set_root_visual_target`).
+  ///
+  /// `hwnd` is still required: it owns the input/focus association for the
+  /// composition-hosted webview.
+  #[inline]
+  fn create_composition_controller(
+    hwnd: HWND,
+    env: &ICoreWebView2Environment,
+    _incognito: bool,
+    _background_color: Option<(u8, u8, u8, u8)>,
+  ) -> Result<ICoreWebView2Controller> {
+    let env3 = env.cast::<ICoreWebView2Environment3>()?;
+    let (tx, rx) = mpsc::channel();
+
+    let handler = CreateCoreWebView2CompositionControllerCompletedHandler::create(Box::new(
+      move |error_code, controller| {
+        error_code?;
+        tx.send(controller.ok_or_else(|| windows::core::Error::from(E_POINTER)))
+          .map_err(|_| windows::core::Error::from(E_UNEXPECTED))
+      },
+    ));
+
+    unsafe { env3.CreateCoreWebView2CompositionController(hwnd, &handler)? };
+
+    let composition: ICoreWebView2CompositionController =
+      webview2_com::wait_with_pump(rx)?.map_err(Into::<Error>::into)?;
+    Ok(composition.cast()?)
   }
 
   #[allow(clippy::too_many_arguments)]
@@ -1846,3 +1913,4 @@ impl<T> UnsafeSend<T> {
     self.0
   }
 }
+
