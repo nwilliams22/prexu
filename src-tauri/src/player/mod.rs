@@ -25,7 +25,10 @@ use tauri::{AppHandle, Manager};
 use geometry::GeomState;
 
 // Re-export pure helpers that external callers (commands/, lib.rs) reference
-// via `crate::player::*`.
+// via `crate::player::*`. These geometry helpers are Windows-only (the host
+// window they position only exists on Windows), so the re-export must carry
+// the same gate or it fails to resolve on Linux/macOS.
+#[cfg(target_os = "windows")]
 pub(crate) use geometry::{compute_minimize_inset, initial_host_geometry};
 pub use timeline::TimelineCtx;
 

@@ -1,0 +1,13 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "bundle": {
+    "windows": {
+      "nsis": {
+        "installerHooks": "nsis-hooks/hooks.nsh"
+      }
+    },
+    "resources": {
+      "bin/libmpv-2.dll": "libmpv-2.dll"
+    }
+  }
+}
