@@ -61,22 +61,18 @@ push a `vX.Y.Z` tag). Confirm:
 
 Publish that public draft, then verify an installed app updates from it.
 
-### 4. Cutover transition (IMPORTANT — don't strand existing users)
+### 4. Cutover
 
-Apps already installed have the **old** endpoint
-(`…/prexu/releases/latest/download/latest.json`) baked into their binary. They
-keep using it until they update to a build that contains the **new** endpoint.
+No external users yet, so flip to private right after step 3 passes:
 
-1. Ship at least **one release that includes this endpoint change** while the
-   old `prexu` repo is **still public**, so current users receive it and move
-   onto a new-endpoint build.
-2. Only after that update has propagated should you flip `prexu` to **private**:
-   ```bash
-   gh repo edit nwilliams22/prexu --visibility private --accept-visibility-change-warning
-   ```
+```bash
+gh repo edit nwilliams22/prexu --visibility private --accept-visibility-change-warning
+```
 
-If you have no existing installs to worry about, flip to private right after
-step 3 passes.
+> If Prexu ever gains real users on builds with the **old** endpoint
+> (`…/prexu/releases/latest/download/latest.json`), don't flip cold: ship one
+> release carrying the new endpoint while `prexu` is still public so installs
+> migrate, then go private. Until then this doesn't apply.
 
 ### 5. After going private — branch protection note
 
