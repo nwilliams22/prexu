@@ -33,9 +33,16 @@ tauri-plugin-single-instance = "2.4.0"
 tauri-plugin-store = "2"
 tauri-plugin-updater = "2"
 url = "2"
-libmpv2 = { version = "4", features = ["build_libmpv"] }
+# Default (Linux/macOS): link the system libmpv via pkg-config / `-lmpv`
+# (libmpv2-sys emits `cargo:rustc-link-lib=mpv`). The `build_libmpv` feature
+# is added ONLY on Windows below, where libmpv is shipped as a vendored DLL
+# sourced from MPV_SOURCE rather than a distro package.
+libmpv2 = { version = "4" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+# Windows ships a vendored libmpv-2.dll; `build_libmpv` makes libmpv2's build
+# script wire MPV_SOURCE into the link search path (see src-tauri/build.rs).
+libmpv2 = { version = "4", features = ["build_libmpv"] }
 # Raw libmpv FFI for `screenshot-raw` (mpv_command_ret → mpv_node), used to
 # source frames for the DWM iconic taskbar/alt-tab preview. Must resolve to
 # the same version libmpv2 pins transitively so `Mpv::ctx`'s `mpv_handle`
