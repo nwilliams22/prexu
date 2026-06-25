@@ -1,3 +1,18 @@
+# Release pipeline for Prexu — private source, public update channel.
+#
+# Goal: keep BOTH the source AND the minisign signing key inside this PRIVATE
+# repo, while still shipping auto-updates the app can fetch without auth.
+#
+# Flow:
+#   1. build (matrix): tauri-action builds + SIGNS each platform and publishes a
+#      DRAFT release HERE (private). This is what generates a correct latest.json.
+#   2. publish-public: download those signed assets, rewrite the URLs in
+#      latest.json from this repo's path to the PUBLIC prexu-releases path, and
+#      upload binaries + .sig + rewritten latest.json to a DRAFT release on
+#      nwilliams22/prexu-releases. You then review + publish that draft.
+#
+# The signing key never leaves this repo. The public repo holds no secrets and
+# no source — only the already-public, signed binaries. See RELEASE_SETUP.md.
 name: Release
 
 on:
@@ -6,19 +21,20 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: write # tauri-action creates the private draft release
 
 # Windows libmpv dev archive URL. Use the **baseline** (non-v3) build — the
 # AVX2 v3 build fails LoadLibrary with ERROR_NOACCESS on Windows 11 (see
 # docs/native-player-status.md). Same pinned release + SHA256 as ci.yml; keep
 # the two workflows in lockstep when bumping. Override per-run via the
-# `LIBMPV_URL`/`LIBMPV_SHA256` repository variables (e.g. to point at a
-# vendored copy under this repo's Releases). The SHA256 is verified after
-# download and a mismatch fails the build; cache invalidates automatically
+# `LIBMPV_URL`/`LIBMPV_SHA256` repository variables. The SHA256 is verified
+# after download and a mismatch fails the build; cache invalidates automatically
 # when the URL or SHA256 changes.
 env:
   LIBMPV_URL: ${{ vars.LIBMPV_URL || 'https://github.com/zhongfly/mpv-winbuild/releases/download/2026-05-29-13a3e3ad0e/mpv-dev-x86_64-20260529-git-13a3e3ad0e.7z' }}
   LIBMPV_SHA256: ${{ vars.LIBMPV_SHA256 || '2c4883c8836b53465796aca61e16f7ce6c3adda818baadc850b9f2a39bd2ce5d' }}
+  # The public repo that hosts the published binaries + latest.json.
+  PUBLIC_RELEASE_REPO: nwilliams22/prexu-releases
 
 jobs:
   build:
@@ -136,6 +152,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Build + sign, publishing a DRAFT release to THIS (private) repo. The
+      # signing key stays here. tauri-action generates latest.json with this
+      # repo's asset URLs; publish-public rewrites them to the public repo.
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -145,16 +164,85 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: "Prexu v__VERSION__"
-          releaseBody: "See the [changelog](https://github.com/prexu/prexu/blob/main/CHANGELOG.md) for details."
+          releaseBody: "Internal build artifacts. Public binaries are mirrored to prexu-releases."
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }}
 
-  cleanup:
+  # Mirror the signed binaries + latest.json to the PUBLIC release channel.
+  # Runs once, after every matrix build has populated the private draft release.
+  publish-public:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Delete old releases (keep last 3)
+      - name: Download signed assets from private draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # read this repo's own draft
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          mkdir -p dist-assets
+          echo "Downloading assets from private draft release $TAG"
+          gh release download "$TAG" --dir dist-assets --clobber
+          ls -la dist-assets
+
+      - name: Rewrite latest.json URLs to the public repo
+        run: |
+          set -euo pipefail
+          cd dist-assets
+          if [ ! -f latest.json ]; then
+            echo "::error::latest.json not found in release assets — updater manifest missing"
+            exit 1
+          fi
+          # Anchored on '/releases/download/' so 'prexu' is never confused with
+          # the 'prexu-releases' substring.
+          sed -i \
+            's#github.com/${{ github.repository }}/releases/download/#github.com/${{ env.PUBLIC_RELEASE_REPO }}/releases/download/#g' \
+            latest.json
+          echo "--- rewritten latest.json ---"
+          cat latest.json
+          if grep -q "github.com/${{ github.repository }}/releases/download/" latest.json; then
+            echo "::error::latest.json still references the private repo after rewrite"
+            exit 1
+          fi
+
+      - name: Publish to public release channel (draft)
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PIPELINE_TOKEN }} # write to PUBLIC repo
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          REPO="${{ env.PUBLIC_RELEASE_REPO }}"
+          if ! gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
+            echo "Creating draft release $TAG on $REPO"
+            gh release create "$TAG" -R "$REPO" --draft \
+              --title "Prexu $TAG" \
+              --notes "Auto-update channel. Signed binaries only; source is private."
+          fi
+          echo "Uploading assets to $REPO $TAG"
+          gh release upload "$TAG" -R "$REPO" dist-assets/* --clobber
+          echo "Done. Review and publish the draft at: https://github.com/$REPO/releases"
+
+      - name: Prune old public releases (keep last 3)
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PIPELINE_TOKEN }}
+        run: |
+          set -euo pipefail
+          REPO="${{ env.PUBLIC_RELEASE_REPO }}"
+          # Keep the 3 newest published semver releases; delete older ones + tags.
+          old=$(gh release list -R "$REPO" --limit 100 --json tagName,createdAt,isDraft \
+            --jq '[.[] | select(.isDraft==false) | select(.tagName|test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))]
+                  | sort_by(.createdAt) | reverse | .[3:][].tagName')
+          for t in $old; do
+            echo "Deleting old public release $t"
+            gh release delete "$t" -R "$REPO" --yes --cleanup-tag
+          done
+
+  cleanup:
+    needs: publish-public
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete old private draft releases (keep last 3)
         uses: dev-drprasad/delete-older-releases@v0.3.4
         with:
           keep_latest: 3
