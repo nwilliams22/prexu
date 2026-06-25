@@ -186,6 +186,27 @@ pub fn set_video_offset(off_x: i32, off_y: i32) {
     });
 }
 
+/// Force a DirectComposition recomposite of the current tree. MUST run on the
+/// main/UI thread (the DComp device is apartment-threaded); callers guarantee
+/// that via `run_on_main_thread`. No-op if composition isn't installed.
+///
+/// prexu-3fxj: a composition-swapchain `Present` updates the swapchain, but the
+/// video visual is not shown on screen until the device is committed on the main
+/// thread. The geometry path commits incidentally (via [`set_video_offset`]), so
+/// on a playback that receives no main-thread geometry event the video freezes on
+/// its first frame while audio advances. The render thread posts this once after
+/// its first present to guarantee the visual starts updating.
+pub fn commit() {
+    HOST.with(|h| {
+        if let Some(host) = h.borrow().as_ref() {
+            match unsafe { host._device.Commit() } {
+                Ok(()) => log::debug!("[player:comp] DComp commit (recomposite)"),
+                Err(e) => log::warn!("[player:comp] commit failed: {:?}", e),
+            }
+        }
+    });
+}
+
 /// Client-area size of `hwnd` in pixels, floored at 1x1 so swapchain/texture
 /// creation never sees a zero dimension (e.g. a minimized window at install).
 fn client_size(hwnd: HWND) -> (u32, u32) {

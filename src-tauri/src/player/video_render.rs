@@ -23,10 +23,11 @@
 use std::ffi::c_void;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use khronos_egl as egl;
 use libloading::Library;
+use tauri::AppHandle;
 use libmpv2::render::{OpenGLInitParams, RenderContext, RenderParam, RenderParamApiType};
 use libmpv2::Mpv;
 
@@ -512,6 +513,10 @@ struct SignalState {
 #[derive(PartialEq, Eq)]
 enum WaitVerdict {
     Frame,
+    /// No wake arrived within `WAIT_TIMEOUT`. The loop is alive but mpv pushed
+    /// no frame — used by the prexu-3fxj freeze diagnostics to tell "wakes
+    /// stopped" apart from "frames render but don't display".
+    Timeout,
     Stop,
 }
 
@@ -568,7 +573,12 @@ impl RenderSignal {
                 return WaitVerdict::Frame;
             }
             match self.cv.wait_timeout(s, WAIT_TIMEOUT) {
-                Ok((guard, _)) => s = guard,
+                Ok((guard, wt)) => {
+                    s = guard;
+                    if wt.timed_out() {
+                        return WaitVerdict::Timeout;
+                    }
+                }
                 Err(_) => return WaitVerdict::Stop,
             }
         }
@@ -588,13 +598,13 @@ impl VideoRenderThread {
     /// Spawn the render thread. `mpv` is cloned so the thread keeps mpv alive
     /// for as long as its `RenderContext` exists; teardown stops+joins this
     /// thread before the final `Arc<Mpv>` drops.
-    pub fn start(mpv: Arc<Mpv>, surfaces: VideoSurfaces) -> Self {
+    pub fn start(mpv: Arc<Mpv>, surfaces: VideoSurfaces, app: AppHandle) -> Self {
         let signal = Arc::new(RenderSignal::new());
         let signal_for_thread = Arc::clone(&signal);
         let handle = std::thread::Builder::new()
             .name("prexu-video-render".to_string())
             .spawn(move || {
-                if let Err(e) = render_loop(mpv, surfaces, signal_for_thread) {
+                if let Err(e) = render_loop(mpv, surfaces, signal_for_thread, app) {
                     log::error!("[player:video] render thread error: {e}");
                 }
                 log::info!("[player:video] render thread exited");
@@ -641,6 +651,7 @@ fn render_loop(
     mpv: Arc<Mpv>,
     surfaces: VideoSurfaces,
     signal: Arc<RenderSignal>,
+    app: AppHandle,
 ) -> Result<(), String> {
     let VideoSurfaces { device, swapchain, mut shared_tex, share_handle, width, height } = surfaces;
     let mut cur_w = width;
@@ -679,13 +690,51 @@ fn render_loop(
     }
     log::info!("[player:video] render thread up ({width}x{height}, fbo={fbo})");
 
-    while signal.wait() == WaitVerdict::Frame {
-        // Apply the latest pending resize (coalesced) before rendering, and force
-        // a redraw afterwards so the resized swapchain shows the current frame
-        // even if mpv has no new one queued.
-        let mut force_render = false;
+    // prexu-3fxj: after the first frame is presented, post a one-shot DComp commit
+    // to the main thread so the video visual starts recompositing without waiting
+    // for an incidental main-thread geometry event (which may never arrive).
+    let mut committed = false;
+    // prexu-3fxj: mpv's render update-callback sometimes fires once with no FRAME
+    // flag and then never again, so gating render on FRAME leaves the vo un-primed
+    // and the video frozen on a black first frame. Force the first render
+    // unconditionally to prime mpv's libmpv vo cadence.
+    let mut primed = false;
+    // prexu-3fxj / C4c: a DPI / monitor change emits a BURST of growing sizes
+    // (e.g. 1925→…→2016 px over ~2s on a 150% display). Rebuilding the shared
+    // texture + swapchain + ANGLE FBO on every intermediate size thrashes the
+    // render target → black/garbage on HiDPI. Stage the latest requested size and
+    // rebuild ONCE it has been stable for `RESIZE_SETTLE`, collapsing the burst to
+    // a single rebuild at the final size.
+    const RESIZE_SETTLE: Duration = Duration::from_millis(120);
+    let mut pending_resize: Option<(u32, u32)> = None;
+    let mut pending_since = Instant::now();
+
+    loop {
+        match signal.wait() {
+            WaitVerdict::Stop => break,
+            WaitVerdict::Timeout => {
+                // A resize that settled during an mpv-idle gap still needs to apply;
+                // otherwise nothing to do until the next wake.
+                if pending_resize.is_none() {
+                    continue;
+                }
+            }
+            WaitVerdict::Frame => {}
+        }
+
+        // Force a render on the first pass (prime) and after a resize so the
+        // resized swapchain shows the current frame even if mpv has none queued.
+        let mut force_render = !primed;
+        primed = true;
+        // Stage the latest requested size; defer the rebuild until it settles.
         if let Some((nw, nh)) = signal.take_resize() {
             if nw > 0 && nh > 0 && (nw, nh) != (cur_w, cur_h) {
+                pending_resize = Some((nw, nh));
+                pending_since = Instant::now();
+            }
+        }
+        if let Some((nw, nh)) = pending_resize {
+            if pending_since.elapsed() >= RESIZE_SETTLE {
                 match resize_surfaces(&device, &swapchain, &mut gl, nw, nh) {
                     Ok((tex, new_fbo)) => {
                         shared_tex = tex;
@@ -693,10 +742,11 @@ fn render_loop(
                         cur_w = nw;
                         cur_h = nh;
                         force_render = true;
-                        log::debug!("[player:video] resized surfaces to {nw}x{nh} (fbo={fbo})");
+                        log::debug!("[player:video] resized surfaces to {nw}x{nh} (settled, fbo={fbo})");
                     }
                     Err(e) => log::error!("[player:video] resize to {nw}x{nh} failed: {e}"),
                 }
+                pending_resize = None;
             }
         }
 
@@ -720,6 +770,11 @@ fn render_loop(
             Ok(back) => {
                 unsafe { ctx.CopyResource(&back, &shared_tex) };
                 let _ = unsafe { swapchain.Present(1, Default::default()) }.ok();
+                if !committed {
+                    committed = true;
+                    let app = app.clone();
+                    let _ = app.run_on_main_thread(move || crate::player::composition_host::commit());
+                }
             }
             Err(e) => log::warn!("[player:video] swapchain GetBuffer failed: {e:?}"),
         }

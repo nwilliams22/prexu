@@ -397,7 +397,14 @@ impl PlayerState {
             match video_render::claim_surfaces() {
                 Some(surfaces) => {
                     log::info!("[player] starting video render thread (composition mode)");
-                    Some(video_render::VideoRenderThread::start(Arc::clone(&mpv), surfaces))
+                    // Invalidate the cross-playback geom dedup cache: the new render
+                    // thread starts at the stale install surface size, so the initial
+                    // sync (scheduled after init) MUST apply rather than dedup-skip,
+                    // or the video stays stuck at install size and frozen (prexu-3fxj).
+                    if let Ok(mut g) = self.geom.lock() {
+                        g.last_geometry = None;
+                    }
+                    Some(video_render::VideoRenderThread::start(Arc::clone(&mpv), surfaces, app.clone()))
                 }
                 None => {
                     log::error!(
@@ -420,7 +427,35 @@ impl PlayerState {
             #[cfg(target_os = "windows")]
             video_render,
         });
+        drop(guard); // release before the main-thread sync below tries inner.try_lock()
         log::info!("[player] event pump spawned, init complete");
+
+        // prexu-3fxj / prexu-0qri: composition playbacks reuse the persistent geom
+        // dedup cache but spawn a FRESH render thread at the stale install surface
+        // size. Window-event geometry syncs only fire when the window moves/resizes,
+        // so a replay at the same window size leaves the render thread stuck at the
+        // install size — video frozen (no swapchain rebuild + commit) and/or cropped.
+        // Fire one immediate sync on the MAIN thread (required: set_video_offset's
+        // DComp commit is thread-affine) so every composition playback resizes the
+        // video to the current player viewport and commits the visual.
+        #[cfg(target_os = "windows")]
+        if composition {
+            let app2 = app.clone();
+            if let Err(e) = app.run_on_main_thread(move || {
+                if let Some(win) = app2.get_webview_window("main") {
+                    if let (Ok(pos), Ok(size)) = (win.inner_position(), win.inner_size()) {
+                        app2.state::<PlayerState>().sync_geometry_now(
+                            pos.x,
+                            pos.y,
+                            size.width as i32,
+                            size.height as i32,
+                        );
+                    }
+                }
+            }) {
+                log::warn!("[player] initial composition geometry sync schedule failed: {:?}", e);
+            }
+        }
         Ok(())
     }
 
