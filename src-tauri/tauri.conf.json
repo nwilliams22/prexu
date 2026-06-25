@@ -38,14 +38,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "windows": {
-      "nsis": {
-        "installerHooks": "nsis-hooks/hooks.nsh"
-      }
-    },
-    "resources": {
-      "bin/libmpv-2.dll": "libmpv-2.dll"
-    },
     "createUpdaterArtifacts": true
   },
   "plugins": {
