@@ -102,6 +102,26 @@ jobs:
           }
           Get-ChildItem -Recurse "src-tauri\ci\mpv\64" | ForEach-Object { Write-Host "  $($_.FullName)" }
 
+      # Path C3d bundles the ANGLE DLLs (libEGL/libGLESv2) as Tauri resources,
+      # so tauri_build validates they exist even for `cargo clippy`. This headless
+      # job never loads ANGLE (no GPU / no composition render path), so stub the
+      # DLLs to satisfy the resource-path check. The real runtime SHA-256 +
+      # Authenticode verification (player::angle_loader) is unaffected — it runs
+      # only when the app initialises the video render path, which this job never
+      # does. The DLLs are gitignored binaries provided out-of-band locally.
+      - name: Stub ANGLE DLLs for resource validation (headless, never loaded)
+        shell: pwsh
+        run: |
+          $bin = "src-tauri\bin"
+          New-Item -ItemType Directory -Force -Path $bin | Out-Null
+          foreach ($n in @("libEGL.dll", "libGLESv2.dll")) {
+            $p = Join-Path $bin $n
+            if (-not (Test-Path $p)) {
+              [System.IO.File]::WriteAllBytes($p, [byte[]](0x4D, 0x5A))
+              Write-Host "Stubbed $p"
+            }
+          }
+
       # MPV_SOURCE points libmpv2-sys's build script at the vendored mpv.lib +
       # headers; build.rs also copies libmpv-2.dll to target\debug\ for runtime.
       # Clippy must run here, not in the ubuntu `ci` job: src-tauri links libmpv2
