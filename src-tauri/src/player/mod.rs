@@ -230,8 +230,9 @@ impl PlayerState {
     /// `player_enter_minimize` so geometry conversions use the live scale.
     #[cfg(target_os = "windows")]
     pub(crate) fn set_scale_factor(&self, scale: f64) {
-        if let Ok(mut g) = self.geom.lock() {
-            if (g.scale_factor - scale).abs() > f64::EPSILON {
+        let changed = if let Ok(mut g) = self.geom.lock() {
+            let changed = (g.scale_factor - scale).abs() > f64::EPSILON;
+            if changed {
                 log::info!(
                     "[player:host] scale factor {:.3} → {:.3}",
                     g.scale_factor,
@@ -239,6 +240,16 @@ impl PlayerState {
                 );
                 g.scale_factor = scale;
             }
+            changed
+            // geom lock released here before touching the composition controller
+        } else {
+            false
+        };
+        // C4c (prexu-od2n): keep the composition-hosted webview crisp after a
+        // monitor/DPI change by re-applying the rasterization scale. No-op when
+        // composition isn't installed (windowed host / non-main thread).
+        if changed {
+            composition_host::set_rasterization_scale(scale);
         }
     }
 
@@ -651,6 +662,11 @@ impl PlayerState {
             return;
         }
 
+        // C4b (prexu-x2bt): the window moved on screen — tell the composition-
+        // hosted webview so it repositions OS-owned popups (the IME candidate
+        // window). No-op until composition is installed.
+        composition_host::notify_window_moved();
+
         // Acquire geom once to plan the move (inset + dedup), then release
         // before calling inner.try_lock() / SetWindowPos. Dropping geom
         // before try_lock is mandatory: holding it across try_lock would let
@@ -716,6 +732,11 @@ impl PlayerState {
             log::trace!("[player] sync_geometry suppressed — fullscreen transition");
             return;
         }
+
+        // C4b (prexu-x2bt): a maximize/restore/snap shifts the window origin —
+        // reposition the composition webview's IME candidate window. No-op until
+        // composition is installed.
+        composition_host::notify_window_moved();
 
         // Single geom acquisition: throttle + pending + inset + dedup,
         // all computed while holding one lock by plan_sync, then released

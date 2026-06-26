@@ -19,7 +19,7 @@
 use std::cell::RefCell;
 
 use webview2_com::Microsoft::Web::WebView2::Win32::*;
-use webview2_com::CursorChangedEventHandler;
+use webview2_com::{AcceleratorKeyPressedEventHandler, CursorChangedEventHandler};
 use windows::core::{w, Interface, PCWSTR};
 use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
@@ -32,6 +32,8 @@ use windows::Win32::Graphics::DirectComposition::{
 };
 use windows::Win32::Graphics::Dxgi::{IDXGIDevice, IDXGISwapChain1};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState;
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, GetClientRect, LoadCursorW, SetCursor, HCURSOR, HTCLIENT, IDC_ARROW,
@@ -57,6 +59,13 @@ thread_local! {
     /// what makes the cursor restore correctly after the player hides it —
     /// WM_SETCURSOR alone lags the page's async cursor changes by a move.
     static CURSOR: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
+
+    /// The composition webview's controller, stashed on `install` so later
+    /// events can reach it: DPI changes re-apply the rasterization scale (C4c)
+    /// and window moves reposition the IME candidate window (C4b). Apartment-
+    /// threaded COM, main-thread only — same reason as HOST that it lives in a
+    /// thread-local rather than Tauri state (it is not `Send`).
+    static CONTROLLER: RefCell<Option<ICoreWebView2Controller>> = const { RefCell::new(None) };
 }
 
 struct CompositionHost {
@@ -97,6 +106,12 @@ pub fn request_hosting() {
 /// caused wry to create; the cast fails for a windowed controller.
 pub fn install(hwnd: HWND, controller: &ICoreWebView2Controller) -> windows::core::Result<()> {
     let composition: ICoreWebView2CompositionController = controller.cast()?;
+
+    // C4 (prexu-0oc3): re-apply the parity windowed WebView2 gave for free but
+    // visual hosting drops. Stash the controller first so later DPI events (C4c)
+    // and window moves (C4b) can reach it, then configure the one-shot settings.
+    CONTROLLER.with(|c| *c.borrow_mut() = Some(controller.clone()));
+    configure_controller_parity(hwnd, controller);
 
     let d3d = create_d3d11_device()?;
     let dxgi: IDXGIDevice = d3d.cast()?;
@@ -164,6 +179,157 @@ pub fn install(hwnd: HWND, controller: &ICoreWebView2Controller) -> windows::cor
         });
     });
     Ok(())
+}
+
+// ── C4 controller parity (prexu-0oc3): re-add windowed WebView2 freebies ──────
+
+/// Apply the one-shot controller settings that windowed WebView2 provided for
+/// free but DirectComposition visual hosting drops: HiDPI rasterization scale
+/// (C4c), external file-drop rejection (C4d), and Ctrl+P print suppression
+/// (C4e). Runs once from [`install`] on the main/UI thread.
+fn configure_controller_parity(hwnd: HWND, controller: &ICoreWebView2Controller) {
+    // C4c (prexu-od2n): windowed WebView2 tracked monitor DPI for free; the
+    // visual-hosted controller renders at scale 1.0 by default, so text is soft
+    // on a >100% monitor. Pin the rasterization scale to the window's DPI and
+    // ask WebView2 to follow monitor changes; `set_rasterization_scale`
+    // additionally re-applies it from the player's scale-factor handler.
+    match controller.cast::<ICoreWebView2Controller3>() {
+        Ok(c3) => {
+            let scale = dpi_scale(hwnd);
+            unsafe {
+                if let Err(e) = c3.SetShouldDetectMonitorScaleChanges(true) {
+                    log::warn!(
+                        "[player:comp] SetShouldDetectMonitorScaleChanges failed: {:?}",
+                        e
+                    );
+                }
+                match c3.SetRasterizationScale(scale) {
+                    Ok(()) => log::info!(
+                        "[player:comp] rasterization scale set to {:.3} (C4c)",
+                        scale
+                    ),
+                    Err(e) => log::warn!(
+                        "[player:comp] SetRasterizationScale({:.3}) failed: {:?}",
+                        scale,
+                        e
+                    ),
+                }
+            }
+        }
+        Err(e) => log::warn!(
+            "[player:comp] ICoreWebView2Controller3 unavailable; HiDPI scale not set (C4c): {:?}",
+            e
+        ),
+    }
+
+    // C4d (prexu-jc8x): Prexu accepts no file drops. Under composition an
+    // external drop would otherwise be accepted by the webview and navigate it
+    // away from the app; disabling it makes the OS show the no-drop cursor and
+    // dropped files do nothing.
+    match controller.cast::<ICoreWebView2Controller4>() {
+        Ok(c4) => match unsafe { c4.SetAllowExternalDrop(false) } {
+            Ok(()) => log::info!("[player:comp] external file drop disabled (C4d)"),
+            Err(e) => log::warn!("[player:comp] SetAllowExternalDrop(false) failed: {:?}", e),
+        },
+        Err(e) => log::warn!(
+            "[player:comp] ICoreWebView2Controller4 unavailable; external drop not disabled (C4d): {:?}",
+            e
+        ),
+    }
+
+    // C4e (prexu-yd7e): swallow Ctrl+P so WebView2's print dialog never opens.
+    // A surgical accelerator filter, not `AreBrowserAcceleratorKeysEnabled(false)`
+    // — that would also disable F5/Ctrl+R reload and Ctrl+F find, which we keep.
+    install_print_suppressor(controller);
+}
+
+/// DPI scale of `hwnd`'s monitor (1.0 == 96 DPI / 100%); 1.0 if the query fails.
+fn dpi_scale(hwnd: HWND) -> f64 {
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    if dpi == 0 {
+        log::warn!("[player:comp] GetDpiForWindow returned 0; defaulting scale to 1.0");
+        1.0
+    } else {
+        dpi as f64 / 96.0
+    }
+}
+
+/// C4e: register an `AcceleratorKeyPressed` filter that marks Ctrl+P handled,
+/// preventing the WebView2 print dialog. Only Ctrl+P is intercepted; all other
+/// accelerators (reload, find) pass through untouched.
+fn install_print_suppressor(controller: &ICoreWebView2Controller) {
+    const VK_P: u32 = 0x50;
+    const VK_CONTROL: i32 = 0x11;
+    let handler = AcceleratorKeyPressedEventHandler::create(Box::new(
+        move |_sender, args: Option<ICoreWebView2AcceleratorKeyPressedEventArgs>| {
+            if let Some(args) = args {
+                let mut kind = COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN;
+                let mut vk = 0u32;
+                unsafe {
+                    let _ = args.KeyEventKind(&mut kind);
+                    let _ = args.VirtualKey(&mut vk);
+                }
+                let is_down = kind == COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN
+                    || kind == COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN;
+                // High bit of GetKeyState == key currently down.
+                let ctrl_down = (unsafe { GetKeyState(VK_CONTROL) }) < 0;
+                if is_down && vk == VK_P && ctrl_down {
+                    match unsafe { args.SetHandled(true) } {
+                        Ok(()) => {
+                            log::debug!("[player:comp] swallowed Ctrl+P (print disabled, C4e)")
+                        }
+                        Err(e) => log::warn!("[player:comp] SetHandled(Ctrl+P) failed: {:?}", e),
+                    }
+                }
+            }
+            Ok(())
+        },
+    ));
+    let mut token = 0i64;
+    match unsafe { controller.add_AcceleratorKeyPressed(&handler, &mut token) } {
+        Ok(()) => log::info!("[player:comp] Ctrl+P print suppressor installed (C4e)"),
+        Err(e) => log::error!("[player:comp] add_AcceleratorKeyPressed failed: {:?}", e),
+    }
+}
+
+/// C4c: re-apply the rasterization scale after a DPI / monitor-scale change so
+/// the webview stays crisp when moved between monitors of differing DPI. Called
+/// from the player's scale-factor handler. No-op until composition is installed.
+pub fn set_rasterization_scale(scale: f64) {
+    CONTROLLER.with(|c| {
+        if let Some(controller) = c.borrow().as_ref() {
+            if let Ok(c3) = controller.cast::<ICoreWebView2Controller3>() {
+                match unsafe { c3.SetRasterizationScale(scale) } {
+                    Ok(()) => {
+                        log::debug!("[player:comp] rasterization scale -> {:.3} (C4c)", scale)
+                    }
+                    Err(e) => log::warn!(
+                        "[player:comp] SetRasterizationScale({:.3}) failed: {:?}",
+                        scale,
+                        e
+                    ),
+                }
+            }
+        }
+    });
+}
+
+/// C4b: notify the composition-hosted webview that its parent window moved, so
+/// it repositions OS-owned popups — chiefly the IME candidate window, which
+/// otherwise sticks at its install-time screen position under visual hosting.
+/// Called on every window move/origin change. No-op until composition is
+/// installed.
+pub fn notify_window_moved() {
+    CONTROLLER.with(|c| {
+        if let Some(controller) = c.borrow().as_ref() {
+            if let Err(e) = unsafe { controller.NotifyParentWindowPositionChanged() } {
+                log::trace!(
+                    "[player:comp] NotifyParentWindowPositionChanged failed: {:?}",
+                    e
+                );
+            }
+        }
+    });
 }
 
 /// Position the video DComp visual at `(off_x, off_y)` client-relative pixels.
