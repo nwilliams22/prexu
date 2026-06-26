@@ -2,8 +2,9 @@
 //! DirectComposition visual so the React UI can be composited *above* the mpv
 //! video visual on a single HWND (Alt+Tab / capture parity, no black tile).
 //!
-//! Two halves, both gated on the `PREXU_COMPOSITION_HOST` env flag so default
-//! startup is untouched until this path is proven on a real GPU desktop:
+//! Composition is the default render path (C3h, prexu-kcmg); set
+//! `PREXU_LEGACY_HOST` to fall back to the legacy WS_POPUP host while it still
+//! exists (deleted by prexu-zfyi). Two halves:
 //!   1. [`request_hosting`] — called once before the `main` window is built,
 //!      flips the vendored-wry opt-in so its WebView2 is created via
 //!      `CreateCoreWebView2CompositionController` instead of windowed mode.
@@ -11,9 +12,8 @@
 //!      builds the DComp device + target on the main HWND, creates the webview
 //!      visual, and `SetRootVisualTarget`s the composition controller into it.
 //!
-//! The mpv *video* visual (below the webview) is C3d (prexu-60mz.4); until then
-//! this renders the React app alone through composition, which is exactly the
-//! milestone that proves the webview-host half works.
+//! The mpv *video* visual sits below the webview (C3d, prexu-60mz.4); the webview
+//! is transparent where the React app doesn't paint, so the video shows through.
 #![cfg(target_os = "windows")]
 
 use std::cell::RefCell;
@@ -43,8 +43,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_XBUTTONDOWN, WM_XBUTTONUP,
 };
 
-/// Env flag opting the main window into composition hosting. Off by default.
-const FLAG: &str = "PREXU_COMPOSITION_HOST";
+/// Env flag opting OUT of composition hosting, back to the legacy WS_POPUP host.
+/// Composition is the default render path (C3h, prexu-kcmg); set this to fall
+/// back while the legacy path still exists (deleted by prexu-zfyi).
+const LEGACY_FLAG: &str = "PREXU_LEGACY_HOST";
 
 thread_local! {
     /// Keeps the DComp tree (device/target/visual) alive for the process
@@ -86,16 +88,17 @@ struct CompositionHost {
     _share_handle: HANDLE,
 }
 
-/// Whether composition hosting is requested for this run.
+/// Whether composition hosting is active for this run. Default: yes. Opt out
+/// (legacy WS_POPUP host) by setting `PREXU_LEGACY_HOST` (C3h, prexu-kcmg).
 pub fn enabled() -> bool {
-    std::env::var_os(FLAG).is_some()
+    std::env::var_os(LEGACY_FLAG).is_none()
 }
 
 /// Flip the vendored-wry opt-in so the next top-level webview built on this
 /// thread (the `main` window) is composition-hosted. Must run before Tauri
 /// builds that window — i.e. before `Builder::run`.
 pub fn request_hosting() {
-    log::info!("[player:comp] {FLAG} set — requesting composition hosting for main webview");
+    log::info!("[player:comp] requesting composition hosting for main webview (default path)");
     wry::set_pending_composition_hosting(true);
 }
 
