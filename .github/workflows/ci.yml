@@ -42,6 +42,13 @@ jobs:
       - name: Relay server clippy
         run: cd relay-server && cargo clippy --all-targets -- -D warnings
 
+      # Unit + WS integration tests (tokio/axum, no Windows libmpv needed, so
+      # they run on this ubuntu job). Guards against regressions like the
+      # keepalive-tick race (prexu-waec) and rate-limit flake (prexu-3a78) that
+      # previously slipped through because only clippy ran here (prexu-uy8p).
+      - name: Relay server tests
+        run: cd relay-server && cargo test
+
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
