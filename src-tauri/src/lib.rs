@@ -404,14 +404,13 @@ pub fn run() {
     #[cfg(target_os = "windows")]
     player::angle_loader::harden_dll_search_path();
 
-    // Path C3c (prexu-60mz.3): flag-gated. Must run BEFORE the config `main`
-    // window is built (inside Builder::run below), on this same main thread, so
-    // the vendored-wry opt-in is consumed by that window's webview. The DComp
-    // tree is then attached in `.setup()` once the HWND exists.
+    // Path C3c (prexu-60mz.3): composition hosting is unconditional on Windows.
+    // Must run BEFORE the config `main` window is built (inside Builder::run
+    // below), on this same main thread, so the vendored-wry opt-in is consumed
+    // by that window's webview. The DComp tree is then attached in `.setup()`
+    // once the HWND exists.
     #[cfg(target_os = "windows")]
-    if player::composition_host::enabled() {
-        player::composition_host::request_hosting();
-    }
+    player::composition_host::request_hosting();
 
     tauri::Builder::default()
         .manage(ProxyState::new())
@@ -514,44 +513,27 @@ pub fn run() {
                     // teardown) via the extracted handler (prexu-bgz.30).
                     player::events::attach_window_handlers(&window, app_handle);
 
-                    // Register custom DWM iconic bitmaps so alt-tab/taskbar
-                    // previews show the mpv video instead of black (prexu-2k7p).
-                    //
-                    // Path C3d/C3f: the iconic workaround exists ONLY because the
-                    // legacy WS_POPUP host left a transparent hole that DWM
-                    // thumbnailed as black. Under composition hosting the video
-                    // lives on the main HWND's own composited surface, which DWM
-                    // captures natively — and `FORCE_ICONIC_REPRESENTATION` would
-                    // OVERRIDE that live capture with a static bitmap (the cause
-                    // of the black Alt+Tab tile). So skip it in composition mode.
-                    if !player::composition_host::enabled() {
-                        player::taskbar_preview::enable(&window, app.handle().clone());
-                    }
-
                     // Path C3c: attach the DComp tree to the (already
-                    // composition-hosted) main webview. Flag-gated; no-op on
-                    // default startup. HWND is passed as isize because the
-                    // with_webview closure must be Send (HWND is not).
-                    if player::composition_host::enabled() {
-                        match window.hwnd() {
-                            Ok(hwnd) => {
-                                let hwnd_isize = hwnd.0 as isize;
-                                let res = window.with_webview(move |pw| {
-                                    let hwnd =
-                                        windows::Win32::Foundation::HWND(hwnd_isize as *mut _);
-                                    let controller = pw.controller();
-                                    if let Err(e) =
-                                        player::composition_host::install(hwnd, &controller)
-                                    {
-                                        log::error!("[player:comp] install failed: {:?}", e);
-                                    }
-                                });
-                                if let Err(e) = res {
-                                    log::error!("[player:comp] with_webview failed: {:?}", e);
+                    // composition-hosted) main webview. HWND is passed as isize
+                    // because the with_webview closure must be Send (HWND is not).
+                    match window.hwnd() {
+                        Ok(hwnd) => {
+                            let hwnd_isize = hwnd.0 as isize;
+                            let res = window.with_webview(move |pw| {
+                                let hwnd =
+                                    windows::Win32::Foundation::HWND(hwnd_isize as *mut _);
+                                let controller = pw.controller();
+                                if let Err(e) =
+                                    player::composition_host::install(hwnd, &controller)
+                                {
+                                    log::error!("[player:comp] install failed: {:?}", e);
                                 }
+                            });
+                            if let Err(e) = res {
+                                log::error!("[player:comp] with_webview failed: {:?}", e);
                             }
-                            Err(e) => log::error!("[player:comp] main hwnd unavailable: {:?}", e),
                         }
+                        Err(e) => log::error!("[player:comp] main hwnd unavailable: {:?}", e),
                     }
                 }
             }

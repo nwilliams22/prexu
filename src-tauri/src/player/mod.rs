@@ -7,12 +7,6 @@ pub(crate) mod lifecycle;
 pub(crate) mod timeline;
 
 #[cfg(target_os = "windows")]
-pub mod host_window;
-
-#[cfg(target_os = "windows")]
-pub mod taskbar_preview;
-
-#[cfg(target_os = "windows")]
 pub mod composition_host;
 
 #[cfg(target_os = "windows")]
@@ -35,7 +29,7 @@ use geometry::GeomState;
 
 // Re-export pure helpers that external callers (commands/, lib.rs) reference
 // via `crate::player::*`.
-pub(crate) use geometry::{compute_minimize_inset, initial_host_geometry};
+pub(crate) use geometry::compute_minimize_inset;
 pub use timeline::TimelineCtx;
 
 /// Minimum interval between consecutive sync_geometry calls. Drag-resize
@@ -190,15 +184,6 @@ struct Inner {
     /// own the HWND, avoiding the race where DestroyWindow ran before
     /// mpv's render thread stopped using it.
     event_pump: Option<JoinHandle<()>>,
-    /// Host HWND. Created on and owned by the Tauri main thread (see
-    /// `ensure_init`), so cross-thread SetWindowPos calls from the main
-    /// thread's on_window_event handler and the fullscreen sync closure
-    /// are NOT cross-thread — they hit a window the calling thread owns,
-    /// so SetWindowPos is synchronous and non-blocking. Wrapped in Option
-    /// so `destroy()` can `take()` it and dispatch the Drop (which runs
-    /// DestroyWindow) back to the main thread.
-    #[cfg(target_os = "windows")]
-    host: Option<host_window::HostWindow>,
     /// Path C3d: the mpv→DComp render thread, present only in composition mode.
     /// `destroy()` stops+joins it BEFORE the final `Arc<Mpv>` drops so the
     /// libmpv2 `RenderContext` is freed before `mpv_terminate_destroy` runs.
@@ -340,101 +325,54 @@ impl PlayerState {
             }
         }
 
-        // Snapshot minimize state + DPI scale BEFORE the run_on_main_thread
-        // closure so the closure (which is 'static + Send) can compute the
-        // mini-inset rect without capturing &self. When `ensure_init` runs
-        // during an in-mini autoplay handoff (prexu-may), the new host MUST
-        // be sized to the mini inset on its FIRST set_geometry — otherwise
-        // mpv's vo computes its swapchain against the full WebView rect and
-        // the first frame renders black/clipped after the later sync_geometry
-        // shrinks the host. Pre-snapshotting here keeps the fix on a single
-        // code path (the initial set_geometry below) and avoids a second
-        // SetWindowPos that would also trigger a swapchain rebuild.
-        #[cfg(target_os = "windows")]
-        let (minimize_snapshot, scale_snapshot) = {
-            let g = self.geom.lock().ok();
-            let snap = g.as_ref().and_then(|g| g.minimize);
-            let scale = g.as_ref().map(|g| g.scale_factor).unwrap_or(1.0);
-            (snap, scale)
-        };
-
-        // Path C3d: under composition hosting, mpv renders through a libmpv2
-        // RenderContext into the DComp video visual (no host window, no `wid`).
-        // The legacy `wid` host-window path is the default when the flag is off.
-        #[cfg(target_os = "windows")]
-        let composition = composition_host::enabled();
-
-        // On Windows (legacy path only), create the native host window on the
-        // MAIN THREAD. See `lifecycle::create_host_window` for the thread-affinity
-        // rationale (host WndProc must run on the message-pumping main thread, or
-        // cross-thread SetWindowPos deadlocks). In composition mode there is no
-        // host window — `Inner.host` stays `None` and every geometry/fullscreen
-        // call (all guarded on `host.as_ref()`) becomes a no-op until the DComp
-        // transform rewire (C3e).
-        #[cfg(target_os = "windows")]
-        let host = if composition {
-            None
-        } else {
-            Some(lifecycle::create_host_window(app, minimize_snapshot, scale_snapshot)?)
-        };
-
-        #[cfg(target_os = "windows")]
-        let wid = host.as_ref().map(|h| h.hwnd_as_i64());
-
         // Marker for cold-start latency attribution. The gap between this
         // log and the first "FileLoaded" event covers: (a) mpv handle
         // construction, (b) demuxer opening the network stream (cold
         // plex.direct connect), and (c) hardware decoder probing.
         log::info!("[player:init] starting mpv init (hwdec=auto-safe)");
 
+        // Path C3d: composition hosting is the unconditional render path on
+        // Windows — mpv renders through a libmpv2 RenderContext into the DComp
+        // video visual (no host window, no `wid`).
         #[cfg(target_os = "windows")]
-        let mpv = lifecycle::configure_mpv_properties(wid, composition)?;
+        let mpv = lifecycle::configure_mpv_properties(None, true)?;
         #[cfg(not(target_os = "windows"))]
         let mpv = lifecycle::configure_mpv_properties(None, false)?;
-        #[cfg(target_os = "windows")]
-        log::info!("[player] mpv created (composition={}, wid={:?})", composition, wid);
-        #[cfg(not(target_os = "windows"))]
         log::info!("[player] mpv created");
 
         let mpv = Arc::new(mpv);
         let event_pump = events::spawn_event_pump(Arc::clone(&mpv), app.clone())?;
 
-        // In composition mode, claim the GPU surfaces published by
-        // `composition_host::install` and spawn the mpv render thread. If the
-        // surfaces are missing (install failed/didn't run) we log and continue
-        // with no video output rather than failing init.
+        // Claim the GPU surfaces published by `composition_host::install` and
+        // spawn the mpv render thread. If the surfaces are missing (install
+        // failed/didn't run) we log and continue with no video output rather
+        // than failing init.
         #[cfg(target_os = "windows")]
-        let video_render = if composition {
-            match video_render::claim_surfaces() {
-                Some(surfaces) => {
-                    log::info!("[player] starting video render thread (composition mode)");
-                    // Invalidate the cross-playback geom dedup cache: the new render
-                    // thread starts at the stale install surface size, so the initial
-                    // sync (scheduled after init) MUST apply rather than dedup-skip,
-                    // or the video stays stuck at install size and frozen (prexu-3fxj).
-                    if let Ok(mut g) = self.geom.lock() {
-                        g.last_geometry = None;
-                    }
-                    Some(video_render::VideoRenderThread::start(Arc::clone(&mpv), surfaces, app.clone()))
+        let video_render = match video_render::claim_surfaces() {
+            Some(surfaces) => {
+                log::info!("[player] starting video render thread (composition mode)");
+                // Invalidate the cross-playback geom dedup cache: the new render
+                // thread starts at the stale install surface size, so the initial
+                // sync (scheduled after init) MUST apply rather than dedup-skip,
+                // or the video stays stuck at install size and frozen (prexu-3fxj).
+                if let Ok(mut g) = self.geom.lock() {
+                    g.last_geometry = None;
                 }
-                None => {
-                    log::error!(
-                        "[player] composition enabled but no GPU surfaces published; \
-                         video will not render (composition_host::install did not run?)"
-                    );
-                    None
-                }
+                Some(video_render::VideoRenderThread::start(Arc::clone(&mpv), surfaces, app.clone()))
             }
-        } else {
-            None
+            None => {
+                log::error!(
+                    "[player] no GPU surfaces published; video will not render \
+                     (composition_host::install did not run?)"
+                );
+                None
+            }
         };
 
         let mut guard = self.inner.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
         *guard = Some(Inner {
             mpv,
             event_pump: Some(event_pump),
-            #[cfg(target_os = "windows")]
-            host,
             #[cfg(target_os = "windows")]
             video_render,
         });
@@ -450,7 +388,7 @@ impl PlayerState {
         // DComp commit is thread-affine) so every composition playback resizes the
         // video to the current player viewport and commits the visual.
         #[cfg(target_os = "windows")]
-        if composition {
+        {
             let app2 = app.clone();
             if let Err(e) = app.run_on_main_thread(move || {
                 if let Some(win) = app2.get_webview_window("main") {
@@ -528,12 +466,12 @@ impl PlayerState {
         Ok(())
     }
 
-    /// Synchronously stop playback and destroy the mpv handle + host window.
+    /// Synchronously stop playback and destroy the mpv handle.
     ///
     /// The key invariant: when this function returns, mpv is fully terminated
-    /// (audio silenced, render threads exited) AND the host HWND is destroyed.
-    /// Callers — notably `player_unload` from the Tauri frontend — rely on
-    /// this so audio doesn't keep bleeding through after navigation.
+    /// (audio silenced, render threads exited). Callers — notably `player_unload`
+    /// from the Tauri frontend — rely on this so audio doesn't keep bleeding
+    /// through after navigation.
     ///
     /// Steps:
     /// 1. Take `Inner` out of the Mutex so we control drop order.
@@ -542,9 +480,8 @@ impl PlayerState {
     ///    caller (TS handleExit) navigate away without an audio bleed.
     /// 3. SPAWN a background thread that joins the event pump (which can
     ///    take up to ~1s to break out of its `wait_event(1.0)` loop after
-    ///    Shutdown), dispatches HostWindow drop to the main thread, and
-    ///    drops Inner — releasing the final Arc<Mpv> and triggering
-    ///    `mpv_terminate_destroy` from the background.
+    ///    Shutdown) and drops Inner — releasing the final Arc<Mpv> and
+    ///    triggering `mpv_terminate_destroy` from the background.
     /// 4. Return immediately so the caller's await resolves in <50ms.
     ///
     /// Rationale: previously this function joined the pump synchronously
@@ -624,10 +561,9 @@ impl PlayerState {
             log::warn!("[player] destroy: quit failed: {:?}", e);
         }
 
-        // ASYNCHRONOUS teardown — pump join + host drop + final Arc release
-        // all happen on a background thread (see
-        // `lifecycle::spawn_teardown_task`). Inner is moved in; HostWindow is
-        // `unsafe impl Send` and its drop is re-dispatched to the main thread.
+        // ASYNCHRONOUS teardown — pump join + final Arc release happen on a
+        // background thread (see `lifecycle::spawn_teardown_task`). Inner is
+        // moved in and dropped there.
         lifecycle::spawn_teardown_task(inner, app.clone());
 
         log::info!(
@@ -682,35 +618,16 @@ impl PlayerState {
         // A move that carried a size change (maximize/restore/snap or a
         // top-left corner drag-resize) is really a resize: delegate to the
         // throttled sync_geometry path (prexu-hia9). A one-shot maximize passes
-        // the throttle immediately (gate open), so the host resizes without
+        // the throttle immediately (gate open), so the video resizes without
         // waiting for the trailing Resized; a continuous corner-resize stays
         // coalesced to ~30 Hz, avoiding the mpv swapchain-rebuild storm.
-        let (ax, ay, write_back) = match plan {
-            geometry::MovePlan::Resize => {
-                self.sync_geometry(x, y, width, height);
-                return;
-            }
-            geometry::MovePlan::Move { ax, ay, write_back } => (ax, ay, write_back),
-        };
-
-        // Pure reposition fast path. try_lock guards against re-entrancy:
-        // SetWindowPos fires WM_WINDOWPOSCHANGED synchronously on this thread,
-        // which can re-enter sync_geometry_move via the window-event handler.
-        let Ok(guard) = self.inner.try_lock() else { return };
-        if let Some(inner) = guard.as_ref() {
-            if let Some(host) = inner.host.as_ref() {
-                if let Err(e) = host.set_position(ax, ay) {
-                    log::warn!("[player] sync_geometry_move failed: {}", e);
-                    return;
-                }
-                // Keep last_geometry's (x, y) in sync so the next
-                // sync_geometry call (resize) dedup-compares correctly.
-                if let Some(write_back) = write_back {
-                    if let Ok(mut g) = self.geom.lock() {
-                        g.last_geometry = Some(write_back);
-                    }
-                }
-            }
+        //
+        // A pure reposition needs no further work under composition hosting:
+        // the video visual is composited on the same HWND and tracks the window
+        // automatically, and IME popups were already repositioned by the
+        // notify_window_moved() call above.
+        if matches!(plan, geometry::MovePlan::Resize) {
+            self.sync_geometry(x, y, width, height);
         }
     }
 
@@ -765,12 +682,7 @@ impl PlayerState {
         // ongoing SetWindowPos will finish with the correct geometry.
         let Ok(guard) = self.inner.try_lock() else { return };
         if let Some(inner) = guard.as_ref() {
-            if let Some(host) = inner.host.as_ref() {
-                log::debug!("[player] sync_geometry applied ({},{},{}x{})", ax, ay, aw, ah);
-                if let Err(e) = host.set_geometry(ax, ay, aw, ah) {
-                    log::warn!("[player] sync_geometry failed: {}", e);
-                }
-            } else if let Some(vr) = inner.video_render.as_ref() {
+            if let Some(vr) = inner.video_render.as_ref() {
                 // Composition mode: no host HWND. The swapchain tracks the inset
                 // SIZE (aw,ah); the video DComp visual is OFFSET to the inset's
                 // client-relative corner (ax-x, ay-y) — (0,0) = full-window video,
@@ -809,12 +721,7 @@ impl PlayerState {
         let geometry::SyncPlan::Apply(ax, ay, aw, ah) = plan else { return };
         let Ok(guard) = self.inner.try_lock() else { return };
         if let Some(inner) = guard.as_ref() {
-            if let Some(host) = inner.host.as_ref() {
-                log::debug!("[player] sync_geometry_now applied ({},{},{}x{})", ax, ay, aw, ah);
-                if let Err(e) = host.set_geometry(ax, ay, aw, ah) {
-                    log::warn!("[player] sync_geometry_now failed: {}", e);
-                }
-            } else if let Some(vr) = inner.video_render.as_ref() {
+            if let Some(vr) = inner.video_render.as_ref() {
                 if aw > 0 && ah > 0 {
                     log::debug!("[player] sync_geometry_now -> video {}x{} @ ({},{})", aw, ah, ax - x, ay - y);
                     vr.request_resize(aw as u32, ah as u32);
@@ -955,13 +862,13 @@ impl PlayerState {
         self.pending_focus_reassert.swap(false, Ordering::AcqRel)
     }
 
-    /// True when the player is currently in pop-out mode. Used to decide
-    /// whether the focus-restore reassert also needs to re-flag the
-    /// host's WS_EX_TOPMOST (popout) or just nudge geometry + z-order
-    /// (full / fullscreen / minimize). Returns false when the lock is
-    /// poisoned — callers treat that as "not in popout" so they skip
-    /// the topmost reassert.
+    /// True when the player is currently in pop-out mode (a `pre_popout_geometry`
+    /// stash is present). Returns false when the lock is poisoned. Retained as a
+    /// pop-out state accessor exercised by the enter/exit state-machine tests;
+    /// its former production caller (the legacy host topmost reassert) was
+    /// removed when composition hosting became unconditional (prexu-zfyi).
     #[cfg(target_os = "windows")]
+    #[allow(dead_code)]
     pub(crate) fn is_in_popout(&self) -> bool {
         self.pre_popout_geometry
             .lock()
@@ -969,48 +876,27 @@ impl PlayerState {
             .unwrap_or(false)
     }
 
-    /// Reassert the mpv host window's geometry (and topmost flag,
-    /// when in popout) after the main Tauri window regains focus.
+    /// Reassert the video geometry after the main Tauri window regains focus.
     ///
-    /// Why this exists (prexu-5l5): when another app fully occludes
-    /// Prexu (any player mode — full, fullscreen, popout, mini) and
-    /// the user alt+tabs back, the mpv vo's D3D11 swap chain can be
-    /// left in `DXGI_STATUS_OCCLUDED` and never re-Present without a
-    /// kick. The visible result is the player chrome rendered
-    /// correctly but the video region showing through to whatever
-    /// was behind.
+    /// Why this exists (prexu-5l5): when another app fully occludes Prexu (any
+    /// player mode — full, fullscreen, popout, mini) and the user alt+tabs
+    /// back, the composition swapchain can be left stale and never recomposite
+    /// without a kick. The visible result is the player chrome rendered
+    /// correctly but the video region showing through to whatever was behind.
     ///
-    /// Mode-split recovery:
-    /// - **Full / fullscreen / mini**: only `apply_host_geometry`.
-    ///   The forced `SetWindowPos` triggers WM_PAINT on the host;
-    ///   mpv's vo handles WM_PAINT by Presenting the next frame,
-    ///   which flushes the occluded swap chain. No z-order or
-    ///   topmost change, so WebView2 mouse capture is undisturbed.
-    /// - **Popout**: `apply_host_topmost(true, Some(parent))` first
-    ///   to re-flag WS_EX_TOPMOST + re-anchor below the WebView
-    ///   (the always-on-top group can shuffle the host out from
-    ///   under the WebView during the focus restore), then
-    ///   `apply_host_geometry` for the Present nudge.
+    /// Under composition hosting the video lives on the main HWND's own
+    /// composited surface, so there is no separate host window to re-anchor or
+    /// re-flag topmost — the always-on-top / z-order shuffle the legacy host
+    /// suffered no longer applies. Re-applying the current geometry re-runs the
+    /// DComp commit (via `apply_host_geometry`), which refreshes the visual.
     ///
-    /// Why the split: in non-popout modes the host is already in
-    /// the normal z-order under the WebView; running
-    /// `apply_host_topmost(false, Some(parent))` issues a
-    /// `SetWindowPos(HWND_NOTOPMOST)` that briefly leaves the host
-    /// above sibling z-order before the follow-up `anchor_below`
-    /// re-seats it. During that micro-window Win32 re-evaluates
-    /// cursor ownership and the WebView2 cursor capture gets
-    /// stuck on the host's thick-frame edge hit-test (resize
-    /// glyph). Skipping the redundant topmost flip avoids the
-    /// flicker entirely.
-    ///
-    /// Early-returns when mpv isn't initialised so Focused events
-    /// during dashboard navigation pay nothing. Gated by
-    /// `consume_focus_reassert` in the caller so each out-and-back
-    /// focus cycle runs this exactly once.
+    /// Early-returns when mpv isn't initialised so Focused events during
+    /// dashboard navigation pay nothing. Gated by `consume_focus_reassert` in
+    /// the caller so each out-and-back focus cycle runs this exactly once.
     #[cfg(target_os = "windows")]
     pub(crate) fn reassert_host_on_focus(
         &self,
-        parent: windows::Win32::Foundation::HWND,
+        _parent: windows::Win32::Foundation::HWND,
         x: i32,
         y: i32,
         width: i32,
@@ -1019,30 +905,12 @@ impl PlayerState {
         if !self.is_initialised() {
             return;
         }
-        let in_popout = self.is_in_popout();
         log::info!(
-            "[player:host] reassert_host_on_focus ({},{},{}x{}) popout={}",
-            x, y, width, height, in_popout
+            "[player:host] reassert_host_on_focus ({},{},{}x{})",
+            x, y, width, height
         );
-        if in_popout {
-            // Popout: reassert topmost flag + anchor in one call.
-            // The always-on-top group can drop the host out from
-            // under the WebView during a focus shuffle, so we need
-            // BOTH the WS_EX_TOPMOST flip and the anchor.
-            self.apply_host_topmost(true, Some(parent));
-        } else {
-            // Non-popout: anchor-only reassert. Single SetWindowPos
-            // with insertAfter=parent triggers WM_WINDOWPOSCHANGED
-            // → mpv vo rebuilds the D3D11 swap chain (kicks the
-            // occluded state). Skips the HWND_NOTOPMOST flip that
-            // would briefly put the host above the WebView and
-            // disrupt WebView2 mouse capture (cursor stuck on host
-            // edge resize glyph — prexu-5l5 follow-up).
-            self.reassert_host_anchor(parent);
-        }
-        // Geometry nudge — forces SetWindowPos which triggers
-        // WM_PAINT and the next Present, flushing any occluded
-        // D3D11 swap chain.
+        // Re-apply the current geometry to re-run the DComp commit and refresh
+        // a swapchain left stale while occluded.
         self.apply_host_geometry(x, y, width, height);
     }
 
@@ -1055,24 +923,6 @@ impl PlayerState {
             .as_ref()
             .ok_or_else(|| "mpv not initialised".to_string())?;
         f(&inner.mpv).map_err(|e| format!("mpv error: {:?}", e))
-    }
-
-    /// Capture the current mpv video frame as a tightly-packed top-down BGRA
-    /// buffer (alpha forced opaque), for the DWM iconic taskbar/alt-tab
-    /// preview. Returns `None` when mpv is uninitialised or no decoded frame
-    /// is available (e.g. idle/loading) — the caller then supplies a fallback
-    /// card so the preview is never the black punch-through (prexu-2k7p).
-    ///
-    /// Runs on the UI thread (subclass WndProc). `screenshot-raw` is mpv-side
-    /// serialised and thread-safe; the only contention is the brief `inner`
-    /// lock, held just for the synchronous FFI call.
-    #[cfg(target_os = "windows")]
-    pub(crate) fn screenshot_bgra(&self) -> Option<taskbar_preview::RawFrame> {
-        let guard = self.inner.lock().ok()?;
-        let inner = guard.as_ref()?;
-        // SAFETY: `ctx` is a live mpv_handle for as long as `inner` (and thus
-        // the lock guard) is held; `capture_mpv_frame` only reads from it.
-        unsafe { taskbar_preview::capture_mpv_frame(inner.mpv.ctx.as_ptr()) }
     }
 
     /// Store (or clear, with `None`) the close-time timeline report context.
@@ -1148,15 +998,7 @@ impl PlayerState {
         let (ax, ay, aw, ah) = adjusted;
         let Ok(guard) = self.inner.lock() else { return };
         if let Some(inner) = guard.as_ref() {
-            if let Some(host) = inner.host.as_ref() {
-                log::debug!(
-                    "[player] apply_host_geometry force ({},{},{}x{})",
-                    ax, ay, aw, ah
-                );
-                if let Err(e) = host.set_geometry(ax, ay, aw, ah) {
-                    log::warn!("[player] apply_host_geometry failed: {}", e);
-                }
-            } else if let Some(vr) = inner.video_render.as_ref() {
+            if let Some(vr) = inner.video_render.as_ref() {
                 // Composition instant-apply (fullscreen toggle, minimize/popout
                 // resync). Size -> swapchain, corner -> visual offset. Caller runs
                 // this on the main thread (see resync_host / fullscreen command).
@@ -1164,71 +1006,6 @@ impl PlayerState {
                     log::debug!("[player] apply_host_geometry -> video {}x{} @ ({},{})", aw, ah, ax - x, ay - y);
                     vr.request_resize(aw as u32, ah as u32);
                     composition_host::set_video_offset(ax - x, ay - y);
-                }
-            }
-        }
-    }
-
-    /// Re-anchor the mpv host window directly below the WebView in
-    /// z-order without touching its WS_EX_TOPMOST flag. Single
-    /// `SetWindowPos(parent, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE)`
-    /// call — enough to trigger `WM_WINDOWPOSCHANGED` on the host
-    /// (which mpv's vo handles by rebuilding its D3D11 swap chain),
-    /// but cheap enough not to disturb WebView2 mouse capture.
-    ///
-    /// Used by the focus-restore reassert path in non-popout modes
-    /// (full / fullscreen / mini). Popout uses `apply_host_topmost`
-    /// instead because it also needs the topmost flag reasserted.
-    /// (prexu-5l5 follow-up)
-    #[cfg(target_os = "windows")]
-    pub(crate) fn reassert_host_anchor(
-        &self,
-        parent: windows::Win32::Foundation::HWND,
-    ) {
-        let Ok(guard) = self.inner.lock() else {
-            return;
-        };
-        if let Some(inner) = guard.as_ref() {
-            if let Some(host) = inner.host.as_ref() {
-                log::debug!("[player] reassert_host_anchor");
-                if let Err(e) = host.anchor_below(parent) {
-                    log::warn!("[player:host] reassert_host_anchor failed: {}", e);
-                }
-            }
-        }
-    }
-
-    /// Toggle the mpv host window's topmost flag for pop-out mode so the
-    /// video floats above other apps the same way the WebView overlay does.
-    ///
-    /// Re-anchors below `parent` whenever a parent is provided, on BOTH
-    /// the topmost=true and topmost=false paths. SetWindowPos(HWND_NOTOPMOST)
-    /// only drops the host below other topmost windows — it does NOT put
-    /// it back below the WebView in the regular z-order group. Without the
-    /// anchor_below(parent) here, after exit_popout the host floats above
-    /// the WebView and steals all mouse events.
-    #[cfg(target_os = "windows")]
-    pub(crate) fn apply_host_topmost(
-        &self,
-        topmost: bool,
-        parent: Option<windows::Win32::Foundation::HWND>,
-    ) {
-        let Ok(guard) = self.inner.lock() else {
-            return;
-        };
-        if let Some(inner) = guard.as_ref() {
-            if let Some(host) = inner.host.as_ref() {
-                log::info!("[player] apply_host_topmost({})", topmost);
-                if let Err(e) = host.set_topmost(topmost) {
-                    log::warn!("[player] apply_host_topmost failed: {}", e);
-                }
-                if let Some(p) = parent {
-                    if let Err(e) = host.anchor_below(p) {
-                        log::warn!(
-                            "[player] apply_host_topmost: anchor_below failed: {}",
-                            e
-                        );
-                    }
                 }
             }
         }
@@ -1363,31 +1140,6 @@ mod tests {
         let (x, y, _w, _h) =
             compute_minimize_inset(DEFAULT, 1.0, 0, 0, 100, 100);
         assert_eq!((x, y), (0, 0));
-    }
-
-    // ---- initial_host_geometry (prexu-may) -----------------------------
-
-    #[test]
-    fn initial_host_geometry_passthrough_when_no_minimize() {
-        let (x, y, w, h) =
-            initial_host_geometry(None, 1.0, 100, 50, 1920, 1080);
-        assert_eq!((x, y, w, h), (100, 50, 1920, 1080));
-    }
-
-    #[test]
-    fn initial_host_geometry_applies_inset_when_minimize_present() {
-        let snap = Some(DEFAULT);
-        let got = initial_host_geometry(snap, 1.0, 0, 0, 1920, 1080);
-        let expected = compute_minimize_inset(DEFAULT, 1.0, 0, 0, 1920, 1080);
-        assert_eq!(got, expected);
-        assert_eq!(got, (1544, 864, 360, 200));
-    }
-
-    #[test]
-    fn initial_host_geometry_inset_respects_dpi_scale() {
-        let (_, _, w, h) =
-            initial_host_geometry(Some(DEFAULT), 1.25, 0, 0, 2400, 1350);
-        assert_eq!((w, h), (450, 250));
     }
 
     // ---- Focus-restore host reassert guard (prexu-5l5) -----------------

@@ -2,9 +2,8 @@
 //! DirectComposition visual so the React UI can be composited *above* the mpv
 //! video visual on a single HWND (Alt+Tab / capture parity, no black tile).
 //!
-//! Composition is the default render path (C3h, prexu-kcmg); set
-//! `PREXU_LEGACY_HOST` to fall back to the legacy WS_POPUP host while it still
-//! exists (deleted by prexu-zfyi). Two halves:
+//! Composition is the unconditional render path on Windows (C3h, prexu-kcmg;
+//! the legacy WS_POPUP host was removed by prexu-zfyi). Two halves:
 //!   1. [`request_hosting`] — called once before the `main` window is built,
 //!      flips the vendored-wry opt-in so its WebView2 is created via
 //!      `CreateCoreWebView2CompositionController` instead of windowed mode.
@@ -42,11 +41,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_NCDESTROY, WM_RBUTTONDBLCLK, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_XBUTTONDBLCLK,
     WM_XBUTTONDOWN, WM_XBUTTONUP,
 };
-
-/// Env flag opting OUT of composition hosting, back to the legacy WS_POPUP host.
-/// Composition is the default render path (C3h, prexu-kcmg); set this to fall
-/// back while the legacy path still exists (deleted by prexu-zfyi).
-const LEGACY_FLAG: &str = "PREXU_LEGACY_HOST";
 
 thread_local! {
     /// Keeps the DComp tree (device/target/visual) alive for the process
@@ -88,17 +82,11 @@ struct CompositionHost {
     _share_handle: HANDLE,
 }
 
-/// Whether composition hosting is active for this run. Default: yes. Opt out
-/// (legacy WS_POPUP host) by setting `PREXU_LEGACY_HOST` (C3h, prexu-kcmg).
-pub fn enabled() -> bool {
-    std::env::var_os(LEGACY_FLAG).is_none()
-}
-
 /// Flip the vendored-wry opt-in so the next top-level webview built on this
 /// thread (the `main` window) is composition-hosted. Must run before Tauri
 /// builds that window — i.e. before `Builder::run`.
 pub fn request_hosting() {
-    log::info!("[player:comp] requesting composition hosting for main webview (default path)");
+    log::info!("[player:comp] requesting composition hosting for main webview");
     wry::set_pending_composition_hosting(true);
 }
 

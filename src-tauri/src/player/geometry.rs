@@ -129,44 +129,6 @@ pub(crate) fn compute_minimize_inset(
     (x + off_x, y + off_y, mw, mh)
 }
 
-/// Pure helper: initial host geometry for `ensure_init`.  Returns the
-/// mini-inset rect when a `MinimizeState` snapshot is present, otherwise
-/// passes the full client rect through.
-#[cfg(target_os = "windows")]
-pub(crate) fn initial_host_geometry(
-    snapshot: Option<MinimizeState>,
-    scale: f64,
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
-) -> (i32, i32, i32, i32) {
-    match snapshot {
-        Some(state) => compute_minimize_inset(state, scale, x, y, width, height),
-        None => (x, y, width, height),
-    }
-}
-
-// ── Host surface seam ──────────────────────────────────────────────────────
-
-/// The two geometry operations the sync engine performs on the mpv host
-/// window. Abstracted behind a trait so the throttle/dedup/trailing-flush
-/// orchestration can be driven against a recording fake in unit tests
-/// without a live Win32 window (`HostWindow` impls it for production —
-/// see `host_window.rs`).
-///
-/// Production code on the hot path still calls the inherent `HostWindow`
-/// methods directly; this trait exists so the test driver and the real
-/// window share one interface, keeping the tested sequence honest. It is
-/// therefore test-only — the conformance impl for `HostWindow` is compiled
-/// during `cargo test` to prove the real type still satisfies the
-/// interface the fake exercises.
-#[cfg(all(test, target_os = "windows"))]
-pub(crate) trait HostSurface {
-    fn set_geometry(&self, x: i32, y: i32, width: i32, height: i32) -> Result<(), String>;
-    fn set_position(&self, x: i32, y: i32) -> Result<(), String>;
-}
-
 // ── Pure sync planning ─────────────────────────────────────────────────────
 
 /// What `sync_geometry` should do after consulting `GeomState`. Computed
@@ -453,30 +415,6 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn initial_host_geometry_passthrough_when_no_minimize() {
-        let (x, y, w, h) = initial_host_geometry(None, 1.0, 100, 50, 1920, 1080);
-        assert_eq!((x, y, w, h), (100, 50, 1920, 1080));
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn initial_host_geometry_applies_inset_when_present() {
-        let snap = Some(DEFAULT);
-        let got = initial_host_geometry(snap, 1.0, 0, 0, 1920, 1080);
-        let expected = compute_minimize_inset(DEFAULT, 1.0, 0, 0, 1920, 1080);
-        assert_eq!(got, expected);
-        assert_eq!(got, (1544, 864, 360, 200));
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn initial_host_geometry_inset_respects_dpi_scale() {
-        let (_, _, w, h) = initial_host_geometry(Some(DEFAULT), 1.25, 0, 0, 2400, 1350);
-        assert_eq!((w, h), (450, 250));
-    }
-
     // ── Sync engine driven against a recording fake host ─────────────────
     //
     // These exercise the full throttle / dedup / trailing-flush / move
@@ -518,7 +456,7 @@ mod tests {
     }
 
     #[cfg(target_os = "windows")]
-    impl HostSurface for RecordingHost {
+    impl RecordingHost {
         fn set_geometry(&self, x: i32, y: i32, w: i32, h: i32) -> Result<(), String> {
             self.calls.borrow_mut().push(HostCall::SetGeometry(x, y, w, h));
             if self.fail { Err("forced".into()) } else { Ok(()) }
@@ -534,7 +472,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     fn drive_sync(
         g: &mut GeomState,
-        host: &dyn HostSurface,
+        host: &RecordingHost,
         now: Instant,
         x: i32,
         y: i32,
@@ -553,7 +491,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     fn drive_move(
         g: &mut GeomState,
-        host: &dyn HostSurface,
+        host: &RecordingHost,
         now: Instant,
         x: i32,
         y: i32,

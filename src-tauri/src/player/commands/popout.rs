@@ -663,17 +663,9 @@ pub async fn player_enter_popout(
     // returns.
     resync_host(&main, &state);
 
-    // Mark the mpv host window topmost too. Tauri's set_always_on_top on
-    // the main window only flips that flag for the WebView's HWND — the
-    // host is a sibling top-level so it stays in the regular z-order,
-    // letting other apps render between the always-on-top WebView and
-    // the video underneath. Anchor below main inside the topmost group
-    // so the WebView still overlays the video region.
-    if let Ok(parent) = main.hwnd() {
-        state.apply_host_topmost(true, Some(parent));
-    } else {
-        state.apply_host_topmost(true, None);
-    }
+    // Under composition hosting the video is composited on the main HWND's own
+    // surface, so `set_always_on_top` above already floats the video with the
+    // WebView — there is no separate host window to flag topmost or re-anchor.
 
     // Persist the chosen corner + size for next session. A failure here is
     // not fatal — the user can re-enter pop-out and we'll save again.
@@ -822,14 +814,9 @@ pub async fn player_exit_popout(
     main.set_always_on_top(false)
         .map_err(|e| format!("set_always_on_top(false) failed: {}", e))?;
 
-    // Clear topmost on the mpv host window AND re-anchor it below the
-    // WebView. Passing Some(parent) here is load-bearing:
-    // SetWindowPos(HWND_NOTOPMOST) alone leaves the host above normal-
-    // z-order siblings, so after exit the host floats over the WebView
-    // and the app becomes uninteractable. Anchoring below puts it back
-    // in its correct place underneath the WebView pixels.
-    let parent_hwnd = main.hwnd().ok();
-    state.apply_host_topmost(false, parent_hwnd);
+    // Under composition hosting there is no separate host window to clear
+    // topmost on or re-anchor — `set_always_on_top(false)` above returns the
+    // single composited HWND (video + WebView) to the regular z-order.
 
     let stash = state
         .pre_popout_geometry
