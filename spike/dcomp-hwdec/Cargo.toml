@@ -1,0 +1,57 @@
+# THROWAWAY feasibility spike — beads prexu-60mz.2 / Path C3b.
+#
+# Extends the C2 overlay spike with HARDWARE DECODE (hwdec) enabled, to settle
+# the biggest unverified Path C risk: does hwdec=auto-safe survive the libmpv2
+# RenderContext + ANGLE EGL share-handle interop? C0/C2 ran hwdec=no. Production
+# needs hwdec for codec breadth (the reason for the native player). Plays a REAL
+# encoded H.264 clip (lavfi is CPU-only and won't engage hwdec) and logs mpv's
+# actually-chosen decoder (hwdec-current). DO NOT SHIP.
+#
+# Deps identical to the C2 spike (pinned to src-tauri).
+[package]
+name = "dcomp-hwdec-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "dcomp_hwdec"
+path = "src/main.rs"
+
+[dependencies]
+log = "0.4"
+env_logger = "0.11"
+
+# mpv (C0): safe wrapper + raw sys, build_libmpv so the spike links its own libmpv.
+libmpv2 = { version = "4", features = ["build_libmpv"] }
+libmpv2-sys = "4"
+
+# ANGLE EGL/GLES (C0), loaded dynamically from libEGL.dll at runtime.
+khronos-egl = { version = "6", features = ["dynamic"] }
+libloading = "0.8"
+
+# WebView2 visual hosting (C1).
+webview2-com = "0.38.2"
+
+[target.'cfg(target_os = "windows")'.dependencies.windows]
+version = "0.61"
+features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_DirectComposition",
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
+    "Foundation",
+    "Foundation_Metadata",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+]

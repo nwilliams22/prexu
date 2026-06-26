@@ -7,6 +7,13 @@ fn main() {
     #[cfg(target_os = "windows")]
     copy_libmpv_dll();
 
+    // Path C3d: place the ANGLE DLLs (libEGL/libGLESv2) next to the exe for the
+    // dev runtime. Source is bin/ (the bundled resource), optionally refreshed
+    // from ANGLE_SOURCE. SHA-256-pinned + Authenticode-verified at load time
+    // (see player::angle_loader).
+    #[cfg(target_os = "windows")]
+    copy_angle_dlls();
+
     // Delay-load libmpv-2.dll. mpv's DllMain on Windows touches state that's
     // unsafe to use during DLL_PROCESS_ATTACH; static linking causes an
     // access violation at process startup. With /DELAYLOAD the DLL isn't
@@ -18,6 +25,42 @@ fn main() {
     }
 
     tauri_build::build();
+}
+
+#[cfg(target_os = "windows")]
+fn copy_angle_dlls() {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let bin = manifest_dir.join("bin");
+    println!("cargo:rerun-if-env-changed=ANGLE_SOURCE");
+
+    // Optionally refresh bin/ from a caller-provided ANGLE distribution.
+    if let Some(src_dir) = env::var_os("ANGLE_SOURCE") {
+        let src_dir = PathBuf::from(src_dir);
+        for name in ["libEGL.dll", "libGLESv2.dll"] {
+            let s = src_dir.join(name);
+            if s.exists() {
+                copy_if_newer(&s, &bin.join(name));
+            }
+        }
+    }
+
+    // Copy next to the built exe so dev/`tauri dev` finds them via the app dir.
+    if let Ok(out_dir) = env::var("OUT_DIR") {
+        let out_dir = PathBuf::from(out_dir);
+        if let Some(target_dir) = out_dir.ancestors().nth(3) {
+            for name in ["libEGL.dll", "libGLESv2.dll"] {
+                let s = bin.join(name);
+                println!("cargo:rerun-if-changed={}", s.display());
+                if s.exists() {
+                    copy_if_newer(&s, &target_dir.join(name));
+                } else {
+                    println!(
+                        "cargo:warning=ANGLE {name} missing from bin/; Path C3d video render will fail until it is provided"
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]

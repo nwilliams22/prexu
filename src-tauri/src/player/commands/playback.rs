@@ -333,16 +333,15 @@ pub async fn player_unload(
     state.destroy(&app)
 }
 
-/// Soft stop — clear mpv's current file but keep the mpv handle + host
-/// window alive for the next `loadfile`. Drives the per-episode handoff
-/// path so React's `[ratingKey]` effect cleanup no longer destroys mpv
-/// every time the user advances to the next episode (prexu-7fe).
+/// Soft stop — clear mpv's current file but keep the mpv handle alive for
+/// the next `loadfile`. Drives the per-episode handoff path so React's
+/// `[ratingKey]` effect cleanup no longer destroys mpv every time the user
+/// advances to the next episode (prexu-7fe).
 ///
 /// Episode handoff cost before this: ~1s destroy (event pump join + mpv
-/// terminate + HostWindow drop) + new ensure_init (~50ms HostWindow
-/// create + 12s hwdec probe on first run, ~100ms otherwise) + DXGI swap
-/// chain rebuild. After: ~ms mute + mpv `stop` + loadfile on the same
-/// instance.
+/// terminate) + new ensure_init (12s hwdec probe on first run, ~100ms
+/// otherwise) + DXGI swap chain rebuild. After: ~ms mute + mpv `stop` +
+/// loadfile on the same instance.
 ///
 /// `player_unload` (full destroy) is still the right call on actual
 /// player-route unmount (back to dashboard, navigation away). TS keeps

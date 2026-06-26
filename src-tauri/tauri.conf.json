@@ -21,7 +21,8 @@
         "fullscreen": false,
         "center": true,
         "visible": false,
-        "transparent": true
+        "transparent": true,
+        "dragDropEnabled": false
       }
     ],
     "security": {
@@ -38,6 +39,16 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "windows": {
+      "nsis": {
+        "installerHooks": "nsis-hooks/hooks.nsh"
+      }
+    },
+    "resources": {
+      "bin/libmpv-2.dll": "libmpv-2.dll",
+      "bin/libEGL.dll": "libEGL.dll",
+      "bin/libGLESv2.dll": "libGLESv2.dll"
+    },
     "createUpdaterArtifacts": true
   },
   "plugins": {
