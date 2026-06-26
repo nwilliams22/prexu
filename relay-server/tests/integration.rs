@@ -941,27 +941,35 @@ async fn test_rate_limiting() {
     .await;
     ws_recv(&mut ws).await; // session_created
 
-    // Send 35 messages rapidly (limit is 30 per second)
+    // Send 35 messages rapidly (limit is 30 per second). The server disconnects
+    // the moment the limit trips, so a send mid-loop can fail once the socket is
+    // closing — tolerate that (the rate-limit error is already queued) rather
+    // than unwrapping like ws_send and panicking before the assertion below.
+    let ping = serde_json::to_string(&serde_json::json!({ "type": "ping" })).unwrap();
     for i in 0..35 {
-        ws_send(
-            &mut ws,
-            &serde_json::json!({
-                "type": "ping"
-            }),
-        )
-        .await;
+        if ws.send(Message::Text(ping.clone().into())).await.is_err() {
+            break;
+        }
         // Tiny delay to avoid TCP-level backpressure, but fast enough to hit rate limit
         if i % 10 == 9 {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     }
 
-    // We should eventually receive a rate-limit error or get disconnected.
-    // Collect messages until we see auth_error with rate limit reason or the
-    // connection closes.
-    let mut found_rate_limit = false;
+    // The server enforces the limit by DISCONNECTING the client. The courtesy
+    // "Rate limit exceeded" AuthError is best-effort (it is `try_send`, which is
+    // dropped when the burst has already filled the outbound channel), so accept
+    // EITHER that error OR the socket closing as proof we were rate-limited.
+    // `ws_try_recv` yields `Value::Null` when the socket closes; a `None`
+    // (read timeout with the socket still open) means we were NOT disconnected —
+    // the limiter failed to fire.
+    let mut rate_limited = false;
     for _ in 0..40 {
         match ws_try_recv(&mut ws, Duration::from_millis(500)).await {
+            Some(msg) if msg.is_null() => {
+                rate_limited = true; // socket closed = disconnected by the limiter
+                break;
+            }
             Some(msg) => {
                 if msg["type"] == "auth_error"
                     && msg["reason"]
@@ -969,7 +977,7 @@ async fn test_rate_limiting() {
                         .unwrap_or("")
                         .contains("Rate limit")
                 {
-                    found_rate_limit = true;
+                    rate_limited = true;
                     break;
                 }
             }
@@ -978,8 +986,8 @@ async fn test_rate_limiting() {
     }
 
     assert!(
-        found_rate_limit,
-        "expected rate limit error after rapid-fire messages"
+        rate_limited,
+        "expected to be disconnected (rate limited) after rapid-fire messages"
     );
 }
 
