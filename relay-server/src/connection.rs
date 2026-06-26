@@ -4,7 +4,7 @@ use std::sync::Arc;
 use axum::extract::ws::{Message, WebSocket};
 use futures::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
-use tokio::time::{interval, Duration, Instant};
+use tokio::time::{interval_at, Duration, Instant};
 use tracing::{info, warn};
 
 use crate::messages::{ClientMessage, ServerMessage};
@@ -115,8 +115,14 @@ pub async fn handle_connection(ws: WebSocket, state: SharedState) {
         }
     });
 
-    // Phase 3: Reader loop with keepalive and rate limiting
-    let mut keepalive = interval(Duration::from_secs(30));
+    // Phase 3: Reader loop with keepalive and rate limiting.
+    // `interval()` fires its first tick immediately; start one full period out
+    // so a keepalive Pong never races the first broadcast on a freshly-connected
+    // socket (prexu-waec — flaky WS integration tests). 30s cadence thereafter.
+    let mut keepalive = interval_at(
+        Instant::now() + Duration::from_secs(30),
+        Duration::from_secs(30),
+    );
     let state_clone = state.clone();
     let username_clone = username.clone();
     let thumb_clone = thumb.clone();
