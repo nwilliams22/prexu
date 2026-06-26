@@ -28,7 +28,11 @@ use tauri::{AppHandle, Manager};
 use geometry::GeomState;
 
 // Re-export pure helpers that external callers (commands/, lib.rs) reference
-// via `crate::player::*`.
+// via `crate::player::*`. `compute_minimize_inset` is Windows-only (the host
+// inset it computes only exists under composition hosting), so the re-export
+// must carry the same gate or it fails to resolve on Linux/macOS.
+// (`initial_host_geometry` was removed with the legacy WS_POPUP host, prexu-zfyi.)
+#[cfg(target_os = "windows")]
 pub(crate) use geometry::compute_minimize_inset;
 pub use timeline::TimelineCtx;
 
