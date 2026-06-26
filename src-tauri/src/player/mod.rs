@@ -690,7 +690,7 @@ impl PlayerState {
                 if aw > 0 && ah > 0 {
                     log::trace!("[player] sync_geometry -> video {}x{} @ ({},{})", aw, ah, ax - x, ay - y);
                     vr.request_resize(aw as u32, ah as u32);
-                    composition_host::set_video_offset(ax - x, ay - y);
+                    composition_host::set_video_dest(ax - x, ay - y, aw as u32, ah as u32);
                 }
             }
         }
@@ -725,7 +725,7 @@ impl PlayerState {
                 if aw > 0 && ah > 0 {
                     log::debug!("[player] sync_geometry_now -> video {}x{} @ ({},{})", aw, ah, ax - x, ay - y);
                     vr.request_resize(aw as u32, ah as u32);
-                    composition_host::set_video_offset(ax - x, ay - y);
+                    composition_host::set_video_dest(ax - x, ay - y, aw as u32, ah as u32);
                 }
             }
         }
@@ -1005,7 +1005,7 @@ impl PlayerState {
                 if aw > 0 && ah > 0 {
                     log::debug!("[player] apply_host_geometry -> video {}x{} @ ({},{})", aw, ah, ax - x, ay - y);
                     vr.request_resize(aw as u32, ah as u32);
-                    composition_host::set_video_offset(ax - x, ay - y);
+                    composition_host::set_video_dest(ax - x, ay - y, aw as u32, ah as u32);
                 }
             }
         }

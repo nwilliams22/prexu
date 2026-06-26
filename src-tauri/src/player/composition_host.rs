@@ -27,7 +27,8 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_SDK_VERSION,
 };
 use windows::Win32::Graphics::DirectComposition::{
-    DCompositionCreateDevice, IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,
+    DCompositionCreateDevice, IDCompositionDevice, IDCompositionScaleTransform,
+    IDCompositionTarget, IDCompositionVisual,
 };
 use windows::Win32::Graphics::Dxgi::{IDXGIDevice, IDXGISwapChain1};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
@@ -62,6 +63,18 @@ thread_local! {
     /// threaded COM, main-thread only — same reason as HOST that it lives in a
     /// thread-local rather than Tauri state (it is not `Send`).
     static CONTROLLER: RefCell<Option<ICoreWebView2Controller>> = const { RefCell::new(None) };
+
+    /// The video swapchain's actual pixel size — what the render thread last
+    /// rebuilt it to. The DComp video visual is scaled by dest/actual so a
+    /// grow fills the inset immediately, before the async swapchain rebuild
+    /// lands (prexu-bgjd). Main-thread only.
+    static VIDEO_ACTUAL: std::cell::Cell<(u32, u32)> = const { std::cell::Cell::new((1, 1)) };
+
+    /// The desired video inset rect `(off_x, off_y, dest_w, dest_h)` in client
+    /// px, last requested by the geometry path. Paired with VIDEO_ACTUAL to
+    /// compute the stretch scale. Main-thread only.
+    static VIDEO_DEST: std::cell::Cell<(i32, i32, u32, u32)> =
+        const { std::cell::Cell::new((0, 0, 1, 1)) };
 }
 
 struct CompositionHost {
@@ -80,6 +93,9 @@ struct CompositionHost {
     _video_swapchain: IDXGISwapChain1,
     _shared_tex: ID3D11Texture2D,
     _share_handle: HANDLE,
+    // prexu-bgjd: scale transform on the video visual, mutated by
+    // `set_video_dest` / `set_video_size` to stretch the swapchain to the inset.
+    video_scale: IDCompositionScaleTransform,
 }
 
 /// Flip the vendored-wry opt-in so the next top-level webview built on this
@@ -125,6 +141,22 @@ pub fn install(hwnd: HWND, controller: &ICoreWebView2Controller) -> windows::cor
         crate::player::video_render::create_video_swapchain(&d3d, width, height)?;
     unsafe { video_visual.SetContent(&video_swapchain)? };
 
+    // prexu-bgjd: a scale transform on the video visual lets the geometry path
+    // stretch the current swapchain to fill a grown inset before the async
+    // rebuild lands (`set_video_dest` sets scale = dest/actual; identity here).
+    // Center (0,0) scales from the visual's top-left, which `SetOffsetX2/Y2`
+    // pins to the inset corner.
+    let video_scale = unsafe { device.CreateScaleTransform()? };
+    unsafe {
+        video_scale.SetCenterX2(0.0)?;
+        video_scale.SetCenterY2(0.0)?;
+        video_scale.SetScaleX2(1.0)?;
+        video_scale.SetScaleY2(1.0)?;
+        video_visual.SetTransform(&video_scale)?;
+    }
+    VIDEO_ACTUAL.with(|a| a.set((width, height)));
+    VIDEO_DEST.with(|d| d.set((0, 0, width, height)));
+
     unsafe { root_visual.AddVisual(&video_visual, true, None)? }; // video at bottom
     unsafe { root_visual.AddVisual(&webview_visual, true, &video_visual)? }; // webview above
     unsafe { target.SetRoot(&root_visual)? };
@@ -167,6 +199,7 @@ pub fn install(hwnd: HWND, controller: &ICoreWebView2Controller) -> windows::cor
             _video_swapchain: video_swapchain,
             _shared_tex: shared_tex,
             _share_handle: share_handle,
+            video_scale,
         });
     });
     Ok(())
@@ -323,24 +356,63 @@ pub fn notify_window_moved() {
     });
 }
 
-/// Position the video DComp visual at `(off_x, off_y)` client-relative pixels.
-/// The visual's content (the swapchain) is sized to the inset by the render
-/// thread; this places it — `(0,0)` = full-window video, a corner offset = the
-/// mini player. MUST run on the main/UI thread (the DComp device is apartment-
-/// threaded); callers guarantee that. No-op if composition isn't installed.
-pub fn set_video_offset(off_x: i32, off_y: i32) {
+/// Apply the current `VIDEO_DEST` rect to the video visual: offset to the inset
+/// corner and scale the swapchain content by `dest/actual` so it fills the inset
+/// even while the async swapchain rebuild is still in flight (prexu-bgjd).
+fn apply_video_transform(host: &CompositionHost) {
+    let (off_x, off_y, dest_w, dest_h) = VIDEO_DEST.with(|d| d.get());
+    let (act_w, act_h) = VIDEO_ACTUAL.with(|a| a.get());
+    // Clamp scale to >= 1: only ever stretch the swapchain UP to fill a grown
+    // inset. On shrink the (still-larger) swapchain over-covers the smaller
+    // pane and the opaque React UI masks the excess — scaling it DOWN to the
+    // pane instead would risk a momentary under-fill that shows the transparent
+    // window through (prexu-bgjd). The render thread rebuilds to the exact size
+    // shortly after, returning the scale to 1 either way.
+    let sx = (dest_w as f32 / act_w.max(1) as f32).max(1.0);
+    let sy = (dest_h as f32 / act_h.max(1) as f32).max(1.0);
+    unsafe {
+        let _ = host._video_visual.SetOffsetX2(off_x as f32);
+        let _ = host._video_visual.SetOffsetY2(off_y as f32);
+        let _ = host.video_scale.SetScaleX2(sx);
+        let _ = host.video_scale.SetScaleY2(sy);
+        if let Err(e) = host._device.Commit() {
+            log::warn!("[player:comp] video transform commit failed: {:?}", e);
+        }
+    }
+}
+
+/// Position AND size the video DComp visual to the inset rect
+/// `(off_x, off_y, dest_w x dest_h)` in client pixels — `(0,0,full,full)` is
+/// full-window video, a corner sub-rect is the mini player. The swapchain is
+/// rebuilt to `dest` ASYNCHRONOUSLY by the render thread; until that lands, a
+/// scale transform stretches the current swapchain to fill `dest`, so growing
+/// the mini player never exposes the app behind the pane (prexu-bgjd). When the
+/// render thread reports the rebuilt size via [`set_video_size`], the scale
+/// snaps back to 1:1 (crisp). MUST run on the main/UI thread (the DComp device
+/// is apartment-threaded); callers guarantee that. No-op if composition isn't
+/// installed.
+pub fn set_video_dest(off_x: i32, off_y: i32, dest_w: u32, dest_h: u32) {
+    VIDEO_DEST.with(|d| d.set((off_x, off_y, dest_w.max(1), dest_h.max(1))));
     HOST.with(|h| {
         if let Some(host) = h.borrow().as_ref() {
-            unsafe {
-                let _ = host._video_visual.SetOffsetX2(off_x as f32);
-                let _ = host._video_visual.SetOffsetY2(off_y as f32);
-                if let Err(e) = host._device.Commit() {
-                    log::warn!("[player:comp] set_video_offset commit failed: {:?}", e);
-                }
-            }
-            log::trace!("[player:comp] video visual offset -> ({off_x},{off_y})");
+            apply_video_transform(host);
         }
     });
+    log::trace!("[player:comp] video dest -> ({off_x},{off_y}) {dest_w}x{dest_h}");
+}
+
+/// Report the render thread's newly-rebuilt swapchain size (prexu-bgjd).
+/// Dispatched to the main thread after `resize_surfaces` settles so the stretch
+/// transform set by [`set_video_dest`] collapses back to 1:1 now that the
+/// swapchain matches the inset. No-op if composition isn't installed.
+pub fn set_video_size(w: u32, h: u32) {
+    VIDEO_ACTUAL.with(|a| a.set((w.max(1), h.max(1))));
+    HOST.with(|h| {
+        if let Some(host) = h.borrow().as_ref() {
+            apply_video_transform(host);
+        }
+    });
+    log::trace!("[player:comp] video swapchain size -> {w}x{h}");
 }
 
 /// Force a DirectComposition recomposite of the current tree. MUST run on the
@@ -349,7 +421,7 @@ pub fn set_video_offset(off_x: i32, off_y: i32) {
 ///
 /// prexu-3fxj: a composition-swapchain `Present` updates the swapchain, but the
 /// video visual is not shown on screen until the device is committed on the main
-/// thread. The geometry path commits incidentally (via [`set_video_offset`]), so
+/// thread. The geometry path commits incidentally (via [`set_video_dest`]), so
 /// on a playback that receives no main-thread geometry event the video freezes on
 /// its first frame while audio advances. The render thread posts this once after
 /// its first present to guarantee the visual starts updating.

@@ -743,6 +743,13 @@ fn render_loop(
                         cur_h = nh;
                         force_render = true;
                         log::debug!("[player:video] resized surfaces to {nw}x{nh} (settled, fbo={fbo})");
+                        // prexu-bgjd: tell the main thread the swapchain now
+                        // matches the inset so the stretch transform set during
+                        // the grow collapses back to 1:1 (crisp).
+                        let app = app.clone();
+                        let _ = app.run_on_main_thread(move || {
+                            crate::player::composition_host::set_video_size(nw, nh)
+                        });
                     }
                     Err(e) => log::error!("[player:video] resize to {nw}x{nh} failed: {e}"),
                 }
