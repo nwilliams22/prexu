@@ -666,7 +666,7 @@ fn render_loop(
 
     // ANGLE GL context is thread-affine — created and driven entirely here.
     let mut gl = AngleGl::create(width as i32, height as i32)?;
-    fbo = gl.import_share_handle_as_fbo(share_handle.0 as *mut c_void, width as i32, height as i32)?;
+    fbo = gl.import_share_handle_as_fbo(share_handle.0, width as i32, height as i32)?;
 
     // RenderContext over the live mpv handle. The handle is internally
     // synchronized and `mpv` outlives this thread (our Arc clone keeps it alive;
@@ -780,7 +780,7 @@ fn render_loop(
                 if !committed {
                     committed = true;
                     let app = app.clone();
-                    let _ = app.run_on_main_thread(move || crate::player::composition_host::commit());
+                    let _ = app.run_on_main_thread(crate::player::composition_host::commit);
                 }
             }
             Err(e) => log::warn!("[player:video] swapchain GetBuffer failed: {e:?}"),
@@ -812,6 +812,6 @@ fn resize_surfaces(
 
     let (tex, handle) = create_shared_texture(device, w, h)
         .map_err(|e| format!("recreate shared texture: {e:?}"))?;
-    let fbo = gl.import_share_handle_as_fbo(handle.0 as *mut c_void, w as i32, h as i32)?;
+    let fbo = gl.import_share_handle_as_fbo(handle.0, w as i32, h as i32)?;
     Ok((tex, fbo))
 }

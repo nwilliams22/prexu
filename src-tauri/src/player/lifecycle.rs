@@ -32,6 +32,7 @@ use super::Inner;
 ///   - `true`: `vo=libmpv`, no `wid` — frames are pulled by a libmpv2
 ///     `RenderContext` on the video render thread and composited into the DComp
 ///     video visual. The `wid` argument is ignored in this mode.
+///
 /// Every other property (hwdec, keep-open, OSD, cursor, cache, af, subs) is
 /// identical across both paths — only the video-output backend changes.
 ///
