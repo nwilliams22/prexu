@@ -46,6 +46,22 @@ sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
   librsvg2-dev patchelf libssl-dev
 ```
 
+### Issue tracker (beads) on a fresh clone
+
+The full task graph travels in git as `.beads/issues.jsonl` — cloning the repo
+brings every issue. The Dolt database under `.beads/dolt/` is gitignored and
+rebuilt from that jsonl automatically by the tracked `.beads/hooks/` on
+checkout/merge. You only need the `bd` binary:
+
+```bash
+mise install        # provisions bd + dolt (see mise.toml [tools])
+bd ready            # first run imports issues.jsonl into a local Dolt DB
+```
+
+No extra sync step — `bd` reads what git already carries. (`bd dolt push` to a
+Dolt remote is an optional second channel for full history; not required to see
+the tasks.)
+
 ## Packaging
 
 Tauri's Linux bundler can emit three formats:

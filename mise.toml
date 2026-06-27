@@ -1,6 +1,23 @@
 [tools]
 node = "22"
 
+# Beads issue tracker + its Dolt backend, so `mise install` provisions `bd` on
+# any machine (e.g. the Linux dev box). The task graph itself travels in git as
+# .beads/issues.jsonl; bd rebuilds its local Dolt DB from that jsonl on first
+# run. Asset patterns per the beads install docs — verify on the box if a
+# release layout changes.
+[tools."github:steveyegge/beads"]
+version = "latest"
+[tools."github:steveyegge/beads".platforms]
+linux-x64 = { asset_pattern = "beads_*_linux_amd64.tar.gz" }
+macos-arm64 = { asset_pattern = "beads_*_darwin_arm64.tar.gz" }
+
+[tools."github:dolthub/dolt"]
+version = "latest"
+[tools."github:dolthub/dolt".platforms]
+linux-x64 = { asset_pattern = "dolt-linux-amd64.tar.gz" }
+macos-arm64 = { asset_pattern = "dolt-darwin-amd64.tar.gz" }
+
 [tasks.lint]
 description = "Run oxlint over the frontend source"
 run = "npm run lint"
