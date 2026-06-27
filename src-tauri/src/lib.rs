@@ -1,4 +1,8 @@
 mod downloads;
+// The native player is libmpv-backed and Windows-only (HEVC-10 etc.). Gating
+// the whole module off-Windows keeps libmpv out of the macOS/Linux link line;
+// those platforms use the HTML5 <video> engine. See Cargo.toml + prexu-nesp.
+#[cfg(target_os = "windows")]
 mod player;
 mod util;
 
@@ -412,10 +416,9 @@ pub fn run() {
     #[cfg(target_os = "windows")]
     player::composition_host::request_hosting();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .manage(ProxyState::new())
         .manage(downloads::DownloadManager::new())
-        .manage(player::PlayerState::new())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // If a second instance is launched, focus the existing window
             if let Some(window) = app.get_webview_window("main") {
@@ -447,39 +450,62 @@ pub fn run() {
         )
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_store::Builder::default().build())
-        .plugin(tauri_plugin_updater::Builder::default().build())
-        .invoke_handler(tauri::generate_handler![
-            start_proxy,
-            app_ready,
-            downloads::get_downloads_dir,
-            downloads::open_downloads_dir,
-            downloads::download_media,
-            downloads::cancel_download,
-            downloads::delete_download,
-            downloads::get_local_file_path,
-            player::commands::player_load_url,
-            player::commands::player_play,
-            player::commands::player_pause,
-            player::commands::player_seek,
-            player::commands::player_set_volume,
-            player::commands::player_set_muted,
-            player::commands::player_set_audio_track,
-            player::commands::player_set_sub_track,
-            player::commands::player_load_external_sub,
-            player::commands::player_set_audio_delay_ms,
-            player::commands::player_set_af_chain,
-            player::commands::player_apply_sub_style,
-            player::commands::player_set_timeline_context,
-            player::commands::player_clear_timeline_context,
-            player::commands::player_unload,
-            player::commands::player_stop,
-            player::commands::player_set_fullscreen,
-            player::commands::player_enter_popout,
-            player::commands::player_exit_popout,
-            player::commands::player_enter_minimize,
-            player::commands::player_exit_minimize,
-            player::commands::player_update_mini_geometry,
-        ])
+        .plugin(tauri_plugin_updater::Builder::default().build());
+
+    // PlayerState owns the libmpv handle — managed only on Windows.
+    #[cfg(target_os = "windows")]
+    let builder = builder.manage(player::PlayerState::new());
+
+    // The player_* commands exist only on Windows (native libmpv player). The
+    // non-Windows handler omits them so the player module — and therefore
+    // libmpv — need not compile off-Windows. The frontend gates invocation via
+    // IS_NATIVE_PLAYER (Windows-only), so other platforms never call these.
+    #[cfg(target_os = "windows")]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        start_proxy,
+        app_ready,
+        downloads::get_downloads_dir,
+        downloads::open_downloads_dir,
+        downloads::download_media,
+        downloads::cancel_download,
+        downloads::delete_download,
+        downloads::get_local_file_path,
+        player::commands::player_load_url,
+        player::commands::player_play,
+        player::commands::player_pause,
+        player::commands::player_seek,
+        player::commands::player_set_volume,
+        player::commands::player_set_muted,
+        player::commands::player_set_audio_track,
+        player::commands::player_set_sub_track,
+        player::commands::player_load_external_sub,
+        player::commands::player_set_audio_delay_ms,
+        player::commands::player_set_af_chain,
+        player::commands::player_apply_sub_style,
+        player::commands::player_set_timeline_context,
+        player::commands::player_clear_timeline_context,
+        player::commands::player_unload,
+        player::commands::player_stop,
+        player::commands::player_set_fullscreen,
+        player::commands::player_enter_popout,
+        player::commands::player_exit_popout,
+        player::commands::player_enter_minimize,
+        player::commands::player_exit_minimize,
+        player::commands::player_update_mini_geometry,
+    ]);
+    #[cfg(not(target_os = "windows"))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        start_proxy,
+        app_ready,
+        downloads::get_downloads_dir,
+        downloads::open_downloads_dir,
+        downloads::download_media,
+        downloads::cancel_download,
+        downloads::delete_download,
+        downloads::get_local_file_path,
+    ]);
+
+    builder
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 // Window is `visible: false` in tauri.conf.json. We do NOT

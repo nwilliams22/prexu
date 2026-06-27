@@ -161,3 +161,46 @@ jobs:
           MPV_SOURCE: ${{ github.workspace }}\src-tauri\ci\mpv
           RUST_LOG: debug
         run: cargo test --test headless_mpv -- --nocapture --ignored
+
+  linux-build:
+    name: Linux src-tauri build (non-Windows gating)
+    runs-on: ubuntu-22.04
+    # Compiles + LINKS src-tauri on Linux to prove the native player (libmpv) is
+    # fully gated off non-Windows (prexu-nesp). The link step is the point: the
+    # bug this guards against was `rust-lld: error: unable to find library -lmpv`
+    # — a base libmpv2 dep leaking onto the Linux link line. No MPV_SOURCE and no
+    # libmpv is installed here; if anything re-introduces a libmpv dependency on
+    # non-Windows, this job fails at link. Mirrors the release.yml Linux deps.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # generate_context!() embeds the frontend dist at compile time, so the
+      # bundle must exist before cargo build.
+      - name: Build frontend
+        run: npm run build
+
+      - name: Build src-tauri (no libmpv)
+        working-directory: src-tauri
+        run: cargo build
