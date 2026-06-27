@@ -19,7 +19,7 @@ vi.mock("../../services/logger", () => ({
   },
 }));
 
-import { reportTimelineBeacon } from "../../services/plex-playback";
+import { reportTimeline, reportTimelineBeacon } from "../../services/plex-playback";
 import { markAsUnwatched } from "../../services/plex-library";
 import { onWatchStateChanged } from "../../services/watch-state-events";
 
@@ -49,6 +49,27 @@ describe("useTimelineReporting.reportStopped", () => {
       "66324",
     );
     expect(reportTimelineBeacon).not.toHaveBeenCalled();
+  });
+
+  it("ends the Now Playing session with a stopped report when stopped under 60s (prexu-9cj5)", () => {
+    const result = setup();
+    act(() => {
+      result.current.ratingKeyRef.current = "66324";
+      result.current.durationRef.current = 1244; // seconds
+      result.current.currentTimeRef.current = 3.17; // 3.17s < 60s
+      result.current.reportStopped();
+    });
+    // unscrobble alone does not end the server session — a state=stopped
+    // timeline report must also fire, else Now Playing lingers until the
+    // Plex idle timeout.
+    expect(reportTimeline).toHaveBeenCalledWith(
+      SERVER.uri,
+      SERVER.accessToken,
+      "66324",
+      "stopped",
+      3_170,
+      1_244_000,
+    );
   });
 
   it("clears at the boundary just under 60s", () => {
