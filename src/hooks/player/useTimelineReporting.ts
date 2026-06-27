@@ -83,11 +83,25 @@ export function useTimelineReporting(
       // /:/unscrobble. Relying on Plex to implicitly drop the marker for a
       // `state=stopped` beacon with time < 60s does NOT work when a prior
       // resume point already exists — the old offset (e.g. 3:08) survives.
-      logger.info("playback", "early stop (<60s) — clearing resume marker", {
+      logger.info("playback", "early stop (<60s) — ending session + clearing resume marker", {
         ratingKey,
         timeMs: Math.round(timeMs),
       });
       const { uri, accessToken } = server;
+      // End the Plex "Now Playing" session promptly (prexu-9cj5). /:/unscrobble
+      // only clears the resume marker — it does NOT tell the server playback
+      // stopped, so on its own the session lingers in Now Playing until Plex's
+      // idle timeout. A stopped report with time < 60s ends the session without
+      // recording a resume offset; the unscrobble below then clears any
+      // pre-existing marker. Fire-and-forget — reportTimeline swallows errors.
+      reportTimeline(
+        uri,
+        accessToken,
+        ratingKey,
+        "stopped",
+        timeMs,
+        durationRef.current * 1000,
+      );
       markAsUnwatched(uri, accessToken, ratingKey)
         .then(() => {
           logger.info("playback", "resume marker cleared (unscrobble ok)", {
