@@ -145,7 +145,7 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: "Prexu v__VERSION__"
-          releaseBody: "See the [changelog](https://github.com/prexu/prexu/blob/main/CHANGELOG.md) for details."
+          releaseBody: "See the [changelog](https://github.com/nwilliams22/prexu/blob/main/CHANGELOG.md) for details."
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }}
