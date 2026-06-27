@@ -35,14 +35,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Windows-only for now: the native player (libmpv) is Windows-only and
-        # the player module is not yet gated for non-Windows builds, so the
-        # macOS/Linux legs fail at link (`-lmpv` not found). Re-add the
-        # ubuntu/macos targets once that gating lands (tracked under the Linux
-        # native-parity track). See docs/adr-native-player-cross-platform.md.
+        # Windows + Linux. The native libmpv player is Windows-only; the player
+        # module is gated off non-Windows (prexu-nesp), so Linux builds the
+        # HTML5 <video> shell and links without libmpv. Linux ships AppImage +
+        # rpm (see tauri.linux.conf.json). macOS is intentionally deferred (10x
+        # CI cost + no Apple notarization yet) — re-add a macos leg when the
+        # native player is ported there. See docs/adr-native-player-cross-platform.md
+        # and docs/linux-dev.md.
         include:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
 
     runs-on: ${{ matrix.os }}
 
@@ -63,7 +67,10 @@ jobs:
             libappindicator3-dev \
             librsvg2-dev \
             patchelf \
-            libssl-dev
+            libssl-dev \
+            rpm
+          # `rpm` provides rpmbuild, required by Tauri's rpm bundler. AppImage
+          # bundling is handled by tauri-action's own tooling.
 
       # ── Windows: libmpv dev files ───────────────────────────────────────
       # The libmpv2 crate's `build_libmpv` feature on Windows expects a layout
