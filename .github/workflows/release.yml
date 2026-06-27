@@ -19,6 +19,16 @@ permissions:
 env:
   LIBMPV_URL: ${{ vars.LIBMPV_URL || 'https://github.com/zhongfly/mpv-winbuild/releases/download/2026-05-29-13a3e3ad0e/mpv-dev-x86_64-20260529-git-13a3e3ad0e.7z' }}
   LIBMPV_SHA256: ${{ vars.LIBMPV_SHA256 || '2c4883c8836b53465796aca61e16f7ce6c3adda818baadc850b9f2a39bd2ce5d' }}
+  # Pinned ANGLE runtime DLLs (libEGL/libGLESv2) for the Windows native-player
+  # render path. Hosted as assets on this repo's non-semver `angle-vendor-1`
+  # release. The SHA256s MUST match the pins in
+  # src-tauri/src/player/angle_loader.rs (EGL_SHA256 / GLESV2_SHA256) or the
+  # player rejects the DLLs at load time. Verified after download; a mismatch
+  # fails the build.
+  ANGLE_EGL_URL: ${{ vars.ANGLE_EGL_URL || 'https://github.com/nwilliams22/prexu/releases/download/angle-vendor-1/libEGL.dll' }}
+  ANGLE_EGL_SHA256: ${{ vars.ANGLE_EGL_SHA256 || 'a86422d6d679dda4c00bb0db813884eb14857924eb391fb48283dfca5be007ef' }}
+  ANGLE_GLESV2_URL: ${{ vars.ANGLE_GLESV2_URL || 'https://github.com/nwilliams22/prexu/releases/download/angle-vendor-1/libGLESv2.dll' }}
+  ANGLE_GLESV2_SHA256: ${{ vars.ANGLE_GLESV2_SHA256 || 'b48565279ebfcc75675e9b88a1835bd9fd94016290641bc98108ae382962b2f3' }}
 
 jobs:
   build:
@@ -126,6 +136,37 @@ jobs:
         run: |
           Add-Content -Path $env:GITHUB_ENV -Value "MPV_SOURCE=C:\libmpv"
           Add-Content -Path $env:GITHUB_PATH -Value "C:\libmpv\64"
+
+      # ── Windows: ANGLE runtime DLLs ─────────────────────────────────────
+      # The native player's DirectComposition render path loads libEGL.dll +
+      # libGLESv2.dll at runtime, SHA-256-pinned + Authenticode-verified
+      # (src/player/angle_loader.rs). bin/ is gitignored, so fetch the pinned
+      # DLLs into src-tauri/bin/ where tauri.windows.conf.json bundles them and
+      # build.rs copies them next to the dev exe. SHA256 is verified against the
+      # angle_loader pins — a mismatch fails the build (the player would reject
+      # the DLLs anyway).
+      - name: Install ANGLE DLLs (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $bin = Join-Path $env:GITHUB_WORKSPACE "src-tauri\bin"
+          New-Item -ItemType Directory -Force -Path $bin | Out-Null
+          $dlls = @(
+            @{ Name = "libEGL.dll";    Url = $env:ANGLE_EGL_URL;     Sha = $env:ANGLE_EGL_SHA256 },
+            @{ Name = "libGLESv2.dll"; Url = $env:ANGLE_GLESV2_URL;  Sha = $env:ANGLE_GLESV2_SHA256 }
+          )
+          foreach ($d in $dlls) {
+            $dest = Join-Path $bin $d.Name
+            Write-Host "Downloading $($d.Name) from $($d.Url)"
+            Invoke-WebRequest -Uri $d.Url -OutFile $dest -UseBasicParsing
+            $actual = (Get-FileHash $dest -Algorithm SHA256).Hash.ToLower()
+            if ($actual -ne $d.Sha.ToLower()) {
+              Write-Error "SHA256 mismatch for $($d.Name): expected $($d.Sha) got $actual"
+              exit 1
+            }
+            Write-Host "SHA256 verified for $($d.Name): $actual"
+          }
 
       - name: Setup Node
         uses: actions/setup-node@v5
