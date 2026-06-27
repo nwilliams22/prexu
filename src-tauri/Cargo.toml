@@ -33,12 +33,12 @@ tauri-plugin-single-instance = "2.4.0"
 tauri-plugin-store = "2"
 tauri-plugin-updater = "2"
 url = "2"
-# Default (Linux/macOS): link the system libmpv via pkg-config / `-lmpv`
-# (libmpv2-sys emits `cargo:rustc-link-lib=mpv`). The `build_libmpv` feature
-# is added ONLY on Windows below, where libmpv is shipped as a vendored DLL
-# sourced from MPV_SOURCE rather than a distro package.
-libmpv2 = { version = "4" }
 
+# libmpv2 is Windows-only: the native player module is gated to Windows
+# (see src/lib.rs), so non-Windows builds never reference it and must not pull
+# it in — a base dependency would emit `cargo:rustc-link-lib=mpv` and fail the
+# macOS/Linux link with `-lmpv not found`. The Windows entry below adds the
+# `build_libmpv` feature, which wires MPV_SOURCE into the link path.
 [target.'cfg(target_os = "windows")'.dependencies]
 # Windows ships a vendored libmpv-2.dll; `build_libmpv` makes libmpv2's build
 # script wire MPV_SOURCE into the link search path (see src-tauri/build.rs).
