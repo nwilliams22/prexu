@@ -1,0 +1,16 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "bundle": {
+    "linux": {
+      "deb": {
+        "depends": ["libmpv2 | libmpv1"]
+      },
+      "rpm": {
+        "depends": ["mpv-libs"]
+      },
+      "appimage": {
+        "bundleMediaFramework": true
+      }
+    }
+  }
+}

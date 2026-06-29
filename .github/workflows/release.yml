@@ -54,7 +54,12 @@ jobs:
             libappindicator3-dev \
             librsvg2-dev \
             patchelf \
-            libssl-dev
+            libssl-dev \
+            libmpv-dev
+          # libmpv-dev provides libmpv.so + mpv.pc so libmpv2-sys links the
+          # system libmpv (no MPV_SOURCE on Linux — that path is Windows-only).
+          # Without it tauri-action's cargo build fails at link with -lmpv
+          # unresolved, and no Linux bundle is produced.
 
       # ── Windows: libmpv dev files ───────────────────────────────────────
       # The libmpv2 crate's `build_libmpv` feature on Windows expects a layout

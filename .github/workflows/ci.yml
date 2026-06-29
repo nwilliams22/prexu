@@ -42,6 +42,23 @@ jobs:
       - name: Relay server clippy
         run: cd relay-server && cargo clippy --all-targets -- -D warnings
 
+      # Compile src-tauri on Linux so a Linux-only break (e.g. an ungated
+      # #[cfg(target_os = "windows")] item) fails CI instead of reaching main
+      # via the Windows-only headless-mpv job (prexu-z4g3 / PR #15). libmpv-dev
+      # provides the system libmpv that libmpv2-sys links against on Linux.
+      - name: Install src-tauri system deps (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libmpv-dev
+
+      - name: src-tauri build (Linux)
+        working-directory: src-tauri
+        run: cargo build
+
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
