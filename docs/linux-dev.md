@@ -1,8 +1,10 @@
 # Linux development & packaging
 
-Status: **scaffolding** — Prexu builds on Linux today (HTML5 `<video>` engine),
-but no Linux build has been runtime-tested on hardware yet. The native
-libmpv player is Windows-only (see
+Status: **runtime-verified** — Prexu builds **and runs** on Linux today (HTML5
+`<video>` engine), verified on Nobara/Fedora 43 + KDE Plasma **Wayland** + NVIDIA
+(prexu-duna.3). Playback works via Plex; non-H.264/AAC media transcodes (see
+[Wayland runtime notes](#wayland-runtime-notes)). The native libmpv player is
+Windows-only (see
 [`adr-native-player-cross-platform.md`](adr-native-player-cross-platform.md)).
 This doc captures what's known so a Linux dev session can start fast. Verify
 package names on the actual machine — distro packages drift.
@@ -84,10 +86,57 @@ CI builds on **ubuntu-22.04** (glibc 2.35). A binary built against an older
 glibc runs on newer distros, so a Fedora target (newer glibc) is forward-
 compatible. Keep the build runner on the oldest distro we want to support.
 
+## Wayland runtime notes
+
+Verified on KDE Plasma Wayland + NVIDIA (prexu-duna.3). Two Wayland-specific
+quirks worth knowing:
+
+### webkit2gtk DMABUF crash (handled in-app)
+
+On Wayland with many GPUs (notably NVIDIA), webkit2gtk's DMABUF renderer
+crashes at webview creation — `Gdk-Message: Error 71 (Protocol error)
+dispatching to Wayland display` — killing the app before first paint. Prexu
+sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` at startup on Linux (in `run()`, before
+GTK init) to force the stable GL path, so **no user action is needed**
+(prexu-z5mz). To debug the DMABUF path, override it: `WEBKIT_DISABLE_DMABUF_RENDERER=0 npm run tauri dev`
+(expect the crash on affected GPUs).
+
+### Window position is not restored on Wayland — use a KWin rule
+
+`tauri-plugin-window-state` restores window **size** but **not position** on
+Wayland: the protocol forbids a client from placing its own toplevel window —
+the compositor decides — so position-restore is a silent no-op and KWin
+re-centers the window on the primary monitor every launch (prexu-80s0). There
+is no reliable in-app fix on native Wayland.
+
+Workaround — a KWin **window rule** pins it where you want:
+
+1. Right-click the Prexu titlebar → **More Actions → Configure Special
+   Application Settings…** (or System Settings → Window Management → Window
+   Rules → New).
+2. **Window matching:** Window class (application) → **Exact Match** → `prexu`.
+3. **Size & Position → Add property → Position** → set mode **Apply Initially**
+   and the `x y` of the target monitor's top-left corner.
+4. **OK**, then relaunch Prexu.
+
+Find a monitor's top-left coordinate with `kscreen-doctor -o` (look at each
+output's `Geometry: X,Y WxH`). Example: a monitor reported as
+`Geometry: 3840,0 3840x2160` is placed to the right of a primary 4K panel, so
+its origin is `x=3840 y=0` — set Position to `3840 x 0` to open Prexu there.
+
+If "Apply Initially" doesn't stick (some apps re-assert geometry after start),
+also add the property **Ignore requested geometry → Yes** (KWin notes this in
+the rule dialog). "Apply Initially" places the window on open but still lets you
+move it afterward; use **Force** only if you want it locked.
+
 ## What still requires a Linux machine
 
-- Confirm WebKitGTK on Fedora decodes the target Plex codecs (if yes, the HTML5
-  engine may be sufficient on Linux and a native player is lower priority).
+- ~~Confirm WebKitGTK on Fedora decodes the target Plex codecs.~~ **Answered
+  (prexu-duna.3):** the HTML5 path direct-plays only **H.264 + AAC**; HEVC
+  (8- and 10-bit), AV1, and AC3/E-AC3/TrueHD/DTS audio all force a Plex
+  transcode (~17% of the Movies library by video, ~170 titles by audio). So the
+  native render-API player is warranted on Linux — those codecs are its
+  must-cover scope.
 - The native player render-API backend (mpv OpenGL/Vulkan → Wayland/X11
   surface). Wayland is the modern Fedora default and has no mpv `--wid`
   embedding, so this is the render-API path (ADR option L2), not the Windows
