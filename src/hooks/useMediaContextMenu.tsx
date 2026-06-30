@@ -20,6 +20,30 @@ import PlaylistPicker from "../components/PlaylistPicker";
 import FixMatchDialog from "../components/FixMatchDialog";
 import type { PlexMediaItem, PlexEpisode, PlexSeason } from "../types/library";
 
+// ── Watched-toggle logic ──
+
+/**
+ * Which watched-toggle actions to offer for an item, in display order.
+ *
+ * An item with a resume point (`viewOffset` > 0, i.e. it's in Continue
+ * Watching) offers BOTH actions regardless of whether it was already fully
+ * watched — so a re-watched movie can be marked complete or reset, same as a
+ * first-time-in-progress one. Otherwise only the single toggle for the item's
+ * current watched state is shown. The action matching the current state is
+ * listed first (prexu-i5dq).
+ */
+export function watchedToggleActions(item: {
+  viewCount?: number;
+  viewOffset?: number;
+}): ("watched" | "unwatched")[] {
+  const watched = !!item.viewCount;
+  const inProgress = !!item.viewOffset;
+  if (watched) {
+    return inProgress ? ["unwatched", "watched"] : ["unwatched"];
+  }
+  return inProgress ? ["watched", "unwatched"] : ["watched"];
+}
+
 // ── Internal state shapes ──
 
 interface ContextMenuState {
@@ -100,48 +124,22 @@ export function useMediaContextMenu(options: UseMediaContextMenuOptions = {}) {
     (item: PlexMediaItem, extraItems: ContextMenuItem[]): ContextMenuItem[] => {
       if (!server) return [];
       const items: ContextMenuItem[] = [];
-      const hasView = (item as { viewCount?: number }).viewCount;
-      const hasProgress = (item as { viewOffset?: number }).viewOffset;
 
       // ── Watched / Unwatched toggle ──
-      if (hasView) {
-        items.push({
-          label: "Mark as Unwatched",
-          onClick: async () => {
-            await markAsUnwatched(
-              server.uri,
-              server.accessToken,
-              item.ratingKey,
-            );
-            onRefreshRef.current?.();
-          },
-        });
-      } else {
-        items.push({
-          label: "Mark as Watched",
-          onClick: async () => {
-            await markAsWatched(
-              server.uri,
-              server.accessToken,
-              item.ratingKey,
-            );
-            onRefreshRef.current?.();
-          },
-        });
-        // Also offer "Mark as Unwatched" for partially-watched items
-        if (hasProgress) {
-          items.push({
-            label: "Mark as Unwatched",
-            onClick: async () => {
-              await markAsUnwatched(
-                server.uri,
-                server.accessToken,
-                item.ratingKey,
-              );
-              onRefreshRef.current?.();
-            },
-          });
-        }
+      const watchedToggleItem = (
+        action: "watched" | "unwatched",
+      ): ContextMenuItem => ({
+        label: action === "watched" ? "Mark as Watched" : "Mark as Unwatched",
+        onClick: async () => {
+          const mark = action === "watched" ? markAsWatched : markAsUnwatched;
+          await mark(server.uri, server.accessToken, item.ratingKey);
+          onRefreshRef.current?.();
+        },
+      });
+      for (const action of watchedToggleActions(
+        item as { viewCount?: number; viewOffset?: number },
+      )) {
+        items.push(watchedToggleItem(action));
       }
 
       // ── Page-specific extra items ──
