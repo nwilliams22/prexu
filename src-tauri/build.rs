@@ -1,4 +1,7 @@
+// Only used by the Windows-only libmpv DLL provisioning below.
+#[cfg(target_os = "windows")]
 use std::env;
+#[cfg(target_os = "windows")]
 use std::path::PathBuf;
 
 fn main() {

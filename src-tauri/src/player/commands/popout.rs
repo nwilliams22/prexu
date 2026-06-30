@@ -6,10 +6,12 @@
 //! the main window full size but renders the player chrome in a small corner
 //! region of the WebView.
 
+#[cfg(target_os = "windows")]
 use tauri::{AppHandle, Emitter, Manager, State};
 #[cfg(target_os = "windows")]
 use tauri_plugin_store::StoreExt;
 
+#[cfg(target_os = "windows")]
 use crate::player::{MinimizeCorner, PlayerState};
 #[cfg(target_os = "windows")]
 use super::win32_monitor::{decode_device_name, monitor_info, resync_host, work_area_from_info};

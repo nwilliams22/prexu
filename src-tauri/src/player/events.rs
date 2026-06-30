@@ -27,7 +27,9 @@ use std::time::{Duration, Instant};
 
 use libmpv2::events::{Event, EventContext, PropertyData};
 use libmpv2::{Format, Mpv};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
+#[cfg(target_os = "windows")]
+use tauri::Manager; // Windows-only: needed for .state() in attach_window_handlers / start_flusher
 
 // ── Window handler (prexu-bgz.30) ────────────────────────────────────────────
 

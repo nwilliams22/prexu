@@ -5,8 +5,10 @@
 //! remains interactive so the user can browse the Library, check cast/crew,
 //! etc. while the small video region keeps playing in the corner.
 
+#[cfg(target_os = "windows")]
 use tauri::{AppHandle, Emitter, Manager, State};
 
+#[cfg(target_os = "windows")]
 use crate::player::{MinimizeCorner, MinimizeState, PlayerState};
 #[cfg(target_os = "windows")]
 use super::win32_monitor::resync_host;

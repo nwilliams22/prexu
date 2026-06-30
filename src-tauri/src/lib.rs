@@ -466,6 +466,9 @@ pub fn run() {
             player::commands::player_update_mini_geometry,
         ])
         .setup(|app| {
+            // `window` is only consumed by the #[cfg(target_os = "windows")] block below.
+            // On Linux/macOS the binding is intentionally unused — silence the lint there.
+            #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
             if let Some(window) = app.get_webview_window("main") {
                 // Window is `visible: false` in tauri.conf.json. We do NOT
                 // call window.show() here — the frontend invokes

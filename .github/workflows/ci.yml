@@ -55,9 +55,13 @@ jobs:
             libssl-dev \
             libmpv-dev
 
-      - name: src-tauri build (Linux)
+      # clippy -D warnings (not plain build) so non-Windows dead-code drift
+      # fails CI, matching the Windows headless-mpv job's strictness. The
+      # player's Windows-only items are cfg-gated / cfg_attr-allowed for
+      # non-Windows so this stays clean (prexu-duna.5).
+      - name: src-tauri clippy (Linux)
         working-directory: src-tauri
-        run: cargo build
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium

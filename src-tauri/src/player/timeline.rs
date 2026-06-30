@@ -23,10 +23,13 @@ use super::CLOSE_REPORT_JOIN_BUDGET;
 #[derive(Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineCtx {
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))] // Windows-only: read by stopped_report_request
     pub server_uri: String,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))] // Windows-only: read by stopped_report_request
     pub token: String,
     pub rating_key: String,
     pub duration_ms: u64,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))] // Windows-only: read by stopped_report_request
     pub client_id: String,
 }
 
@@ -37,6 +40,7 @@ pub struct TimelineCtx {
 /// thread captures only owned plain data (no `&self`) and the request shape
 /// can be unit tested without a live server.  reqwest's `.query()` handles
 /// percent-encoding of the values at send time.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))] // Windows-only: called by fire_stopped_report
 pub(crate) fn stopped_report_request(
     ctx: &TimelineCtx,
     pos_ms: u64,
@@ -71,6 +75,7 @@ pub(crate) fn stopped_report_request(
 /// be read inside the spawned thread.
 ///
 /// No-op (returns immediately) when `ctx` is `None`.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))] // Windows-only: called by report_stopped_on_close
 pub(crate) fn fire_stopped_report(ctx: Option<TimelineCtx>, pos_ms_opt: Option<u64>) {
     let (ctx, pos_ms) = match (ctx, pos_ms_opt) {
         (Some(c), Some(p)) => (c, p),

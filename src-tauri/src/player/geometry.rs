@@ -19,7 +19,9 @@
 
 use std::time::Instant;
 
-use super::{MinimizeCorner, MinimizeState, GEOMETRY_SYNC_MIN_INTERVAL};
+use super::{MinimizeState, GEOMETRY_SYNC_MIN_INTERVAL};
+#[cfg(target_os = "windows")]
+use super::MinimizeCorner; // Windows-only: used in compute_minimize_inset / initial_host_geometry
 
 /// All geometry-throttle state bundled behind a single mutex.
 ///
@@ -30,14 +32,17 @@ pub(crate) struct GeomState {
     /// Instant of the last sync that actually ran (leading-edge throttle).
     /// Initialised to `now − GEOMETRY_SYNC_MIN_INTERVAL` so the very first
     /// event passes through without an extra sleep.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) last_sync: Instant,
     /// `(x, y, w, h)` in physical pixels of the last geometry we applied.
     /// `None` before any geometry has been applied.  Used to deduplicate
     /// identical back-to-back calls.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) last_geometry: Option<(i32, i32, i32, i32)>,
     /// Geometry stored by a throttled call so the trailing edge is never
     /// lost.  Consumed by `flush_pending_geometry` (or cleared by the next
     /// call that passes the throttle).
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) pending_geometry: Option<(i32, i32, i32, i32)>,
     /// In-window minimize state in logical pixels.  `None` when not in
     /// minimize mode.  Applied by `apply_minimize_inset_inner` on every
@@ -45,6 +50,7 @@ pub(crate) struct GeomState {
     pub(crate) minimize: Option<MinimizeState>,
     /// DPI scale factor of the main window.  Updated from
     /// `ScaleFactorChanged` and `player_enter_minimize`.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) scale_factor: f64,
 }
 
@@ -69,6 +75,7 @@ impl GeomState {
 ///
 /// Pure function: no side-effects, fully unit-testable without a
 /// `PlayerState`.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))] // Windows-only: called by plan_sync / plan_sync_immediate
 #[inline]
 pub(crate) fn should_throttle(last_sync: Instant, now: Instant) -> bool {
     now.duration_since(last_sync) < GEOMETRY_SYNC_MIN_INTERVAL

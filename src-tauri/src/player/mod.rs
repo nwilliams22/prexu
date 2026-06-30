@@ -17,10 +17,13 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use tokio::sync::Notify;
+#[cfg(target_os = "windows")]
+use tokio::sync::Notify; // Windows-only: used by flusher_notify field
 
 use libmpv2::Mpv;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
+#[cfg(target_os = "windows")]
+use tauri::Manager; // Windows-only: needed for .state() in start_flusher
 
 use geometry::GeomState;
 
@@ -54,6 +57,7 @@ pub(crate) const GEOMETRY_SYNC_MIN_INTERVAL: Duration = Duration::from_millis(33
 /// instant); a dead/slow server costs at most this much instead of the old
 /// main-thread worst case of client construction + 1500ms send. Past this
 /// budget the thread is detached and races process exit (prexu-bgz.9).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))] // Windows-only: read by fire_stopped_report via timeline.rs
 pub(crate) const CLOSE_REPORT_JOIN_BUDGET: Duration = Duration::from_millis(300);
 
 /// Managed state container holding the mpv handle + (on Windows) the native
@@ -103,11 +107,13 @@ pub struct PlayerState {
     /// 50ms throttle window leaves the host stuck at stale geometry —
     /// `sync_geometry` stores the final geometry to pending but no further
     /// event arrives to consume it.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))] // Windows-only: read by claim_trailing_schedule / flush_pending_geometry
     trailing_scheduled: AtomicBool,
     /// Saved (x, y, width, height) of the Tauri main window's outer rect
     /// before entering pop-out mode. Stashed by `player_enter_popout` and
     /// consumed by `player_exit_popout` to restore the previous geometry.
     /// `None` when not in pop-out mode.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))] // Windows-only: read by is_in_popout / player_exit_popout
     pub(crate) pre_popout_geometry: Mutex<Option<(i32, i32, u32, u32)>>,
     /// Latched on `WindowEvent::Focused(false)`, consumed on the next
     /// `WindowEvent::Focused(true)`. Gates `reassert_host_on_focus`
@@ -170,9 +176,13 @@ pub enum MinimizeCorner {
 /// new scale without re-firing `player_enter_minimize` from the frontend.
 #[derive(Debug, Clone, Copy)]
 pub struct MinimizeState {
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))] // Windows-only: read by compute_minimize_inset
     pub width: u32,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))] // Windows-only: read by compute_minimize_inset
     pub height: u32,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))] // Windows-only: read by compute_minimize_inset
     pub padding: u32,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))] // Windows-only: read by compute_minimize_inset
     pub corner: MinimizeCorner,
 }
 
@@ -952,6 +962,7 @@ impl PlayerState {
 
     /// One-shot take of the report context. A `CloseRequested` is typically
     /// followed by `Destroyed`; taking ensures only the first event reports.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))] // Windows-only: called by report_stopped_on_close
     pub(crate) fn take_timeline_ctx(&self) -> Option<TimelineCtx> {
         self.timeline_ctx.lock().ok().and_then(|mut g| g.take())
     }
@@ -975,6 +986,7 @@ impl PlayerState {
     /// the typical LAN Plex request (~tens of ms) land. No-op when no
     /// playback registered a context or the frontend already cleared it
     /// after its own report.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))] // Windows-only: called from attach_window_handlers CloseRequested arm
     pub fn report_stopped_on_close(&self) {
         let ctx = self.take_timeline_ctx();
         // time-pos MUST be read here on the caller thread — mpv is torn
