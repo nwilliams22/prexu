@@ -401,6 +401,19 @@ fn write_error(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Linux/Wayland (prexu-z5mz): webkit2gtk's DMABUF renderer crashes at
+    // webview creation on Wayland with many GPUs (notably NVIDIA) —
+    // "Gdk-Message: Error 71 (Protocol error) dispatching to Wayland display" —
+    // killing the app before first paint. Disabling the DMABUF renderer is the
+    // upstream-recommended workaround and forces the stable GL path. Must be set
+    // before GTK/webview init (i.e. before the Builder runs below). Only set it
+    // when the user hasn't overridden it, so DMABUF can still be force-enabled
+    // for testing.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+
     // Security (Path C3d): drop CWD/PATH from the process DLL search order
     // before anything loads a third-party DLL — defeats DLL planting/sideloading
     // for ANGLE and every other dynamically-loaded module. Keeps app dir +
