@@ -1,0 +1,37 @@
+# THROWAWAY feasibility spike — beads prexu-axj4.1.
+#
+# Proves mpv's render API (libmpv/render.h, OpenGL backend) can composite
+# decoded video frames UNDERNEATH a transparent webkit2gtk webview on a live
+# Wayland (and X11) session — the make-or-break unknown gating epic prexu-axj4.
+#
+# On Linux, Tauri/wry's webview is NOT a separate OS window: it is a
+# WebKitWebView GTK widget packed into a gtk::Box inside a gtk::ApplicationWindow
+# (see wry-0.54.2/src/webkitgtk/mod.rs:290, where wry sets the webview bg to
+# RGBA(0,0,0,0) when transparent). So there is no `--wid` to embed under and no
+# wl_subsurface to attach: the whole window is ONE wl_surface and GTK composites
+# its widgets. This spike mirrors that exact stack — gtk 0.18 + webkit2gtk-4.1 —
+# and stacks an mpv GtkGLArea UNDER a transparent webview via GtkOverlay.
+#
+# Versions pinned to match src-tauri/Cargo.lock (gtk 0.18.2, webkit2gtk 2.0.2 =
+# webkitgtk 4.1) so the widget/compositing behavior is interchangeable with the
+# real app. mpv render API is raw FFI to the system libmpv (2.5.0). DO NOT SHIP.
+[package]
+name = "wayland-render-compositing-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "wl_render_compositing"
+path = "src/main.rs"
+
+[dependencies]
+log = "0.4"
+env_logger = "0.11"
+
+# Same GTK3 / webkitgtk-4.1 bindings wry 0.54.2 uses on Linux.
+gtk = { version = "0.18", features = ["v3_24"] }
+webkit2gtk = { version = "2.0", features = ["v2_40"] }
+
+[build-dependencies]
+pkg-config = "0.3"
