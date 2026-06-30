@@ -1,6 +1,16 @@
 [tools]
 node = "22"
 
+[env]
+# `bd dolt push`/`pull` shell out to the dolt CLI in external-server mode, which
+# needs the specific Dolt *database* directory — NOT the server data-dir. Without
+# this, those commands fail with: "dolt push requires a local Dolt CLI database
+# directory in external-server mode; set BEADS_DOLT_CLI_DIR ...". The database
+# lives at .beads/dolt/<database>, where <database> is "prexu" per
+# .beads/metadata.json (dolt_database). mise loads this whenever you're in the
+# project, so dolt sync works without per-shell setup.
+BEADS_DOLT_CLI_DIR = "{{config_root}}/.beads/dolt/prexu"
+
 # Beads issue tracker + its Dolt backend, so `mise install` provisions `bd` on
 # any machine (e.g. the Linux dev box). The task graph itself travels in git as
 # .beads/issues.jsonl; bd rebuilds its local Dolt DB from that jsonl on first
