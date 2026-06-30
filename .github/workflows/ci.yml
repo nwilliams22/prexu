@@ -95,17 +95,19 @@ jobs:
         with:
           components: clippy
 
-      # Fetch ONLY the runtime DLL from a pinned, checksummed mpv dev release and
-      # drop it beside the vendored mpv.lib + headers to complete MPV_SOURCE/64.
-      # Pin both the release tag and the SHA256 so the binary can't change under
-      # us; mismatches fail the job (supply-chain guard, per prexu-r8o).
+      # Fetch ONLY the runtime DLL from our self-hosted, checksummed mpv mirror
+      # and drop it beside the vendored mpv.lib + headers to complete
+      # MPV_SOURCE/64. The mirror lives in this repo's `libmpv-vendor` release
+      # because upstream zhongfly/mpv-winbuild deletes nightlies within days,
+      # 404ing any pinned upstream URL (prexu-n1wt). Pin the SHA256 so the
+      # binary can't change under us; mismatches fail the job (supply-chain
+      # guard, per prexu-r8o). Keep asset + SHA256 in lockstep with release.yml.
       - name: Fetch libmpv runtime DLL (pinned + checksummed)
         shell: pwsh
         run: |
-          $tag    = "2026-05-29-13a3e3ad0e"
-          $asset  = "mpv-dev-x86_64-20260529-git-13a3e3ad0e.7z"
-          $sha256 = "2c4883c8836b53465796aca61e16f7ce6c3adda818baadc850b9f2a39bd2ce5d"
-          $url    = "https://github.com/zhongfly/mpv-winbuild/releases/download/$tag/$asset"
+          $asset  = "mpv-dev-x86_64-20260629-git-3f1b23abd0.7z"
+          $sha256 = "ea0a4aa3bdb1fc225c5fa4f73f7a705e06fae84f99fc8f9946757e99eb5f5a26"
+          $url    = "https://github.com/nwilliams22/prexu/releases/download/libmpv-vendor/$asset"
           Write-Host "Downloading $url"
           Invoke-WebRequest -Uri $url -OutFile $asset
           $actual = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLower()
