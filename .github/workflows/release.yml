@@ -8,17 +8,19 @@ on:
 permissions:
   contents: write
 
-# Windows libmpv dev archive URL. Use the **baseline** (non-v3) build — the
-# AVX2 v3 build fails LoadLibrary with ERROR_NOACCESS on Windows 11 (see
-# docs/native-player-status.md). Same pinned release + SHA256 as ci.yml; keep
-# the two workflows in lockstep when bumping. Override per-run via the
-# `LIBMPV_URL`/`LIBMPV_SHA256` repository variables (e.g. to point at a
-# vendored copy under this repo's Releases). The SHA256 is verified after
-# download and a mismatch fails the build; cache invalidates automatically
-# when the URL or SHA256 changes.
+# Windows libmpv dev archive URL. Self-hosted mirror under this repo's
+# `libmpv-vendor` release (same self-hosting pattern as the ANGLE DLLs below) —
+# upstream zhongfly/mpv-winbuild rotates and deletes nightlies within days,
+# 404ing any pinned upstream URL (prexu-n1wt). The mirror is the **baseline**
+# (non-v3) build — the AVX2 v3 build fails LoadLibrary with ERROR_NOACCESS on
+# Windows 11 (see docs/native-player-status.md). Same pinned asset + SHA256 as
+# ci.yml; keep the two workflows in lockstep when bumping. Override per-run via
+# the `LIBMPV_URL`/`LIBMPV_SHA256` repository variables. The SHA256 is verified
+# after download and a mismatch fails the build; cache invalidates
+# automatically when the URL or SHA256 changes.
 env:
-  LIBMPV_URL: ${{ vars.LIBMPV_URL || 'https://github.com/zhongfly/mpv-winbuild/releases/download/2026-05-29-13a3e3ad0e/mpv-dev-x86_64-20260529-git-13a3e3ad0e.7z' }}
-  LIBMPV_SHA256: ${{ vars.LIBMPV_SHA256 || '2c4883c8836b53465796aca61e16f7ce6c3adda818baadc850b9f2a39bd2ce5d' }}
+  LIBMPV_URL: ${{ vars.LIBMPV_URL || 'https://github.com/nwilliams22/prexu/releases/download/libmpv-vendor/mpv-dev-x86_64-20260629-git-3f1b23abd0.7z' }}
+  LIBMPV_SHA256: ${{ vars.LIBMPV_SHA256 || 'ea0a4aa3bdb1fc225c5fa4f73f7a705e06fae84f99fc8f9946757e99eb5f5a26' }}
   # Pinned ANGLE runtime DLLs (libEGL/libGLESv2) for the Windows native-player
   # render path. Hosted as assets on this repo's non-semver `angle-vendor-1`
   # release. The SHA256s MUST match the pins in
