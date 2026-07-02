@@ -18,6 +18,17 @@ vi.mock("../../services/logger", () => ({
   },
 }));
 
+// SUPPORTS_PLAYER_WINDOWING resolves from navigator.userAgent + Tauri
+// internals, both absent by default under jsdom — so pop-out would report
+// unsupported here without this override. All the existing tests in this
+// file assume Windows-native pop-out IPC works; the "windowing
+// unsupported" describe block below covers the Linux-native gate
+// (prexu-axj4.4) with its own per-test remock instead.
+vi.mock("./engineResolution", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./engineResolution")>()),
+  SUPPORTS_PLAYER_WINDOWING: true,
+}));
+
 describe("usePopOutPlayer", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -74,6 +85,33 @@ describe("usePopOutPlayer", () => {
       await Promise.resolve();
     });
 
+    expect(result.current.isPopOut).toBe(false);
+  });
+});
+
+describe("usePopOutPlayer — windowing unsupported (e.g. Linux native, prexu-axj4.4)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("reports isPopOutSupported=false and no-ops togglePopOut without invoking IPC", async () => {
+    vi.resetModules();
+    vi.doMock("./engineResolution", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./engineResolution")>()),
+      SUPPORTS_PLAYER_WINDOWING: false,
+    }));
+
+    const { usePopOutPlayer: usePopOutPlayerUnsupported } = await import("./usePopOutPlayer");
+    const { result } = renderHook(() => usePopOutPlayerUnsupported());
+
+    expect(result.current.isPopOutSupported).toBe(false);
+
+    act(() => {
+      result.current.togglePopOut();
+    });
+
+    expect(playerService.playerEnterPopOut).not.toHaveBeenCalled();
+    expect(playerService.playerExitPopOut).not.toHaveBeenCalled();
     expect(result.current.isPopOut).toBe(false);
   });
 });

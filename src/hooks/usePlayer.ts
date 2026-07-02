@@ -1,16 +1,22 @@
 /**
- * Core playback hook. Dispatches to one of two backends per platform:
- * - Windows (Tauri): `useNativePlayer` — libmpv via player://* events
- * - everywhere else: HTML5 `<video>` + hls.js (the original implementation
- *   below, renamed `useHtml5Player`)
+ * Core playback hook. Dispatches to one of two backends per Player mount:
+ * - Native (Windows or Linux, Tauri): `useNativePlayer` — libmpv via
+ *   player://* events
+ * - everywhere else / when the user opts out: HTML5 `<video>` + hls.js
+ *   (the original implementation below, `useHtml5Player`)
  *
  * Both backends return the same `UsePlayerResult` so PlayerControls,
- * watch-together hooks, and the post-play screen don't care which is active.
+ * watch-together hooks, and the post-play screen don't care which is
+ * active — they can read `player.engine` if they need to know.
  *
- * The dispatch decision is a module-level constant set once at import time
- * (so React always calls the same hook for any given component instance —
- * the rules-of-hooks invariant holds even though the call site is a
- * ternary).
+ * The dispatch decision is resolved ONCE per Player mount via a lazy
+ * useState initializer (see engineResolution.ts for the full contract).
+ * React requires the SAME hook to be called across every render of a
+ * given component instance — the rules-of-hooks invariant holds because
+ * `engine` never changes after the first render of a given `usePlayer`
+ * call site. A runtime fallback (native failing mid-session) works by
+ * forcing PlayerOverlay to fully remount `<Player>`, not by flipping this
+ * value in place.
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
@@ -20,6 +26,13 @@ import { useHlsLoader } from "./player/useHlsLoader";
 import { useTimelineReporting } from "./player/useTimelineReporting";
 import { useStreamSelection } from "./player/useStreamSelection";
 import { useNativePlayer } from "./player/useNativePlayer";
+import {
+  IS_NATIVE_PLAYER_PLATFORM,
+  SUPPORTS_PLAYER_WINDOWING,
+  isSessionFallbackActive,
+  resolveEngineChoice,
+  type ResolvedEngine,
+} from "./player/engineResolution";
 import { addPendingWatchSync } from "../services/storage";
 import {
   prepareSource,
@@ -42,11 +55,11 @@ import type {
 import { buildSubtitleCss } from "../utils/subtitle-css";
 import { logger, redactUrl } from "../services/logger";
 
-export const IS_NATIVE_PLAYER =
-  typeof window !== "undefined" &&
-  "__TAURI_INTERNALS__" in window &&
-  typeof navigator !== "undefined" &&
-  navigator.userAgent.includes("Windows");
+// Re-exported so existing call sites that import platform/engine constants
+// from "../hooks/usePlayer" (the historical home of IS_NATIVE_PLAYER) keep
+// working without an extra import path. See engineResolution.ts for docs.
+export { IS_NATIVE_PLAYER_PLATFORM, SUPPORTS_PLAYER_WINDOWING };
+export type { ResolvedEngine };
 
 export interface UsePlayerResult {
   // Refs
@@ -134,6 +147,18 @@ export interface UsePlayerResult {
   }) => void;
 
   /**
+   * Which backend this Player mount is actually using — "native" (mpv) or
+   * "html5". Fixed for the lifetime of the mount (see engineResolution.ts).
+   * Consumers that used to branch on the old module-level IS_NATIVE_PLAYER
+   * constant should read this instead — it reflects the resolved choice
+   * for THIS session (preference + platform + fallback), not just platform
+   * capability. Window-management affordances (minimize/pop-out) should
+   * still gate on SUPPORTS_PLAYER_WINDOWING, not this field — native on
+   * Linux has no windowing IPC yet.
+   */
+  engine: ResolvedEngine;
+
+  /**
    * Identity-stable slice of this result: everything except the 4 Hz
    * time-pos values (`currentTime` / `buffered`). Both backends memoize
    * this object over stable callbacks + rarely-changing state only, so
@@ -156,9 +181,23 @@ export type PlayerChrome = Omit<
 >;
 
 export function usePlayer(ratingKey: string, offsetOverride?: number | null): UsePlayerResult {
-  // The branch is a module-level constant — React calls the same hook for
-  // any given component instance across renders, so rules-of-hooks holds.
-  return IS_NATIVE_PLAYER
+  const { preferences } = usePreferences();
+
+  // Resolved ONCE via a lazy useState initializer — this is what makes the
+  // ternary below safe under rules-of-hooks. `engine` never changes across
+  // re-renders of this component instance, even if preferences or the
+  // session-fallback flag change later; a runtime fallback instead forces
+  // PlayerOverlay to remount <Player> with a fresh key, which re-runs this
+  // initializer from scratch and picks up the (by then true) fallback flag.
+  const [engine] = useState<ResolvedEngine>(() =>
+    resolveEngineChoice({
+      platformCapable: IS_NATIVE_PLAYER_PLATFORM,
+      playerEngine: preferences.playback.playerEngine,
+      sessionFallback: isSessionFallbackActive(),
+    }),
+  );
+
+  return engine === "native"
     ? useNativePlayer(ratingKey, offsetOverride)
     : useHtml5Player(ratingKey, offsetOverride);
 }
@@ -663,6 +702,7 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
       subscribeToEof,
       applySubtitleStyle,
       applyAudioEnhancement,
+      engine: "html5",
     }),
     [
       title,

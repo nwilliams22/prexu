@@ -15,6 +15,16 @@ vi.mock("../services/player", () => ({
   playerUpdateMiniGeometry: vi.fn().mockResolvedValue(undefined),
 }));
 
+// SUPPORTS_PLAYER_WINDOWING resolves from navigator.userAgent + Tauri
+// internals, both absent under jsdom by default. Every minimize/restore
+// test in this file assumes Windows-native windowing IPC works, so force
+// it true here; the Linux-native gate itself (prexu-axj4.4) is covered in
+// a separate describe block below with its own per-test remock.
+vi.mock("../hooks/player/engineResolution", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../hooks/player/engineResolution")>()),
+  SUPPORTS_PLAYER_WINDOWING: true,
+}));
+
 vi.mock("../services/logger", () => ({
   logger: {
     info: vi.fn(),
@@ -299,5 +309,41 @@ describe("PlayerContext split (prexu-ii3) — session vs minimize identity", () 
       result.current.session.updateSession({ offset: 42 }),
     );
     expect(result.current.minimize).toBe(minimizeRef);
+  });
+});
+
+describe("PlayerContext — windowing unsupported (e.g. Linux native, prexu-axj4.4)", () => {
+  it("minimize() and restoreFromMinimize() no-op without invoking IPC", async () => {
+    vi.resetModules();
+    vi.doMock("../hooks/player/engineResolution", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../hooks/player/engineResolution")>()),
+      SUPPORTS_PLAYER_WINDOWING: false,
+    }));
+
+    const { PlayerProvider: PlayerProviderUnsupported, usePlayerSession: useSessionUnsupported, usePlayerMinimize: useMinimizeUnsupported } =
+      await import("./PlayerContext");
+    const playerServiceUnsupported = await import("../services/player");
+
+    const wrapperUnsupported = ({ children }: { children: ReactNode }) => (
+      <PlayerProviderUnsupported>{children}</PlayerProviderUnsupported>
+    );
+    const useBothUnsupported = () => {
+      const session = useSessionUnsupported();
+      const minimize = useMinimizeUnsupported();
+      return { ...session, ...minimize };
+    };
+
+    const { result } = renderHook(useBothUnsupported, { wrapper: wrapperUnsupported });
+
+    act(() => {
+      result.current.minimize();
+    });
+    expect(result.current.isMinimized).toBe(false);
+    expect(playerServiceUnsupported.playerEnterMinimize).not.toHaveBeenCalled();
+
+    act(() => {
+      result.current.restoreFromMinimize();
+    });
+    expect(playerServiceUnsupported.playerExitMinimize).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,6 @@
 import type { PlaybackPreferences } from "../../types/preferences";
 import { LANGUAGES } from "../../constants/languages";
+import { IS_NATIVE_PLAYER_PLATFORM } from "../../hooks/player/engineResolution";
 import { styles } from "./settingsStyles";
 
 interface PlaybackSettingsPanelProps {
@@ -11,6 +12,27 @@ export function PlaybackSettingsPanel({ playback: pb, updatePlayback }: Playback
   return (
     <section style={styles.section}>
       <h3 style={styles.sectionTitle}>Playback</h3>
+
+      {/* Only shown when this platform can even run the native (mpv)
+          backend — Tauri desktop on Windows or Linux. Browser/web builds
+          never see this control since HTML5 is their only option. */}
+      {IS_NATIVE_PLAYER_PLATFORM && (
+        <div style={styles.field}>
+          <label style={styles.label}>Player Engine</label>
+          <p style={styles.hint}>
+            Changing this applies the next time you open the player.
+          </p>
+          <select
+            value={pb.playerEngine}
+            onChange={(e) => updatePlayback({ playerEngine: e.target.value as PlaybackPreferences["playerEngine"] })}
+            style={styles.select}
+          >
+            <option value="auto">Auto — native when available</option>
+            <option value="native">Native (mpv)</option>
+            <option value="html5">HTML5 (browser)</option>
+          </select>
+        </div>
+      )}
 
       <div style={styles.field}>
         <label style={styles.label}>Video Quality</label>

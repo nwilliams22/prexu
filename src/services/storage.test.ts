@@ -97,6 +97,7 @@ describe("storage", () => {
         skipIntroEnabled: true,
         skipCreditsEnabled: true,
         autoPlayEnabled: true,
+        playerEngine: "auto",
         subtitleStyle: {
           fontFamily: "sans-serif",
           textColor: "#FFFFFF",
@@ -297,6 +298,52 @@ describe("storage", () => {
       // Defaults applied for missing keys
       expect(prefs.playback.subtitleSize).toBe(100);
       expect(prefs.appearance.dashboardSections.continueWatching).toBe(true);
+    });
+
+    it("defaults playerEngine to 'auto' for prefs saved before the field existed (prexu-axj4.4)", async () => {
+      // Simulate a pre-axj4.4 save with no playerEngine key at all.
+      localStorage.setItem(
+        "prexu_preferences",
+        JSON.stringify({
+          playback: { quality: "720p" },
+          appearance: {},
+        })
+      );
+
+      const prefs = await getPreferences();
+      expect(prefs.playback.playerEngine).toBe("auto");
+      // Doesn't clobber the rest of the saved value.
+      expect(prefs.playback.quality).toBe("720p");
+    });
+
+    it("preserves an explicit non-default playerEngine value", async () => {
+      localStorage.setItem(
+        "prexu_preferences",
+        JSON.stringify({
+          playback: { playerEngine: "html5" },
+          appearance: {},
+        })
+      );
+
+      const prefs = await getPreferences();
+      expect(prefs.playback.playerEngine).toBe("html5");
+    });
+
+    it("gracefully ignores a corrupted playerEngine value (falls back to default on next full parse failure, otherwise passes the raw value through)", async () => {
+      // mergeWithDefaults doesn't validate enum membership today — an
+      // invalid stored value passes through unchanged rather than crashing.
+      // This documents that behavior rather than asserting a stricter
+      // contract than the rest of the preferences merge already provides.
+      localStorage.setItem(
+        "prexu_preferences",
+        JSON.stringify({
+          playback: { playerEngine: "not-a-real-engine" },
+          appearance: {},
+        })
+      );
+
+      const prefs = await getPreferences();
+      expect(prefs.playback.playerEngine).toBe("not-a-real-engine");
     });
 
     it("deep merges dashboardSections", async () => {
