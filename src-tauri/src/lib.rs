@@ -1,8 +1,10 @@
 mod downloads;
-// The native player is libmpv-backed and Windows-only (HEVC-10 etc.). Gating
-// the whole module off-Windows keeps libmpv out of the macOS/Linux link line;
-// those platforms use the HTML5 <video> engine. See Cargo.toml + prexu-nesp.
-#[cfg(target_os = "windows")]
+// The native libmpv player compiles on Windows (wid/HWND + DirectComposition)
+// and Linux (render API + GtkGLArea under the transparent WebKitWebView — see
+// docs/adr-native-player-render-api.md, prexu-axj4.3). macOS and any other
+// target omit it and use the HTML5 <video> engine, keeping libmpv out of their
+// link line (see Cargo.toml per-target dependency tables + prexu-nesp).
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 mod player;
 mod util;
 
@@ -465,14 +467,15 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_updater::Builder::default().build());
 
-    // PlayerState owns the libmpv handle — managed only on Windows.
-    #[cfg(target_os = "windows")]
+    // PlayerState owns the libmpv handle — managed on Windows and Linux.
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     let builder = builder.manage(player::PlayerState::new());
 
-    // The player_* commands exist only on Windows (native libmpv player). The
-    // non-Windows handler omits them so the player module — and therefore
-    // libmpv — need not compile off-Windows. The frontend gates invocation via
-    // IS_NATIVE_PLAYER (Windows-only), so other platforms never call these.
+    // The player_* commands exist on Windows (native libmpv player) and Linux
+    // (render-API player, prexu-axj4.3). macOS and other targets omit them so
+    // the player module — and therefore libmpv — need not compile there. The
+    // frontend gates invocation on the native-player probe, so other platforms
+    // never call these.
     #[cfg(target_os = "windows")]
     let builder = builder.invoke_handler(tauri::generate_handler![
         start_proxy,
@@ -500,13 +503,49 @@ pub fn run() {
         player::commands::player_unload,
         player::commands::player_stop,
         player::commands::player_set_fullscreen,
+        player::commands::player_engine_status,
         player::commands::player_enter_popout,
         player::commands::player_exit_popout,
         player::commands::player_enter_minimize,
         player::commands::player_exit_minimize,
         player::commands::player_update_mini_geometry,
     ]);
-    #[cfg(not(target_os = "windows"))]
+    // Linux native player (prexu-axj4.3): the render-API player exposes the same
+    // playback command surface as Windows, minus the Win32-only window-hosting
+    // commands (minimize / popout / mini-geometry). Fullscreen maps to a plain
+    // Tauri window toggle (no host geometry). `player_engine_status` +
+    // `player://engine-failed` are the HTML5-fallback probe contract with the TS
+    // side.
+    #[cfg(target_os = "linux")]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        start_proxy,
+        app_ready,
+        downloads::get_downloads_dir,
+        downloads::open_downloads_dir,
+        downloads::download_media,
+        downloads::cancel_download,
+        downloads::delete_download,
+        downloads::get_local_file_path,
+        player::commands::player_load_url,
+        player::commands::player_play,
+        player::commands::player_pause,
+        player::commands::player_seek,
+        player::commands::player_set_volume,
+        player::commands::player_set_muted,
+        player::commands::player_set_audio_track,
+        player::commands::player_set_sub_track,
+        player::commands::player_load_external_sub,
+        player::commands::player_set_audio_delay_ms,
+        player::commands::player_set_af_chain,
+        player::commands::player_apply_sub_style,
+        player::commands::player_set_timeline_context,
+        player::commands::player_clear_timeline_context,
+        player::commands::player_unload,
+        player::commands::player_stop,
+        player::commands::player_set_fullscreen,
+        player::commands::player_engine_status,
+    ]);
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     let builder = builder.invoke_handler(tauri::generate_handler![
         start_proxy,
         app_ready,
@@ -543,6 +582,34 @@ pub fn run() {
                         }
                     }
                 });
+
+                // Linux native player (prexu-axj4.3): reparent wry's webview
+                // under a GtkOverlay with an mpv-render GtkGLArea beneath it,
+                // and make the webview background transparent so the video shows
+                // through. Runs here on the GTK main thread (setup hook), before
+                // any playback. Failures fall back to HTML5 (engine-failed).
+                #[cfg(target_os = "linux")]
+                {
+                    player::linux_compositor::install(&window, app.handle().clone());
+
+                    // Close-time Plex timeline report (prexu-50f), same as the
+                    // Windows path: on window close mid-playback the JS unmount
+                    // cleanup is unreliable, so Rust fires the final
+                    // `state=stopped` report from the live mpv position. mpv is
+                    // still alive at CloseRequested (fires before teardown).
+                    let report_handle = app.handle().clone();
+                    window.on_window_event(move |event| {
+                        if matches!(
+                            event,
+                            tauri::WindowEvent::CloseRequested { .. }
+                                | tauri::WindowEvent::Destroyed
+                        ) {
+                            report_handle
+                                .state::<player::PlayerState>()
+                                .report_stopped_on_close();
+                        }
+                    });
+                }
 
                 #[cfg(target_os = "windows")]
                 {

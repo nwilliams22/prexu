@@ -1,4 +1,8 @@
+// `env` / `PathBuf` are only used by the Windows-only libmpv/ANGLE DLL-staging
+// helpers below; other targets link libmpv via the system/bundle path.
+#[cfg(target_os = "windows")]
 use std::env;
+#[cfg(target_os = "windows")]
 use std::path::PathBuf;
 
 fn main() {

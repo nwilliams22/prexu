@@ -34,11 +34,18 @@ tauri-plugin-store = "2"
 tauri-plugin-updater = "2"
 url = "2"
 
-# libmpv2 is Windows-only: the native player module is gated to Windows
-# (see src/lib.rs), so non-Windows builds never reference it and must not pull
-# it in — a base dependency would emit `cargo:rustc-link-lib=mpv` and fail the
-# macOS/Linux link with `-lmpv not found`. The Windows entry below adds the
-# `build_libmpv` feature, which wires MPV_SOURCE into the link path.
+# libmpv2 backs the native player, which is compiled on Windows AND Linux
+# (see src/lib.rs — the `player` module is gated to `any(windows, linux)`).
+# macOS and other targets still omit it: a base dependency would emit
+# `cargo:rustc-link-lib=mpv` and fail their link with `-lmpv not found`, so the
+# dependency lives in per-target tables only.
+#
+#   - Windows: vendored `libmpv-2.dll`; the `build_libmpv` feature wires
+#     MPV_SOURCE into the link search path (see src-tauri/build.rs).
+#   - Linux: dynamically links the *system* libmpv (`pkg-config mpv`, ≥2.5.0).
+#     libmpv2-sys's default build script emits `cargo:rustc-link-lib=mpv`, which
+#     resolves against the distro/AppImage-bundled `libmpv.so` (prexu-axj4.7) —
+#     so NO `build_libmpv` feature here.
 [target.'cfg(target_os = "windows")'.dependencies]
 # Windows ships a vendored libmpv-2.dll; `build_libmpv` makes libmpv2's build
 # script wire MPV_SOURCE into the link search path (see src-tauri/build.rs).
@@ -83,6 +90,25 @@ webview2-com = "0.38"
 # Direct dep purely for `wry::set_pending_composition_hosting` (the composition
 # opt-in added to the vendored fork); resolves to vendor/wry via [patch].
 wry = "0.54"
+
+# ── Linux native player (prexu-axj4.3): render-API compositing ──
+# libmpv render context composited under the transparent WebKitWebView via a
+# GtkOverlay + GtkGLArea (see src/player/linux_compositor.rs + the ADR
+# docs/adr-native-player-render-api.md). gtk / glib / webkit2gtk are pinned to
+# the SAME versions Tauri 2.10 / wry 0.54 already resolve transitively (verified
+# against Cargo.lock: gtk 0.18, glib 0.18, webkit2gtk 2.0) so there is exactly
+# one GTK stack in the build — a second, mismatched gtk-rs would not interop
+# with the widgets wry hands us via gtk_window()/default_vbox()/with_webview().
+[target.'cfg(target_os = "linux")'.dependencies]
+# System libmpv, no build_libmpv (see the target-windows comment above).
+libmpv2 = "4"
+gtk = { version = "0.18", features = ["v3_24"] }
+glib = "0.18"
+webkit2gtk = { version = "2.0", features = ["v2_40"] }
+# setlocale(LC_NUMERIC, "C") before mpv_create (libmpv refuses a non-C numeric
+# locale); dlopen of libEGL/libGL for the GL proc-address resolver.
+libc = "0.2"
+libloading = "0.8"
 
 # Path C3c (prexu-60mz.3): vendored fork of wry to add a WebView2 composition-
 # controller hosting path (CreateCoreWebView2CompositionController +
