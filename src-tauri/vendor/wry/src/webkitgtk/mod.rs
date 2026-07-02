@@ -60,6 +60,35 @@ use self::web_context::WebContextExt;
 
 const WEBVIEW_ID: &str = "webview_id";
 
+thread_local! {
+  /// prexu-axj4.3 (Linux native player): when set, the NEXT webview built on the
+  /// current thread is created with `attributes.transparent` forced on, so the
+  /// creation-time transparency path below runs (`set_background_color` RGBA
+  /// 0,0,0,0 before the WebKitWebView realizes and fixes its compositing /
+  /// opaque-region state). This lets the embedding app composite video UNDER
+  /// the webview widget while the TOPLEVEL window stays opaque
+  /// (`transparent:false` — the Wayland-bleed decision, prexu-duna): Tauri only
+  /// propagates its window-level `transparent` flag into
+  /// `WebViewAttributes.transparent`, so an opaque window could otherwise never
+  /// get a transparent webview widget. Mirrors the Windows
+  /// `set_pending_composition_hosting` fork pattern: per-thread + consumed once
+  /// so other windows keep the default opaque webview.
+  static PENDING_WEBVIEW_TRANSPARENCY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Request a transparent-background webview for the next webview created on the
+/// current thread. Must be called before building the window whose webview
+/// should composite over app-rendered content. See
+/// [`PENDING_WEBVIEW_TRANSPARENCY`].
+pub fn set_pending_webview_transparency(enabled: bool) {
+  PENDING_WEBVIEW_TRANSPARENCY.with(|c| c.set(enabled));
+}
+
+/// Reads and clears the pending webview-transparency request.
+fn take_pending_webview_transparency() -> bool {
+  PENDING_WEBVIEW_TRANSPARENCY.with(|c| c.replace(false))
+}
+
 mod drag_drop;
 mod synthetic_mouse_events;
 mod web_context;
@@ -250,6 +279,13 @@ impl InnerWebView {
   where
     W: IsA<gtk::Container>,
   {
+    // prexu-axj4.3: consume the per-thread transparency opt-in (see
+    // PENDING_WEBVIEW_TRANSPARENCY above) before `attributes.transparent` is
+    // read by the creation path below.
+    if take_pending_webview_transparency() {
+      attributes.transparent = true;
+    }
+
     // default_context allows us to create a scoped context on-demand
     let mut default_context;
     let web_context = if attributes.incognito {

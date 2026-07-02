@@ -371,6 +371,12 @@ use android::*;
 
 #[cfg(gtk)]
 pub(crate) mod webkitgtk;
+/// prexu-axj4.3: opt the next webview into a transparent background at creation
+/// time (Linux native player composites video under the webview widget while
+/// the toplevel window stays opaque). Mirrors the Windows
+/// `set_pending_composition_hosting` fork addition.
+#[cfg(gtk)]
+pub use self::webkitgtk::set_pending_webview_transparency;
 /// Re-exported [raw-window-handle](https://docs.rs/raw-window-handle/latest/raw_window_handle/) crate.
 pub use raw_window_handle;
 use raw_window_handle::HasWindowHandle;

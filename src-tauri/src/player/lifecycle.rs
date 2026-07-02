@@ -20,6 +20,24 @@ use tauri::AppHandle;
 
 use super::Inner;
 
+/// Force `LC_NUMERIC=C` exactly once, before the first `mpv_create()` on Linux.
+/// libmpv aborts initialization under any locale whose numeric formatting uses
+/// a non-'.' decimal separator; the C locale is the one it mandates.
+#[cfg(target_os = "linux")]
+fn ensure_c_numeric_locale() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        // SAFETY: `setlocale` is a libc call with a static category constant and
+        // a `'static` NUL-terminated locale string; it returns the previous
+        // locale (ignored) and mutates only process-global locale state.
+        unsafe {
+            libc::setlocale(libc::LC_NUMERIC, c"C".as_ptr());
+        }
+        log::info!("[player:linux] setlocale(LC_NUMERIC, \"C\") applied before mpv_create");
+    });
+}
+
 /// Construct the `Mpv` handle with our baseline playback config.
 ///
 /// `wid` is the host HWND (as i64) mpv renders into — `Some` on Windows where a
@@ -39,6 +57,14 @@ use super::Inner;
 /// Splitting this out keeps the (long, comment-heavy) property block readable in
 /// isolation; the perf-tuning rationale lives with the properties it explains.
 pub(super) fn configure_mpv_properties(wid: Option<i64>, composition: bool) -> Result<Mpv, String> {
+    // libmpv refuses `mpv_create()` under a non-C `LC_NUMERIC` (it requires the
+    // '.' decimal separator). On Linux force `LC_NUMERIC=C` process-wide, once,
+    // before the handle is created (prexu-axj4.3 / spike gotcha #4). Windows
+    // ships a C locale by default and links a vendored libmpv, so this is a
+    // Linux-only guard.
+    #[cfg(target_os = "linux")]
+    ensure_c_numeric_locale();
+
     Mpv::with_initializer(|init| {
         if composition {
             // Render-context path: mpv outputs through libmpv (no OS window).
@@ -50,6 +76,22 @@ pub(super) fn configure_mpv_properties(wid: Option<i64>, composition: bool) -> R
             init.set_property("vo", "gpu-next")?;
         }
         init.set_property("hwdec", "auto-safe")?;
+        // ── Linux audio (prexu-axj4.3 defect 3) ──
+        // The native player plays the ORIGINAL multichannel track (5.1/7.1
+        // AC3/DTS/TrueHD) that the HTML5 path always received as a stereo AAC
+        // transcode. mpv's default downmix does NOT normalize, so a hot 5.1 mix
+        // folded to the (typically stereo) PipeWire sink clips hard ("blown
+        // out" distortion). `audio-normalize-downmix=yes` rescales the downmix
+        // to prevent clipping; `audio-channels=auto-safe` (mpv's default, made
+        // explicit) lets the AO negotiate the sink's real layout so no downmix
+        // happens on true surround setups. Linux-gated: Windows ships the same
+        // mpv default (same clipping risk) — changing it there is a separate
+        // follow-up bead, not a drive-by.
+        #[cfg(target_os = "linux")]
+        {
+            init.set_property("audio-channels", "auto-safe")?;
+            init.set_property("audio-normalize-downmix", "yes")?;
+        }
         init.set_property("keep-open", "always")?;
         init.set_property("force-window", "no")?;
         init.set_property("volume-max", 200_i64)?;

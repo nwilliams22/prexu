@@ -27,7 +27,10 @@ use std::time::{Duration, Instant};
 
 use libmpv2::events::{Event, EventContext, PropertyData};
 use libmpv2::{Format, Mpv};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
+// `Manager` is only needed by the Windows-only window handlers below.
+#[cfg(target_os = "windows")]
+use tauri::Manager;
 
 // ── Window handler (prexu-bgz.30) ────────────────────────────────────────────
 

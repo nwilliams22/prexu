@@ -11,6 +11,7 @@ import {
 import { flushSync } from "react-dom";
 import { logger } from "../services/logger";
 import { playerEnterMinimize, playerExitMinimize, playerUpdateMiniGeometry } from "../services/player";
+import { SUPPORTS_PLAYER_WINDOWING } from "../hooks/player/engineResolution";
 import {
   DEFAULT_MINI_RECT,
   loadPersistedMiniRect,
@@ -199,6 +200,15 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // cascade. Keeping it because the visual-flash rationale stands on
   // its own.
   const minimize = useCallback(() => {
+    // In-window minimize is Windows-only IPC today (prexu-axj4.4) — the
+    // UI affordance that calls this is already gated on
+    // SUPPORTS_PLAYER_WINDOWING in Player.tsx, but guard here too so a
+    // Linux-native session never invokes player_enter_minimize even if
+    // some future call site forgets the UI-level gate.
+    if (!SUPPORTS_PLAYER_WINDOWING) {
+      logger.warn("player:minimize", "minimize ignored — windowing unsupported on this platform");
+      return;
+    }
     logger.info("player:minimize", "entering", miniRectRef.current);
     flushSync(() => {
       setIsMinimized(true);
@@ -223,6 +233,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // benign — the corner mask exposes a slice of the still-full mpv frame,
   // not desktop transparency.
   const restoreFromMinimize = useCallback(() => {
+    // Mirrors the minimize() guard — isMinimized can only be true here if
+    // minimize() already let it through, so this is belt-and-suspenders.
+    if (!SUPPORTS_PLAYER_WINDOWING) {
+      logger.warn("player:minimize", "restore ignored — windowing unsupported on this platform");
+      setIsMinimized(false);
+      return;
+    }
     logger.info("player:minimize", "restoring");
     playerExitMinimize()
       .then(() => setIsMinimized(false))
@@ -305,6 +322,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!isMinimized) {
       prevIsMinimizedRef.current = false;
+      return;
+    }
+    // Belt-and-suspenders: isMinimized can only be true if minimize()
+    // already gated on SUPPORTS_PLAYER_WINDOWING, but guard the IPC call
+    // itself too so a future code path setting isMinimized directly can't
+    // reach an unregistered command on Linux native.
+    if (!SUPPORTS_PLAYER_WINDOWING) {
       return;
     }
     const isTransition = !prevIsMinimizedRef.current;

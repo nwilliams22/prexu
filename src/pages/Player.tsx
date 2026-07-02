@@ -16,7 +16,8 @@ import {
   type PlayerWatchTogether,
 } from "../contexts/PlayerContext";
 import { getImageUrl } from "../services/plex-library";
-import { usePlayer, IS_NATIVE_PLAYER } from "../hooks/usePlayer";
+import { usePlayer } from "../hooks/usePlayer";
+import { SUPPORTS_PLAYER_WINDOWING } from "../hooks/player/engineResolution";
 import { useWatchTogether } from "../hooks/useWatchTogether";
 import { useAudioEnhancements } from "../hooks/useAudioEnhancements";
 import { usePreferences } from "../hooks/usePreferences";
@@ -67,6 +68,12 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   const playerMinimize = usePlayerMinimize();
 
   const player = usePlayer(ratingKey, offset);
+  // Resolved once per mount by usePlayer (see engineResolution.ts) — safe
+  // to read every render since it never changes for the lifetime of this
+  // component instance. Window-management affordances (minimize/pop-out)
+  // gate on SUPPORTS_PLAYER_WINDOWING instead — native on Linux has no
+  // windowing IPC yet (prexu-axj4.4).
+  const isNativeEngine = player.engine === "native";
 
   // Watch Together — derive props from the session bundle (was previously
   // pulled from URL query params). useWatchTogether tolerates null inputs
@@ -167,32 +174,40 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   // exits pop-out first when needed, and `togglePiP` exits minimize first.
   const pip = usePictureInPicture(player.videoRef);
   const popOut = usePopOutPlayer();
-  const pipActive = IS_NATIVE_PLAYER ? popOut.isPopOut : pip.isPiPActive;
-  const pipSupported = IS_NATIVE_PLAYER
+  // Pop-out is Windows-native window management — gate on
+  // SUPPORTS_PLAYER_WINDOWING, not the engine flag. On native-but-no-
+  // windowing (Linux), there's also no <video> element for browser PiP,
+  // so PiP is simply unsupported there until axj4.5 mini-player parity.
+  const pipActive = SUPPORTS_PLAYER_WINDOWING
+    ? popOut.isPopOut
+    : !isNativeEngine && pip.isPiPActive;
+  const pipSupported = SUPPORTS_PLAYER_WINDOWING
     ? popOut.isPopOutSupported
-    : pip.isPiPSupported;
+    : !isNativeEngine && pip.isPiPSupported;
   // Individual fields as deps — the pip/popOut result objects are rebuilt
   // each render, and using them whole would recreate these callbacks (and
   // break memoized chrome children downstream) on every render.
   const { isPopOut, togglePopOut } = popOut;
   const { togglePiP: toggleBrowserPiP } = pip;
   const togglePiP = useCallback(() => {
-    if (IS_NATIVE_PLAYER) {
+    if (SUPPORTS_PLAYER_WINDOWING) {
       // Mutual exclusion with minimize: if currently minimized, restore
       // to full first, then pop out.
       if (playerMinimize.isMinimized) {
         playerMinimize.restoreFromMinimize();
       }
       togglePopOut();
-    } else {
+    } else if (!isNativeEngine) {
       toggleBrowserPiP();
     }
-  }, [togglePopOut, toggleBrowserPiP, playerMinimize]);
+    // Native-but-no-windowing (Linux): neither path applies — pipSupported
+    // is already false there so the button isn't shown.
+  }, [togglePopOut, toggleBrowserPiP, playerMinimize, isNativeEngine]);
 
   const handleMinimize = useCallback(() => {
     // Mutual exclusion with pop-out: if currently popped out, exit
     // pop-out first, then minimize.
-    if (IS_NATIVE_PLAYER && isPopOut) {
+    if (SUPPORTS_PLAYER_WINDOWING && isPopOut) {
       togglePopOut();
     }
     playerMinimize.minimize();
@@ -558,7 +573,11 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   // remain interactive. The mpv host has already been shrunk by the
   // Rust-side player_enter_minimize call from PlayerContext.minimize();
   // this just makes the React chrome match.
-  if (playerMinimize.isMinimized) {
+  // SUPPORTS_PLAYER_WINDOWING gate is belt-and-suspenders here: isMinimized
+  // can only be true if handleMinimize's UI affordance was rendered (which
+  // already gates on this same constant) AND PlayerContext.minimize()
+  // itself let the call through — see engineResolution.ts.
+  if (SUPPORTS_PLAYER_WINDOWING && playerMinimize.isMinimized) {
     return (
       <MinimizedPlayer
         player={player}
@@ -586,20 +605,25 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
         // Win32 HWND BEHIND this transparent webview. Painting black here
         // would occlude it. HTML5 path keeps black so the <video> letterbox
         // stays cinema-style.
-        background: IS_NATIVE_PLAYER ? "transparent" : styles.container?.background,
+        background: isNativeEngine ? "transparent" : styles.container?.background,
         cursor: chromeVisible ? "default" : "none",
       }}
-      onMouseMove={() => {
+      onMouseMove={(e) => {
         // A real pointer move means the drag-resize is over and the user is
         // reaching for the chrome — reveal it immediately (see isResizing).
+        // endResize stays unconditional (pre-axj4.4 behavior); the event is
+        // forwarded so the hook's synthetic-mousemove guard can distinguish
+        // genuine pointer displacement from engine-dispatched moves fired
+        // when layout changes under a stationary cursor (Linux/WebKitGTK —
+        // see usePlayerControlsVisibility's docblock).
         endResize();
-        handleMouseMove();
+        handleMouseMove(e);
       }}
     >
       {/* Video element — only used on the HTML5 path. On native path
           videoRef is never populated, so we hide the element entirely so
           its default black box doesn't occlude the host window. */}
-      {IS_NATIVE_PLAYER ? (
+      {isNativeEngine ? (
         /* Transparent click target for the native path — click to
            play/pause, double-click to fullscreen, same as the HTML5
            <video> element. */
@@ -619,7 +643,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
       {/* Pop-out drag strip (prexu-6qz): hover-reveal handle for the
           borderless floating window. Native popout path only; follows the
           controls auto-hide state. See PopoutDragStrip for the rationale. */}
-      {IS_NATIVE_PLAYER && popOut.isPopOut && (
+      {SUPPORTS_PLAYER_WINDOWING && popOut.isPopOut && (
         <PopoutDragStrip visible={chromeVisible} />
       )}
 
@@ -726,10 +750,10 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
             isActive: pipActive,
             isSupported: pipSupported,
             onToggle: togglePiP,
-            isPopOutMode: IS_NATIVE_PLAYER,
+            isPopOutMode: SUPPORTS_PLAYER_WINDOWING,
           }}
-          minimize={IS_NATIVE_PLAYER ? {
-            isSupported: IS_NATIVE_PLAYER,
+          minimize={SUPPORTS_PLAYER_WINDOWING ? {
+            isSupported: SUPPORTS_PLAYER_WINDOWING,
             isActive: playerMinimize.isMinimized,
             onMinimize: handleMinimize,
           } : undefined}

@@ -156,6 +156,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { prepareSource } from "../../services/plex-playback";
 import { useNativePlayer } from "./useNativePlayer";
+import {
+  __resetEngineFallbackForTests,
+  consumePendingResumeOffsetMs,
+  isSessionFallbackActive,
+} from "./engineResolution";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -173,6 +178,10 @@ beforeEach(() => {
       };
     },
   );
+  // engineResolution's session-fallback flag is a real module-level
+  // singleton (not mocked in this file) — reset it so prexu-axj4.4's
+  // fallback tests below don't leak state into each other.
+  __resetEngineFallbackForTests();
 });
 
 function fireReady() {
@@ -350,6 +359,16 @@ describe("useNativePlayer dispatch contract (prexu-ve9)", () => {
         ({ rk }: { rk: string }) => useNativePlayer(rk),
         { initialProps: { rk: "100" } },
       );
+
+      // Let generation 1's one-time player_engine_status pre-flight
+      // (prexu-axj4.4) resolve before starting generation 2 — otherwise
+      // gen 1 would be superseded while still awaiting that check and
+      // would never reach prepareSource at all, which isn't the race
+      // this test is exercising. The check only runs once per mount, so
+      // this doesn't affect generation 2's behavior below.
+      await waitFor(() => {
+        expect(prepareSource).toHaveBeenCalledTimes(1);
+      });
 
       // Second episode starts while the first is still preparing.
       rerender({ rk: "200" });
@@ -696,6 +715,191 @@ describe("useNativePlayer dispatch contract (prexu-ve9)", () => {
         "player_apply_sub_style",
         expect.objectContaining({ style: expect.objectContaining({ fontFamily: "Arial" }) }),
       );
+    });
+  });
+
+  describe("engine field", () => {
+    it("reports engine: 'native'", async () => {
+      const { result } = renderHook(() => useNativePlayer("123"));
+      await waitFor(() => {
+        expect(eventHandlers["player://ready"]?.length ?? 0).toBeGreaterThan(0);
+      });
+      expect(result.current.engine).toBe("native");
+    });
+  });
+
+  describe("player_engine_status pre-flight (prexu-axj4.4)", () => {
+    it("proceeds with native init when engine status omits a shape (default test mock resolves undefined)", async () => {
+      // Default mock resolves every invoke() call with `undefined` — this
+      // documents that an unrecognized/undefined response is treated as
+      // "available" (never crashes, never spuriously falls back), matching
+      // the contract: only an explicit available:false or a rejection
+      // should downgrade to HTML5.
+      vi.mocked(prepareSource).mockResolvedValue({
+        item: { type: "movie", title: "T" },
+        playable: { Marker: [], duration: 60000 },
+        part: { id: 1, Chapter: [] },
+        categorized: { audio: [], subtitles: [] },
+        defaultAudio: undefined,
+        defaultSub: undefined,
+        isLocal: false,
+        sourceKind: "hls",
+        url: "https://server/index.m3u8",
+        viewOffset: 0,
+      } as unknown as Awaited<ReturnType<typeof prepareSource>>);
+
+      renderHook(() => useNativePlayer("123"));
+      await waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith("player_engine_status");
+      });
+      await waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith(
+          "player_load_url",
+          expect.objectContaining({ url: expect.any(String) }),
+        );
+      });
+      expect(isSessionFallbackActive()).toBe(false);
+    });
+
+    it("falls back to HTML5 (session-fallback flag) when player_engine_status reports available:false", async () => {
+      vi.mocked(prepareSource).mockResolvedValue(null);
+      vi.mocked(invoke).mockImplementation((cmd: unknown) => {
+        if (cmd === "player_engine_status") {
+          return Promise.resolve({ available: false, reason: "render init failed" });
+        }
+        return Promise.resolve(undefined);
+      });
+
+      renderHook(() => useNativePlayer("123"));
+
+      await waitFor(() => {
+        expect(isSessionFallbackActive()).toBe(true);
+      });
+      // Bailed out before ever attempting player_load_url.
+      expect(invoke).not.toHaveBeenCalledWith(
+        "player_load_url",
+        expect.anything(),
+      );
+    });
+
+    it("falls back to HTML5 when the player_engine_status invoke rejects (command not registered yet)", async () => {
+      vi.mocked(invoke).mockImplementation((cmd: unknown) => {
+        if (cmd === "player_engine_status") {
+          return Promise.reject(new Error("command player_engine_status not found"));
+        }
+        return Promise.resolve(undefined);
+      });
+
+      renderHook(() => useNativePlayer("123"));
+
+      await waitFor(() => {
+        expect(isSessionFallbackActive()).toBe(true);
+      });
+      expect(invoke).not.toHaveBeenCalledWith(
+        "player_load_url",
+        expect.anything(),
+      );
+    });
+
+    it("only checks engine status once per mount, not on every episode handoff", async () => {
+      // restoreMocks (vitest.config.ts) wipes the module-level factory
+      // defaults before every test, so invoke/prepareSource must be given
+      // explicit implementations here rather than relying on the factory's
+      // `.mockResolvedValue(...)` — that's already gone by the time this
+      // test runs.
+      vi.mocked(invoke).mockResolvedValue(undefined);
+      vi.mocked(prepareSource).mockResolvedValue({
+        item: { type: "movie", title: "T" },
+        playable: { Marker: [], duration: 60000 },
+        part: { id: 1, Chapter: [] },
+        categorized: { audio: [], subtitles: [] },
+        defaultAudio: undefined,
+        defaultSub: undefined,
+        isLocal: false,
+        sourceKind: "hls",
+        url: "https://server/index.m3u8",
+        viewOffset: 0,
+      } as unknown as Awaited<ReturnType<typeof prepareSource>>);
+
+      const { rerender } = renderHook(
+        ({ rk }: { rk: string }) => useNativePlayer(rk),
+        { initialProps: { rk: "100" } },
+      );
+      await waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith("player_engine_status");
+      });
+      const callsAfterFirst = vi.mocked(invoke).mock.calls.filter(
+        (c) => c[0] === "player_engine_status",
+      ).length;
+      expect(callsAfterFirst).toBe(1);
+
+      // Let generation 1 fully clear the (one-time) pre-flight check and
+      // reach prepareSource before starting generation 2 — otherwise gen 1
+      // would be superseded mid-check and never call prepareSource, which
+      // would make the "called twice" assertion below hang forever.
+      await waitFor(() => {
+        expect(prepareSource).toHaveBeenCalledTimes(1);
+      });
+
+      rerender({ rk: "200" });
+      await waitFor(() => {
+        expect(prepareSource).toHaveBeenCalledTimes(2);
+      });
+      const callsAfterSecond = vi.mocked(invoke).mock.calls.filter(
+        (c) => c[0] === "player_engine_status",
+      ).length;
+      expect(callsAfterSecond).toBe(1);
+    });
+  });
+
+  describe("player://engine-failed runtime fallback (prexu-axj4.4)", () => {
+    function fireEngineFailed(reason: string) {
+      const subs = eventHandlers["player://engine-failed"];
+      if (!subs || subs.length === 0) {
+        throw new Error("player://engine-failed handlers not registered yet");
+      }
+      for (const h of subs) h({ payload: reason });
+    }
+
+    it("sets the session-fallback flag when the event fires", async () => {
+      renderHook(() => useNativePlayer("123"));
+
+      await waitFor(() => {
+        expect(eventHandlers["player://engine-failed"]?.length ?? 0).toBeGreaterThan(0);
+      });
+
+      expect(isSessionFallbackActive()).toBe(false);
+
+      act(() => {
+        fireEngineFailed("GL context lost");
+      });
+
+      expect(isSessionFallbackActive()).toBe(true);
+    });
+
+    it("stashes the last known playback position as the pending resume offset", async () => {
+      renderHook(() => useNativePlayer("123"));
+
+      await waitFor(() => {
+        expect(eventHandlers["player://time-pos"]?.length ?? 0).toBeGreaterThan(0);
+      });
+
+      act(() => {
+        const timeSubs = eventHandlers["player://time-pos"];
+        for (const h of timeSubs) h({ payload: 42.5 });
+      });
+
+      await waitFor(() => {
+        expect(eventHandlers["player://engine-failed"]?.length ?? 0).toBeGreaterThan(0);
+      });
+
+      act(() => {
+        fireEngineFailed("render init failed");
+      });
+
+      expect(consumePendingResumeOffsetMs()).toBe(42500);
+      // One-shot — a second read comes back empty.
+      expect(consumePendingResumeOffsetMs()).toBeNull();
     });
   });
 });
