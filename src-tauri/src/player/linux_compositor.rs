@@ -273,6 +273,35 @@ pub(crate) fn should_pump(paused: bool, idle_active: bool) -> bool {
     !paused && !idle_active
 }
 
+/// Clear (empty) the opaque region of a widget's GdkWindow so GDK and the
+/// compositor alpha-blend the whole widget instead of fast-pathing "opaque"
+/// areas from a retained buffer. Called on the webview at realize and after
+/// every size-allocate (WebKit re-computes its opaque region there). `verbose`
+/// logs the observable compositing state once (realize) instead of per-resize.
+/// Panic-free: runs inside GTK signal closures.
+fn clear_opaque_region(widget: &gtk::Widget, verbose: bool) {
+    let Some(gdk_window) = widget.window() else {
+        if verbose {
+            log::warn!("[player:linux] clear_opaque_region: widget has no GdkWindow yet");
+        }
+        return;
+    };
+    // An EMPTY region (not None — None means "let GTK compute") = nothing opaque.
+    let empty = gtk::cairo::Region::create();
+    gdk_window.set_opaque_region(Some(&empty));
+    if verbose {
+        // GDK exposes no opaque-region getter; log the adjacent observable state.
+        log::info!(
+            "[player:linux] webview opaque region cleared (realize) — app_paintable={} screen_composited={:?} visual_depth={:?}",
+            widget.is_app_paintable(),
+            widget.screen().map(|s| s.is_composited()),
+            widget.visual().map(|v| v.depth())
+        );
+    } else {
+        log::trace!("[player:linux] webview opaque region re-cleared (size-allocate)");
+    }
+}
+
 // ── Compositor state (GTK-main-thread only) ────────────────────────────────────
 
 thread_local! {
@@ -320,17 +349,32 @@ impl Compositor {
 /// thread (Tauri `setup` hook), before any playback. Fail-soft.
 pub fn install(window: &WebviewWindow, app: AppHandle) {
     log::info!("[player:linux] installing render-API compositor");
+    // The WebKit DMABUF renderer is REQUIRED for correct transparent-webview
+    // compositing (the fallback renderer accumulates stale composites —
+    // progressive dimming/ghosting; see lib.rs). Log the effective state so a
+    // user-set disable is visible in defect reports.
+    match std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER") {
+        Ok(v) if v != "0" => log::warn!(
+            "[player:linux] WEBKIT_DISABLE_DMABUF_RENDERER={v} is set — transparent-webview \
+             compositing WILL degrade (progressive dimming); native player not recommended"
+        ),
+        _ => log::info!("[player:linux] WebKit DMABUF renderer enabled (default)"),
+    }
     init_gl_resolver();
 
-    // (1) Webview transparency. tauri.linux.conf.json sets transparent:false, so
-    // wry did NOT set the WebKitWebView background transparent (it only does so
-    // when the window is `transparent`). Without this the webview paints opaque
-    // over the GLArea (re-review finding). Safe app-wide: the React UI paints its
-    // own opaque backgrounds and already goes transparent during native playback.
+    // (1) Webview transparency — belt-and-braces. The LOAD-BEARING call is the
+    // creation-time opt-in in lib.rs (`wry::set_pending_webview_transparency`,
+    // consumed by the vendored fork BEFORE the WebKitWebView was built): only a
+    // pre-creation transparent background fixes WebKit's compositing /
+    // opaque-region state, so GTK truly alpha-blends the webview over the
+    // GLArea instead of re-blending a stale opaque-retained surface
+    // (progressive video dimming). This runtime call merely re-asserts the page
+    // background. Safe app-wide: the React UI paints its own opaque backgrounds
+    // and goes transparent during native playback.
     if let Err(e) = window.with_webview(|pw| {
         let webview = pw.inner();
         webview.set_background_color(&gtk::gdk::RGBA::new(0.0, 0.0, 0.0, 0.0));
-        log::info!("[player:linux] WebKitWebView background set to transparent (RGBA 0,0,0,0)");
+        log::info!("[player:linux] WebKitWebView background re-asserted transparent (RGBA 0,0,0,0)");
     }) {
         log::error!("[player:linux] with_webview (transparency) failed: {e:?}");
     }
@@ -399,6 +443,26 @@ pub fn install(window: &WebviewWindow, app: AppHandle) {
     log::info!(
         "[player:linux] reparent done — webview (direct overlay child) over GtkGLArea; UI subtree shown"
     );
+
+    // Fix B (belt-and-braces on top of the creation-time transparency): clear
+    // the webview GdkWindow's opaque region so GDK/the compositor never treat
+    // any part of it as opaque-retained. GDK has no opaque-region GETTER, so
+    // the observable state (app-paintable, RGBA visual depth, composited) is
+    // logged instead. WebKit re-computes the region on every size-allocate, so
+    // re-assert there too (our handler runs after WebKit's class handler).
+    {
+        webview_widget.connect_realize(|w| {
+            clear_opaque_region(w, true);
+        });
+        webview_widget.connect_size_allocate(|w, _alloc| {
+            clear_opaque_region(w, false);
+        });
+        // Already realized (unlikely at setup, the toplevel is still hidden) —
+        // apply now rather than waiting for a realize that already happened.
+        if webview_widget.is_realized() {
+            clear_opaque_region(&webview_widget, true);
+        }
+    }
 
     // (3) Wire the render lifecycle and store the compositor.
     let comp = Rc::new(Compositor {

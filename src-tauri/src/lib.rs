@@ -403,18 +403,20 @@ fn write_error(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Linux/Wayland (prexu-z5mz): webkit2gtk's DMABUF renderer crashes at
-    // webview creation on Wayland with many GPUs (notably NVIDIA) —
-    // "Gdk-Message: Error 71 (Protocol error) dispatching to Wayland display" —
-    // killing the app before first paint. Disabling the DMABUF renderer is the
-    // upstream-recommended workaround and forces the stable GL path. Must be set
-    // before GTK/webview init (i.e. before the Builder runs below). Only set it
-    // when the user hasn't overridden it, so DMABUF can still be force-enabled
-    // for testing.
-    #[cfg(target_os = "linux")]
-    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-    }
+    // Linux/Wayland: we previously force-set WEBKIT_DISABLE_DMABUF_RENDERER=1
+    // here (prexu-z5mz: webkit2gtk's DMABUF renderer crashed at webview creation
+    // on Wayland/NVIDIA — "Error 71 (Protocol error)"). That force is REMOVED
+    // for the native player (prexu-axj4.3): WebKitGTK's fallback (non-DMABUF)
+    // renderer does not clear a TRANSPARENT webview's retained composite, so
+    // every repaint re-blends onto stale pixels — video/controls progressively
+    // darken to black within seconds and "hidden" chrome lingers as ghost
+    // pixels. With the DMABUF renderer enabled the transparent webview
+    // composites correctly over the mpv GtkGLArea (verified on the z5mz box
+    // itself: webkit2gtk 2.52.3 + NVIDIA 595.71.05 no longer crash — flat
+    // luminance over 60 s, source-accurate brightness). Users on stacks where
+    // the old crash persists can still export WEBKIT_DISABLE_DMABUF_RENDERER=1
+    // (the env var is respected by WebKit directly), at the cost of the
+    // native-player compositing defect — the HTML5 engine remains the fallback.
 
     // Security (Path C3d): drop CWD/PATH from the process DLL search order
     // before anything loads a third-party DLL — defeats DLL planting/sideloading
@@ -430,6 +432,20 @@ pub fn run() {
     // once the HWND exists.
     #[cfg(target_os = "windows")]
     player::composition_host::request_hosting();
+
+    // Linux native player (prexu-axj4.3): opt the main webview into a
+    // TRANSPARENT background at creation time via the vendored-wry fork. Same
+    // placement discipline as the Windows request_hosting() above: must run on
+    // this thread before the config `main` window (and its webview) is built
+    // inside Builder::run. Creation-time is the load-bearing call — it fixes
+    // the WebKitWebView's compositing/opaque-region state before the widget
+    // realizes, so GTK composites the webview OVER the mpv GtkGLArea with true
+    // alpha instead of re-blending a stale opaque-retained surface
+    // (progressive video dimming). The TOPLEVEL window stays transparent:false
+    // (tauri.linux.conf.json — Wayland-bleed, prexu-duna); only the webview
+    // WIDGET goes transparent.
+    #[cfg(target_os = "linux")]
+    wry::set_pending_webview_transparency(true);
 
     let builder = tauri::Builder::default()
         .manage(ProxyState::new())

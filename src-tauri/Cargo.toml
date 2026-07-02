@@ -109,6 +109,11 @@ webkit2gtk = { version = "2.0", features = ["v2_40"] }
 # locale); dlopen of libEGL/libGL for the GL proc-address resolver.
 libc = "0.2"
 libloading = "0.8"
+# Direct dep purely for `wry::set_pending_webview_transparency` (the Linux
+# creation-time webview-transparency opt-in added to the vendored fork —
+# mirror of the Windows composition-hosting entry above); resolves to
+# vendor/wry via [patch].
+wry = "0.54"
 
 # Path C3c (prexu-60mz.3): vendored fork of wry to add a WebView2 composition-
 # controller hosting path (CreateCoreWebView2CompositionController +
