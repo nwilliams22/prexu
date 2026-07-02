@@ -1,12 +1,17 @@
 /**
- * Native (libmpv-backed) playback hook — Windows path for Phase 2.
+ * Native (libmpv-backed) playback hook — Windows and Linux (prexu-axj4).
  *
  * Replaces the HTML5 `<video>` + hls.js bindings with Tauri commands +
  * `player://*` event subscriptions. Returns the same `UsePlayerResult` shape
  * as `usePlayer` so PlayerControls, watch-together hooks, and the post-play
  * screen compile unchanged.
  *
- * Step 2.6 will refactor `usePlayer` to delegate here on Windows.
+ * Only reached when usePlayer() has already resolved the engine to
+ * "native" for this mount (see engineResolution.ts) — this hook doesn't
+ * re-check platform/preference, but it DOES do a one-time runtime
+ * pre-flight (`player_engine_status`) and listens for a later runtime
+ * failure (`player://engine-failed`); both paths set the session-fallback
+ * flag so PlayerOverlay force-remounts into HTML5 (prexu-axj4.4).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -15,6 +20,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useAuth } from "../useAuth";
 import { usePreferences } from "../usePreferences";
 import { useTimelineReporting } from "./useTimelineReporting";
+import { setPendingResumeOffsetMs, setSessionFallbackActive } from "./engineResolution";
 import { addPendingWatchSync, getClientIdentifier } from "../../services/storage";
 import {
   prepareSource,
@@ -35,6 +41,12 @@ import type {
 } from "../../types/preferences";
 import type { PlayerChrome, UsePlayerResult } from "../usePlayer";
 import { logger, redactUrl } from "../../services/logger";
+
+/** Shape of the player_engine_status IPC response (prexu-axj4.4 contract). */
+interface PlayerEngineStatus {
+  available: boolean;
+  reason: string | null;
+}
 
 export function useNativePlayer(
   ratingKey: string,
@@ -94,6 +106,10 @@ export function useNativePlayer(
   // before touching mpv or React state; the per-ratingKey cleanup bumps it
   // so a superseded init stops at its next checkpoint.
   const initGenRef = useRef(0);
+  // Guards the one-time player_engine_status pre-flight check (below) so
+  // it only runs on the true first init of this mount, not on every
+  // episode handoff's initPlayback re-run.
+  const engineStatusCheckedRef = useRef(false);
   const isLocalPlaybackRef = useRef(false);
   // Media part id of the currently playing file — needed to persist subtitle
   // selection on the server after an on-demand download.
@@ -215,6 +231,17 @@ export function useNativePlayer(
           logger.debug("player", "received fullscreen event", e.payload);
           setIsFullscreen(e.payload);
         }),
+        // Runtime native failure (render/GL init failed after mpv was
+        // already committed to — see docs/adr-native-player-render-api.md
+        // and prexu-axj4.4). Stashes the last known position (best-effort
+        // resume-offset preservation) then sets the session-fallback flag;
+        // PlayerOverlay subscribes to it and force-remounts <Player> into
+        // HTML5, consuming the stashed offset for the new session.
+        listen<string>("player://engine-failed", (e) => {
+          logger.warn("player", "native engine failed at runtime — falling back to HTML5", e.payload);
+          setPendingResumeOffsetMs(Math.round(timeline.currentTimeRef.current * 1000));
+          setSessionFallbackActive(true);
+        }),
       ]);
       if (cancelled) {
         for (const u of subs) u();
@@ -249,6 +276,45 @@ export function useNativePlayer(
     // unnecessarily and races against the post-render dep-driven re-fire
     // of this very effect. useRef(false) gives us the correct first-mount
     // semantics for the genuine cold-start deferral case.
+
+    // One-time engine-resolution pre-flight (prexu-axj4.4): usePlayer()
+    // already committed to "native" for this mount before mpv init was
+    // ever attempted (rules-of-hooks — see engineResolution.ts), so this
+    // can't block that decision. Instead it double-checks the Rust side
+    // is actually ready RIGHT before the first load_url and bails into
+    // the fallback path if not, rather than proceeding to a native init
+    // that's doomed to fail. Guarded to run once per mount, not per
+    // episode handoff. A malformed/undefined response (e.g. the command
+    // not yet returning the documented shape) is treated as available —
+    // only an explicit `available:false` or an invoke rejection triggers
+    // fallback, matching the IPC contract in the axj4.4 bead notes.
+    if (!engineStatusCheckedRef.current) {
+      engineStatusCheckedRef.current = true;
+      try {
+        const status = await invoke<PlayerEngineStatus>("player_engine_status");
+        if (gen !== initGenRef.current) {
+          logger.debug("player", "initPlayback superseded", { gen });
+          return;
+        }
+        if (status && status.available === false) {
+          logger.warn(
+            "player",
+            "player_engine_status reported unavailable — falling back to HTML5",
+            status.reason ?? "no reason given",
+          );
+          setSessionFallbackActive(true);
+          return;
+        }
+      } catch (err) {
+        if (gen !== initGenRef.current) {
+          logger.debug("player", "initPlayback superseded", { gen });
+          return;
+        }
+        logger.warn("player", "player_engine_status invoke failed — falling back to HTML5", String(err));
+        setSessionFallbackActive(true);
+        return;
+      }
+    }
 
     try {
       const prepared = await prepareSource({
@@ -785,6 +851,7 @@ export function useNativePlayer(
       subscribeToEof,
       applySubtitleStyle,
       applyAudioEnhancement,
+      engine: "native",
     }),
     [
       title,

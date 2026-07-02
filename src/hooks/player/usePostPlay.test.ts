@@ -5,28 +5,15 @@
  * the synchronous pause when PostPlay opens (native path), the mini-mode
  * handoff (autoplay → fire next; no-autoplay → restore), and ratingKey reset.
  *
- * Uses the native (IS_NATIVE_PLAYER=true) path throughout — the test
- * environment satisfies the Windows + __TAURI_INTERNALS__ checks once the
- * harness in beforeEach sets the internals object. The EOF effect on
- * native subscribes to `player://eof` via a dynamic import of
- * @tauri-apps/api/event, which we mock with a manual emitter.
+ * usePostPlay dispatches through `player.subscribeToEof` (a plain function
+ * on the fixture below) rather than branching on any engine constant
+ * itself, so no platform/Tauri stubbing is needed here — makePlayer()'s
+ * subscribeToEof captures the handler directly and triggerEof() fires it.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// usePlayer.ts evaluates IS_NATIVE_PLAYER as a module constant from
-// `__TAURI_INTERNALS__ in window` AND a "Windows" userAgent substring.
-// jsdom ships userAgent="...(win32)...", so the constant always resolves
-// false in tests. Mock the module to expose IS_NATIVE_PLAYER=true so the
-// EOF effect takes the native (mpv listen) branch we mock below.
 // ── Mocks (must come before imports so the factory hoists correctly) ──────
-
-vi.mock("../usePlayer", async () => {
-  const actual = await vi.importActual<typeof import("../usePlayer")>(
-    "../usePlayer",
-  );
-  return { ...actual, IS_NATIVE_PLAYER: true };
-});
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn().mockResolvedValue(undefined),

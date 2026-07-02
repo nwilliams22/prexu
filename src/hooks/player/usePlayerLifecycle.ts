@@ -14,7 +14,8 @@
  */
 
 import { useCallback, useMemo } from "react";
-import { IS_NATIVE_PLAYER, type UsePlayerResult } from "../usePlayer";
+import type { UsePlayerResult } from "../usePlayer";
+import { SUPPORTS_PLAYER_WINDOWING } from "./engineResolution";
 import type { UsePopOutPlayerResult } from "./usePopOutPlayer";
 import type { PlayerSessionContextValue } from "../../contexts/PlayerContext";
 import { logger } from "../../services/logger";
@@ -91,7 +92,8 @@ export function usePlayerLifecycle({
   // idempotent — running classList.remove twice is a no-op.
   //
   // No-op on HTML5: the class is never added there (useTransparentWindow
-  // is gated on IS_NATIVE_PLAYER inside PlayerOverlay).
+  // is gated on the resolved engine being "native" inside PlayerOverlay —
+  // see engineResolution.ts, prexu-axj4.4).
   const prepareNavAway = useCallback(async () => {
     document.body.classList.remove(TRANSPARENT_BODY_CLASS);
     await exitFullscreenIfActive();
@@ -110,7 +112,7 @@ export function usePlayerLifecycle({
     // restored to its pre-pop-out outer geometry and always-on-top is
     // cleared before we unload the player. Without this the app stays at
     // the pop-out size after the player closes.
-    if (IS_NATIVE_PLAYER && isPopOut) {
+    if (SUPPORTS_PLAYER_WINDOWING && isPopOut) {
       try {
         togglePopOut();
       } catch (err) {

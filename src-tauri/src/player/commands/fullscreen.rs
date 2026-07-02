@@ -43,6 +43,23 @@ pub async fn player_set_fullscreen(
         return fs_result;
     }
 
+    // Linux (prexu-axj4.3): video and UI are composited into one GTK surface,
+    // so a fullscreen toggle is just a plain Tauri window toggle — GTK's widget
+    // allocation resizes the GtkGLArea automatically, with no host geometry to
+    // synchronise and no D3D11-swapchain-rebuild storm to suppress.
+    #[cfg(target_os = "linux")]
+    let fs_result = {
+        let fs_result = main
+            .set_fullscreen(fullscreen)
+            .map_err(|e| format!("set_fullscreen failed: {}", e));
+        let actual_fs = main.is_fullscreen().unwrap_or(fullscreen);
+        log::info!("[player:cmd] set_fullscreen: emitting actual_fs={}", actual_fs);
+        let _ = app.emit("player://fullscreen", actual_fs);
+        fs_result
+    };
+
+    #[cfg(target_os = "windows")]
+    let fs_result = {
     state.set_fullscreen_transition(true);
     let fs_result = main
         .set_fullscreen(fullscreen)
@@ -98,6 +115,9 @@ pub async fn player_set_fullscreen(
     tokio::time::sleep(std::time::Duration::from_millis(350)).await;
     state.set_fullscreen_transition(false);
     log::info!("[player:cmd] set_fullscreen: transition flag cleared after settle");
+
+    fs_result
+    };
 
     fs_result
 }

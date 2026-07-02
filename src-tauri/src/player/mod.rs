@@ -1,10 +1,21 @@
-//! Native libmpv-backed player (Windows-first).
+//! Native libmpv-backed player.
+//!
+//! Two rendering backends share the cross-platform core (`PlayerState`, the mpv
+//! event pump, lifecycle, timeline reporting, and the playback command surface):
+//!   - **Windows**: `wid`/HWND host + DirectComposition (`video_render`,
+//!     `composition_host`, `angle_loader`, Win32 geometry sync).
+//!   - **Linux**: the mpv render API compositing a `GtkGLArea` under the
+//!     transparent WebKitWebView (`linux_compositor`, prexu-axj4.3).
 
 pub mod commands;
 pub mod events;
-pub(crate) mod geometry;
 pub(crate) mod lifecycle;
 pub(crate) mod timeline;
+
+// Win32 geometry-sync math (host inset / throttle / dedup) — only the Windows
+// `wid` host needs it; Linux lets GTK's widget allocation drive resize/DPI.
+#[cfg(target_os = "windows")]
+pub(crate) mod geometry;
 
 #[cfg(target_os = "windows")]
 pub mod composition_host;
@@ -15,16 +26,25 @@ pub mod angle_loader;
 #[cfg(target_os = "windows")]
 pub mod video_render;
 
+// Linux render-API compositor: reparents wry's webview under a GtkOverlay with
+// an mpv-render GtkGLArea beneath, and owns the render context + frame loop.
+#[cfg(target_os = "linux")]
+pub mod linux_compositor;
+
+#[cfg(target_os = "windows")]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "windows")]
 use tokio::sync::Notify;
 
 use libmpv2::Mpv;
+#[cfg_attr(not(target_os = "windows"), allow(unused_imports))]
 use tauri::{AppHandle, Manager};
 
+#[cfg(target_os = "windows")]
 use geometry::GeomState;
 
 // Re-export pure helpers that external callers (commands/, lib.rs) reference
@@ -50,6 +70,7 @@ pub use timeline::TimelineCtx;
 /// the gap between WebView chrome (no throttle) and mpv host (throttled),
 /// which at 50 ms produced visible mismatched-edge artifacts during
 /// resize (host extends past or stops short of chrome).
+#[cfg(target_os = "windows")]
 pub(crate) const GEOMETRY_SYNC_MIN_INTERVAL: Duration = Duration::from_millis(33);
 
 /// How long `report_stopped_on_close` waits for the spawned report thread
@@ -79,7 +100,9 @@ pub struct PlayerState {
     /// gpu-next vo rebuild its D3D11 swapchain. Doing that ~10 times within
     /// 300 ms reliably crashes the mpv render thread, so we suppress
     /// sync_geometry while this flag is set and do one explicit sync after
-    /// the transition settles.
+    /// the transition settles. Windows-only: Linux fullscreen is a plain
+    /// Tauri window toggle with no host geometry to suppress.
+    #[cfg(target_os = "windows")]
     fullscreen_transition: AtomicBool,
     /// All geometry-throttle state behind a single mutex, eliminating the
     /// six-way lock-order hazard of the previous per-field mutexes.
@@ -93,7 +116,10 @@ pub struct PlayerState {
     ///
     /// Acquired once per geometry event; dropped before the
     /// `inner.try_lock()` / `SetWindowPos` call so the Win32 re-entrancy
-    /// guard on `inner` remains separate and non-blocking.
+    /// guard on `inner` remains separate and non-blocking. Windows-only: on
+    /// Linux GTK's widget allocation drives resize/DPI, so there is no
+    /// geometry to throttle or sync.
+    #[cfg(target_os = "windows")]
     geom: Mutex<GeomState>,
     /// True while a trailing-edge flush is scheduled for the pending
     /// geometry. Acts as a one-shot debounce: the first event of a fast
@@ -106,12 +132,15 @@ pub struct PlayerState {
     /// Without this, a fast drag-resize whose FINAL event lands inside the
     /// 50ms throttle window leaves the host stuck at stale geometry —
     /// `sync_geometry` stores the final geometry to pending but no further
-    /// event arrives to consume it.
+    /// event arrives to consume it. Windows-only (geometry sync).
+    #[cfg(target_os = "windows")]
     trailing_scheduled: AtomicBool,
     /// Saved (x, y, width, height) of the Tauri main window's outer rect
     /// before entering pop-out mode. Stashed by `player_enter_popout` and
     /// consumed by `player_exit_popout` to restore the previous geometry.
-    /// `None` when not in pop-out mode.
+    /// `None` when not in pop-out mode. Windows-only (pop-out is a Win32
+    /// window-hosting feature).
+    #[cfg(target_os = "windows")]
     pub(crate) pre_popout_geometry: Mutex<Option<(i32, i32, u32, u32)>>,
     /// Latched on `WindowEvent::Focused(false)`, consumed on the next
     /// `WindowEvent::Focused(true)`. Gates `reassert_host_on_focus`
@@ -153,6 +182,9 @@ pub struct PlayerState {
 /// `MiniCorner` string union in `src/utils/mini-rect.ts`. Serde deserializes
 /// the kebab-case IPC string directly into this enum at the command boundary,
 /// so unknown strings are a hard error rather than a silent fallback.
+///
+/// Windows-only: the in-window mini player is a Win32 window-hosting feature.
+#[cfg(target_os = "windows")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MinimizeCorner {
@@ -172,6 +204,9 @@ pub enum MinimizeCorner {
 /// `GeomState::scale_factor` — this lets cross-monitor DPI changes
 /// (`WindowEvent::ScaleFactorChanged`) recompute the host rect at the
 /// new scale without re-firing `player_enter_minimize` from the frontend.
+///
+/// Windows-only (see [`MinimizeCorner`]).
+#[cfg(target_os = "windows")]
 #[derive(Debug, Clone, Copy)]
 pub struct MinimizeState {
     pub width: u32,
@@ -200,9 +235,13 @@ impl PlayerState {
         Self {
             inner: Mutex::new(None),
             init_lock: Mutex::new(()),
+            #[cfg(target_os = "windows")]
             fullscreen_transition: AtomicBool::new(false),
+            #[cfg(target_os = "windows")]
             geom: Mutex::new(GeomState::new()),
+            #[cfg(target_os = "windows")]
             trailing_scheduled: AtomicBool::new(false),
+            #[cfg(target_os = "windows")]
             pre_popout_geometry: Mutex::new(None),
             #[cfg(target_os = "windows")]
             pending_focus_reassert: AtomicBool::new(false),
@@ -242,6 +281,7 @@ impl PlayerState {
         }
     }
 
+    #[cfg(target_os = "windows")]
     pub(crate) fn set_fullscreen_transition(&self, in_progress: bool) {
         self.fullscreen_transition
             .store(in_progress, Ordering::Release);
@@ -253,6 +293,7 @@ impl PlayerState {
     /// snapshot was actually present (for logging / test assertions). The
     /// snapshot lives on `PlayerState` (per-process), so an exit-while-minimized
     /// would otherwise leak the mini rect into the following session.
+    #[cfg(target_os = "windows")]
     pub(crate) fn clear_minimize_snapshot(&self) -> bool {
         match self.geom.lock() {
             Ok(mut g) => {
@@ -335,13 +376,13 @@ impl PlayerState {
         // plex.direct connect), and (c) hardware decoder probing.
         log::info!("[player:init] starting mpv init (hwdec=auto-safe)");
 
-        // Path C3d: composition hosting is the unconditional render path on
-        // Windows — mpv renders through a libmpv2 RenderContext into the DComp
-        // video visual (no host window, no `wid`).
-        #[cfg(target_os = "windows")]
+        // Both platforms use the render-context path (`composition = true` →
+        // `vo=libmpv`, no host window, no `wid`):
+        //   - Windows: a libmpv2 RenderContext feeds the DComp video visual.
+        //   - Linux: a libmpv2 RenderContext feeds the GtkGLArea under the
+        //     transparent webview (prexu-axj4.3). `setlocale(LC_NUMERIC, "C")`
+        //     is applied inside `configure_mpv_properties` before `mpv_create`.
         let mpv = lifecycle::configure_mpv_properties(None, true)?;
-        #[cfg(not(target_os = "windows"))]
-        let mpv = lifecycle::configure_mpv_properties(None, false)?;
         log::info!("[player] mpv created");
 
         let mpv = Arc::new(mpv);
@@ -372,6 +413,12 @@ impl PlayerState {
                 None
             }
         };
+
+        // Linux (prexu-axj4.3): hand the live mpv handle to the compositor so it
+        // creates the mpv render context on the GTK main thread and binds it to
+        // the GtkGLArea. Marshalled internally — safe to call from this worker.
+        #[cfg(target_os = "linux")]
+        linux_compositor::attach_mpv(app, Arc::clone(&mpv));
 
         let mut guard = self.inner.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
         *guard = Some(Inner {
@@ -443,7 +490,11 @@ impl PlayerState {
     ///
     /// No-op when mpv isn't initialised (e.g. called twice, or before
     /// the first load) — returns Ok so callers don't need to gate.
-    #[cfg(target_os = "windows")]
+    ///
+    /// Cross-platform: on Linux the render context stays alive across a soft
+    /// stop (only `player_unload`/`destroy` tears it down), so the next
+    /// `loadfile` reuses the same mpv handle + GtkGLArea render path.
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     pub(crate) fn stop_playback(&self) -> Result<(), String> {
         let guard = self.inner.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
         let Some(inner) = guard.as_ref() else {
@@ -503,6 +554,8 @@ impl PlayerState {
         // exit-while-minimized re-creates the mpv host at the stale mini inset,
         // so a replay launches in mini even though the React isMinimized flag
         // was reset on exit. Cleared even on the "nothing to destroy" path.
+        // Windows-only: the mini inset is a Win32 window-hosting concern.
+        #[cfg(target_os = "windows")]
         self.clear_minimize_snapshot();
 
         // Abort the long-lived trailing-edge flusher task (prexu-bgz.24).
@@ -527,11 +580,23 @@ impl PlayerState {
             .map_err(|e| format!("Lock poisoned: {}", e))?
             .take();
 
+        // `mut` is used on Windows (inner.video_render.take()); on Linux nothing
+        // mutates `inner` before it is moved into the teardown task.
+        #[allow(unused_mut)]
         let Some(mut inner) = inner else {
             log::debug!("[player] destroy: nothing to destroy");
             return Ok(());
         };
         log::info!("[player] destroy: Inner taken, Arc strong_count={}", Arc::strong_count(&inner.mpv));
+
+        // Linux (prexu-axj4.3): free the mpv render context on the GTK main
+        // thread and drop the compositor's `Arc<Mpv>` clone BEFORE the final Arc
+        // release below triggers `mpv_terminate_destroy`. This blocks until the
+        // main thread has run the teardown, enforcing the
+        // `mpv_render_context_free` before `mpv_terminate_destroy` ordering
+        // (same bug class as prexu-60mz.4 on Windows).
+        #[cfg(target_os = "linux")]
+        linux_compositor::detach_mpv(app);
 
         // Path C3d: stop the video render thread FIRST (composition mode only).
         // `stop()` signals + joins it, which frees the libmpv2 RenderContext and

@@ -157,10 +157,20 @@ existing Windows leg.
 - **Webview transparency vs. the toplevel `transparent:false` decision.** Prexu
   sets `transparent:false` on Linux (prexu-duna, "Wayland bleed"). The webview
   *widget* must still composite transparently over the GLArea even though the
-  *toplevel window* is opaque — these are different surfaces, but the interaction
-  with `WEBKIT_DISABLE_DMABUF_RENDERER=1` (prexu-z5mz) and the toplevel setting
-  must be re-validated together during axj4.3. (Spike ran with
-  `WEBKIT_DISABLE_DMABUF_RENDERER=1` and webview transparency worked.)
+  *toplevel window* is opaque. **Resolved during axj4.3 (amended 2026-07-02):**
+  transparency must be requested at webview *creation* (a `set_pending_webview_transparency`
+  opt-in was added to the vendored wry fork, mirroring the Windows
+  composition-hosting pattern) — a runtime `set_background_color` alone does not
+  flip WebKit's opaque/compositing state. Critically, `WEBKIT_DISABLE_DMABUF_RENDERER=1`
+  (the prexu-z5mz workaround) **breaks transparent-webview compositing**: WebKit's
+  fallback renderer never clears the retained composite, so every repaint
+  re-blends translucent content onto stale pixels (progressive darkening, video
+  only visible after full redraws, ghost UI). The spike appeared to work only
+  because its overlay was mostly static. The z5mz crash no longer reproduces on
+  webkit2gtk 2.52.3 + NVIDIA 595.71.05, so the app no longer force-disables the
+  DMABUF renderer; a user-exported `WEBKIT_DISABLE_DMABUF_RENDERER=1` is still
+  respected (logged with a degradation warning) as the escape hatch for
+  z5mz-class stacks.
 - Driver/compositor variance (NVIDIA vs Mesa, GTK GL context creation) — the
   HTML5 fallback exists precisely to absorb environments where render init fails.
 

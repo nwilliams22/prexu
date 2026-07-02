@@ -1,8 +1,10 @@
 mod downloads;
-// The native player is libmpv-backed and Windows-only (HEVC-10 etc.). Gating
-// the whole module off-Windows keeps libmpv out of the macOS/Linux link line;
-// those platforms use the HTML5 <video> engine. See Cargo.toml + prexu-nesp.
-#[cfg(target_os = "windows")]
+// The native libmpv player compiles on Windows (wid/HWND + DirectComposition)
+// and Linux (render API + GtkGLArea under the transparent WebKitWebView — see
+// docs/adr-native-player-render-api.md, prexu-axj4.3). macOS and any other
+// target omit it and use the HTML5 <video> engine, keeping libmpv out of their
+// link line (see Cargo.toml per-target dependency tables + prexu-nesp).
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 mod player;
 mod util;
 
@@ -401,18 +403,20 @@ fn write_error(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Linux/Wayland (prexu-z5mz): webkit2gtk's DMABUF renderer crashes at
-    // webview creation on Wayland with many GPUs (notably NVIDIA) —
-    // "Gdk-Message: Error 71 (Protocol error) dispatching to Wayland display" —
-    // killing the app before first paint. Disabling the DMABUF renderer is the
-    // upstream-recommended workaround and forces the stable GL path. Must be set
-    // before GTK/webview init (i.e. before the Builder runs below). Only set it
-    // when the user hasn't overridden it, so DMABUF can still be force-enabled
-    // for testing.
-    #[cfg(target_os = "linux")]
-    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-    }
+    // Linux/Wayland: we previously force-set WEBKIT_DISABLE_DMABUF_RENDERER=1
+    // here (prexu-z5mz: webkit2gtk's DMABUF renderer crashed at webview creation
+    // on Wayland/NVIDIA — "Error 71 (Protocol error)"). That force is REMOVED
+    // for the native player (prexu-axj4.3): WebKitGTK's fallback (non-DMABUF)
+    // renderer does not clear a TRANSPARENT webview's retained composite, so
+    // every repaint re-blends onto stale pixels — video/controls progressively
+    // darken to black within seconds and "hidden" chrome lingers as ghost
+    // pixels. With the DMABUF renderer enabled the transparent webview
+    // composites correctly over the mpv GtkGLArea (verified on the z5mz box
+    // itself: webkit2gtk 2.52.3 + NVIDIA 595.71.05 no longer crash — flat
+    // luminance over 60 s, source-accurate brightness). Users on stacks where
+    // the old crash persists can still export WEBKIT_DISABLE_DMABUF_RENDERER=1
+    // (the env var is respected by WebKit directly), at the cost of the
+    // native-player compositing defect — the HTML5 engine remains the fallback.
 
     // Security (Path C3d): drop CWD/PATH from the process DLL search order
     // before anything loads a third-party DLL — defeats DLL planting/sideloading
@@ -428,6 +432,20 @@ pub fn run() {
     // once the HWND exists.
     #[cfg(target_os = "windows")]
     player::composition_host::request_hosting();
+
+    // Linux native player (prexu-axj4.3): opt the main webview into a
+    // TRANSPARENT background at creation time via the vendored-wry fork. Same
+    // placement discipline as the Windows request_hosting() above: must run on
+    // this thread before the config `main` window (and its webview) is built
+    // inside Builder::run. Creation-time is the load-bearing call — it fixes
+    // the WebKitWebView's compositing/opaque-region state before the widget
+    // realizes, so GTK composites the webview OVER the mpv GtkGLArea with true
+    // alpha instead of re-blending a stale opaque-retained surface
+    // (progressive video dimming). The TOPLEVEL window stays transparent:false
+    // (tauri.linux.conf.json — Wayland-bleed, prexu-duna); only the webview
+    // WIDGET goes transparent.
+    #[cfg(target_os = "linux")]
+    wry::set_pending_webview_transparency(true);
 
     let builder = tauri::Builder::default()
         .manage(ProxyState::new())
@@ -465,14 +483,15 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_updater::Builder::default().build());
 
-    // PlayerState owns the libmpv handle — managed only on Windows.
-    #[cfg(target_os = "windows")]
+    // PlayerState owns the libmpv handle — managed on Windows and Linux.
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     let builder = builder.manage(player::PlayerState::new());
 
-    // The player_* commands exist only on Windows (native libmpv player). The
-    // non-Windows handler omits them so the player module — and therefore
-    // libmpv — need not compile off-Windows. The frontend gates invocation via
-    // IS_NATIVE_PLAYER (Windows-only), so other platforms never call these.
+    // The player_* commands exist on Windows (native libmpv player) and Linux
+    // (render-API player, prexu-axj4.3). macOS and other targets omit them so
+    // the player module — and therefore libmpv — need not compile there. The
+    // frontend gates invocation on the native-player probe, so other platforms
+    // never call these.
     #[cfg(target_os = "windows")]
     let builder = builder.invoke_handler(tauri::generate_handler![
         start_proxy,
@@ -500,13 +519,49 @@ pub fn run() {
         player::commands::player_unload,
         player::commands::player_stop,
         player::commands::player_set_fullscreen,
+        player::commands::player_engine_status,
         player::commands::player_enter_popout,
         player::commands::player_exit_popout,
         player::commands::player_enter_minimize,
         player::commands::player_exit_minimize,
         player::commands::player_update_mini_geometry,
     ]);
-    #[cfg(not(target_os = "windows"))]
+    // Linux native player (prexu-axj4.3): the render-API player exposes the same
+    // playback command surface as Windows, minus the Win32-only window-hosting
+    // commands (minimize / popout / mini-geometry). Fullscreen maps to a plain
+    // Tauri window toggle (no host geometry). `player_engine_status` +
+    // `player://engine-failed` are the HTML5-fallback probe contract with the TS
+    // side.
+    #[cfg(target_os = "linux")]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        start_proxy,
+        app_ready,
+        downloads::get_downloads_dir,
+        downloads::open_downloads_dir,
+        downloads::download_media,
+        downloads::cancel_download,
+        downloads::delete_download,
+        downloads::get_local_file_path,
+        player::commands::player_load_url,
+        player::commands::player_play,
+        player::commands::player_pause,
+        player::commands::player_seek,
+        player::commands::player_set_volume,
+        player::commands::player_set_muted,
+        player::commands::player_set_audio_track,
+        player::commands::player_set_sub_track,
+        player::commands::player_load_external_sub,
+        player::commands::player_set_audio_delay_ms,
+        player::commands::player_set_af_chain,
+        player::commands::player_apply_sub_style,
+        player::commands::player_set_timeline_context,
+        player::commands::player_clear_timeline_context,
+        player::commands::player_unload,
+        player::commands::player_stop,
+        player::commands::player_set_fullscreen,
+        player::commands::player_engine_status,
+    ]);
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     let builder = builder.invoke_handler(tauri::generate_handler![
         start_proxy,
         app_ready,
@@ -543,6 +598,34 @@ pub fn run() {
                         }
                     }
                 });
+
+                // Linux native player (prexu-axj4.3): reparent wry's webview
+                // under a GtkOverlay with an mpv-render GtkGLArea beneath it,
+                // and make the webview background transparent so the video shows
+                // through. Runs here on the GTK main thread (setup hook), before
+                // any playback. Failures fall back to HTML5 (engine-failed).
+                #[cfg(target_os = "linux")]
+                {
+                    player::linux_compositor::install(&window, app.handle().clone());
+
+                    // Close-time Plex timeline report (prexu-50f), same as the
+                    // Windows path: on window close mid-playback the JS unmount
+                    // cleanup is unreliable, so Rust fires the final
+                    // `state=stopped` report from the live mpv position. mpv is
+                    // still alive at CloseRequested (fires before teardown).
+                    let report_handle = app.handle().clone();
+                    window.on_window_event(move |event| {
+                        if matches!(
+                            event,
+                            tauri::WindowEvent::CloseRequested { .. }
+                                | tauri::WindowEvent::Destroyed
+                        ) {
+                            report_handle
+                                .state::<player::PlayerState>()
+                                .report_stopped_on_close();
+                        }
+                    });
+                }
 
                 #[cfg(target_os = "windows")]
                 {

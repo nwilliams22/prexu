@@ -23,6 +23,7 @@ export function getDefaultPreferences(): Preferences {
       skipIntroEnabled: true,
       skipCreditsEnabled: true,
       autoPlayEnabled: true,
+      playerEngine: "auto",
       subtitleStyle: {
         fontFamily: "sans-serif",
         textColor: "#FFFFFF",

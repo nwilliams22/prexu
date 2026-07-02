@@ -346,18 +346,52 @@ pub async fn player_unload(
 /// `player_unload` (full destroy) is still the right call on actual
 /// player-route unmount (back to dashboard, navigation away). TS keeps
 /// that path; only the per-episode cleanup switched to `player_stop`.
-#[cfg(target_os = "windows")]
+///
+/// Cross-platform: the player module (and this command) compiles only on
+/// Windows and Linux; both drive the same soft-stop through `stop_playback`.
 #[tauri::command]
 pub async fn player_stop(state: State<'_, PlayerState>) -> Result<(), String> {
     log::info!("[player:cmd] stop");
     state.stop_playback()
 }
 
-#[cfg(not(target_os = "windows"))]
+/// Native-engine availability probe (prexu-axj4.3). The TS side calls this at
+/// startup to decide whether to use the native player or fall back to the HTML5
+/// `<video>` engine. `available` reports whether the native render path is
+/// usable; `reason` carries the cause when it is not.
+///
+/// - **Linux**: libmpv is linked in (packaging-guaranteed), so the engine is
+///   available unless a runtime render-context / GL init failure has been
+///   recorded (see `linux_compositor`, which also emits `player://engine-failed`
+///   so the frontend can fall back mid-session).
+/// - **Windows**: always available (vendored libmpv + DirectComposition).
+#[derive(serde::Serialize, Debug)]
+pub struct EngineStatus {
+    pub available: bool,
+    pub reason: Option<String>,
+}
+
 #[tauri::command]
-pub async fn player_stop() -> Result<(), String> {
-    log::warn!("[player:cmd] stop called on non-Windows platform");
-    Err("native player not supported on this platform".into())
+pub async fn player_engine_status() -> Result<EngineStatus, String> {
+    #[cfg(target_os = "linux")]
+    let status = {
+        let reason = crate::player::linux_compositor::engine_failure_reason();
+        EngineStatus {
+            available: reason.is_none(),
+            reason,
+        }
+    };
+    #[cfg(not(target_os = "linux"))]
+    let status = EngineStatus {
+        available: true,
+        reason: None,
+    };
+    log::info!(
+        "[player:cmd] engine_status available={} reason={:?}",
+        status.available,
+        status.reason
+    );
+    Ok(status)
 }
 
 #[cfg(test)]

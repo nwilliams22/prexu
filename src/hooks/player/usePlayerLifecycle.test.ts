@@ -6,27 +6,19 @@
  * session.stop), prepareNavAway's fullscreen-exit, and
  * navAwayPreservingMount's "exit fullscreen then run nav" contract.
  *
- * IS_NATIVE_PLAYER is true under the jsdom + Tauri-stubbed test env
- * (see vitest setup) when navigator.userAgent contains "Windows" AND
- * window.__TAURI_INTERNALS__ is present. We force-stub both so the
- * native-path branches run.
+ * The popout-first-ordering branch is gated on SUPPORTS_PLAYER_WINDOWING
+ * (Windows-native only, prexu-axj4.4 — Linux native has no windowing IPC
+ * yet). That constant resolves from navigator.userAgent + Tauri internals,
+ * both absent under jsdom by default, so we force-stub it to true here to
+ * exercise the Windows-native branches under test.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// usePlayer.ts evaluates IS_NATIVE_PLAYER as a module constant from
-// `__TAURI_INTERNALS__ in window` AND a "Windows" userAgent substring.
-// jsdom ships userAgent="...(win32)...", so the constant always resolves
-// false in tests. Mock the module to expose IS_NATIVE_PLAYER=true so the
-// native branches under test (fullscreen, body-bg, player_unload) run.
-// We don't exercise usePlayer() itself here — the hook accepts the result
-// as a plain arg — so a tiny stub is sufficient.
-vi.mock("../usePlayer", async () => {
-  const actual = await vi.importActual<typeof import("../usePlayer")>(
-    "../usePlayer",
-  );
-  return { ...actual, IS_NATIVE_PLAYER: true };
-});
+vi.mock("./engineResolution", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./engineResolution")>()),
+  SUPPORTS_PLAYER_WINDOWING: true,
+}));
 
 import { renderHook, act } from "@testing-library/react";
 import { useRef } from "react";
@@ -273,5 +265,45 @@ describe("usePlayerLifecycle", () => {
 
       expect(nav).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe("usePlayerLifecycle — windowing unsupported (e.g. Linux native, prexu-axj4.4)", () => {
+  it("never calls togglePopOut on exit, even if isPopOut is (unexpectedly) true", async () => {
+    vi.resetModules();
+    vi.doMock("./engineResolution", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./engineResolution")>()),
+      SUPPORTS_PLAYER_WINDOWING: false,
+    }));
+
+    const { usePlayerLifecycle: usePlayerLifecycleUnsupported } = await import(
+      "./usePlayerLifecycle"
+    );
+
+    const player = makePlayer();
+    const popOut: UsePopOutPlayerResult = {
+      isPopOut: true,
+      isPopOutSupported: false,
+      togglePopOut: vi.fn(),
+    };
+    const playerSession = makePlayerSession();
+
+    const { result } = renderHook(() => {
+      const isFullscreenRef = useRef(false);
+      return usePlayerLifecycleUnsupported({
+        player,
+        popOut,
+        playerSession,
+        isFullscreenRef,
+      });
+    });
+
+    await act(async () => {
+      await result.current.exit();
+    });
+
+    expect(popOut.togglePopOut).not.toHaveBeenCalled();
+    expect(player.unload).toHaveBeenCalledTimes(1);
+    expect(playerSession.stop).toHaveBeenCalledTimes(1);
   });
 });

@@ -546,6 +546,7 @@ export function createPreferences(
       volumeBoost: 1.0,
       normalizationPreset: "off",
       audioOffsetMs: 0,
+      playerEngine: "auto",
       ...overrides.playback,
     },
     appearance: {

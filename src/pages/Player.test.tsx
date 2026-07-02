@@ -24,8 +24,8 @@ vi.mock("../hooks/useAuth", () => ({
 }));
 
 vi.mock("../hooks/usePlayer", () => ({
-  IS_NATIVE_PLAYER: false,
   usePlayer: () => ({
+    engine: "html5",
     videoRef: { current: null },
     isPlaying: false,
     isLoading: false,
