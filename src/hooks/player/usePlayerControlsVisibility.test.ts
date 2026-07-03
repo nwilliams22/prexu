@@ -349,8 +349,7 @@ describe("usePlayerControlsVisibility", () => {
     });
   });
 
-  // ── TEMPORARY diagnostic logging (prexu-axj4.4, keep-or-strip) ───────────
-  describe("diagnostic re-arm attribution logging", () => {
+  describe("re-arm attribution logging", () => {
     it("logs the re-arm reason for mousemove, explicit, and transition paths", () => {
       const { result, rerender } = renderHook(
         ({ isPlaying }) => usePlayerControlsVisibility(isPlaying),
@@ -373,10 +372,12 @@ describe("usePlayerControlsVisibility", () => {
         undefined,
       );
 
+      // Accepted-mousemove re-arms fire at pointer-move rate → trace, not
+      // debug (the discrete reasons stay at debug).
       act(() => {
         result.current.handleMouseMove({ clientX: 30, clientY: 10 });
       });
-      expect(logger.debug).toHaveBeenCalledWith(
+      expect(logger.trace).toHaveBeenCalledWith(
         "player",
         "controls-visibility re-arm (mousemove)",
         { displacement: 20 },
