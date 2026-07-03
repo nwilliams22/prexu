@@ -95,6 +95,20 @@ pub async fn player_load_url(
         if !header_str.is_empty() {
             mpv.set_property("http-header-fields", header_str.as_str())?;
         }
+        // Linux reveal-mute (prexu-axj4.5): audio decode starts ~1s before the
+        // first video frame, audible under the loading screen (Linux-only —
+        // Windows does not exhibit it). Mute here, at the earliest point a
+        // live mpv handle exists; the frontend restores the user's actual
+        // mute state on `player://host-window-ready` (first frame), with a
+        // fallback timer if that event never arrives. The frontend also
+        // pre-arms via player_set_muted(true) before load_url, but on the
+        // cold first load of a session that call precedes ensure_init and
+        // cannot reach mpv — this is the authoritative arm.
+        #[cfg(target_os = "linux")]
+        {
+            mpv.set_property("mute", true)?;
+            log::debug!("[player:cmd] load_url: reveal-mute armed (linux)");
+        }
         // 4th arg is comma-separated per-file options. `start=<seconds>` seeks
         // mpv to that offset on load (avoids a separate seek round-trip).
         let start_secs = start_offset_ms.map(|ms| ms as f64 / 1000.0).unwrap_or(0.0);

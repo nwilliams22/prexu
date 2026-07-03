@@ -20,7 +20,7 @@
 import { useCallback, useState } from "react";
 import { playerEnterPopOut, playerExitPopOut } from "../../services/player";
 import { logger } from "../../services/logger";
-import { SUPPORTS_PLAYER_WINDOWING } from "./engineResolution";
+import { SUPPORTS_PLAYER_POPOUT } from "./engineResolution";
 
 export interface UsePopOutPlayerResult {
   /** True when the player is currently in pop-out mode. */
@@ -35,12 +35,13 @@ export function usePopOutPlayer(): UsePopOutPlayerResult {
   const [isPopOut, setIsPopOut] = useState(false);
 
   const togglePopOut = useCallback(() => {
-    // Pop-out is Windows-only IPC today (see SUPPORTS_PLAYER_WINDOWING) —
-    // no-op elsewhere (e.g. Linux native) so callers never invoke an
-    // unregistered Tauri command. UI affordances should also gate on
-    // isPopOutSupported so this branch is a defense-in-depth backstop.
-    if (!SUPPORTS_PLAYER_WINDOWING) {
-      logger.warn("player:popout", "toggle ignored — windowing unsupported on this platform");
+    // Pop-out is Windows-only IPC today (see SUPPORTS_PLAYER_POPOUT; Linux
+    // pop-out parity is deferred, prexu-axj4.10) — no-op elsewhere (e.g.
+    // Linux native) so callers never invoke an unregistered Tauri command.
+    // UI affordances should also gate on isPopOutSupported so this branch
+    // is a defense-in-depth backstop.
+    if (!SUPPORTS_PLAYER_POPOUT) {
+      logger.warn("player:popout", "toggle ignored — popout unsupported on this platform");
       return;
     }
     if (isPopOut) {
@@ -62,7 +63,7 @@ export function usePopOutPlayer(): UsePopOutPlayerResult {
 
   return {
     isPopOut,
-    isPopOutSupported: SUPPORTS_PLAYER_WINDOWING,
+    isPopOutSupported: SUPPORTS_PLAYER_POPOUT,
     togglePopOut,
   };
 }

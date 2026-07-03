@@ -6,10 +6,10 @@
  * session.stop), prepareNavAway's fullscreen-exit, and
  * navAwayPreservingMount's "exit fullscreen then run nav" contract.
  *
- * The popout-first-ordering branch is gated on SUPPORTS_PLAYER_WINDOWING
- * (Windows-native only, prexu-axj4.4 — Linux native has no windowing IPC
- * yet). That constant resolves from navigator.userAgent + Tauri internals,
- * both absent under jsdom by default, so we force-stub it to true here to
+ * The popout-first-ordering branch is gated on SUPPORTS_PLAYER_POPOUT
+ * (Windows-native only — Linux popout parity is deferred, prexu-axj4.10).
+ * That constant resolves from navigator.userAgent + Tauri internals, both
+ * absent under jsdom by default, so we force-stub it to true here to
  * exercise the Windows-native branches under test.
  */
 
@@ -17,7 +17,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("./engineResolution", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./engineResolution")>()),
-  SUPPORTS_PLAYER_WINDOWING: true,
+  SUPPORTS_PLAYER_POPOUT: true,
 }));
 
 import { renderHook, act } from "@testing-library/react";
@@ -268,12 +268,12 @@ describe("usePlayerLifecycle", () => {
   });
 });
 
-describe("usePlayerLifecycle — windowing unsupported (e.g. Linux native, prexu-axj4.4)", () => {
+describe("usePlayerLifecycle — popout unsupported (e.g. Linux native, prexu-axj4.10)", () => {
   it("never calls togglePopOut on exit, even if isPopOut is (unexpectedly) true", async () => {
     vi.resetModules();
     vi.doMock("./engineResolution", async (importOriginal) => ({
       ...(await importOriginal<typeof import("./engineResolution")>()),
-      SUPPORTS_PLAYER_WINDOWING: false,
+      SUPPORTS_PLAYER_POPOUT: false,
     }));
 
     const { usePlayerLifecycle: usePlayerLifecycleUnsupported } = await import(

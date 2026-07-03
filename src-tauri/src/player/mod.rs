@@ -160,6 +160,15 @@ pub struct PlayerState {
     /// own route-exit report; `report_stopped_on_close` takes it (one-shot)
     /// and reads the live position from mpv.
     timeline_ctx: Mutex<Option<TimelineCtx>>,
+    /// In-window mini-region state (Linux, prexu-axj4.5). Mirrors Windows'
+    /// `GeomState::minimize` but stored directly on `PlayerState` since Linux
+    /// has no `GeomState`/host-geometry-throttle machinery — GTK drives
+    /// resize directly and margins are recomputed live against the current
+    /// GLArea allocation (see `linux_compositor`'s GLArea `resize` handler
+    /// and `commands::minimize::apply_margins_now`). `None` when not
+    /// minimized.
+    #[cfg(target_os = "linux")]
+    linux_minimize: Mutex<Option<MinimizeState>>,
     /// Notification primitive shared between the window-event handler and the
     /// long-lived trailing-edge flusher task (prexu-bgz.24). The handler calls
     /// `notify_one()` when it wins the `claim_trailing_schedule` race; the
@@ -183,8 +192,11 @@ pub struct PlayerState {
 /// the kebab-case IPC string directly into this enum at the command boundary,
 /// so unknown strings are a hard error rather than a silent fallback.
 ///
-/// Windows-only: the in-window mini player is a Win32 window-hosting feature.
-#[cfg(target_os = "windows")]
+/// Cross-platform (prexu-axj4.5): Windows repositions a separate Win32 host
+/// window into this corner; Linux insets mpv's own video area into it via
+/// the `video-margin-ratio-*` properties (see `commands::minimize` and
+/// `linux_compositor`) since GTK composites video and WebView on one surface
+/// with no separate host window to move.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MinimizeCorner {
@@ -194,19 +206,24 @@ pub enum MinimizeCorner {
     BottomRight,
 }
 
-/// Logical-pixel parameters of the in-window mini region. Stored in
-/// `GeomState::minimize` so `apply_minimize_inset_inner` can produce the
-/// correct host geometry on every Resized event.
+/// Logical-pixel parameters of the in-window mini region.
 ///
 /// Width / height / padding are CSS (logical) pixels, matching what the
-/// React side sends across the IPC. The conversion to physical pixels
-/// happens lazily inside the geometry path against the latest
-/// `GeomState::scale_factor` — this lets cross-monitor DPI changes
-/// (`WindowEvent::ScaleFactorChanged`) recompute the host rect at the
-/// new scale without re-firing `player_enter_minimize` from the frontend.
+/// React side sends across the IPC.
 ///
-/// Windows-only (see [`MinimizeCorner`]).
-#[cfg(target_os = "windows")]
+/// - **Windows**: stored in `GeomState::minimize` so `apply_minimize_inset_inner`
+///   can produce the correct host geometry on every Resized event. The
+///   conversion to physical pixels happens lazily inside the geometry path
+///   against the latest `GeomState::scale_factor` — this lets cross-monitor
+///   DPI changes (`WindowEvent::ScaleFactorChanged`) recompute the host rect
+///   at the new scale without re-firing `player_enter_minimize` from the
+///   frontend.
+/// - **Linux** (prexu-axj4.5): stored in `PlayerState::linux_minimize` and
+///   converted into `video-margin-ratio-*` fractions against the GtkGLArea's
+///   current logical allocation by `commands::minimize::compute_margin_ratios`.
+///   GTK allocations are already logical units, so no DPI conversion is
+///   needed there; margins are simply recomputed whenever the allocation
+///   changes (see the GLArea `resize` handler in `linux_compositor`).
 #[derive(Debug, Clone, Copy)]
 pub struct MinimizeState {
     pub width: u32,
@@ -246,6 +263,8 @@ impl PlayerState {
             #[cfg(target_os = "windows")]
             pending_focus_reassert: AtomicBool::new(false),
             timeline_ctx: Mutex::new(None),
+            #[cfg(target_os = "linux")]
+            linux_minimize: Mutex::new(None),
             #[cfg(target_os = "windows")]
             flusher_notify: Arc::new(Notify::new()),
             #[cfg(target_os = "windows")]
@@ -306,6 +325,45 @@ impl PlayerState {
             }
             Err(_) => false,
         }
+    }
+
+    /// Linux equivalent of the Windows `clear_minimize_snapshot` above: drops
+    /// any leftover in-window mini state (prexu-axj4.5) so a fresh
+    /// `ensure_init` after an exit-while-minimized does not carry stale
+    /// `video-margin-ratio-*` values into the next playback session.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn clear_minimize_snapshot(&self) -> bool {
+        match self.linux_minimize.lock() {
+            Ok(mut g) => {
+                let had = g.is_some();
+                if had {
+                    log::info!("[player:linux] clearing leftover minimize snapshot on teardown");
+                    *g = None;
+                }
+                had
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Write the minimize state (Linux, prexu-axj4.5). Used by the in-window
+    /// mini commands (`commands::minimize`) to store the desired inset;
+    /// consumed by `apply_margins_now` and the GLArea `resize` handler in
+    /// `linux_compositor` to recompute margins whenever the window size
+    /// changes while minimized.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn set_minimize(&self, state: Option<MinimizeState>) -> Result<(), String> {
+        self.linux_minimize
+            .lock()
+            .map(|mut g| *g = state)
+            .map_err(|_| "minimize lock poisoned".to_string())
+    }
+
+    /// Read the current minimize state (Linux, prexu-axj4.5). `None` when
+    /// not minimized.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn get_minimize(&self) -> Option<MinimizeState> {
+        self.linux_minimize.lock().ok().and_then(|g| *g)
     }
 
     /// True when `ensure_init` has run and `destroy` has not. Used by
@@ -551,11 +609,12 @@ impl PlayerState {
 
         // Clear the in-window minimize snapshot on teardown (prexu-ta9). See
         // `clear_minimize_snapshot` — without this a fresh ensure_init after
-        // exit-while-minimized re-creates the mpv host at the stale mini inset,
-        // so a replay launches in mini even though the React isMinimized flag
-        // was reset on exit. Cleared even on the "nothing to destroy" path.
-        // Windows-only: the mini inset is a Win32 window-hosting concern.
-        #[cfg(target_os = "windows")]
+        // exit-while-minimized re-creates the mpv host (Windows) or re-applies
+        // stale video-margin-ratio values (Linux, prexu-axj4.5) at the stale
+        // mini inset, so a replay launches in mini even though the React
+        // isMinimized flag was reset on exit. Cleared even on the "nothing to
+        // destroy" path.
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         self.clear_minimize_snapshot();
 
         // Abort the long-lived trailing-edge flusher task (prexu-bgz.24).
