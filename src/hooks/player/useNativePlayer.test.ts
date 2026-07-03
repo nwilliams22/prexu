@@ -903,3 +903,236 @@ describe("useNativePlayer dispatch contract (prexu-ve9)", () => {
     });
   });
 });
+
+// ── Linux-only reveal-mute workaround (prexu-axj4.5) ────────────────────────
+//
+// On Linux native, ~1s of audio is audible under the loading screen before
+// the first video frame reveals (Windows does not exhibit this,
+// user-confirmed). The fix mutes before player_load_url and restores the
+// user's current muted preference on player://host-window-ready.
+//
+// IS_LINUX_NATIVE_PLAYER is a module-level const derived from
+// navigator.userAgent + window.__TAURI_INTERNALS__ at import time — jsdom's
+// defaults (no Tauri marker) make it false, which is exactly what every
+// OTHER test in this file already relies on (proving requirement (e): zero
+// behavior change on non-Linux/HTML5 by construction, since none of them
+// touch this describe block's mocking at all). To exercise the Linux path
+// we force-remock engineResolution and dynamically re-import useNativePlayer
+// per test — @tauri-apps/api/core's `invoke` and @tauri-apps/api/event's
+// `listen` mocks keep their identity across vi.resetModules() (verified:
+// vi.mock-intercepted specifiers are not re-instantiated the way ordinary
+// modules are), so asserting against the top-level `invoke`/`listen`
+// imports stays valid for the freshly-loaded module too.
+describe("Linux-only reveal-mute workaround (prexu-axj4.5)", () => {
+  type Prepared = Awaited<ReturnType<typeof prepareSource>>;
+
+  function makePrepared(url: string): Prepared {
+    return {
+      item: { type: "movie", title: "Reveal Mute Test" },
+      playable: { Marker: [], duration: 60000 },
+      part: { id: 1, Chapter: [] },
+      categorized: { audio: [], subtitles: [] },
+      defaultAudio: undefined,
+      defaultSub: undefined,
+      isLocal: false,
+      sourceKind: "hls",
+      url,
+      viewOffset: 0,
+    } as unknown as Prepared;
+  }
+
+  async function loadLinuxNativePlayer() {
+    vi.resetModules();
+    vi.doMock("./engineResolution", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./engineResolution")>()),
+      IS_LINUX_NATIVE_PLAYER: true,
+    }));
+    const mod = await import("./useNativePlayer");
+    return mod.useNativePlayer;
+  }
+
+  function fireHostWindowReady() {
+    const subs = eventHandlers["player://host-window-ready"];
+    if (!subs || subs.length === 0) {
+      throw new Error("player://host-window-ready handlers not registered yet");
+    }
+    for (const h of subs) h({ payload: null });
+  }
+
+  function mutedInvokeCalls() {
+    return vi
+      .mocked(invoke)
+      .mock.calls.filter(([cmd]) => cmd === "player_set_muted")
+      .map(([, args]) => (args as { muted: boolean }).muted);
+  }
+
+  beforeEach(() => {
+    vi.mocked(prepareSource).mockResolvedValue(makePrepared("https://server/video.m3u8"));
+  });
+
+  it("mutes before player_load_url, then restores to the user's (unmuted) state on host-window-ready", async () => {
+    const useNativePlayerLinux = await loadLinuxNativePlayer();
+    renderHook(() => useNativePlayerLinux("123"));
+
+    await waitFor(() => {
+      expect(eventHandlers["player://host-window-ready"]?.length ?? 0).toBeGreaterThan(0);
+    });
+
+    const calls = vi.mocked(invoke).mock.calls.map(([cmd]) => cmd);
+    const muteIdx = calls.indexOf("player_set_muted");
+    const loadIdx = calls.indexOf("player_load_url");
+    expect(muteIdx).toBeGreaterThanOrEqual(0);
+    expect(loadIdx).toBeGreaterThan(muteIdx);
+    expect(mutedInvokeCalls()).toEqual([true]);
+
+    act(() => {
+      fireHostWindowReady();
+    });
+
+    expect(mutedInvokeCalls()).toEqual([true, false]);
+  });
+
+  it("(a) keeps the user muted across the reveal when they were already muted", async () => {
+    const useNativePlayerLinux = await loadLinuxNativePlayer();
+    const { result, rerender } = renderHook(
+      ({ rk }: { rk: string }) => useNativePlayerLinux(rk),
+      { initialProps: { rk: "ep1" } },
+    );
+
+    // First load completes normally.
+    await waitFor(() => {
+      expect(eventHandlers["player://host-window-ready"]?.length ?? 0).toBeGreaterThan(0);
+    });
+    act(() => {
+      fireHostWindowReady();
+    });
+    expect(mutedInvokeCalls()).toEqual([true, false]);
+
+    // A genuine, deliberate mute mid-episode-1 (not a reveal artifact).
+    act(() => {
+      result.current.toggleMute();
+    });
+    expect(result.current.isMuted).toBe(true);
+
+    // Autoplay advances to episode 2 — a fresh load re-arms reveal-mute.
+    rerender({ rk: "ep2" });
+    await waitFor(() => {
+      const afterRerenderCalls = mutedInvokeCalls();
+      expect(afterRerenderCalls[afterRerenderCalls.length - 1]).toBe(true);
+    });
+
+    act(() => {
+      fireHostWindowReady();
+    });
+
+    // Restore uses the user's CURRENT muted state (still true) — the reveal
+    // must not silently drop them back to unmuted.
+    const finalCalls = mutedInvokeCalls();
+    expect(finalCalls[finalCalls.length - 1]).toBe(true);
+    expect(result.current.isMuted).toBe(true);
+  });
+
+  it("(b) a mid-load toggle never reaches mpv early — only the latest intent applies at reveal", async () => {
+    const useNativePlayerLinux = await loadLinuxNativePlayer();
+    const { result } = renderHook(() => useNativePlayerLinux("123"));
+
+    await waitFor(() => {
+      expect(eventHandlers["player://host-window-ready"]?.length ?? 0).toBeGreaterThan(0);
+    });
+    expect(mutedInvokeCalls()).toEqual([true]); // arm only, so far
+
+    // User toggles mute twice while the loading screen is still up.
+    act(() => {
+      result.current.toggleMute(); // false -> true (UI reflects it immediately)
+    });
+    expect(result.current.isMuted).toBe(true);
+    act(() => {
+      result.current.toggleMute(); // true -> false (changed their mind)
+    });
+    expect(result.current.isMuted).toBe(false);
+
+    // Neither toggle reached mpv — no unmute (false) was ever sent while
+    // armed, so no early audio leaked out under the loading screen.
+    expect(mutedInvokeCalls()).toEqual([true]);
+
+    act(() => {
+      fireHostWindowReady();
+    });
+
+    // The LAST toggle (unmuted) is what gets applied at reveal.
+    expect(mutedInvokeCalls()).toEqual([true, false]);
+  });
+
+  it("(c) re-arms per load across consecutive episode loads (autoplay path)", async () => {
+    const useNativePlayerLinux = await loadLinuxNativePlayer();
+    const { rerender } = renderHook(
+      ({ rk }: { rk: string }) => useNativePlayerLinux(rk),
+      { initialProps: { rk: "ep1" } },
+    );
+
+    await waitFor(() => {
+      expect(eventHandlers["player://host-window-ready"]?.length ?? 0).toBeGreaterThan(0);
+    });
+    expect(mutedInvokeCalls()).toEqual([true]);
+
+    act(() => {
+      fireHostWindowReady();
+    });
+    expect(mutedInvokeCalls()).toEqual([true, false]);
+
+    // Episode 2: a brand new arm must fire again — the workaround does not
+    // just apply once per mount.
+    rerender({ rk: "ep2" });
+    await waitFor(() => {
+      expect(mutedInvokeCalls()).toEqual([true, false, true]);
+    });
+
+    act(() => {
+      fireHostWindowReady();
+    });
+    expect(mutedInvokeCalls()).toEqual([true, false, true, false]);
+  });
+
+  it("(d) tears down the pending listener on unmount mid-load — no invoke or dangling subscription afterward", async () => {
+    const useNativePlayerLinux = await loadLinuxNativePlayer();
+    const { unmount } = renderHook(() => useNativePlayerLinux("123"));
+
+    await waitFor(() => {
+      expect(eventHandlers["player://host-window-ready"]?.length ?? 0).toBeGreaterThan(0);
+    });
+    expect(mutedInvokeCalls()).toEqual([true]);
+
+    unmount();
+
+    // The listener registered for this load must be gone — nothing left to
+    // fire, proving there's no dangling subscription past teardown.
+    expect(eventHandlers["player://host-window-ready"] ?? []).toHaveLength(0);
+
+    vi.mocked(invoke).mockClear();
+    // Nothing left to invoke post-unmount; the array being empty above is
+    // the real proof, this just documents there's no further mute traffic.
+    expect(mutedInvokeCalls()).toEqual([]);
+  });
+
+  it("(e) never arms on the default (non-Linux) build — zero behavior change", async () => {
+    // Uses the file's regular, statically-imported useNativePlayer (no
+    // engineResolution remock) — IS_LINUX_NATIVE_PLAYER is false here under
+    // jsdom's default (no Tauri marker), exactly like every other test in
+    // this file.
+    renderHook(() => useNativePlayer("123"));
+
+    await waitFor(() => {
+      expect(eventHandlers["player://ready"]?.length ?? 0).toBeGreaterThan(0);
+    });
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        "player_load_url",
+        expect.objectContaining({ url: expect.any(String) }),
+      );
+    });
+
+    // The only player_set_muted call is the ordinary post-load apply of the
+    // user's (default, unmuted) preference — never a pre-load true-arm.
+    expect(mutedInvokeCalls()).toEqual([false]);
+  });
+});

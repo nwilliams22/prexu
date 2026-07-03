@@ -15,14 +15,15 @@ vi.mock("../services/player", () => ({
   playerUpdateMiniGeometry: vi.fn().mockResolvedValue(undefined),
 }));
 
-// SUPPORTS_PLAYER_WINDOWING resolves from navigator.userAgent + Tauri
+// SUPPORTS_PLAYER_MINIMIZE resolves from navigator.userAgent + Tauri
 // internals, both absent under jsdom by default. Every minimize/restore
-// test in this file assumes Windows-native windowing IPC works, so force
-// it true here; the Linux-native gate itself (prexu-axj4.4) is covered in
-// a separate describe block below with its own per-test remock.
+// test in this file assumes native minimize IPC works (true on both
+// Windows and Linux since prexu-axj4.5), so force it true here; the
+// unsupported gate itself is covered in a separate describe block below
+// with its own per-test remock.
 vi.mock("../hooks/player/engineResolution", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../hooks/player/engineResolution")>()),
-  SUPPORTS_PLAYER_WINDOWING: true,
+  SUPPORTS_PLAYER_MINIMIZE: true,
 }));
 
 vi.mock("../services/logger", () => ({
@@ -312,12 +313,12 @@ describe("PlayerContext split (prexu-ii3) — session vs minimize identity", () 
   });
 });
 
-describe("PlayerContext — windowing unsupported (e.g. Linux native, prexu-axj4.4)", () => {
+describe("PlayerContext — minimize unsupported (e.g. HTML5 fallback / non-native, prexu-axj4.5)", () => {
   it("minimize() and restoreFromMinimize() no-op without invoking IPC", async () => {
     vi.resetModules();
     vi.doMock("../hooks/player/engineResolution", async (importOriginal) => ({
       ...(await importOriginal<typeof import("../hooks/player/engineResolution")>()),
-      SUPPORTS_PLAYER_WINDOWING: false,
+      SUPPORTS_PLAYER_MINIMIZE: false,
     }));
 
     const { PlayerProvider: PlayerProviderUnsupported, usePlayerSession: useSessionUnsupported, usePlayerMinimize: useMinimizeUnsupported } =

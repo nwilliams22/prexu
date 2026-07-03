@@ -8,7 +8,7 @@
  * to force a Player remount.
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   resolveEngineChoice,
   isSessionFallbackActive,
@@ -176,5 +176,75 @@ describe("session fallback flag + pub-sub", () => {
     });
     expect(() => setSessionFallbackActive(true)).not.toThrow();
     expect(secondCalls).toBe(1);
+  });
+});
+
+// SUPPORTS_PLAYER_MINIMIZE / SUPPORTS_PLAYER_POPOUT are module-level consts
+// derived from navigator.userAgent + window.__TAURI_INTERNALS__ at import
+// time (prexu-axj4.5 split of the old combined SUPPORTS_PLAYER_WINDOWING).
+// Exercising the full platform matrix means controlling those globals
+// BEFORE the module is evaluated, so each case stubs userAgent + the Tauri
+// marker, force-reloads the module via vi.resetModules(), then dynamically
+// imports a fresh copy and reads its exports.
+describe("SUPPORTS_PLAYER_MINIMIZE / SUPPORTS_PLAYER_POPOUT platform matrix", () => {
+  const originalUserAgent = navigator.userAgent;
+
+  afterEach(() => {
+    Object.defineProperty(navigator, "userAgent", {
+      value: originalUserAgent,
+      configurable: true,
+    });
+    delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  });
+
+  async function loadEngineResolution(tauri: boolean, userAgent: string) {
+    vi.resetModules();
+    if (tauri) {
+      (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    } else {
+      delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+    }
+    Object.defineProperty(navigator, "userAgent", {
+      value: userAgent,
+      configurable: true,
+    });
+    return import("./engineResolution");
+  }
+
+  it("Windows native (Tauri + Windows UA): minimize and popout both supported", async () => {
+    const mod = await loadEngineResolution(
+      true,
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    );
+    expect(mod.SUPPORTS_PLAYER_MINIMIZE).toBe(true);
+    expect(mod.SUPPORTS_PLAYER_POPOUT).toBe(true);
+    expect(mod.IS_LINUX_NATIVE_PLAYER).toBe(false);
+  });
+
+  it("Linux native (Tauri + Linux UA): minimize supported, popout deferred (prexu-axj4.10)", async () => {
+    const mod = await loadEngineResolution(true, "Mozilla/5.0 (X11; Linux x86_64)");
+    expect(mod.SUPPORTS_PLAYER_MINIMIZE).toBe(true);
+    expect(mod.SUPPORTS_PLAYER_POPOUT).toBe(false);
+    expect(mod.IS_LINUX_NATIVE_PLAYER).toBe(true);
+  });
+
+  it("HTML5 / non-Tauri (no __TAURI_INTERNALS__): neither minimize nor popout supported", async () => {
+    const mod = await loadEngineResolution(
+      false,
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    );
+    expect(mod.SUPPORTS_PLAYER_MINIMIZE).toBe(false);
+    expect(mod.SUPPORTS_PLAYER_POPOUT).toBe(false);
+    expect(mod.IS_LINUX_NATIVE_PLAYER).toBe(false);
+  });
+
+  it("Tauri on an unsupported OS (e.g. macOS): neither minimize nor popout supported", async () => {
+    const mod = await loadEngineResolution(
+      true,
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+    );
+    expect(mod.SUPPORTS_PLAYER_MINIMIZE).toBe(false);
+    expect(mod.SUPPORTS_PLAYER_POPOUT).toBe(false);
+    expect(mod.IS_LINUX_NATIVE_PLAYER).toBe(false);
   });
 });
