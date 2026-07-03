@@ -854,10 +854,16 @@ pub async fn player_exit_popout(
     Ok(())
 }
 
-// Non-Windows stubs so the command names exist for the JS bridge but the
-// platform that hasn't been ported yet (macOS / Linux) returns a clear error
-// instead of failing at the IPC layer with "command not found". Keeps the
-// frontend code path uniform.
+// NOTE: this stub is currently DEAD CODE / never compiled. `commands::popout`
+// itself is declared `#[cfg(target_os = "windows")]` in `commands/mod.rs`
+// (pop-out — a floating, always-on-top mini window — has no Linux port yet,
+// deferred to prexu-axj4.10; unlike in-window minimize, which IS ported on
+// Linux via video-margin-ratio-*, see `commands::minimize`), so this whole
+// file — including the `#[cfg(not(windows))]` branch below — only compiles
+// under Windows regardless of what this cfg says. Kept here, unregistered,
+// as the intended shape for a future Linux pop-out port: once `commands::popout`
+// is un-gated for Linux, this stub would return a clear IPC error instead of
+// "command not found" until the real implementation lands.
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
 pub async fn player_enter_popout(
@@ -866,14 +872,14 @@ pub async fn player_enter_popout(
     _height: Option<u32>,
 ) -> Result<(), String> {
     log::warn!("[player:cmd] enter_popout called on non-Windows platform");
-    Err("pop-out mode is only supported on Windows in Phase 4".into())
+    Err("pop-out mode is only supported on Windows for now (prexu-axj4.10)".into())
 }
 
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
 pub async fn player_exit_popout() -> Result<(), String> {
     log::warn!("[player:cmd] exit_popout called on non-Windows platform");
-    Err("pop-out mode is only supported on Windows in Phase 4".into())
+    Err("pop-out mode is only supported on Windows for now (prexu-axj4.10)".into())
 }
 
 #[cfg(all(test, target_os = "windows"))]

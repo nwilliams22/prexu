@@ -17,7 +17,7 @@ import {
 } from "../contexts/PlayerContext";
 import { getImageUrl } from "../services/plex-library";
 import { usePlayer } from "../hooks/usePlayer";
-import { SUPPORTS_PLAYER_WINDOWING } from "../hooks/player/engineResolution";
+import { SUPPORTS_PLAYER_MINIMIZE, SUPPORTS_PLAYER_POPOUT } from "../hooks/player/engineResolution";
 import { useWatchTogether } from "../hooks/useWatchTogether";
 import { useAudioEnhancements } from "../hooks/useAudioEnhancements";
 import { usePreferences } from "../hooks/usePreferences";
@@ -70,9 +70,9 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   const player = usePlayer(ratingKey, offset);
   // Resolved once per mount by usePlayer (see engineResolution.ts) — safe
   // to read every render since it never changes for the lifetime of this
-  // component instance. Window-management affordances (minimize/pop-out)
-  // gate on SUPPORTS_PLAYER_WINDOWING instead — native on Linux has no
-  // windowing IPC yet (prexu-axj4.4).
+  // component instance. Window-management affordances gate on
+  // SUPPORTS_PLAYER_MINIMIZE / SUPPORTS_PLAYER_POPOUT instead — native on
+  // Linux has minimize IPC (prexu-axj4.5) but not pop-out yet (prexu-axj4.10).
   const isNativeEngine = player.engine === "native";
 
   // Watch Together — derive props from the session bundle (was previously
@@ -175,13 +175,15 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   const pip = usePictureInPicture(player.videoRef);
   const popOut = usePopOutPlayer();
   // Pop-out is Windows-native window management — gate on
-  // SUPPORTS_PLAYER_WINDOWING, not the engine flag. On native-but-no-
-  // windowing (Linux), there's also no <video> element for browser PiP,
-  // so PiP is simply unsupported there until axj4.5 mini-player parity.
-  const pipActive = SUPPORTS_PLAYER_WINDOWING
+  // SUPPORTS_PLAYER_POPOUT, not the engine flag. On native-but-no-popout
+  // (Linux), there's also no <video> element for browser PiP, so the PiP
+  // slot is simply unsupported there until axj4.10 Linux popout parity —
+  // Linux native does get in-window minimize instead (prexu-axj4.5), which
+  // is a separate affordance rendered from SUPPORTS_PLAYER_MINIMIZE below.
+  const pipActive = SUPPORTS_PLAYER_POPOUT
     ? popOut.isPopOut
     : !isNativeEngine && pip.isPiPActive;
-  const pipSupported = SUPPORTS_PLAYER_WINDOWING
+  const pipSupported = SUPPORTS_PLAYER_POPOUT
     ? popOut.isPopOutSupported
     : !isNativeEngine && pip.isPiPSupported;
   // Individual fields as deps — the pip/popOut result objects are rebuilt
@@ -190,7 +192,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   const { isPopOut, togglePopOut } = popOut;
   const { togglePiP: toggleBrowserPiP } = pip;
   const togglePiP = useCallback(() => {
-    if (SUPPORTS_PLAYER_WINDOWING) {
+    if (SUPPORTS_PLAYER_POPOUT) {
       // Mutual exclusion with minimize: if currently minimized, restore
       // to full first, then pop out.
       if (playerMinimize.isMinimized) {
@@ -200,14 +202,17 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     } else if (!isNativeEngine) {
       toggleBrowserPiP();
     }
-    // Native-but-no-windowing (Linux): neither path applies — pipSupported
-    // is already false there so the button isn't shown.
+    // Native-but-no-popout (Linux, prexu-axj4.10): neither path applies —
+    // pipSupported is already false there so the button isn't shown. Linux
+    // native's window-management affordance is minimize instead, rendered
+    // separately below via SUPPORTS_PLAYER_MINIMIZE.
   }, [togglePopOut, toggleBrowserPiP, playerMinimize, isNativeEngine]);
 
   const handleMinimize = useCallback(() => {
     // Mutual exclusion with pop-out: if currently popped out, exit
-    // pop-out first, then minimize.
-    if (SUPPORTS_PLAYER_WINDOWING && isPopOut) {
+    // pop-out first, then minimize. isPopOut can only be true when
+    // SUPPORTS_PLAYER_POPOUT is (Windows), so this is a no-op on Linux.
+    if (SUPPORTS_PLAYER_POPOUT && isPopOut) {
       togglePopOut();
     }
     playerMinimize.minimize();
@@ -573,11 +578,11 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   // remain interactive. The mpv host has already been shrunk by the
   // Rust-side player_enter_minimize call from PlayerContext.minimize();
   // this just makes the React chrome match.
-  // SUPPORTS_PLAYER_WINDOWING gate is belt-and-suspenders here: isMinimized
+  // SUPPORTS_PLAYER_MINIMIZE gate is belt-and-suspenders here: isMinimized
   // can only be true if handleMinimize's UI affordance was rendered (which
   // already gates on this same constant) AND PlayerContext.minimize()
   // itself let the call through — see engineResolution.ts.
-  if (SUPPORTS_PLAYER_WINDOWING && playerMinimize.isMinimized) {
+  if (SUPPORTS_PLAYER_MINIMIZE && playerMinimize.isMinimized) {
     return (
       <MinimizedPlayer
         player={player}
@@ -643,7 +648,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
       {/* Pop-out drag strip (prexu-6qz): hover-reveal handle for the
           borderless floating window. Native popout path only; follows the
           controls auto-hide state. See PopoutDragStrip for the rationale. */}
-      {SUPPORTS_PLAYER_WINDOWING && popOut.isPopOut && (
+      {SUPPORTS_PLAYER_POPOUT && popOut.isPopOut && (
         <PopoutDragStrip visible={chromeVisible} />
       )}
 
@@ -750,10 +755,10 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
             isActive: pipActive,
             isSupported: pipSupported,
             onToggle: togglePiP,
-            isPopOutMode: SUPPORTS_PLAYER_WINDOWING,
+            isPopOutMode: SUPPORTS_PLAYER_POPOUT,
           }}
-          minimize={SUPPORTS_PLAYER_WINDOWING ? {
-            isSupported: SUPPORTS_PLAYER_WINDOWING,
+          minimize={SUPPORTS_PLAYER_MINIMIZE ? {
+            isSupported: SUPPORTS_PLAYER_MINIMIZE,
             isActive: playerMinimize.isMinimized,
             onMinimize: handleMinimize,
           } : undefined}

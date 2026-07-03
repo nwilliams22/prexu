@@ -527,8 +527,12 @@ pub fn run() {
         player::commands::player_update_mini_geometry,
     ]);
     // Linux native player (prexu-axj4.3): the render-API player exposes the same
-    // playback command surface as Windows, minus the Win32-only window-hosting
-    // commands (minimize / popout / mini-geometry). Fullscreen maps to a plain
+    // playback command surface as Windows, plus the in-window minimize commands
+    // (prexu-axj4.5 — implemented via mpv's video-margin-ratio-* properties,
+    // no separate host window to reposition; see `player::linux_compositor`
+    // and `player::commands::minimize`). Pop-out (a floating always-on-top
+    // mini window) and mini-geometry's Win32 monitor-enumeration helpers stay
+    // Windows-only — deferred to prexu-axj4.10. Fullscreen maps to a plain
     // Tauri window toggle (no host geometry). `player_engine_status` +
     // `player://engine-failed` are the HTML5-fallback probe contract with the TS
     // side.
@@ -560,6 +564,9 @@ pub fn run() {
         player::commands::player_stop,
         player::commands::player_set_fullscreen,
         player::commands::player_engine_status,
+        player::commands::player_enter_minimize,
+        player::commands::player_exit_minimize,
+        player::commands::player_update_mini_geometry,
     ]);
     #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     let builder = builder.invoke_handler(tauri::generate_handler![

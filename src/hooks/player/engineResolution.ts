@@ -48,24 +48,58 @@ export const IS_NATIVE_PLAYER_PLATFORM =
   (navigator.userAgent.includes("Windows") || navigator.userAgent.includes("Linux"));
 
 /** True when the current OS is Windows specifically (real UA string, not
- *  jsdom's default). Used only to derive SUPPORTS_PLAYER_WINDOWING. */
+ *  jsdom's default). Used to derive SUPPORTS_PLAYER_POPOUT, and alongside
+ *  IS_LINUX_PLATFORM, SUPPORTS_PLAYER_MINIMIZE. */
 const IS_WINDOWS_PLATFORM =
   typeof navigator !== "undefined" && navigator.userAgent.includes("Windows");
 
+/** True when the current OS is Linux specifically (real UA string, not
+ *  jsdom's default). Used to derive SUPPORTS_PLAYER_MINIMIZE and the
+ *  Linux-native reveal-mute workaround in useNativePlayer.ts. */
+const IS_LINUX_PLATFORM =
+  typeof navigator !== "undefined" && navigator.userAgent.includes("Linux");
+
 /**
- * Windows-only window management (minimize / pop-out). Native playback
- * requires an actual mpv host window; the player_enter_minimize /
- * player_exit_minimize / player_enter_popout / player_exit_popout /
- * player_update_mini_geometry commands only exist in the Rust backend on
- * Windows today — Linux native mini-player parity is tracked separately
- * (axj4.5). Gate every minimize/pop-out affordance AND IPC call on this
- * constant so Linux native never invokes an unregistered command.
+ * In-window minimize / mini-player support — Windows AND Linux. Native
+ * playback requires an actual mpv host window; the player_enter_minimize /
+ * player_exit_minimize / player_update_mini_geometry commands are
+ * registered in the Rust backend on both platforms as of prexu-axj4.5
+ * (Linux brought up to parity with the Windows original from axj4.4 —
+ * same command names/args). Gate every minimize affordance AND IPC call on
+ * this constant so a platform lacking the Rust commands never invokes an
+ * unregistered one.
  *
- * On Windows this is identical to the platform capability check, which is
- * exactly the old (pre-Linux) IS_NATIVE_PLAYER — Windows behavior is
- * therefore unchanged by construction.
+ * On Windows this is identical to the platform capability check, exactly
+ * like the pre-split SUPPORTS_PLAYER_WINDOWING this replaces — Windows
+ * behavior is therefore unchanged by construction.
  */
-export const SUPPORTS_PLAYER_WINDOWING = IS_NATIVE_PLAYER_PLATFORM && IS_WINDOWS_PLATFORM;
+export const SUPPORTS_PLAYER_MINIMIZE =
+  IS_NATIVE_PLAYER_PLATFORM && (IS_WINDOWS_PLATFORM || IS_LINUX_PLATFORM);
+
+/**
+ * Pop-out (floating window) support — Windows-only. Unlike minimize,
+ * pop-out needs a second native window (GTK + GLArea + its own render
+ * context on Linux) that doesn't exist yet; Linux pop-out parity is
+ * deferred and tracked separately (prexu-axj4.10). Gate every pop-out
+ * affordance AND IPC call (player_enter_popout / player_exit_popout) on
+ * this constant so Linux native never invokes an unregistered command.
+ *
+ * On Windows this is identical to the platform capability check, exactly
+ * like the pre-split SUPPORTS_PLAYER_WINDOWING this replaces — Windows
+ * behavior is therefore unchanged by construction.
+ */
+export const SUPPORTS_PLAYER_POPOUT = IS_NATIVE_PLAYER_PLATFORM && IS_WINDOWS_PLATFORM;
+
+/**
+ * True when native playback is running on Linux specifically — narrower
+ * than IS_NATIVE_PLAYER_PLATFORM (which is also true on Windows). Drives
+ * the Linux-only reveal-mute workaround in useNativePlayer.ts: ~1s of
+ * audio is audible under the loading screen before the first video frame
+ * reveals on Linux; Windows does not exhibit this (user-confirmed,
+ * prexu-axj4.5). Kept separate from the two constants above since it
+ * gates an audio workaround, not a UI/IPC feature affordance.
+ */
+export const IS_LINUX_NATIVE_PLAYER = IS_NATIVE_PLAYER_PLATFORM && IS_LINUX_PLATFORM;
 
 export interface EngineResolutionInput {
   /** Whether native playback is possible on this platform at all. */

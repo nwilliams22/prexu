@@ -15,7 +15,7 @@
 
 import { useCallback, useMemo } from "react";
 import type { UsePlayerResult } from "../usePlayer";
-import { SUPPORTS_PLAYER_WINDOWING } from "./engineResolution";
+import { SUPPORTS_PLAYER_POPOUT } from "./engineResolution";
 import type { UsePopOutPlayerResult } from "./usePopOutPlayer";
 import type { PlayerSessionContextValue } from "../../contexts/PlayerContext";
 import { logger } from "../../services/logger";
@@ -112,7 +112,7 @@ export function usePlayerLifecycle({
     // restored to its pre-pop-out outer geometry and always-on-top is
     // cleared before we unload the player. Without this the app stays at
     // the pop-out size after the player closes.
-    if (SUPPORTS_PLAYER_WINDOWING && isPopOut) {
+    if (SUPPORTS_PLAYER_POPOUT && isPopOut) {
       try {
         togglePopOut();
       } catch (err) {

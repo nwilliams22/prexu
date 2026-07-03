@@ -54,8 +54,10 @@ use gtk::glib;
 use gtk::prelude::*;
 use libmpv2::render::{OpenGLInitParams, RenderContext, RenderParam, RenderParamApiType};
 use libmpv2::Mpv;
-use tauri::{AppHandle, Emitter, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use webkit2gtk::WebViewExt;
+
+use crate::player::PlayerState;
 
 // ── GL constants / fn-pointer types ───────────────────────────────────────────
 
@@ -552,6 +554,113 @@ pub fn detach_mpv(app: &AppHandle) {
     }
 }
 
+// ── In-window minimize: video-margin-ratio application (prexu-axj4.5) ──────────
+//
+// There is no separate host window to reposition on Linux (see the module
+// docs) — the mini-corner inset is achieved by insetting mpv's own video area
+// with `video-margin-ratio-left/right/top/bottom`. `commands::minimize`
+// computes the four ratios (pure, unit-tested); the functions below apply
+// them to the live mpv handle from the GTK main thread.
+
+/// Apply mpv's `video-margin-ratio-*` properties, if attached. Panic-free
+/// (`try_borrow`, logged early-return) — called both from a main-thread
+/// dispatch (`apply_margins_now`/`clear_margins_now`) and directly from the
+/// GLArea `resize` signal handler below, both of which already run on the
+/// GTK main thread.
+fn apply_margin_ratios(comp: &Compositor, ratios: (f64, f64, f64, f64)) {
+    let Ok(mb) = comp.mpv.try_borrow() else {
+        log::warn!("[player:linux] apply_margin_ratios: mpv slot busy, skipped");
+        return;
+    };
+    let Some(mpv) = mb.as_ref() else {
+        log::debug!("[player:linux] apply_margin_ratios: mpv not attached, skipped");
+        return;
+    };
+    let (left, right, top, bottom) = ratios;
+    for (name, value) in [
+        ("video-margin-ratio-left", left),
+        ("video-margin-ratio-right", right),
+        ("video-margin-ratio-top", top),
+        ("video-margin-ratio-bottom", bottom),
+    ] {
+        if let Err(e) = mpv.set_property(name, value) {
+            log::error!("[player:linux] set_property({name}, {value:.4}) failed: {e:?}");
+        }
+    }
+    log::debug!(
+        "[player:linux] video-margin-ratio applied left={left:.4} right={right:.4} top={top:.4} bottom={bottom:.4}"
+    );
+}
+
+/// Recompute margins from the current `PlayerState::get_minimize()` inset and
+/// the GLArea's CURRENT logical allocation, then apply them to mpv. Called by
+/// `player_enter_minimize` / `player_update_mini_geometry` after they store
+/// the new `MinimizeState`.
+///
+/// Dispatches onto the GTK main thread and blocks (bounded by a timeout) so
+/// the command stays synchronous — mirroring the Windows `resync_host` call,
+/// which likewise applies the new geometry before the command returns.
+pub(crate) fn apply_margins_now(app: &AppHandle) {
+    let app2 = app.clone();
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let dispatched = app.run_on_main_thread(move || {
+        let comp = COMPOSITOR.with(|c| c.try_borrow().ok().and_then(|g| g.clone()));
+        let Some(comp) = comp else {
+            log::warn!("[player:linux] apply_margins_now: compositor not installed");
+            let _ = tx.send(());
+            return;
+        };
+        let Some(mini) = app2.state::<PlayerState>().get_minimize() else {
+            log::debug!("[player:linux] apply_margins_now: no minimize state, skipping");
+            let _ = tx.send(());
+            return;
+        };
+        let w = comp.gl_area.allocated_width();
+        let h = comp.gl_area.allocated_height();
+        let ratios = crate::player::commands::minimize::compute_margin_ratios(w, h, mini);
+        log::info!(
+            "[player:linux] apply_margins_now: allocation={w}x{h} corner={:?} ratios={:?}",
+            mini.corner, ratios
+        );
+        apply_margin_ratios(&comp, ratios);
+        let _ = tx.send(());
+    });
+    match dispatched {
+        Ok(()) => {
+            if rx.recv_timeout(std::time::Duration::from_secs(1)).is_err() {
+                log::warn!("[player:linux] apply_margins_now: main-thread apply not confirmed within 1s");
+            }
+        }
+        Err(e) => log::error!("[player:linux] apply_margins_now: run_on_main_thread failed: {e:?}"),
+    }
+}
+
+/// Reset all four `video-margin-ratio-*` properties to 0.0 so mpv fills the
+/// whole GLArea again. Called by `player_exit_minimize`. Same blocking
+/// main-thread dispatch pattern as `apply_margins_now`.
+pub(crate) fn clear_margins_now(app: &AppHandle) {
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let dispatched = app.run_on_main_thread(move || {
+        let comp = COMPOSITOR.with(|c| c.try_borrow().ok().and_then(|g| g.clone()));
+        match comp {
+            Some(comp) => {
+                log::info!("[player:linux] clear_margins_now: resetting video-margin-ratio to 0");
+                apply_margin_ratios(&comp, (0.0, 0.0, 0.0, 0.0));
+            }
+            None => log::warn!("[player:linux] clear_margins_now: compositor not installed"),
+        }
+        let _ = tx.send(());
+    });
+    match dispatched {
+        Ok(()) => {
+            if rx.recv_timeout(std::time::Duration::from_secs(1)).is_err() {
+                log::warn!("[player:linux] clear_margins_now: main-thread clear not confirmed within 1s");
+            }
+        }
+        Err(e) => log::error!("[player:linux] clear_margins_now: run_on_main_thread failed: {e:?}"),
+    }
+}
+
 // ── Render lifecycle ───────────────────────────────────────────────────────────
 
 /// Connect the GtkGLArea `realize` / `render` / `unrealize` signals. Each
@@ -637,10 +746,30 @@ fn wire_gl_area(comp: &Rc<Compositor>) {
     // resize: GTK reallocates the GLArea buffers at the new size — queue an
     // immediate repaint so a paused player (pump gated off) still redraws the
     // current frame at the new allocation instead of leaving stale content.
+    //
+    // Also recompute + re-apply video-margin-ratio-* here (prexu-axj4.5):
+    // the mini inset is a FIXED px rect, so its ratios of the surface change
+    // on every resize while minimized — without this the mini region would
+    // drift out of the requested corner as soon as the user resized the main
+    // window. `get_minimize()` returns `None` when not minimized, so this is
+    // a no-op during normal (non-mini) playback. Runs on the GTK main thread
+    // (this is a GTK signal handler) — panic-free per the module invariant:
+    // `weak.upgrade()` early-returns if the compositor is gone, and
+    // `apply_margin_ratios` itself uses `try_borrow`.
     {
+        let weak = Rc::downgrade(comp);
         comp.gl_area.connect_resize(move |area, w, h| {
             log::debug!("[player:linux] GLArea resize {w}x{h} — queueing repaint");
             area.queue_render();
+            let Some(c) = weak.upgrade() else { return };
+            if let Some(mini) = c.app.state::<PlayerState>().get_minimize() {
+                let ratios = crate::player::commands::minimize::compute_margin_ratios(w, h, mini);
+                log::debug!(
+                    "[player:linux] resize while minimized — recomputed ratios={:?}",
+                    ratios
+                );
+                apply_margin_ratios(&c, ratios);
+            }
         });
     }
 

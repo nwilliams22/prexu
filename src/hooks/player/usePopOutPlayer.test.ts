@@ -18,15 +18,15 @@ vi.mock("../../services/logger", () => ({
   },
 }));
 
-// SUPPORTS_PLAYER_WINDOWING resolves from navigator.userAgent + Tauri
+// SUPPORTS_PLAYER_POPOUT resolves from navigator.userAgent + Tauri
 // internals, both absent by default under jsdom — so pop-out would report
 // unsupported here without this override. All the existing tests in this
-// file assume Windows-native pop-out IPC works; the "windowing
-// unsupported" describe block below covers the Linux-native gate
-// (prexu-axj4.4) with its own per-test remock instead.
+// file assume Windows-native pop-out IPC works; the "popout unsupported"
+// describe block below covers the gate (Linux native, prexu-axj4.10 defers
+// Linux popout parity) with its own per-test remock instead.
 vi.mock("./engineResolution", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./engineResolution")>()),
-  SUPPORTS_PLAYER_WINDOWING: true,
+  SUPPORTS_PLAYER_POPOUT: true,
 }));
 
 describe("usePopOutPlayer", () => {
@@ -89,7 +89,7 @@ describe("usePopOutPlayer", () => {
   });
 });
 
-describe("usePopOutPlayer — windowing unsupported (e.g. Linux native, prexu-axj4.4)", () => {
+describe("usePopOutPlayer — popout unsupported (e.g. Linux native, prexu-axj4.10)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -98,7 +98,7 @@ describe("usePopOutPlayer — windowing unsupported (e.g. Linux native, prexu-ax
     vi.resetModules();
     vi.doMock("./engineResolution", async (importOriginal) => ({
       ...(await importOriginal<typeof import("./engineResolution")>()),
-      SUPPORTS_PLAYER_WINDOWING: false,
+      SUPPORTS_PLAYER_POPOUT: false,
     }));
 
     const { usePopOutPlayer: usePopOutPlayerUnsupported } = await import("./usePopOutPlayer");

@@ -28,7 +28,8 @@ import { useStreamSelection } from "./player/useStreamSelection";
 import { useNativePlayer } from "./player/useNativePlayer";
 import {
   IS_NATIVE_PLAYER_PLATFORM,
-  SUPPORTS_PLAYER_WINDOWING,
+  SUPPORTS_PLAYER_MINIMIZE,
+  SUPPORTS_PLAYER_POPOUT,
   isSessionFallbackActive,
   resolveEngineChoice,
   type ResolvedEngine,
@@ -58,7 +59,7 @@ import { logger, redactUrl } from "../services/logger";
 // Re-exported so existing call sites that import platform/engine constants
 // from "../hooks/usePlayer" (the historical home of IS_NATIVE_PLAYER) keep
 // working without an extra import path. See engineResolution.ts for docs.
-export { IS_NATIVE_PLAYER_PLATFORM, SUPPORTS_PLAYER_WINDOWING };
+export { IS_NATIVE_PLAYER_PLATFORM, SUPPORTS_PLAYER_MINIMIZE, SUPPORTS_PLAYER_POPOUT };
 export type { ResolvedEngine };
 
 export interface UsePlayerResult {
@@ -152,9 +153,9 @@ export interface UsePlayerResult {
    * Consumers that used to branch on the old module-level IS_NATIVE_PLAYER
    * constant should read this instead — it reflects the resolved choice
    * for THIS session (preference + platform + fallback), not just platform
-   * capability. Window-management affordances (minimize/pop-out) should
-   * still gate on SUPPORTS_PLAYER_WINDOWING, not this field — native on
-   * Linux has no windowing IPC yet.
+   * capability. Window-management affordances should still gate on
+   * SUPPORTS_PLAYER_MINIMIZE / SUPPORTS_PLAYER_POPOUT, not this field —
+   * native on Linux has minimize but not pop-out IPC yet (prexu-axj4.10).
    */
   engine: ResolvedEngine;
 

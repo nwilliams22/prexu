@@ -20,7 +20,12 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useAuth } from "../useAuth";
 import { usePreferences } from "../usePreferences";
 import { useTimelineReporting } from "./useTimelineReporting";
-import { setPendingResumeOffsetMs, setSessionFallbackActive } from "./engineResolution";
+import {
+  IS_LINUX_NATIVE_PLAYER,
+  setPendingResumeOffsetMs,
+  setSessionFallbackActive,
+} from "./engineResolution";
+import { HOST_READY_FALLBACK_MS } from "./useTransparentWindow";
 import { addPendingWatchSync, getClientIdentifier } from "../../services/storage";
 import {
   prepareSource,
@@ -120,6 +125,63 @@ export function useNativePlayer(
   isMutedRef.current = isMuted;
   const offsetOverrideRef = useRef(offsetOverride);
   offsetOverrideRef.current = offsetOverride;
+
+  // ── Linux-only reveal-mute workaround (prexu-axj4.5) ──
+  // On Linux native, mpv's audio for a newly-loaded file starts slightly
+  // before the first composited frame reaches the WebView (~1s), so audio
+  // is briefly audible under the opaque loading screen before the video
+  // reveals. Windows does not exhibit this (user-confirmed), so the whole
+  // workaround is scoped to IS_LINUX_NATIVE_PLAYER and is a no-op
+  // everywhere else — see initPlayback below for the arm/restore sequence.
+  //
+  // revealMuteArmedRef is the gate `applyMuted` consults: while armed, ANY
+  // player_set_muted invoke (user toggle, saved-preference apply after
+  // load) is deferred rather than sent to mpv immediately, so a mid-load
+  // mute/unmute toggle can't sneak audio past the workaround. The LATEST
+  // user intent (isMutedRef.current) is applied in one shot once armed
+  // clears.
+  const revealMuteArmedRef = useRef(false);
+  // Unlisten for the per-load player://host-window-ready subscription that
+  // clears the arm. Tracked so a superseded/unmounted load's listener is
+  // always torn down (never fires after teardown, never leaks).
+  const revealMuteUnlistenRef = useRef<UnlistenFn | undefined>(undefined);
+  // Safety-net mirroring useTransparentWindow's HOST_READY_FALLBACK_MS: if
+  // host-window-ready never arrives for some reason, restore mute anyway
+  // rather than leaving audio permanently silenced for the rest of the load.
+  const revealMuteTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  /** Tear down any pending reveal-mute wait (listener + fallback timer) and
+   *  clear the arm gate. Called at the start of every initPlayback (fresh
+   *  load supersedes any prior pending wait) and from both cleanup effects
+   *  so a superseded or unmounted load never restores/leaks. */
+  const teardownRevealMute = useCallback(() => {
+    revealMuteUnlistenRef.current?.();
+    revealMuteUnlistenRef.current = undefined;
+    if (revealMuteTimeoutRef.current !== undefined) {
+      clearTimeout(revealMuteTimeoutRef.current);
+      revealMuteTimeoutRef.current = undefined;
+    }
+    revealMuteArmedRef.current = false;
+  }, []);
+
+  /** Single funnel for every player_set_muted invoke (initial saved-state
+   *  apply after load, toggleMute, setVolume's auto-unmute). While the
+   *  reveal-mute workaround is armed, the invoke is deferred — the actual
+   *  mpv-side mute stays forced-true until the arm clears — everywhere else
+   *  (Windows, HTML5, or once the arm has cleared) this is a plain
+   *  pass-through invoke, so behavior is unchanged there. */
+  const applyMuted = useCallback(async (muted: boolean) => {
+    if (revealMuteArmedRef.current) {
+      logger.debug("player", "reveal-mute armed — deferring player_set_muted", { muted });
+      return;
+    }
+    logger.debug("player", "player_set_muted", { muted });
+    try {
+      await invoke("player_set_muted", { muted });
+    } catch (err) {
+      logger.error("player", "player_set_muted failed", String(err));
+    }
+  }, []);
 
   // ── Deferred-op queue ──
   // Replaces three separate pending refs (pendingExternalSubRef,
@@ -395,6 +457,76 @@ export function useNativePlayer(
           );
         });
       }
+
+      // Reset from any prior (superseded) load's reveal-mute wait before
+      // arming a fresh one for THIS load — see the refs/applyMuted docblock
+      // above. Linux-only; a plain no-op on every other platform.
+      teardownRevealMute();
+      if (IS_LINUX_NATIVE_PLAYER) {
+        revealMuteArmedRef.current = true;
+        logger.debug("player", "reveal-mute arming for load", { gen });
+        // Belt-and-braces early arm. The AUTHORITATIVE arm is Rust-side:
+        // player_load_url mutes mpv (Linux-gated) right after ensure_init,
+        // before loadfile — the only point that also covers the cold first
+        // load of a session, where this invoke rejects with "mpv not
+        // initialised" (caught and logged, never blocks the load) because
+        // mpv doesn't exist until player_load_url runs. On warm loads
+        // (episode handoff keeps the handle alive via soft-stop) this
+        // lands slightly earlier than the Rust arm.
+        invoke("player_set_muted", { muted: true }).catch((err) =>
+          logger.warn("player", "reveal-mute arm invoke failed", String(err)),
+        );
+
+        let settled = false;
+        const settleRevealMute = (reason: "event" | "timeout" | "listen-failed") => {
+          if (settled) return;
+          settled = true;
+          if (gen !== initGenRef.current) {
+            logger.debug("player", "reveal-mute restore skipped — superseded load", {
+              gen,
+              reason,
+            });
+            return;
+          }
+          if (revealMuteTimeoutRef.current !== undefined) {
+            clearTimeout(revealMuteTimeoutRef.current);
+            revealMuteTimeoutRef.current = undefined;
+          }
+          revealMuteUnlistenRef.current = undefined;
+          revealMuteArmedRef.current = false;
+          logger.debug("player", "reveal-mute restoring user muted state", {
+            muted: isMutedRef.current,
+            reason,
+          });
+          void applyMuted(isMutedRef.current);
+        };
+
+        // Safety net: restore anyway if host-window-ready never arrives,
+        // mirroring useTransparentWindow's HOST_READY_FALLBACK_MS so audio
+        // is never left permanently silenced for the rest of the load.
+        revealMuteTimeoutRef.current = setTimeout(
+          () => settleRevealMute("timeout"),
+          HOST_READY_FALLBACK_MS,
+        );
+
+        try {
+          const unlisten = await listen<null>("player://host-window-ready", () => {
+            settleRevealMute("event");
+          });
+          if (gen !== initGenRef.current || settled) {
+            // Superseded (or already settled via the fallback timeout)
+            // while awaiting listener registration — don't leave a
+            // dangling subscription behind.
+            unlisten();
+          } else {
+            revealMuteUnlistenRef.current = unlisten;
+          }
+        } catch (err) {
+          logger.warn("player", "reveal-mute listen(host-window-ready) failed", String(err));
+          settleRevealMute("listen-failed");
+        }
+      }
+
       await invoke("player_load_url", {
         url: prepared.url,
         headers: {} as Record<string, string>,
@@ -416,7 +548,11 @@ export function useNativePlayer(
         logger.debug("player", "initPlayback superseded", { gen });
         return;
       }
-      await invoke("player_set_muted", { muted: isMutedRef.current });
+      // Routed through applyMuted (not a raw invoke) so this is deferred
+      // while the reveal-mute workaround is armed (Linux) instead of
+      // immediately un-forcing mute right after load — see applyMuted's
+      // docblock above.
+      await applyMuted(isMutedRef.current);
       if (gen !== initGenRef.current) {
         logger.debug("player", "initPlayback superseded", { gen });
         return;
@@ -489,7 +625,7 @@ export function useNativePlayer(
       setIsLoading(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- ref values are stable
-  }, [server, ratingKey, timeline]);
+  }, [server, ratingKey, timeline, teardownRevealMute, applyMuted]);
 
   // Init on mount / when ratingKey changes.
   //
@@ -515,6 +651,11 @@ export function useNativePlayer(
       invoke("player_stop").catch((err) =>
         logger.error("player", "player_stop failed", String(err)),
       );
+      // Tear down any still-pending reveal-mute wait (Linux-only,
+      // prexu-axj4.5) — covers both episode-handoff (a fresh arm follows
+      // in the next initPlayback) and true unmount (this effect's cleanup
+      // also runs then, so no dangling listener/timer survives teardown).
+      teardownRevealMute();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- timeline funcs are stable
   }, [initPlayback]);
@@ -593,17 +734,23 @@ export function useNativePlayer(
       }).catch(() => {});
       if (clamped > 0 && isMutedRef.current) {
         setIsMuted(false);
-        invoke("player_set_muted", { muted: false }).catch(() => {});
+        // Routed through applyMuted so a volume-driven auto-unmute can't
+        // sneak past the Linux reveal-mute workaround mid-load either.
+        void applyMuted(false);
       }
     },
-    [],
+    [applyMuted],
   );
 
   const toggleMute = useCallback(() => {
     const next = !isMutedRef.current;
     setIsMuted(next);
-    invoke("player_set_muted", { muted: next }).catch(() => {});
-  }, []);
+    // Routed through applyMuted: React state (and so the mute button icon)
+    // flips immediately, but the actual mpv-side invoke is deferred while
+    // the Linux reveal-mute workaround is armed — the LATEST toggle here
+    // still wins once the arm clears (see applyMuted's docblock).
+    void applyMuted(next);
+  }, [applyMuted]);
 
   // Primitive setter — used by both toggleFullscreen and the public
   // setFullscreen method on UsePlayerResult. Optimistically updates React
