@@ -123,3 +123,15 @@ wry = "0.54"
 # API-compatible with what Tauri calls. Re-base on wry bumps when Tauri bumps.
 [patch.crates-io]
 wry = { path = "vendor/wry" }
+# Vendored at 4.1.0 (the exact version `libmpv2 = "4"` resolves) to add
+# RenderContext::render_no_block — render() with
+# MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME=0, which the stock render() neither
+# passes nor exposes. The Linux compositor needs it: with the default
+# block-for-target-time, mpv_render_context_render parks the GTK main thread
+# in an UNTIMED cond wait for the vo's flip_page (present_count), and a
+# video-margin-ratio reconfig during playback can deadlock the pair
+# circularly — the vo waits for the client to consume its frame while render
+# waits for the previous frame's present (prexu-skr2: black video, starved
+# IPC responses, app-wide stall until any core wakeup). Windows keeps the
+# stock blocking render(); only linux_compositor calls the new method.
+libmpv2 = { path = "vendor/libmpv2" }

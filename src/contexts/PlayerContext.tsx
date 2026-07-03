@@ -243,7 +243,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     }
     logger.info("player:minimize", "restoring");
     playerExitMinimize()
-      .then(() => setIsMinimized(false))
+      .then(() => {
+        logger.info("player:minimize", "restore IPC done — isMinimized -> false");
+        setIsMinimized(false);
+      })
       .catch((err) =>
         logger.error("player:minimize", "exit failed", String(err)),
       );

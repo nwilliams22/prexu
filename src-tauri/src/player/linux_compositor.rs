@@ -741,7 +741,16 @@ fn wire_gl_area(comp: &Rc<Compositor>) {
             }
             let (w, h) =
                 fbo_dimensions(area.allocated_width(), area.allocated_height(), area.scale_factor());
-            match render.render::<()>(fbo_id, w, h, true) {
+            // render_no_block (vendored libmpv2 addition): render() with
+            // MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME=0. The default blocking
+            // render parks THIS (GTK main) thread in an untimed cond wait for
+            // the vo thread's flip_page; a video-margin-ratio reconfig during
+            // playback deadlocks that pair circularly and freezes the whole
+            // main loop — black video, starved Tauri IPC responses — until
+            // any mpv core wakeup (prexu-skr2, diagnosed via live eu-stack).
+            // Pacing is ours anyway: the 60 Hz pump + GTK vsync drive frame
+            // timing, so target-time blocking buys nothing here.
+            match render.render_no_block::<()>(fbo_id, w, h, true) {
                 Ok(()) => log::trace!("[player:linux] render frame fbo={fbo_id} {w}x{h}"),
                 Err(e) => log::trace!("[player:linux] render error: {e:?}"),
             }
