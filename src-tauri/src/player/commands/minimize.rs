@@ -251,8 +251,14 @@ pub async fn player_exit_minimize(
     state: State<'_, PlayerState>,
 ) -> Result<(), String> {
     log::info!("[player:cmd] exit_minimize (linux)");
+    // Same busy/ready bracketing as enter_minimize above: restore is a
+    // genuine mode transition, and the Windows exit path runs the pair via
+    // resync_host. Without it useTransparentWindow never sees the
+    // transition on Linux (prexu-7d3 contract).
+    let _ = app.emit("player://host-window-busy", ());
     state.set_minimize(None)?;
     crate::player::linux_compositor::clear_margins_now(&app);
+    let _ = app.emit("player://host-window-ready", ());
     Ok(())
 }
 
