@@ -525,6 +525,26 @@ pub fn detach_mpv(app: &AppHandle) {
             if let Some(src) = comp.pump_source.try_borrow_mut().ok().and_then(|mut g| g.take()) {
                 src.remove();
             }
+            // mpv render API contract: the SAME GL context that created the
+            // render context must be current for every mpv_render_* call,
+            // INCLUDING mpv_render_context_free (which the drop below runs).
+            // The create path (try_create_render_context) makes it current;
+            // without doing so here the free executes against whatever context
+            // is current on the main thread — none, or GDK's own paint
+            // context — and mpv deletes its GL objects inside GDK's context.
+            // That corrupts GTK's compositing state: the toplevel stops
+            // committing frames and the window freezes on its last composite
+            // (black after resize) even though every thread stays healthy
+            // (prexu-3iv3). Skip when unrealized — the GL context is gone and
+            // the unrealize handler already freed the render context there.
+            if comp.realized.get() {
+                comp.gl_area.make_current();
+                if let Some(err) = comp.gl_area.error() {
+                    log::error!("[player:linux] detach_mpv: make_current failed: {err}");
+                }
+            } else {
+                log::warn!("[player:linux] detach_mpv: GLArea not realized — freeing without context");
+            }
             let freed = match comp.render.try_borrow_mut() {
                 Ok(mut g) => g.take().is_some(),
                 Err(e) => {

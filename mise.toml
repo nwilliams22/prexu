@@ -2,6 +2,12 @@
 node = "22"
 
 [env]
+# The Tauri backend and relay-server need cargo. Rust is provisioned by rustup
+# (not mise) on the dev boxes, and rustup's `. ~/.cargo/env` line isn't in every
+# shell profile — so put the rustup bin dir on PATH whenever mise activates in
+# this project. Harmless if cargo is already on PATH from elsewhere.
+_.path = ["{{env.HOME}}/.cargo/bin"]
+
 # `bd dolt push`/`pull` shell out to the dolt CLI in external-server mode, which
 # needs the specific Dolt *database* directory — NOT the server data-dir. Without
 # this, those commands fail with: "dolt push requires a local Dolt CLI database

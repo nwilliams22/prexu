@@ -158,7 +158,13 @@ function AppRoutes() {
 
     const dismissIfQuorum = () => {
       if (cancelled) return;
-      if (settledCount >= QUORUM) setAppReady(true);
+      if (settledCount >= QUORUM) {
+        // Cancel the hard cap — without this it always fires at 20s and
+        // logs a misleading "hard cap reached" warning even when the splash
+        // was dismissed at quorum long before (harmless but poisons logs).
+        clearTimeout(hardCapTimer);
+        setAppReady(true);
+      }
     };
 
     const trackSettled = (label: string) => () => {
