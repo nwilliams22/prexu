@@ -26,16 +26,18 @@
  * never does. Discrete gestures (clicks, keys, seek-bar drags) keep
  * resetting through `resetHideTimer`, which stays unconditional.
  *
- * TEMPORARY DIAGNOSTIC LOGGING (prexu-axj4.4, keep-or-strip at review):
- * every timer re-arm logs its reason at debug — grep for
- * "controls-visibility" — so an on-hardware session can attribute any
- * residual chrome pinning in one look:
+ * Re-arm attribution logging: every timer re-arm logs its reason — grep
+ * for "controls-visibility" — so an on-hardware session can attribute any
+ * chrome pinning in one look:
  *   [player] controls-visibility re-arm (mousemove) {"displacement":12}
  *   [player] controls-visibility re-arm (mousemove-first)
  *   [player] controls-visibility re-arm (isPlaying-transition) {"isPlaying":true}
  *   [player] controls-visibility re-arm (explicit)
  *   [player] controls-visibility auto-hide fired
- * Sub-threshold moves log at trace (4 Hz-class noise per conventions):
+ * Accepted-mousemove re-arms and sub-threshold ignores fire at pointer-move
+ * rate during real movement, so they log at trace; the discrete reasons
+ * (first move, explicit gesture, play/pause transition, hide firing) log
+ * at debug:
  *   [player] controls-visibility mousemove ignored (below threshold) {"displacement":1.4}
  */
 
@@ -84,10 +86,13 @@ export function usePlayerControlsVisibility(
   const anchorRef = useRef<PointerPosition | null>(null);
 
   // Single owner of "show + start the 3s countdown". `reason`/`data` feed
-  // the TEMPORARY diagnostic logging described in the module docblock.
+  // the re-arm attribution logging described in the module docblock.
+  // Continuous mousemove re-arms are trace-class (pointer-move rate);
+  // every other reason is a discrete gesture/transition and logs at debug.
   const armHideTimer = useCallback(
     (reason: string, data?: Record<string, unknown>) => {
-      logger.debug("player", `controls-visibility re-arm (${reason})`, data);
+      const level = reason === "mousemove" ? "trace" : "debug";
+      logger[level]("player", `controls-visibility re-arm (${reason})`, data);
       setControlsVisible(true);
       if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
       hideTimerRef.current = setTimeout(() => {
@@ -139,11 +144,11 @@ export function usePlayerControlsVisibility(
   // - Always show controls and start a fresh 3s countdown
   // - This applies whether playing or paused
   //
-  // NOTE (prexu-axj4.4 diagnostics): on the native path isPlaying is fed
-  // by `player://paused` events. If the Rust side ever emits alternating
-  // pause values (e.g. around buffering), each alternation re-fires this
-  // effect and pins the chrome — the "isPlaying-transition" re-arm log
-  // exists precisely to catch that in on-hardware logs.
+  // NOTE: on the native path isPlaying is fed by `player://paused` events.
+  // If the Rust side ever emits alternating pause values (e.g. around
+  // buffering), each alternation re-fires this effect and pins the chrome —
+  // the "isPlaying-transition" re-arm log exists precisely to catch that
+  // in on-hardware logs.
   useEffect(() => {
     armHideTimer("isPlaying-transition", { isPlaying });
   }, [isPlaying, armHideTimer]);
