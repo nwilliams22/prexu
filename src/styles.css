@@ -242,7 +242,15 @@ a:hover {
 }
 
 .card-enter {
-  animation: cardEnter 0.35s ease-out both;
+  /* `backwards`, NOT `both` (prexu-3iv3): backwards fill is all the stagger
+     needs (holds the `from` state during animation-delay); forward fill kept
+     every finished entrance animation permanently active in the effect stack.
+     With hundreds of cards each also carrying `transition: transform` + an
+     inline hover transform, any document-wide class flip then livelocked
+     webkit2gtk 2.52 in CSS transition retargeting (100% CPU, frozen UI —
+     see the bead for stack evidence). `to` state equals the natural style,
+     so dropping forward fill is visually identical. */
+  animation: cardEnter 0.35s ease-out backwards;
 }
 
 /* Scanning sweep — light line passes across the card */
