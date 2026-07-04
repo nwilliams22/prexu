@@ -213,7 +213,10 @@ fn handle_proxy_request(
         if line.is_empty() {
             break;
         }
-        if line.to_lowercase().starts_with("range:") {
+        // Zero-allocation case-insensitive prefix check; `get` (not slicing)
+        // so a malformed multi-byte header line can't panic the connection
+        // thread on a non-char-boundary.
+        if line.get(..6).is_some_and(|p| p.eq_ignore_ascii_case("range:")) {
             range_header = Some(line[6..].trim().to_string());
         }
     }
@@ -252,15 +255,16 @@ fn handle_proxy_request(
                             _ => "application/octet-stream",
                         };
 
-                        // Handle Range requests for seeking
+                        // Handle Range requests for seeking. Streamed with a
+                        // fixed buffer (prexu-0szx.2): the old path ignored
+                        // the requested end and read start→EOF into ONE Vec —
+                        // a seek near the start of a multi-GB remux allocated
+                        // gigabytes and could OOM the process.
                         if let Some(ref range) = range_header {
-                            if let Some(start) = parse_range_start(range, file_size) {
-                                let end = file_size - 1;
+                            if let Some((start, end)) = parse_range(range, file_size) {
                                 let length = end - start + 1;
                                 use std::io::Seek;
                                 file.seek(std::io::SeekFrom::Start(start))?;
-                                let mut buf = vec![0u8; length as usize];
-                                file.read_exact(&mut buf)?;
                                 let header = format!(
                                     "HTTP/1.1 206 Partial Content\r\n\
                                      Content-Type: {}\r\n\
@@ -272,15 +276,13 @@ fn handle_proxy_request(
                                     content_type, length, start, end, file_size
                                 );
                                 stream.write_all(header.as_bytes())?;
-                                stream.write_all(&buf)?;
+                                stream_body(&mut file, &mut stream, Some(length))?;
                                 stream.flush()?;
                                 return Ok(());
                             }
                         }
 
-                        // Full file response
-                        let mut buf = Vec::with_capacity(file_size as usize);
-                        file.read_to_end(&mut buf)?;
+                        // Full file response — streamed, never buffered whole.
                         let header = format!(
                             "HTTP/1.1 200 OK\r\n\
                              Content-Type: {}\r\n\
@@ -291,7 +293,7 @@ fn handle_proxy_request(
                             content_type, file_size
                         );
                         stream.write_all(header.as_bytes())?;
-                        stream.write_all(&buf)?;
+                        stream_body(&mut file, &mut stream, Some(file_size))?;
                         stream.flush()?;
                         return Ok(());
                     }
@@ -336,48 +338,115 @@ fn handle_proxy_request(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
 
-    let body = resp.bytes()?;
+    // Relay the body as it downloads (prexu-0szx.2). The old code buffered
+    // the ENTIRE upstream response (`resp.bytes()`) before writing a single
+    // byte to the WebView — every HLS segment paid full-download latency
+    // with zero download/upload overlap. `reqwest::blocking::Response`
+    // implements `Read`, so we stream through a fixed buffer instead.
+    //
+    // Content-Length is forwarded from upstream when known; when Plex sends
+    // a chunked/unsized body we omit it — every response already sends
+    // `Connection: close`, so the body is validly EOF-delimited (HTTP/1.1).
+    let content_length = resp.content_length();
 
-    // Write HTTP response back to the WebView
     let mut header = format!(
         "HTTP/1.1 {} {}\r\n\
          Content-Type: {}\r\n\
-         Content-Length: {}\r\n\
          Access-Control-Allow-Origin: https://tauri.localhost\r\n\
          Connection: close\r\n",
         status.as_u16(),
         status.canonical_reason().unwrap_or(""),
         content_type,
-        body.len()
     );
+    if let Some(len) = content_length {
+        header.push_str(&format!("Content-Length: {}\r\n", len));
+    }
     if let Some(cr) = content_range {
         header.push_str(&format!("Content-Range: {}\r\n", cr));
     }
     header.push_str("\r\n");
 
     stream.write_all(header.as_bytes())?;
-    stream.write_all(&body)?;
+    let mut resp = resp;
+    // An upstream read error past this point can only truncate the body —
+    // the status line is already on the wire. With Content-Length present
+    // the client detects the truncation; either way the connection closes.
+    stream_body(&mut resp, &mut stream, None)?;
     stream.flush()?;
 
     Ok(())
 }
 
-/// Parse the start byte from a Range header like "bytes=1234-"
-fn parse_range_start(range: &str, file_size: u64) -> Option<u64> {
+/// Fixed relay-buffer size for [`stream_body`]. Large enough that a LAN-rate
+/// media stream doesn't burn syscalls, small enough to be irrelevant next to
+/// a single video segment.
+const PROXY_STREAM_BUF: usize = 256 * 1024;
+
+/// Copy `len` bytes (or until EOF when `len` is `None`) from `reader` to
+/// `writer` through one fixed heap buffer. Returns the bytes copied. This is
+/// the memory-bounded replacement for the whole-body `Vec` reads the proxy
+/// used to do (prexu-0szx.2): peak memory is `PROXY_STREAM_BUF` regardless
+/// of body size, and the first byte reaches the client immediately.
+fn stream_body(
+    reader: &mut dyn StdRead,
+    writer: &mut dyn Write,
+    len: Option<u64>,
+) -> std::io::Result<u64> {
+    let mut buf = vec![0u8; PROXY_STREAM_BUF];
+    let mut copied: u64 = 0;
+    loop {
+        let want = match len {
+            Some(l) => {
+                let remaining = l.saturating_sub(copied);
+                if remaining == 0 {
+                    break;
+                }
+                buf.len().min(remaining as usize)
+            }
+            None => buf.len(),
+        };
+        let n = reader.read(&mut buf[..want])?;
+        if n == 0 {
+            break; // EOF (short read against `len` = truncated source; caller's Content-Length exposes it)
+        }
+        writer.write_all(&buf[..n])?;
+        copied += n as u64;
+    }
+    Ok(copied)
+}
+
+/// Parse a Range header (`bytes=S-E`, `bytes=S-`, or suffix `bytes=-N`)
+/// against `file_size`. Returns the INCLUSIVE `(start, end)` byte pair, with
+/// `end` clamped to the last byte, or `None` when unparseable/unsatisfiable
+/// (caller then serves the full file as 200). Replaces the old
+/// `parse_range_start`, which ignored the requested end entirely — the
+/// response always ran to EOF no matter what the client asked for.
+fn parse_range(range: &str, file_size: u64) -> Option<(u64, u64)> {
     let range = range.trim();
-    if !range.starts_with("bytes=") {
-        return None;
+    let spec = range.strip_prefix("bytes=")?;
+    let (start_s, end_s) = spec.split_once('-')?;
+    if start_s.is_empty() {
+        // Suffix form: last N bytes.
+        let n = end_s.parse::<u64>().ok()?;
+        if n == 0 || file_size == 0 {
+            return None;
+        }
+        let start = file_size.saturating_sub(n);
+        return Some((start, file_size - 1));
     }
-    let spec = &range[6..];
-    let parts: Vec<&str> = spec.split('-').collect();
-    if parts.is_empty() {
-        return None;
-    }
-    let start = parts[0].parse::<u64>().ok()?;
+    let start = start_s.parse::<u64>().ok()?;
     if start >= file_size {
         return None;
     }
-    Some(start)
+    let end = if end_s.is_empty() {
+        file_size - 1
+    } else {
+        end_s.parse::<u64>().ok()?.min(file_size - 1)
+    };
+    if end < start {
+        return None;
+    }
+    Some((start, end))
 }
 
 fn write_error(
@@ -674,4 +743,89 @@ pub fn run() {
         .unwrap_or_else(|e| {
             log::error!("Failed to run tauri application: {}", e);
         });
+}
+
+// ── Proxy helper tests (pure — no sockets, no files) ─────────────────────────
+
+#[cfg(test)]
+mod proxy_tests {
+    use super::{parse_range, stream_body};
+
+    // parse_range — the (start, end) contract against a 1000-byte file.
+
+    #[test]
+    fn range_open_ended_runs_to_last_byte() {
+        assert_eq!(parse_range("bytes=200-", 1000), Some((200, 999)));
+    }
+
+    #[test]
+    fn range_explicit_end_is_honored_not_eof() {
+        // The prexu-0szx.2 defect: the old parser ignored the end entirely.
+        assert_eq!(parse_range("bytes=200-499", 1000), Some((200, 499)));
+    }
+
+    #[test]
+    fn range_end_clamped_to_file_size() {
+        assert_eq!(parse_range("bytes=200-5000", 1000), Some((200, 999)));
+    }
+
+    #[test]
+    fn range_suffix_serves_last_n_bytes() {
+        assert_eq!(parse_range("bytes=-100", 1000), Some((900, 999)));
+        // Suffix larger than the file = whole file.
+        assert_eq!(parse_range("bytes=-5000", 1000), Some((0, 999)));
+    }
+
+    #[test]
+    fn range_unsatisfiable_or_malformed_is_none() {
+        assert_eq!(parse_range("bytes=1000-", 1000), None); // start == size
+        assert_eq!(parse_range("bytes=500-200", 1000), None); // end < start
+        assert_eq!(parse_range("bytes=-0", 1000), None); // empty suffix
+        assert_eq!(parse_range("bytes=-", 1000), None);
+        assert_eq!(parse_range("items=0-", 1000), None); // wrong unit
+        assert_eq!(parse_range("bytes=abc-", 1000), None);
+        assert_eq!(parse_range("bytes=-5", 0), None); // empty file
+    }
+
+    #[test]
+    fn range_first_and_last_single_bytes() {
+        assert_eq!(parse_range("bytes=0-0", 1000), Some((0, 0)));
+        assert_eq!(parse_range("bytes=999-999", 1000), Some((999, 999)));
+    }
+
+    // stream_body — bounded-copy contract.
+
+    #[test]
+    fn stream_body_caps_at_len() {
+        let src = vec![7u8; 4096];
+        let mut out = Vec::new();
+        let copied = stream_body(&mut src.as_slice(), &mut out, Some(1000)).unwrap();
+        assert_eq!(copied, 1000);
+        assert_eq!(out.len(), 1000);
+    }
+
+    #[test]
+    fn stream_body_stops_at_eof_before_len() {
+        // Truncated source: copies what exists, reports the short count.
+        let src = vec![7u8; 300];
+        let mut out = Vec::new();
+        let copied = stream_body(&mut src.as_slice(), &mut out, Some(1000)).unwrap();
+        assert_eq!(copied, 300);
+    }
+
+    #[test]
+    fn stream_body_none_copies_to_eof() {
+        // Spans multiple buffer fills (buffer is 256 KiB).
+        let src = vec![0u8; 600 * 1024];
+        let mut out = Vec::new();
+        let copied = stream_body(&mut src.as_slice(), &mut out, None).unwrap();
+        assert_eq!(copied, 600 * 1024);
+        assert_eq!(out.len(), 600 * 1024);
+    }
+
+    #[test]
+    fn stream_body_empty_source_is_zero() {
+        let mut out = Vec::new();
+        assert_eq!(stream_body(&mut (&[] as &[u8]), &mut out, None).unwrap(), 0);
+    }
 }
