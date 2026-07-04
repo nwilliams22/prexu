@@ -174,12 +174,12 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   // exits pop-out first when needed, and `togglePiP` exits minimize first.
   const pip = usePictureInPicture(player.videoRef);
   const popOut = usePopOutPlayer();
-  // Pop-out is Windows-native window management — gate on
-  // SUPPORTS_PLAYER_POPOUT, not the engine flag. On native-but-no-popout
-  // (Linux), there's also no <video> element for browser PiP, so the PiP
-  // slot is simply unsupported there until axj4.10 Linux popout parity —
-  // Linux native does get in-window minimize instead (prexu-axj4.5), which
-  // is a separate affordance rendered from SUPPORTS_PLAYER_MINIMIZE below.
+  // Pop-out is native window management (Windows + Linux since
+  // prexu-axj4.10) — gate on SUPPORTS_PLAYER_POPOUT, not the engine flag.
+  // On native-but-no-popout platforms there's also no <video> element for
+  // browser PiP, so the PiP slot is simply unsupported there. In-window
+  // minimize (prexu-axj4.5) is a separate affordance rendered from
+  // SUPPORTS_PLAYER_MINIMIZE below.
   const pipActive = SUPPORTS_PLAYER_POPOUT
     ? popOut.isPopOut
     : !isNativeEngine && pip.isPiPActive;

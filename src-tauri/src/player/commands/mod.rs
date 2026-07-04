@@ -10,11 +10,11 @@ pub mod playback;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 pub mod minimize;
 
-// Win32-only window-hosting commands (pop-out / monitor geometry). Pop-out
-// (a floating, always-on-top mini window) has no Linux port yet — deferred
-// to prexu-axj4.10; GTK's single-surface compositing has no separate host
-// window to float/reposition the way `win32_monitor` does.
-#[cfg(target_os = "windows")]
+// Pop-out (a floating, always-on-top mini window). Cross-platform since
+// prexu-axj4.10: Windows drives Win32 geometry + monitor persistence via
+// `win32_monitor`; Linux morphs the main window through Tauri/GTK ops (the
+// GLArea render target follows the allocation, no host resync needed).
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 pub mod popout;
 #[cfg(target_os = "windows")]
 pub mod win32_monitor;
@@ -25,5 +25,5 @@ pub use fullscreen::*;
 pub use playback::*;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 pub use minimize::*;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 pub use popout::*;

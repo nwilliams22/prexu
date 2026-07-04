@@ -135,12 +135,14 @@ pub struct PlayerState {
     /// event arrives to consume it. Windows-only (geometry sync).
     #[cfg(target_os = "windows")]
     trailing_scheduled: AtomicBool,
-    /// Saved (x, y, width, height) of the Tauri main window's outer rect
-    /// before entering pop-out mode. Stashed by `player_enter_popout` and
-    /// consumed by `player_exit_popout` to restore the previous geometry.
-    /// `None` when not in pop-out mode. Windows-only (pop-out is a Win32
-    /// window-hosting feature).
-    #[cfg(target_os = "windows")]
+    /// Saved (x, y, width, height) of the Tauri main window's rect before
+    /// entering pop-out mode. Stashed by `player_enter_popout` and consumed
+    /// by `player_exit_popout` to restore the previous geometry. `None` when
+    /// not in pop-out mode. Windows stashes the Win32 outer rect
+    /// (GetWindowRect); Linux (prexu-axj4.10) stashes outer position +
+    /// inner size (the symmetric round-trip through Tauri's GTK ops — see
+    /// `commands::popout`'s Linux section).
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     pub(crate) pre_popout_geometry: Mutex<Option<(i32, i32, u32, u32)>>,
     /// Latched on `WindowEvent::Focused(false)`, consumed on the next
     /// `WindowEvent::Focused(true)`. Gates `reassert_host_on_focus`
@@ -258,7 +260,7 @@ impl PlayerState {
             geom: Mutex::new(GeomState::new()),
             #[cfg(target_os = "windows")]
             trailing_scheduled: AtomicBool::new(false),
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
             pre_popout_geometry: Mutex::new(None),
             #[cfg(target_os = "windows")]
             pending_focus_reassert: AtomicBool::new(false),
