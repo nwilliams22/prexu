@@ -309,6 +309,29 @@ export function saveVolume(volume: number): void {
   }
 }
 
+// Mute persists like volume (prexu-jphh): stopping an item unmounts the
+// player hook, so per-mount state alone silently unmutes the next session —
+// the axj4.5 A3 expectation is that a muted player STAYS muted across
+// stop → next play, exactly like the volume slider position does.
+
+const MUTED_KEY = "prexu_muted";
+
+export function getSavedMuted(): boolean {
+  try {
+    return localStorage.getItem(MUTED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function saveMuted(muted: boolean): void {
+  try {
+    localStorage.setItem(MUTED_KEY, String(muted));
+  } catch {
+    // Ignore
+  }
+}
+
 // ── Shared source preparation ──
 
 export type SourceKind = "local" | "direct" | "transcode";

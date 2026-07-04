@@ -7,6 +7,8 @@ import {
   reportTimelineBeacon,
   getSavedVolume,
   saveVolume,
+  getSavedMuted,
+  saveMuted,
   QUALITY_PRESETS,
   applyPreparedMetadata,
   refreshDownloadedSubtitles,
@@ -363,6 +365,34 @@ describe("plex-playback — pure functions", () => {
     it("round-trips through save and get", () => {
       saveVolume(0.33);
       expect(getSavedVolume()).toBe(0.33);
+    });
+  });
+
+  // ── getSavedMuted / saveMuted (prexu-jphh) ──
+
+  describe("getSavedMuted / saveMuted", () => {
+    beforeEach(() => {
+      localStorage.clear();
+    });
+
+    it("defaults to unmuted when nothing stored", () => {
+      expect(getSavedMuted()).toBe(false);
+    });
+
+    it("round-trips muted=true through save and get", () => {
+      saveMuted(true);
+      expect(getSavedMuted()).toBe(true);
+    });
+
+    it("round-trips muted=false through save and get", () => {
+      saveMuted(true);
+      saveMuted(false);
+      expect(getSavedMuted()).toBe(false);
+    });
+
+    it("treats a garbage stored value as unmuted", () => {
+      localStorage.setItem("prexu_muted", "banana");
+      expect(getSavedMuted()).toBe(false);
     });
   });
 

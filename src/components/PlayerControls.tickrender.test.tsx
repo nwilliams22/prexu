@@ -89,6 +89,8 @@ vi.mock("../services/plex-playback", () => ({
   reportTimeline: vi.fn(),
   getSavedVolume: () => 1,
   saveVolume: vi.fn(),
+  getSavedMuted: () => false,
+  saveMuted: vi.fn(),
 }));
 
 vi.mock("../services/storage", () => ({
