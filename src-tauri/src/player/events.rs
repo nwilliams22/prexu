@@ -434,6 +434,11 @@ const REPLY_PAUSE: u64 = 3;
 const REPLY_BUFFERING: u64 = 4;
 const REPLY_BUFFERED: u64 = 5;
 const REPLY_EOF_REACHED: u64 = 6;
+/// Linux only: mirrored into the compositor's pump-gate atomics
+/// (prexu-0szx.11) — the 60 Hz frame pump reads relaxed atomics instead of
+/// making two synchronous mpv FFI property reads per tick.
+#[cfg(target_os = "linux")]
+const REPLY_IDLE_ACTIVE: u64 = 7;
 
 const TIME_POS_THROTTLE: Duration = Duration::from_millis(250); // 4 Hz
 // `demuxer-cache-time` updates often during streaming; throttle to keep the
@@ -535,6 +540,13 @@ fn run_pump(mpv: Arc<Mpv>, app: AppHandle) {
     // edge to drive PostPlay / queue advancement off.
     if let Err(e) = ev_ctx.observe_property("eof-reached", Format::Flag, REPLY_EOF_REACHED) {
         log::warn!("[player] observe eof-reached failed: {:?}", e);
+    }
+    // `idle-active` + `pause` feed the Linux compositor's pump gate
+    // (prexu-0szx.11). mpv delivers the current value immediately on
+    // observe, so the atomics sync as soon as this pump starts.
+    #[cfg(target_os = "linux")]
+    if let Err(e) = ev_ctx.observe_property("idle-active", Format::Flag, REPLY_IDLE_ACTIVE) {
+        log::warn!("[player] observe idle-active failed: {:?}", e);
     }
 
     log::info!("[player:events] pump started, properties observed");
@@ -708,7 +720,16 @@ fn dispatch(
             }
             (REPLY_PAUSE, PropertyData::Flag(p)) => {
                 log::debug!("[player:events] paused={}", p);
+                #[cfg(target_os = "linux")]
+                crate::player::linux_compositor::set_pump_paused(p);
                 let _ = app.emit("player://paused", p);
+            }
+            #[cfg(target_os = "linux")]
+            (REPLY_IDLE_ACTIVE, PropertyData::Flag(idle)) => {
+                // Pump-gate mirror only — the frontend has no idle-active
+                // consumer; player://ready / player://eof carry those edges.
+                log::debug!("[player:events] idle-active={}", idle);
+                crate::player::linux_compositor::set_pump_idle(idle);
             }
             (REPLY_BUFFERING, PropertyData::Flag(b)) => {
                 log::debug!("[player:events] buffering={}", b);

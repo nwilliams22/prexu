@@ -28,6 +28,12 @@ pub struct AppState {
     pub pending_invites: DashMap<String, Vec<PendingInviteInfo>>,
     /// Global request timestamps for TMDb proxy rate limiting
     tmdb_timestamps: Mutex<VecDeque<Instant>>,
+    /// Shared outbound HTTP client (prexu-0szx.12). A `reqwest::Client`
+    /// owns its own connection pool + TLS config; per-handler
+    /// `Client::new()` paid a fresh TCP+TLS handshake to
+    /// api.themoviedb.org / plex.tv on every request. Clone per use —
+    /// it's an Arc bump.
+    pub http: reqwest::Client,
 }
 
 impl Default for AppState {
@@ -43,6 +49,7 @@ impl AppState {
             connections: DashMap::new(),
             pending_invites: DashMap::new(),
             tmdb_timestamps: Mutex::new(VecDeque::new()),
+            http: reqwest::Client::new(),
         }
     }
 
