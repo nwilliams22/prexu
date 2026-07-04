@@ -77,18 +77,23 @@ export const SUPPORTS_PLAYER_MINIMIZE =
   IS_NATIVE_PLAYER_PLATFORM && (IS_WINDOWS_PLATFORM || IS_LINUX_PLATFORM);
 
 /**
- * Pop-out (floating window) support — Windows-only. Unlike minimize,
- * pop-out needs a second native window (GTK + GLArea + its own render
- * context on Linux) that doesn't exist yet; Linux pop-out parity is
- * deferred and tracked separately (prexu-axj4.10). Gate every pop-out
- * affordance AND IPC call (player_enter_popout / player_exit_popout) on
- * this constant so Linux native never invokes an unregistered command.
+ * Pop-out (floating window) support — Windows and Linux native
+ * (prexu-axj4.10). Pop-out morphs the MAIN window into a small
+ * always-on-top corner window; it never needed a second native window, so
+ * on Linux it rides the same single-surface GTK path as everything else
+ * (`player_enter_popout` / `player_exit_popout` are Tauri/GTK window ops
+ * there — see `src-tauri/src/player/commands/popout.rs`).
  *
- * On Windows this is identical to the platform capability check, exactly
- * like the pre-split SUPPORTS_PLAYER_WINDOWING this replaces — Windows
- * behavior is therefore unchanged by construction.
+ * Wayland caveat: programmatic placement and keep-above are not in the
+ * protocol, so the popout shrinks in place and floats unpinned there
+ * (the user drags it via the PopoutDragStrip and can pin it
+ * compositor-side); X11 has full Windows parity.
+ *
+ * Gate every pop-out affordance AND IPC call on this constant so
+ * unsupported platforms never invoke an unregistered command.
  */
-export const SUPPORTS_PLAYER_POPOUT = IS_NATIVE_PLAYER_PLATFORM && IS_WINDOWS_PLATFORM;
+export const SUPPORTS_PLAYER_POPOUT =
+  IS_NATIVE_PLAYER_PLATFORM && (IS_WINDOWS_PLATFORM || IS_LINUX_PLATFORM);
 
 /**
  * True when native playback is running on Linux specifically — narrower

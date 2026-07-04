@@ -2,10 +2,10 @@
  * Pop-out player hook for the native (mpv-backed) player path.
  *
  * Wraps `playerEnterPopOut` / `playerExitPopOut` with React state so the
- * Pop-out button in ControlsBottomBar can drive a Win32-native floating
- * window. The browser Picture-in-Picture API silently no-ops inside Tauri's
- * WebView2 because there is no `<video>` element on the native path (mpv
- * renders into a sibling Win32 HostWindow).
+ * Pop-out button in ControlsBottomBar can drive a native floating window
+ * (Win32 on Windows, Tauri/GTK on Linux — prexu-axj4.10). The browser
+ * Picture-in-Picture API silently no-ops inside the Tauri webview because
+ * there is no `<video>` element on the native path.
  *
  * The Rust side owns the geometry: it reads the persisted corner + size
  * from `popout-player.json` on enter (falling back to bottom-right / 480×
@@ -35,11 +35,11 @@ export function usePopOutPlayer(): UsePopOutPlayerResult {
   const [isPopOut, setIsPopOut] = useState(false);
 
   const togglePopOut = useCallback(() => {
-    // Pop-out is Windows-only IPC today (see SUPPORTS_PLAYER_POPOUT; Linux
-    // pop-out parity is deferred, prexu-axj4.10) — no-op elsewhere (e.g.
-    // Linux native) so callers never invoke an unregistered Tauri command.
-    // UI affordances should also gate on isPopOutSupported so this branch
-    // is a defense-in-depth backstop.
+    // Pop-out IPC exists on Windows and Linux native (SUPPORTS_PLAYER_POPOUT,
+    // prexu-axj4.10) — no-op elsewhere (HTML5 fallback, unsupported OS) so
+    // callers never invoke an unregistered Tauri command. UI affordances
+    // should also gate on isPopOutSupported so this branch is a
+    // defense-in-depth backstop.
     if (!SUPPORTS_PLAYER_POPOUT) {
       logger.warn("player:popout", "toggle ignored — popout unsupported on this platform");
       return;

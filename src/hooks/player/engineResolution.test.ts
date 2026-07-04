@@ -221,10 +221,10 @@ describe("SUPPORTS_PLAYER_MINIMIZE / SUPPORTS_PLAYER_POPOUT platform matrix", ()
     expect(mod.IS_LINUX_NATIVE_PLAYER).toBe(false);
   });
 
-  it("Linux native (Tauri + Linux UA): minimize supported, popout deferred (prexu-axj4.10)", async () => {
+  it("Linux native (Tauri + Linux UA): minimize AND popout supported (prexu-axj4.10)", async () => {
     const mod = await loadEngineResolution(true, "Mozilla/5.0 (X11; Linux x86_64)");
     expect(mod.SUPPORTS_PLAYER_MINIMIZE).toBe(true);
-    expect(mod.SUPPORTS_PLAYER_POPOUT).toBe(false);
+    expect(mod.SUPPORTS_PLAYER_POPOUT).toBe(true);
     expect(mod.IS_LINUX_NATIVE_PLAYER).toBe(true);
   });
 
