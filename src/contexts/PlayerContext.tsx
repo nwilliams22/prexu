@@ -11,7 +11,10 @@ import {
 import { flushSync } from "react-dom";
 import { logger } from "../services/logger";
 import { playerEnterMinimize, playerExitMinimize, playerUpdateMiniGeometry } from "../services/player";
-import { SUPPORTS_PLAYER_MINIMIZE } from "../hooks/player/engineResolution";
+import {
+  SUPPORTS_PLAYER_MINIMIZE,
+  IS_LINUX_NATIVE_PLAYER,
+} from "../hooks/player/engineResolution";
 import {
   DEFAULT_MINI_RECT,
   loadPersistedMiniRect,
@@ -217,9 +220,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     // IPC fires from the useEffect below on the resulting commit.
   }, []);
 
-  // NO optimistic flip on restore. Rust takes hundreds of ms to resize mpv
-  // from small back to full (Win32 SetWindowPos), while React would
-  // IMMEDIATELY swap AppLayout from corner-mask (mostly opaque) to
+  // NO optimistic flip on restore — ON WINDOWS. Rust takes hundreds of ms
+  // to resize mpv from small back to full (Win32 SetWindowPos), while React
+  // would IMMEDIATELY swap AppLayout from corner-mask (mostly opaque) to
   // full-viewport-mask (entirely invisible). During that gap mpv is still
   // small in the corner; the rest of the WebView is transparent through to
   // the desktop.
@@ -230,7 +233,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // flips to full-player, AppLayout becomes invisible and mpv is already
   // full size — no transparent gap.
   //
-  // Minimize direction still flips optimistically because that gap is
+  // Linux (prexu-hg1j) DOES flip optimistically: restore is a
+  // video-margin-ratio clear that mpv applies within a frame or two —
+  // none of the SetWindowPos latency above — and the webview composites
+  // over our own GLArea, so even the brief gap shows the mini video
+  // expanding, never the desktop. Waiting on the IPC (a blocking
+  // main-thread dispatch on the Rust side) only staged the transition.
+  //
+  // Minimize direction always flips optimistically because that gap is
   // benign — the corner mask exposes a slice of the still-full mpv frame,
   // not desktop transparency.
   const restoreFromMinimize = useCallback(() => {
@@ -242,6 +252,15 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       return;
     }
     logger.info("player:minimize", "restoring");
+    if (IS_LINUX_NATIVE_PLAYER) {
+      setIsMinimized(false);
+      playerExitMinimize()
+        .then(() => logger.info("player:minimize", "restore IPC done (optimistic flip already applied)"))
+        .catch((err) =>
+          logger.error("player:minimize", "exit failed", String(err)),
+        );
+      return;
+    }
     playerExitMinimize()
       .then(() => {
         logger.info("player:minimize", "restore IPC done — isMinimized -> false");

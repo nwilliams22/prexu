@@ -254,3 +254,55 @@ describe("useTransparentWindow", () => {
     expect(document.body.classList.contains(TRANSPARENT_BODY_CLASS)).toBe(false);
   });
 });
+
+// Linux (prexu-hg1j): the busy/ready shield exists for WebView2, where a
+// transparent body mid-transition leaks the OS desktop behind Prexu. On
+// webkitgtk the webview composites over our own GtkGLArea in one window
+// surface, so the class is kept through transitions (no navy flash) and the
+// ready re-add needs no rAF paint-wait. The module reads the platform at
+// import time, so these tests remock engineResolution and re-import.
+describe("useTransparentWindow — Linux single-surface (prexu-hg1j)", () => {
+  async function loadLinuxHook() {
+    vi.resetModules();
+    vi.doMock("./engineResolution", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./engineResolution")>()),
+      IS_LINUX_NATIVE_PLAYER: true,
+    }));
+    const mod = await import("./useTransparentWindow");
+    return mod.useTransparentWindow;
+  }
+
+  it("does NOT drop the class on busy (no desktop to shield)", async () => {
+    const useLinuxHook = await loadLinuxHook();
+    renderHook(() => useLinuxHook(true));
+    await act(async () => {}); // flush listen() registration
+    act(() => {
+      fireReady(); // initial apply
+    });
+    expect(document.body.classList.contains(TRANSPARENT_BODY_CLASS)).toBe(true);
+
+    act(() => {
+      fireBusy();
+    });
+    // Windows would remove here; Linux keeps the video visible through
+    // the whole transition.
+    expect(document.body.classList.contains(TRANSPARENT_BODY_CLASS)).toBe(true);
+  });
+
+  it("re-asserts the class on transition-ready immediately, without the rAF defer", async () => {
+    const useLinuxHook = await loadLinuxHook();
+    renderHook(() => useLinuxHook(true));
+    await act(async () => {});
+    act(() => {
+      fireReady(); // initial apply
+    });
+
+    // Simulate an external drop, then a transition-complete ready.
+    document.body.classList.remove(TRANSPARENT_BODY_CLASS);
+    act(() => {
+      fireReady();
+    });
+    // Added synchronously — no flushTransitionRaf() needed on Linux.
+    expect(document.body.classList.contains(TRANSPARENT_BODY_CLASS)).toBe(true);
+  });
+});

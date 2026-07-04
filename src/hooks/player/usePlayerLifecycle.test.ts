@@ -307,3 +307,40 @@ describe("usePlayerLifecycle — popout unsupported (e.g. Linux native, prexu-ax
     expect(playerSession.stop).toHaveBeenCalledTimes(1);
   });
 });
+
+// Linux (prexu-hg1j): prepareNavAway's early opaque paint shields a WebView2
+// transparent-frame leak of the OS desktop — a Windows-only artifact. On the
+// webkitgtk single-surface path the class is kept so the last video frame
+// holds until the dashboard replaces it (no navy stage in the exit).
+describe("prepareNavAway — Linux single-surface (prexu-hg1j)", () => {
+  it("keeps the transparent-body class on Linux (no early opaque paint)", async () => {
+    vi.resetModules();
+    vi.doMock("./engineResolution", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./engineResolution")>()),
+      SUPPORTS_PLAYER_POPOUT: false,
+      IS_LINUX_NATIVE_PLAYER: true,
+    }));
+    const { usePlayerLifecycle: useLifecycleLinux } = await import("./usePlayerLifecycle");
+
+    const player = makePlayer();
+    const popOut = makePopOut(false);
+    const playerSession = makePlayerSession();
+    document.body.classList.add("player-transparent");
+
+    const { result } = renderHook(() => {
+      const isFullscreenRef = useRef(false);
+      return useLifecycleLinux({ player, popOut, playerSession, isFullscreenRef });
+    });
+
+    await act(async () => {
+      await result.current.prepareNavAway();
+    });
+
+    // Class survives — useTransparentWindow's unmount cleanup still owns
+    // the eventual removal.
+    expect(document.body.classList.contains("player-transparent")).toBe(true);
+    // Fullscreen path unaffected (not fullscreen → no call).
+    expect(player.setFullscreen).not.toHaveBeenCalled();
+    document.body.classList.remove("player-transparent");
+  });
+});
