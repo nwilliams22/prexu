@@ -15,11 +15,14 @@
 //! - `player://eof`                () fired on end-of-file
 //! - `player://error`              String error message
 //! - `player://ready`              () fired once the file is loaded
-//! - `player://host-window-ready`  () fired once the decoder has finished
-//!   setup on a new file (post-PlaybackRestart), meaning mpv has actually
-//!   rendered a frame into the host HWND. The frontend's
-//!   useTransparentWindow defers body.player-transparent until this signal
-//!   to avoid the cold-start flash (prexu-mto).
+//! - `player://host-window-ready`  () fired once per file load when the
+//!   first frame is actually on screen. The frontend's useTransparentWindow
+//!   defers body.player-transparent until this signal to avoid the
+//!   cold-start flash (prexu-mto) and useNativePlayer restores the
+//!   reveal-mute on it. On Windows the emit happens here on the first
+//!   PlaybackRestart (mpv composites into the host HWND itself); on Linux
+//!   the pump only ARMS `linux_compositor`, which emits after the GLArea
+//!   renders the first frame of the load (prexu-91t8).
 
 use std::sync::Arc;
 use std::thread;
@@ -447,10 +450,11 @@ fn should_emit_throttled(now: Instant, last: Instant, throttle: Duration) -> boo
 }
 
 /// Returns `true` on the first PlaybackRestart per file — i.e. when
-/// `hwdec_logged` is still `false`, meaning we have not yet emitted
-/// `player://host-window-ready` for this file load. Subsequent PlaybackRestart
-/// events (seeks) return `false` so the frontend only receives one
-/// host-window-ready signal per file.
+/// `hwdec_logged` is still `false`, meaning we have not yet triggered the
+/// load reveal (`player://host-window-ready` — emitted directly on Windows,
+/// armed into `linux_compositor` on Linux) for this file load. Subsequent
+/// PlaybackRestart events (seeks) return `false` so the frontend only
+/// receives one host-window-ready signal per file.
 ///
 /// The caller sets `hwdec_logged = true` immediately after acting on `true`.
 fn is_first_frame(hwdec_logged: bool) -> bool {
@@ -618,6 +622,12 @@ fn dispatch(
             }
             *hwdec_logged = false;
             *duration_logged = false;
+            // prexu-91t8: a stale first-frame reveal arm from a previous
+            // aborted load must not fire on this load's first — possibly
+            // still black — frame; it is re-armed at this load's first
+            // PlaybackRestart below.
+            #[cfg(target_os = "linux")]
+            crate::player::linux_compositor::disarm_first_frame_ready();
             log::info!("[player:events] FileLoaded → player://ready");
             let _ = app.emit("player://ready", ());
         }
@@ -627,21 +637,39 @@ fn dispatch(
             // selected backend ("d3d11va", "dxva2-copy", "no", etc.). Log
             // once per file so seeks don't spam.
             //
-            // First PlaybackRestart per file is also our signal that mpv
-            // has actually composited a frame into the host HWND. Emit
-            // player://host-window-ready so the frontend's
+            // First PlaybackRestart per file is also the load-reveal signal
+            // (player://host-window-ready): the frontend's
             // useTransparentWindow stops deferring and applies the
-            // transparent body class without exposing the OS desktop
-            // (prexu-mto). Subsequent PlaybackRestart events (e.g. after
-            // a seek) do not need to re-emit — the receiver only listens
-            // once per session.
+            // transparent body class, and useNativePlayer restores the
+            // reveal-mute (prexu-mto). Subsequent PlaybackRestart events
+            // (e.g. after a seek) do not re-emit — the receiver only
+            // listens once per load.
+            //
+            // WHERE the emit happens is per-backend:
+            //   - Windows (HWND host): mpv composites its own frame, and the
+            //     first PlaybackRestart coincides with it — emit directly.
+            //   - Linux (render API, prexu-91t8): mpv composites nothing
+            //     itself; a frame is only on screen once the GtkGLArea
+            //     render handler draws it, ~0.5-1s after PlaybackRestart on
+            //     a cold load. Arm the compositor instead — it emits after
+            //     the first successfully rendered frame of this load.
             if is_first_frame(*hwdec_logged) {
                 let hwdec = mpv.get_property::<String>("hwdec-current")
                     .unwrap_or_else(|_| "<unavailable>".into());
                 log::info!("[player:events] hwdec-current={} (playback-restart)", hwdec);
                 *hwdec_logged = true;
-                log::info!("[player:events] first frame ready → player://host-window-ready");
-                let _ = app.emit("player://host-window-ready", ());
+                #[cfg(not(target_os = "linux"))]
+                {
+                    log::info!("[player:events] first frame ready → player://host-window-ready");
+                    let _ = app.emit("player://host-window-ready", ());
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    log::info!(
+                        "[player:events] first PlaybackRestart → arming compositor first-frame reveal"
+                    );
+                    crate::player::linux_compositor::arm_first_frame_ready(app);
+                }
             }
         }
         Event::EndFile(reason) => {

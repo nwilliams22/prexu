@@ -5,8 +5,10 @@
  * CSS class (`--bg-primary` in styles.css) is the source of truth.
  *
  * The class is DEFERRED on initial mount until either:
- *   - Rust emits `player://host-window-ready` (mpv has decoded + composited
- *     its first frame on the new file), or
+ *   - Rust emits `player://host-window-ready` — the first frame of the new
+ *     file is actually on screen (Windows: mpv composited into the host HWND
+ *     on the first PlaybackRestart; Linux: the GtkGLArea rendered the first
+ *     frame after the event pump armed the reveal, prexu-91t8), or
  *   - The safety-net timeout fires (HOST_READY_FALLBACK_MS).
  *
  * Deferring fixes prexu-mto: previously the class was added synchronously on
