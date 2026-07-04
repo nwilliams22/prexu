@@ -1,13 +1,38 @@
 //! Pop-out player commands.
 //!
 //! Floating mini-window mode: shrinks the whole Tauri main window down to a
-//! corner of the user's current display, sets always-on-top, and resyncs the
-//! mpv host window. Distinct from the in-window "minimize" mode which keeps
-//! the main window full size but renders the player chrome in a small corner
-//! region of the WebView.
+//! corner of the user's current display, sets always-on-top, and (Windows)
+//! resyncs the mpv host window. Distinct from the in-window "minimize" mode
+//! which keeps the main window full size but renders the player chrome in a
+//! small corner region of the WebView.
+//!
+//! ## Platform split
+//! - **Windows**: Win32 geometry (`GetWindowRect`/`SetWindowPos` — exact
+//!   outer-rect round-trip past Win11's invisible DWM borders) plus
+//!   monitor-by-device-name persistence (prexu-ajn) via `win32_monitor`.
+//! - **Linux** (prexu-axj4.10): the same main-window morph through Tauri/GTK
+//!   window ops. The render-API compositor draws into a GLArea that fills
+//!   the window (`player::linux_compositor`), so there is no host window to
+//!   reposition and no geometry resync — GTK's allocation drives the video
+//!   size automatically. The persisted corner/size store is shared with
+//!   Windows (same file + keys); monitor persistence is not ported — the
+//!   popout opens on the monitor the main window is currently on.
+//!
+//! ## Wayland caveats (X11 has full parity)
+//! - `set_position` / `outer_position` are no-ops / meaningless (the
+//!   protocol has no global window coordinates), so corner placement and
+//!   nearest-corner persistence are skipped — the window shrinks in place
+//!   and the user drags it where they want it (PopoutDragStrip's
+//!   `data-tauri-drag-region` → `gtk_window_begin_move_drag` works on both
+//!   backends).
+//! - `set_always_on_top` (`gtk_window_set_keep_above`) is ignored by most
+//!   Wayland compositors; users can pin the window compositor-side (e.g.
+//!   GNOME's window menu → Always on Top).
+//!
+//! Size + decoration changes work on both backends, so the popout is fully
+//! usable on Wayland — it just floats without OS-level pinning.
 
 use tauri::{AppHandle, Emitter, Manager, State};
-#[cfg(target_os = "windows")]
 use tauri_plugin_store::StoreExt;
 
 use crate::player::{MinimizeCorner, PlayerState};
@@ -19,11 +44,8 @@ use super::win32_monitor::{decode_device_name, monitor_info, resync_host, work_a
 /// so the Rust-side state and the frontend's secure data don't share a file
 /// lock. Existing users without a stored entry fall back to the defaults
 /// (bottom-right, 480×270) on first pop-out.
-#[cfg(target_os = "windows")]
 const POPOUT_STORE_PATH: &str = "popout-player.json";
-#[cfg(target_os = "windows")]
 const POPOUT_KEY_CORNER: &str = "popout.corner";
-#[cfg(target_os = "windows")]
 const POPOUT_KEY_SIZE: &str = "popout.size";
 /// Persists the monitor the user last had the popout on.
 /// Schema: `{ "device_name": "\\\\.\\DISPLAY1", "work_area": [x, y, w, h] }`
@@ -36,23 +58,18 @@ const POPOUT_KEY_SIZE: &str = "popout.size";
 #[cfg(target_os = "windows")]
 const POPOUT_KEY_MONITOR: &str = "popout.monitor";
 
-#[cfg(target_os = "windows")]
 const POPOUT_DEFAULT_CORNER: &str = "bottom-right";
-#[cfg(target_os = "windows")]
 const POPOUT_DEFAULT_WIDTH: u32 = 480;
-#[cfg(target_os = "windows")]
 const POPOUT_DEFAULT_HEIGHT: u32 = 270;
 
-/// Thin accessor for the three pop-out store keys. Wraps the key-string
+/// Thin accessor for the pop-out store keys. Wraps the key-string
 /// constants so call sites name what they're reading/writing rather than
 /// repeating raw string literals. All methods are zero-cost (inline).
 ///
 /// Testable: `key_*` methods are pure; JSON round-trips are tested in
 /// the `tests` module below.
-#[cfg(target_os = "windows")]
 pub(crate) struct PopoutStore;
 
-#[cfg(target_os = "windows")]
 impl PopoutStore {
     pub(crate) fn path() -> &'static str {
         POPOUT_STORE_PATH
@@ -63,6 +80,9 @@ impl PopoutStore {
     pub(crate) fn key_size() -> &'static str {
         POPOUT_KEY_SIZE
     }
+    /// Monitor persistence is Windows-only (prexu-ajn) — Linux opens the
+    /// popout on the main window's current monitor.
+    #[cfg(target_os = "windows")]
     pub(crate) fn key_monitor() -> &'static str {
         POPOUT_KEY_MONITOR
     }
@@ -267,7 +287,6 @@ pub(crate) fn find_monitor_by_name(target_name: &str) -> Option<(i32, i32, i32, 
 /// serde deserializes directly into `MinimizeCorner` via `#[serde(rename_all =
 /// "kebab-case")]`. Unknown strings (corrupted store, future migration) fall
 /// back to `BottomRight` with a warning so the app keeps working.
-#[cfg(target_os = "windows")]
 fn load_persisted_popout(app: &AppHandle) -> (MinimizeCorner, u32, u32) {
     let mut corner = MinimizeCorner::BottomRight;
     let mut width = POPOUT_DEFAULT_WIDTH;
@@ -418,7 +437,6 @@ fn write_window_rect(
 // reason: geometry helper taking window + work-area rect endpoints; grouping
 // into structs would obscure the endpoint-by-endpoint corner comparison
 #[allow(clippy::too_many_arguments)]
-#[cfg(target_os = "windows")]
 fn nearest_corner(
     x: i32,
     y: i32,
@@ -463,7 +481,6 @@ fn nearest_corner(
 /// Compute the (x, y) origin for a `(width, height)` window snapped to
 /// `corner` of the work area `(wx, wy, ww, wh)`. Width/height are clamped
 /// against the work-area dimensions so a too-large request still fits.
-#[cfg(target_os = "windows")]
 fn corner_origin(
     corner: MinimizeCorner,
     width: u32,
@@ -854,35 +871,262 @@ pub async fn player_exit_popout(
     Ok(())
 }
 
-// NOTE: this stub is currently DEAD CODE / never compiled. `commands::popout`
-// itself is declared `#[cfg(target_os = "windows")]` in `commands/mod.rs`
-// (pop-out — a floating, always-on-top mini window — has no Linux port yet,
-// deferred to prexu-axj4.10; unlike in-window minimize, which IS ported on
-// Linux via video-margin-ratio-*, see `commands::minimize`), so this whole
-// file — including the `#[cfg(not(windows))]` branch below — only compiles
-// under Windows regardless of what this cfg says. Kept here, unregistered,
-// as the intended shape for a future Linux pop-out port: once `commands::popout`
-// is un-gated for Linux, this stub would return a clear IPC error instead of
-// "command not found" until the real implementation lands.
-#[cfg(not(target_os = "windows"))]
+// ── Linux implementation (prexu-axj4.10) ───────────────────────────────────
+//
+// Same UX as the Windows commands above, driven through Tauri/GTK window ops.
+// See the module docs for the platform split and the Wayland caveats.
+
+/// True when the app is running on a Wayland session (and not forced onto
+/// X11/XWayland via `GDK_BACKEND=x11`). Env-var heuristic: authoritative
+/// backend detection needs the GTK display type on the main thread, and the
+/// decisions this gates are benign on a mis-detect (a skipped corner
+/// persistence or a harmless no-op move request).
+#[cfg(target_os = "linux")]
+fn linux_is_wayland() -> bool {
+    if std::env::var("GDK_BACKEND")
+        .map(|v| v.contains("x11"))
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    std::env::var("WAYLAND_DISPLAY").is_ok()
+        || std::env::var("XDG_SESSION_TYPE")
+            .map(|v| v == "wayland")
+            .unwrap_or(false)
+}
+
+/// Work area (physical px) of the monitor the main window is currently on.
+/// Tauri's `Monitor::work_area()` subtracts docked panels on X11; on Wayland
+/// it equals the monitor geometry, which is fine — there it only clamps the
+/// popout size (placement is skipped, see module docs).
+#[cfg(target_os = "linux")]
+fn linux_work_area(main: &tauri::WebviewWindow) -> Result<(i32, i32, i32, i32), String> {
+    let monitor = main
+        .current_monitor()
+        .map_err(|e| format!("current_monitor failed: {e}"))?
+        .ok_or_else(|| "no monitor for main window".to_string())?;
+    let wa = monitor.work_area();
+    let (x, y, w, h) = (
+        wa.position.x,
+        wa.position.y,
+        wa.size.width as i32,
+        wa.size.height as i32,
+    );
+    log::debug!("[player:popout] current-monitor work area = ({x},{y},{w}x{h})");
+    Ok((x, y, w, h))
+}
+
+/// Enter pop-out mode (Linux): same contract as the Windows command above —
+/// `Option` args mean "use the persisted geometry", the pre-pop-out geometry
+/// is stashed in `PlayerState::pre_popout_geometry` for `player_exit_popout`
+/// to restore.
+#[cfg(target_os = "linux")]
 #[tauri::command]
 pub async fn player_enter_popout(
-    _corner: Option<crate::player::MinimizeCorner>,
-    _width: Option<u32>,
-    _height: Option<u32>,
+    corner: Option<MinimizeCorner>,
+    width: Option<u32>,
+    height: Option<u32>,
+    app: AppHandle,
+    state: State<'_, PlayerState>,
 ) -> Result<(), String> {
-    log::warn!("[player:cmd] enter_popout called on non-Windows platform");
-    Err("pop-out mode is only supported on Windows for now (prexu-axj4.10)".into())
+    let (saved_corner, saved_w, saved_h) = load_persisted_popout(&app);
+    let corner = corner.unwrap_or(saved_corner);
+    let width = width.unwrap_or(saved_w);
+    let height = height.unwrap_or(saved_h);
+    log::info!(
+        "[player:cmd] enter_popout (linux) corner={:?} size={}x{} wayland={}",
+        corner,
+        width,
+        height,
+        linux_is_wayland()
+    );
+    let main = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main webview window not found".to_string())?;
+
+    // Pop-out and minimize are mutually exclusive (same frontend race as the
+    // Windows command — see its doc). On Linux "minimize" is a set of
+    // video-margin-ratio insets, so clear both the snapshot and the live
+    // margins authoritatively before the popout geometry applies.
+    if state.get_minimize().is_some() {
+        log::debug!("[player:popout] clearing leftover minimize inset on enter");
+        let _ = state.set_minimize(None);
+        crate::player::linux_compositor::clear_margins_now(&app);
+    }
+
+    // Stash the current geometry for exit_popout. inner_size (client area)
+    // round-trips symmetrically through set_size; outer_size would grow the
+    // window by the frame extents on every enter/exit cycle under X11
+    // server-side decorations (same bug class as the Win11 ~7px drift the
+    // Windows path solves with GetWindowRect). On Wayland the position is
+    // meaningless, but the restore's set_position is a no-op there too, so
+    // stashing whatever the backend reports is harmless.
+    let pos = main.outer_position().map(|p| (p.x, p.y)).unwrap_or_else(|e| {
+        log::warn!("[player:popout] outer_position for stash failed: {e}");
+        (0, 0)
+    });
+    let size = main
+        .inner_size()
+        .map_err(|e| format!("inner_size for stash failed: {e}"))?;
+    if let Ok(mut g) = state.pre_popout_geometry.lock() {
+        *g = Some((pos.0, pos.1, size.width, size.height));
+        log::debug!(
+            "[player:popout] stashed pre-popout geometry ({},{},{}x{})",
+            pos.0,
+            pos.1,
+            size.width,
+            size.height
+        );
+    }
+
+    let (wx, wy, ww, wh) = linux_work_area(&main)?;
+    let (x, y, w, h) = corner_origin(corner, width, height, wx, wy, ww, wh);
+
+    // keep-above is best-effort: real on X11, ignored by most Wayland
+    // compositors (no protocol for it) — log, don't fail the command.
+    if let Err(e) = main.set_always_on_top(true) {
+        log::warn!("[player:popout] set_always_on_top(true) failed: {e}");
+    }
+    main.set_decorations(false)
+        .map_err(|e| format!("popout set_decorations(false) failed: {e}"))?;
+    main.set_size(tauri::PhysicalSize::new(w, h))
+        .map_err(|e| format!("popout resize failed: {e}"))?;
+    if let Err(e) = main.set_position(tauri::PhysicalPosition::new(x, y)) {
+        // X11 places the corner; Wayland ignores the request (shrink-in-place).
+        log::warn!("[player:popout] set_position failed: {e}");
+    }
+    log::debug!("[player:popout] resized main to ({x},{y},{w}x{h})");
+
+    // No host resync (a Windows-only concept): the GLArea render target
+    // follows the GTK allocation change from set_size automatically.
+
+    // Persist the chosen corner + size for next session (same store + keys
+    // as Windows). A failure here is not fatal.
+    match app.store(PopoutStore::path()) {
+        Ok(store) => {
+            let corner_str = serde_json::to_value(corner)
+                .unwrap_or_else(|_| serde_json::Value::String(POPOUT_DEFAULT_CORNER.to_string()));
+            store.set(PopoutStore::key_corner(), corner_str);
+            store.set(
+                PopoutStore::key_size(),
+                serde_json::json!({ "width": w, "height": h }),
+            );
+            if let Err(e) = store.save() {
+                log::warn!("[player:popout] store save failed: {:?}", e);
+            } else {
+                log::debug!("[player:popout] persisted corner={:?} size={}x{}", corner, w, h);
+            }
+        }
+        Err(e) => log::warn!("[player:popout] store open failed: {:?}", e),
+    }
+
+    Ok(())
 }
 
-#[cfg(not(target_os = "windows"))]
+/// Exit pop-out mode (Linux): persist the user's current size (+ nearest
+/// corner when the backend reports real coordinates — X11), clear
+/// always-on-top, and restore the stashed pre-pop-out geometry.
+#[cfg(target_os = "linux")]
 #[tauri::command]
-pub async fn player_exit_popout() -> Result<(), String> {
-    log::warn!("[player:cmd] exit_popout called on non-Windows platform");
-    Err("pop-out mode is only supported on Windows for now (prexu-axj4.10)".into())
+pub async fn player_exit_popout(
+    app: AppHandle,
+    state: State<'_, PlayerState>,
+) -> Result<(), String> {
+    log::info!("[player:cmd] exit_popout (linux)");
+    // busy/ready bracket kept for the cross-platform prexu-7d3 contract;
+    // Linux's useTransparentWindow deliberately ignores busy (prexu-hg1j).
+    let _ = app.emit("player://host-window-busy", ());
+    let main = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main webview window not found".to_string())?;
+
+    // Persist the user's drag/resize BEFORE restoring, so the next enter
+    // reopens where they left it — same round-trip as Windows. On Wayland
+    // the position is meaningless: persist only the size and keep the
+    // previously persisted corner.
+    if let Ok(size) = main.inner_size() {
+        let detected_corner = if linux_is_wayland() {
+            None
+        } else {
+            match (main.outer_position(), linux_work_area(&main)) {
+                (Ok(pos), Ok((wx, wy, ww, wh))) => Some(nearest_corner(
+                    pos.x,
+                    pos.y,
+                    size.width as i32,
+                    size.height as i32,
+                    wx,
+                    wy,
+                    ww,
+                    wh,
+                )),
+                _ => {
+                    log::warn!("[player:popout] exit: position/work-area unavailable, corner persistence skipped");
+                    None
+                }
+            }
+        };
+        match app.store(PopoutStore::path()) {
+            Ok(store) => {
+                if let Some(c) = detected_corner {
+                    let corner_str = serde_json::to_value(c).unwrap_or_else(|_| {
+                        serde_json::Value::String(POPOUT_DEFAULT_CORNER.to_string())
+                    });
+                    store.set(PopoutStore::key_corner(), corner_str);
+                }
+                store.set(
+                    PopoutStore::key_size(),
+                    serde_json::json!({ "width": size.width, "height": size.height }),
+                );
+                if let Err(e) = store.save() {
+                    log::warn!("[player:popout] resize-on-exit save failed: {:?}", e);
+                } else {
+                    log::info!(
+                        "[player:popout] persisted exit geometry corner={:?} size={}x{}",
+                        detected_corner,
+                        size.width,
+                        size.height
+                    );
+                }
+            }
+            Err(e) => log::warn!("[player:popout] resize-on-exit store open failed: {:?}", e),
+        }
+    }
+
+    if let Err(e) = main.set_always_on_top(false) {
+        log::warn!("[player:popout] set_always_on_top(false) failed: {e}");
+    }
+
+    let stash = state
+        .pre_popout_geometry
+        .lock()
+        .ok()
+        .and_then(|mut g| g.take());
+
+    let Some((x, y, w, h)) = stash else {
+        log::debug!("[player:popout] exit_popout: no stash, only cleared always-on-top");
+        let _ = app.emit("player://host-window-ready", ());
+        return Ok(());
+    };
+
+    main.set_decorations(true)
+        .map_err(|e| format!("popout set_decorations(true) failed: {e}"))?;
+    main.set_size(tauri::PhysicalSize::new(w, h))
+        .map_err(|e| format!("popout restore resize failed: {e}"))?;
+    if let Err(e) = main.set_position(tauri::PhysicalPosition::new(x, y)) {
+        log::warn!("[player:popout] restore set_position failed: {e}");
+    }
+    log::debug!("[player:popout] restored main to ({x},{y},{w}x{h})");
+
+    // Transition complete — re-arm the transparent body class (prexu-7d3).
+    let _ = app.emit("player://host-window-ready", ());
+
+    Ok(())
 }
 
-#[cfg(all(test, target_os = "windows"))]
+// Pure geometry + store-key tests run on both platforms (the helpers are
+// shared since the Linux port, prexu-axj4.10); only the monitor-persistence
+// key accessor is Windows-gated.
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1128,15 +1372,21 @@ mod tests {
         assert_eq!(PopoutStore::key_size(), POPOUT_KEY_SIZE);
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn popout_store_key_monitor_matches_constant() {
         assert_eq!(PopoutStore::key_monitor(), POPOUT_KEY_MONITOR);
     }
 
     #[test]
-    fn popout_store_keys_are_distinct() {
-        // Guard against accidental aliasing between the three keys.
+    fn popout_store_corner_and_size_keys_are_distinct() {
         assert_ne!(PopoutStore::key_corner(), PopoutStore::key_size());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn popout_store_monitor_key_is_distinct() {
+        // Guard against accidental aliasing with the monitor key (Windows-only).
         assert_ne!(PopoutStore::key_corner(), PopoutStore::key_monitor());
         assert_ne!(PopoutStore::key_size(), PopoutStore::key_monitor());
     }
