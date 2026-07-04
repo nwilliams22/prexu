@@ -120,12 +120,6 @@ vi.mock("../../services/plex-playback", () => ({
   reportTimeline: vi.fn(),
   getSavedVolume: () => 1,
   saveVolume: vi.fn(),
-  // Real-shaped localStorage impls (prexu-jphh) so the A3 persistence tests
-  // can seed prexu_muted and observe toggleMute's writes through the mock.
-  getSavedMuted: () => localStorage.getItem("prexu_muted") === "true",
-  saveMuted: vi.fn((muted: boolean) => {
-    localStorage.setItem("prexu_muted", String(muted));
-  }),
 }));
 
 vi.mock("../../services/storage", () => ({
@@ -170,9 +164,6 @@ import {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  // Mute is persisted to localStorage (prexu-jphh) — clear it so a test's
-  // toggleMute can't leak a saved mute into a later test's fresh mount.
-  localStorage.clear();
   for (const k of Object.keys(eventHandlers)) delete eventHandlers[k];
   // restoreMocks wipes vi.fn impls between tests; re-install the listen
   // capture so player://* subscriptions keep landing in eventHandlers.
@@ -913,6 +904,30 @@ describe("useNativePlayer dispatch contract (prexu-ve9)", () => {
   });
 });
 
+// ── Mute scope: per-session by design (prexu-jphh) ──────────────────────────
+//
+// DESIGN DECISION (bd memory player-mute-scope-decision): mute carries across
+// episode handoff/autoplay WITHIN one player session (same mount — see the
+// reveal-mute test "(a) keeps the user muted across the reveal" below), but a
+// stop unmounts the hook and the next session deliberately starts unmuted.
+// Mute is NOT persisted like volume — PR #38 tried and was reverted. This
+// test pins the reset so persistence isn't reintroduced by accident.
+describe("mute scope (prexu-jphh)", () => {
+  it("a fresh session starts unmuted even when the previous session ended muted", async () => {
+    const first = renderHook(() => useNativePlayer("ep1"));
+    act(() => {
+      first.result.current.toggleMute();
+    });
+    expect(first.result.current.isMuted).toBe(true);
+    // User stops playback — the player (and this hook) unmounts.
+    first.unmount();
+
+    // Next play (same or different item) is a brand-new session: unmuted.
+    const second = renderHook(() => useNativePlayer("ep2"));
+    expect(second.result.current.isMuted).toBe(false);
+  });
+});
+
 // ── Linux-only reveal-mute workaround (prexu-axj4.5) ────────────────────────
 //
 // On Linux native, ~1s of audio is audible under the loading screen before
@@ -1070,51 +1085,6 @@ describe("Linux-only reveal-mute workaround (prexu-axj4.5)", () => {
 
     // The LAST toggle (unmuted) is what gets applied at reveal.
     expect(mutedInvokeCalls()).toEqual([true, false]);
-  });
-
-  it("(d) A3: persisted mute survives stop → next play — fresh mount starts muted and the reveal restore keeps it", async () => {
-    const useNativePlayerLinux = await loadLinuxNativePlayer();
-    // Previous session: the user muted (saveMuted(true)) and then STOPPED
-    // the item, unmounting the hook. This mount is the "next play".
-    localStorage.setItem("prexu_muted", "true");
-
-    const { result } = renderHook(() => useNativePlayerLinux("next-ep"));
-    // The new session initializes muted from storage, not a hardcoded false.
-    expect(result.current.isMuted).toBe(true);
-
-    await waitFor(() => {
-      expect(eventHandlers["player://host-window-ready"]?.length ?? 0).toBeGreaterThan(0);
-    });
-    act(() => {
-      fireHostWindowReady();
-    });
-
-    // The reveal restore applies the persisted TRUE — it must not unmute.
-    const finalCalls = mutedInvokeCalls();
-    expect(finalCalls[finalCalls.length - 1]).toBe(true);
-    expect(result.current.isMuted).toBe(true);
-  });
-
-  it("(e) toggleMute persists the choice for the next session", async () => {
-    const useNativePlayerLinux = await loadLinuxNativePlayer();
-    const { result } = renderHook(() => useNativePlayerLinux("123"));
-
-    await waitFor(() => {
-      expect(eventHandlers["player://host-window-ready"]?.length ?? 0).toBeGreaterThan(0);
-    });
-    act(() => {
-      fireHostWindowReady();
-    });
-
-    act(() => {
-      result.current.toggleMute(); // false -> true
-    });
-    expect(localStorage.getItem("prexu_muted")).toBe("true");
-
-    act(() => {
-      result.current.toggleMute(); // true -> false
-    });
-    expect(localStorage.getItem("prexu_muted")).toBe("false");
   });
 
   it("(c) re-arms per load across consecutive episode loads (autoplay path)", async () => {
