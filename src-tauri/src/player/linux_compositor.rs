@@ -325,6 +325,31 @@ pub(crate) fn should_pump(paused: bool, idle_active: bool) -> bool {
     !paused && !idle_active
 }
 
+/// Subtitle compensation for the margin-based mini mode (prexu-91k4).
+/// Returns `(sub-scale, sub-use-margins)` for a given margin-ratio tuple.
+///
+/// mpv's subtitle/OSD layer ignores `video-margin-ratio-*`: it keeps sizing
+/// text against the full render surface (`sub-scale-with-window`) and may
+/// render into the margins (`sub-use-margins`, default yes). On Windows the
+/// mini player is a genuinely small host window so subs scale naturally; the
+/// Linux parity factor is the mini video's HEIGHT fraction of the surface
+/// (`1 - top - bottom`) — exactly what `sub-scale-with-window` would apply if
+/// the window itself were mini-height. Width margins don't matter: mpv sizes
+/// text by height. `sub-use-margins=no` keeps the (now correctly small) text
+/// inside the video rect instead of the surface-bottom margin.
+///
+/// Zero ratios (not minimized / cleared) restore mpv defaults `(1.0, yes)`.
+/// The floor mirrors `MAX_MARGIN_RATIO` in `commands::minimize`: axis sums
+/// are clamped to 0.99 there, so the height fraction is never below 0.01 —
+/// the clamp here only guards against a degenerate tuple reaching us anyway.
+pub(crate) fn sub_compensation(ratios: (f64, f64, f64, f64)) -> (f64, bool) {
+    let (_left, _right, top, bottom) = ratios;
+    if ratios == (0.0, 0.0, 0.0, 0.0) {
+        return (1.0, true);
+    }
+    ((1.0 - top - bottom).clamp(0.01, 1.0), false)
+}
+
 /// Clear (empty) the opaque region of a widget's GdkWindow so GDK and the
 /// compositor alpha-blend the whole widget instead of fast-pathing "opaque"
 /// areas from a retained buffer. Called on the webview at realize and after
@@ -635,11 +660,12 @@ pub fn detach_mpv(app: &AppHandle) {
 // computes the four ratios (pure, unit-tested); the functions below apply
 // them to the live mpv handle from the GTK main thread.
 
-/// Apply mpv's `video-margin-ratio-*` properties, if attached. Panic-free
-/// (`try_borrow`, logged early-return) — called both from a main-thread
-/// dispatch (`apply_margins_now`/`clear_margins_now`) and directly from the
-/// GLArea `resize` signal handler below, both of which already run on the
-/// GTK main thread.
+/// Apply mpv's `video-margin-ratio-*` properties plus the matching subtitle
+/// compensation (`sub-scale` / `sub-use-margins`, prexu-91k4), if attached.
+/// Panic-free (`try_borrow`, logged early-return) — called both from a
+/// main-thread dispatch (`apply_margins_now`/`clear_margins_now`) and
+/// directly from the GLArea `resize` signal handler below, both of which
+/// already run on the GTK main thread.
 fn apply_margin_ratios(comp: &Compositor, ratios: (f64, f64, f64, f64)) {
     let Ok(mb) = comp.mpv.try_borrow() else {
         log::warn!("[player:linux] apply_margin_ratios: mpv slot busy, skipped");
@@ -660,8 +686,20 @@ fn apply_margin_ratios(comp: &Compositor, ratios: (f64, f64, f64, f64)) {
             log::error!("[player:linux] set_property({name}, {value:.4}) failed: {e:?}");
         }
     }
+    // prexu-91k4: margins move the video but NOT mpv's subtitle layer, which
+    // keeps rendering at full-surface scale (and into the margins). Scale
+    // subs to the mini video height and pin them inside the video rect;
+    // zero ratios restore the defaults. Composes with the user's sub style:
+    // apply_sub_style drives sub-font-size, this multiplies via sub-scale.
+    let (sub_scale, use_margins) = sub_compensation(ratios);
+    if let Err(e) = mpv.set_property("sub-scale", sub_scale) {
+        log::error!("[player:linux] set_property(sub-scale, {sub_scale:.4}) failed: {e:?}");
+    }
+    if let Err(e) = mpv.set_property("sub-use-margins", use_margins) {
+        log::error!("[player:linux] set_property(sub-use-margins, {use_margins}) failed: {e:?}");
+    }
     log::debug!(
-        "[player:linux] video-margin-ratio applied left={left:.4} right={right:.4} top={top:.4} bottom={bottom:.4}"
+        "[player:linux] video-margin-ratio applied left={left:.4} right={right:.4} top={top:.4} bottom={bottom:.4} sub-scale={sub_scale:.4} sub-use-margins={use_margins}"
     );
 }
 
@@ -1007,7 +1045,7 @@ fn try_create_render_context(comp: &Rc<Compositor>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{engine_failure_reason, fbo_dimensions, should_pump};
+    use super::{engine_failure_reason, fbo_dimensions, should_pump, sub_compensation};
 
     #[test]
     fn fbo_dimensions_scale_1_is_identity() {
@@ -1053,6 +1091,39 @@ mod tests {
     #[test]
     fn should_pump_false_when_paused_and_idle() {
         assert!(!should_pump(true, true));
+    }
+
+    #[test]
+    fn sub_compensation_defaults_when_not_minimized() {
+        // Zero ratios = not minimized (or margins just cleared): mpv defaults.
+        assert_eq!(sub_compensation((0.0, 0.0, 0.0, 0.0)), (1.0, true));
+    }
+
+    #[test]
+    fn sub_compensation_scales_by_mini_height_fraction() {
+        // 1600×900 window, 480×270 mini, 16px padding, bottom-right corner:
+        // top = (900-270-16)/900, bottom = 16/900 → video height 270/900 = 0.3.
+        let top = (900.0 - 270.0 - 16.0) / 900.0;
+        let bottom = 16.0 / 900.0;
+        let (scale, use_margins) = sub_compensation((0.69, 0.01, top, bottom));
+        assert!((scale - 0.3).abs() < 1e-9);
+        assert!(!use_margins);
+    }
+
+    #[test]
+    fn sub_compensation_ignores_width_margins() {
+        // mpv sizes subtitle text by height; only the height axis matters.
+        let (scale, _) = sub_compensation((0.9, 0.05, 0.25, 0.25));
+        assert!((scale - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn sub_compensation_clamps_degenerate_height_margins() {
+        // Height margins summing past 1.0 (can't happen via MAX_MARGIN_RATIO,
+        // guarded anyway) must not produce a non-positive scale.
+        let (scale, use_margins) = sub_compensation((0.0, 0.0, 0.7, 0.7));
+        assert!((scale - 0.01).abs() < 1e-9);
+        assert!(!use_margins);
     }
 
     #[test]
