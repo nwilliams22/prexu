@@ -40,6 +40,7 @@
 import { useLayoutEffect } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { logger } from "../../services/logger";
+import { IS_LINUX_NATIVE_PLAYER } from "./engineResolution";
 
 export const TRANSPARENT_BODY_CLASS = "player-transparent";
 
@@ -108,24 +109,43 @@ export function useTransparentWindow(active: boolean): void {
     // Drop the transparent class so the navy body bg fills the WebView
     // while the dashboard / detail page paints. No-op if we haven't
     // applied the initial class yet (mpv hasn't shown a frame).
+    //
+    // Linux (prexu-hg1j): the shield is skipped entirely. It exists
+    // because WebView2 sits in front of the OS desktop — a transparent
+    // body mid-transition leaks whatever window is behind Prexu. On
+    // webkitgtk the webview is composited over our own GtkGLArea in ONE
+    // window surface, so a transparent body only ever exposes the video
+    // layer; dropping the class here just inserted a navy flash into
+    // every transition.
     const onBusy = () => {
       if (cancelled || !initialApplied) return;
+      if (IS_LINUX_NATIVE_PLAYER) {
+        logger.debug("player:transparent", "busy ignored (linux — no desktop to shield)");
+        return;
+      }
       cancelPendingReady();
       removeClass("transition-busy");
     };
 
     // host-window-ready serves two roles:
-    //   1. Initial-frame signal from events.rs (first PlaybackRestart per
-    //      file) — drives the initial defer.
+    //   1. Initial-frame signal (first frame on screen — Windows: first
+    //      PlaybackRestart in events.rs; Linux: first rendered GLArea
+    //      frame, prexu-91t8) — drives the initial defer.
     //   2. Transition-complete signal from popout/minimize commands —
     //      drives the re-add after a busy/ready pair.
     // For #2 we defer the re-add by two rAF + sync layout read so
     // WebView2 commits the underlying route's paint before transparency
-    // returns (same trick as prexu-uzk's dashboard reflow fix).
+    // returns (same trick as prexu-uzk's dashboard reflow fix). On Linux
+    // the class was never dropped (onBusy no-ops, prexu-hg1j) — just
+    // re-assert it immediately, no paint to wait for.
     const onReady = () => {
       if (cancelled) return;
       if (!initialApplied) {
         initialApply("event");
+        return;
+      }
+      if (IS_LINUX_NATIVE_PLAYER) {
+        addClass("transition-ready");
         return;
       }
       cancelPendingReady();

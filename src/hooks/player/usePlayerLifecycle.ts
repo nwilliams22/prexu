@@ -15,7 +15,10 @@
 
 import { useCallback, useMemo } from "react";
 import type { UsePlayerResult } from "../usePlayer";
-import { SUPPORTS_PLAYER_POPOUT } from "./engineResolution";
+import {
+  SUPPORTS_PLAYER_POPOUT,
+  IS_LINUX_NATIVE_PLAYER,
+} from "./engineResolution";
 import type { UsePopOutPlayerResult } from "./usePopOutPlayer";
 import type { PlayerSessionContextValue } from "../../contexts/PlayerContext";
 import { logger } from "../../services/logger";
@@ -94,8 +97,19 @@ export function usePlayerLifecycle({
   // No-op on HTML5: the class is never added there (useTransparentWindow
   // is gated on the resolved engine being "native" inside PlayerOverlay —
   // see engineResolution.ts, prexu-axj4.4).
+  //
+  // Linux (prexu-hg1j): the early opaque paint is skipped. Both paragraphs
+  // above describe a WebView2 artifact — a transparent frame during the
+  // swap leaks the OS DESKTOP behind Prexu. On webkitgtk the webview
+  // composites over our own GtkGLArea in one window surface, so a
+  // transparent body only ever exposes the video layer; painting navy here
+  // just staged the exit (last frame → navy → dashboard) instead of
+  // letting the last frame hold until the dashboard replaces it. The
+  // unmount cleanup in useTransparentWindow still removes the class.
   const prepareNavAway = useCallback(async () => {
-    document.body.classList.remove(TRANSPARENT_BODY_CLASS);
+    if (!IS_LINUX_NATIVE_PLAYER) {
+      document.body.classList.remove(TRANSPARENT_BODY_CLASS);
+    }
     await exitFullscreenIfActive();
   }, [exitFullscreenIfActive]);
 

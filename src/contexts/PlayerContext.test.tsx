@@ -313,6 +313,67 @@ describe("PlayerContext split (prexu-ii3) — session vs minimize identity", () 
   });
 });
 
+// Linux (prexu-hg1j): restore flips optimistically — mpv's margin clear
+// lands within a frame or two (no Win32 SetWindowPos latency) and the
+// webview composites over our own GLArea, so waiting on the IPC before the
+// React flip only staged the transition.
+describe("PlayerContext — Linux optimistic restore (prexu-hg1j)", () => {
+  it("restoreFromMinimize() flips isMinimized immediately, before the exit IPC resolves", async () => {
+    vi.resetModules();
+    vi.doMock("../hooks/player/engineResolution", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../hooks/player/engineResolution")>()),
+      SUPPORTS_PLAYER_MINIMIZE: true,
+      IS_LINUX_NATIVE_PLAYER: true,
+    }));
+    const {
+      PlayerProvider: PlayerProviderLinux,
+      usePlayerSession: useSessionLinux,
+      usePlayerMinimize: useMinimizeLinux,
+    } = await import("./PlayerContext");
+    const playerServiceLinux = await import("../services/player");
+
+    // Exit IPC that never resolves during the test — the flip must not
+    // wait for it.
+    let resolveExit!: () => void;
+    vi.mocked(playerServiceLinux.playerExitMinimize).mockReturnValueOnce(
+      new Promise<void>((r) => {
+        resolveExit = r;
+      }),
+    );
+
+    const wrapperLinux = ({ children }: { children: ReactNode }) => (
+      <PlayerProviderLinux>{children}</PlayerProviderLinux>
+    );
+    const useBothLinux = () => {
+      const session = useSessionLinux();
+      const minimize = useMinimizeLinux();
+      return { ...session, ...minimize };
+    };
+
+    const { result } = renderHook(useBothLinux, { wrapper: wrapperLinux });
+
+    await act(async () => {
+      result.current.minimize();
+      await Promise.resolve();
+    });
+    expect(result.current.isMinimized).toBe(true);
+
+    act(() => {
+      result.current.restoreFromMinimize();
+    });
+
+    // Flipped synchronously — the pending IPC promise has NOT resolved.
+    expect(result.current.isMinimized).toBe(false);
+    expect(playerServiceLinux.playerExitMinimize).toHaveBeenCalledTimes(1);
+
+    // Settle the pending promise so nothing leaks past the test.
+    await act(async () => {
+      resolveExit();
+      await Promise.resolve();
+    });
+  });
+});
+
 describe("PlayerContext — minimize unsupported (e.g. HTML5 fallback / non-native, prexu-axj4.5)", () => {
   it("minimize() and restoreFromMinimize() no-op without invoking IPC", async () => {
     vi.resetModules();
