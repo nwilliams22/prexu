@@ -18,19 +18,22 @@ pub struct PlexIdentity {
 /// Validate a Plex auth token by calling the Plex API.
 /// Returns the verified username and thumb from Plex (not client-supplied).
 ///
+/// `client` is the process-shared `AppState::http` client (prexu-0szx.12) —
+/// this runs once per WebSocket connect, and a per-call `Client::new()`
+/// paid a fresh TLS handshake to plex.tv every time.
+///
 /// When compiled with the `test-mode` feature, auth validation is bypassed
 /// and the token is treated as the username (for integration testing only).
 #[allow(unreachable_code)]
-pub async fn validate_plex_token(token: &str) -> Option<PlexIdentity> {
+pub async fn validate_plex_token(token: &str, client: &reqwest::Client) -> Option<PlexIdentity> {
     #[cfg(feature = "test-mode")]
     {
+        let _ = client; // unused in test-mode builds
         return Some(PlexIdentity {
             username: token.to_string(),
             thumb: format!("https://plex.tv/users/{}/avatar", token),
         });
     }
-
-    let client = reqwest::Client::new();
 
     let resp = client
         .get("https://plex.tv/api/v2/user")

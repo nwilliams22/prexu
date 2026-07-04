@@ -62,12 +62,19 @@ fn app_ready(app: AppHandle) -> Result<(), String> {
         let _ = window.set_focus();
     }
 
-    // Warmup: pre-create host window + libmpv handle on a background
-    // thread so the user's first Play skips the hwdec probe + VO
-    // selection (~12 s observed on a cold Win11 boot). The handle stays
-    // parked in PlayerState; player_load_url's ensure_init is a no-op
-    // when it runs after warmup completes.
-    #[cfg(target_os = "windows")]
+    // Warmup: pre-create the libmpv handle on a background thread so the
+    // user's first Play skips the hwdec probe + VO selection (~12 s
+    // observed on a cold Win11 boot). The handle stays parked in
+    // PlayerState; player_load_url's ensure_init is a no-op when it runs
+    // after warmup completes.
+    //
+    // Linux (prexu-0szx.10): same win. ensure_init marshals the render-
+    // context bind onto the GTK main thread internally (attach_mpv), so a
+    // background warmup thread is safe; the warmed idle mpv renders
+    // nothing (pump gate stays quiescent until a file loads) and the
+    // first-frame reveal only arms at PlaybackRestart, so the loading
+    // choreography is untouched.
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     {
         let warmup_handle = app.clone();
         std::thread::spawn(move || {

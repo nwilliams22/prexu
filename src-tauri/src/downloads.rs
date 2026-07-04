@@ -1,11 +1,19 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex;
 use tauri::{AppHandle, Emitter};
 use futures_util::StreamExt;
 
 use crate::validate_server_url;
+
+/// Process-shared download client (prexu-0szx.12): reqwest's connection
+/// pool + TLS session only get reused when the `Client` itself is —
+/// per-call `Client::new()` paid a fresh TCP+TLS handshake per download.
+fn download_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(reqwest::Client::new)
+}
 
 /// Returns true when `downloaded` has reached or exceeded `total` AND `total`
 /// is a known (non-zero) value. When `total == 0` (content-length absent and
@@ -166,8 +174,7 @@ pub async fn download_media(
     };
 
     // Start streaming download
-    let client = reqwest::Client::new();
-    let response = client
+    let response = download_client()
         .get(&url)
         .send()
         .await
@@ -183,9 +190,16 @@ pub async fn download_media(
 
     let total = response.content_length().unwrap_or(file_size);
     let mut stream = response.bytes_stream();
-    let mut file = tokio::fs::File::create(&temp_path)
-        .await
-        .map_err(|e| format!("Failed to create temp file: {}", e))?;
+    // BufWriter coalesces the per-HTTP-chunk write_all calls (each one is a
+    // tokio blocking-pool dispatch) into 256 KiB file writes (prexu-0szx.12).
+    // The post-loop flush() drains it before the rename; the error/cancel
+    // paths drop it unflushed, which is fine — the temp file is deleted.
+    let mut file = tokio::io::BufWriter::with_capacity(
+        256 * 1024,
+        tokio::fs::File::create(&temp_path)
+            .await
+            .map_err(|e| format!("Failed to create temp file: {}", e))?,
+    );
 
     if total == 0 {
         log::debug!("[downloads] unknown total size for {} — content-length missing and file_size=0; in-loop 100% gate disabled", rating_key);

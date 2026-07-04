@@ -53,7 +53,7 @@ pub async fn handle_connection(ws: WebSocket, state: SharedState) {
     };
 
     // Validate the Plex token server-side
-    let identity = match plex_auth::validate_plex_token(&token).await {
+    let identity = match plex_auth::validate_plex_token(&token, &state.http).await {
         Some(id) => id,
         None => {
             let err = ServerMessage::AuthError {
