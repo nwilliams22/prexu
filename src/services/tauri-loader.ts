@@ -15,9 +15,33 @@ import type {
   LoaderContext,
   LoaderStats,
 } from "hls.js";
-import { LoadStats } from "hls.js";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { logger, redactUrl } from "./logger";
+
+/**
+ * Zeroed LoaderStats, replacing hls.js's `LoadStats` class (prexu-0szx.1).
+ *
+ * This module must import hls.js as TYPES ONLY: a single runtime import here
+ * puts hls.js (~542 KB min) into the static graph, and because
+ * useHlsLoader.ts dynamic-imports it too, Rollup hoists the whole library
+ * into whatever chunk this file lands in (it was 80% of the lazy Player
+ * chunk — parsed on every player open, native-mpv path included, which
+ * never runs hls.js). Vite warns on the regression at build time:
+ * "hls.mjs is dynamically imported ... but also statically imported".
+ */
+function makeLoaderStats(): LoaderStats {
+  return {
+    aborted: false,
+    loaded: 0,
+    retry: 0,
+    total: 0,
+    chunkCount: 0,
+    bwEstimate: 0,
+    loading: { start: 0, first: 0, end: 0 },
+    parsing: { start: 0, end: 0 },
+    buffering: { start: 0, first: 0, end: 0 },
+  };
+}
 
 /**
  * Factory that creates a FetchLoader class bound to a specific Plex token.
@@ -25,7 +49,7 @@ import { logger, redactUrl } from "./logger";
 export function createTauriLoaderClass(serverToken: string) {
   return class TauriFetchLoader implements Loader<LoaderContext> {
     public context: LoaderContext | null = null;
-    public stats: LoaderStats = new LoadStats();
+    public stats: LoaderStats = makeLoaderStats();
 
     private callbacks: LoaderCallbacks<LoaderContext> | null = null;
     private aborted = false;
@@ -40,7 +64,7 @@ export function createTauriLoaderClass(serverToken: string) {
     ): void {
       this.context = context;
       this.callbacks = callbacks;
-      this.stats = new LoadStats();
+      this.stats = makeLoaderStats();
       this.stats.loading.start = performance.now();
       this.aborted = false;
 
