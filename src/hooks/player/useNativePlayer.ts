@@ -34,6 +34,8 @@ import {
   reportTimeline,
   getSavedVolume,
   saveVolume,
+  getSavedMuted,
+  saveMuted,
 } from "../../services/plex-playback";
 import type {
   PlexStream,
@@ -81,7 +83,11 @@ export function useNativePlayer(
   const [duration, setDuration] = useState(0);
   const [buffered, setBuffered] = useState(0);
   const [volume, setVolumeState] = useState(getSavedVolume);
-  const [isMuted, setIsMuted] = useState(false);
+  // Persisted like volume (prexu-jphh): stop → next play unmounts this hook,
+  // and a plain useState(false) would silently unmute the new session (the
+  // reveal-mute restore then applies that false). The initial mpv-side apply
+  // happens via applyMuted(isMutedRef.current) after each load.
+  const [isMuted, setIsMuted] = useState(getSavedMuted);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
 
@@ -734,6 +740,7 @@ export function useNativePlayer(
       }).catch(() => {});
       if (clamped > 0 && isMutedRef.current) {
         setIsMuted(false);
+        saveMuted(false);
         // Routed through applyMuted so a volume-driven auto-unmute can't
         // sneak past the Linux reveal-mute workaround mid-load either.
         void applyMuted(false);
@@ -745,6 +752,7 @@ export function useNativePlayer(
   const toggleMute = useCallback(() => {
     const next = !isMutedRef.current;
     setIsMuted(next);
+    saveMuted(next);
     // Routed through applyMuted: React state (and so the mute button icon)
     // flips immediately, but the actual mpv-side invoke is deferred while
     // the Linux reveal-mute workaround is armed — the LATEST toggle here

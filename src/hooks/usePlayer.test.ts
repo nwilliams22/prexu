@@ -135,6 +135,12 @@ vi.mock("../services/plex-playback", () => ({
   reportTimeline: vi.fn(),
   getSavedVolume: () => 1,
   saveVolume: vi.fn(),
+  // Real-shaped localStorage impls (prexu-jphh) so persistence behavior
+  // stays observable through the mock.
+  getSavedMuted: () => localStorage.getItem("prexu_muted") === "true",
+  saveMuted: vi.fn((muted: boolean) => {
+    localStorage.setItem("prexu_muted", String(muted));
+  }),
 }));
 
 vi.mock("../services/storage", () => ({
