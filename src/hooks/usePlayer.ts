@@ -43,8 +43,6 @@ import {
   reportTimeline,
   getSavedVolume,
   saveVolume,
-  getSavedMuted,
-  saveMuted,
 } from "../services/plex-playback";
 import type {
   PlexChapter,
@@ -228,9 +226,10 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
   const [duration, setDuration] = useState(0);
   const [buffered, setBuffered] = useState(0);
   const [volume, setVolumeState] = useState(getSavedVolume);
-  // Persisted like volume (prexu-jphh) — parity with useNativePlayer, and
-  // applied to the <video> element at init (video.muted = isMutedRef.current).
-  const [isMuted, setIsMuted] = useState(getSavedMuted);
+  // Mute is deliberately PER-SESSION, unlike volume — same contract as
+  // useNativePlayer (prexu-jphh / bd memory player-mute-scope-decision):
+  // survives in-mount episode handoff, resets after a stop. Do NOT persist.
+  const [isMuted, setIsMuted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
 
@@ -563,7 +562,6 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
       if (clamped > 0 && video.muted) {
         video.muted = false;
         setIsMuted(false);
-        saveMuted(false);
       }
     }
   }, []);
@@ -573,7 +571,6 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
     if (!video) return;
     video.muted = !video.muted;
     setIsMuted(video.muted);
-    saveMuted(video.muted);
   }, []);
 
   const toggleFullscreen = useCallback(() => {
