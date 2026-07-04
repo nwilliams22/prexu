@@ -259,6 +259,56 @@ pub fn engine_failure_reason() -> Option<String> {
     ENGINE_FAILURE.lock().ok().and_then(|g| g.clone())
 }
 
+// ── First-frame reveal (prexu-91t8) ─────────────────────────────────────────
+//
+// On the Windows HWND path the first PlaybackRestart coincides with mpv
+// compositing a frame, so events.rs emits `player://host-window-ready` there.
+// On the render-API path mpv composites nothing itself — a frame is only on
+// screen once the GLArea `render` handler has drawn it, which can lag
+// PlaybackRestart by ~0.5-1s (render-context attach races the first load).
+// So on Linux the event pump ARMS this one-shot instead, and the render
+// handler emits host-window-ready after the first successfully rendered frame
+// of that load. Per-LOAD, not per-context: episode handoff soft-stop keeps
+// the render context alive, so the pump re-arms on each file's first
+// PlaybackRestart and disarms any stale arm on FileLoaded.
+
+static FIRST_FRAME_READY_ARMED: AtomicBool = AtomicBool::new(false);
+
+/// Arm the one-shot first-frame reveal for the current file load. Called from
+/// the mpv event-pump thread on the first PlaybackRestart per file. Also
+/// nudges one `queue_render` pass so the arm is consumed even when nothing
+/// else queues a redraw (e.g. playback restored straight into pause: the
+/// 60 Hz pump is gated off and mpv's update callback may already have fired
+/// for the frame that preceded the arm).
+pub(crate) fn arm_first_frame_ready(app: &AppHandle) {
+    FIRST_FRAME_READY_ARMED.store(true, Ordering::Release);
+    log::info!("[player:linux] first-frame reveal armed — host-window-ready on next rendered frame");
+    if let Err(e) = app.run_on_main_thread(|| {
+        let comp = COMPOSITOR.with(|c| c.try_borrow().ok().and_then(|g| g.clone()));
+        match comp {
+            Some(comp) => comp.gl_area.queue_render(),
+            None => log::warn!("[player:linux] arm_first_frame_ready: compositor not installed"),
+        }
+    }) {
+        log::warn!("[player:linux] arm_first_frame_ready: queue_render nudge failed: {e:?}");
+    }
+}
+
+/// Drop any un-consumed arm. Called on FileLoaded (a stale arm from a
+/// previous aborted load must not fire on this load's first — possibly still
+/// black — frame) and on detach.
+pub(crate) fn disarm_first_frame_ready() {
+    if FIRST_FRAME_READY_ARMED.swap(false, Ordering::AcqRel) {
+        log::debug!("[player:linux] stale first-frame reveal arm dropped");
+    }
+}
+
+/// One-shot consume, called from the GLArea render handler after a successful
+/// mpv draw. True at most once per arm.
+fn consume_first_frame_ready() -> bool {
+    FIRST_FRAME_READY_ARMED.swap(false, Ordering::AcqRel)
+}
+
 // ── Pure helpers (unit-tested; no GTK/GL required) ─────────────────────────────
 
 /// Physical-pixel FBO size from the GLArea's logical allocation and the DPI
@@ -518,6 +568,9 @@ pub fn attach_mpv(app: &AppHandle, mpv: Arc<Mpv>) {
 /// context is freed (ordering requirement — prexu-60mz.4 bug class).
 pub fn detach_mpv(app: &AppHandle) {
     log::info!("[player:linux] detach_mpv — freeing render context on main thread (blocking)");
+    // No renders will follow — an un-consumed reveal arm must not leak into
+    // the next session's first (pre-PlaybackRestart) frame.
+    disarm_first_frame_ready();
     let (tx, rx) = std::sync::mpsc::channel::<()>();
     let dispatched = app.run_on_main_thread(move || {
         let comp = COMPOSITOR.with(|c| c.try_borrow().ok().and_then(|g| g.clone()));
@@ -751,7 +804,20 @@ fn wire_gl_area(comp: &Rc<Compositor>) {
             // Pacing is ours anyway: the 60 Hz pump + GTK vsync drive frame
             // timing, so target-time blocking buys nothing here.
             match render.render_no_block::<()>(fbo_id, w, h, true) {
-                Ok(()) => log::trace!("[player:linux] render frame fbo={fbo_id} {w}x{h}"),
+                Ok(()) => {
+                    log::trace!("[player:linux] render frame fbo={fbo_id} {w}x{h}");
+                    // prexu-91t8: the load reveal fires HERE — a frame is now
+                    // actually in the GLArea buffer (on screen within one GTK
+                    // frame-clock cycle) — not on PlaybackRestart. Only on a
+                    // successful draw; an errored render leaves the arm set
+                    // for the next attempt.
+                    if consume_first_frame_ready() {
+                        log::info!(
+                            "[player:linux] first frame rendered after arm → player://host-window-ready"
+                        );
+                        let _ = c.app.emit("player://host-window-ready", ());
+                    }
+                }
                 Err(e) => log::trace!("[player:linux] render error: {e:?}"),
             }
             // Force the alpha channel fully opaque AFTER mpv's draw: mpv's GL
@@ -994,5 +1060,27 @@ mod tests {
         // No failure recorded in a fresh process (record_engine_failure needs an
         // AppHandle and is never called in unit tests).
         assert!(engine_failure_reason().is_none());
+    }
+
+    #[test]
+    fn first_frame_reveal_is_one_shot_and_disarmable() {
+        use std::sync::atomic::Ordering;
+        // The whole arm/consume/disarm sequence lives in ONE test: the flag is
+        // a process-global static and parallel tests would race it.
+        // (arm_first_frame_ready needs an AppHandle for the queue_render
+        // nudge, so the arm side is exercised via the static directly.)
+        super::disarm_first_frame_ready();
+        assert!(!super::consume_first_frame_ready(), "un-armed consume must be false");
+
+        super::FIRST_FRAME_READY_ARMED.store(true, Ordering::Release);
+        assert!(super::consume_first_frame_ready(), "armed consume fires once");
+        assert!(!super::consume_first_frame_ready(), "second consume must not re-fire");
+
+        super::FIRST_FRAME_READY_ARMED.store(true, Ordering::Release);
+        super::disarm_first_frame_ready();
+        assert!(
+            !super::consume_first_frame_ready(),
+            "disarm drops a stale arm before it can fire"
+        );
     }
 }
