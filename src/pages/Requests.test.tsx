@@ -15,6 +15,7 @@ const mockDismissRequest = vi.fn();
 const mockMarkAllRead = vi.fn();
 let mockRequests: ContentRequest[] = [];
 let mockIsRelayConnected = true;
+let mockIsLoading = false;
 
 vi.mock("../hooks/useAuth", () => ({
   useAuth: () => ({ activeUser: stableActiveUser }),
@@ -23,6 +24,7 @@ vi.mock("../hooks/useAuth", () => ({
 vi.mock("../hooks/useContentRequests", () => ({
   useContentRequests: () => ({
     requests: mockRequests,
+    isLoading: mockIsLoading,
     respondToRequest: mockRespondToRequest,
     dismissRequest: mockDismissRequest,
     markAllRead: mockMarkAllRead,
@@ -105,6 +107,7 @@ describe("Requests", () => {
     vi.clearAllMocks();
     mockRequests = [pendingRequest, approvedRequest, declinedRequest];
     mockIsRelayConnected = true;
+    mockIsLoading = false;
   });
 
   it("renders the page title for admin", () => {
@@ -217,6 +220,14 @@ describe("Requests", () => {
     renderPage();
 
     expect(screen.getByText("No content requests yet.")).toBeInTheDocument();
+  });
+
+  it("does not flash the empty state while requests are still loading (prexu-0szx.17)", () => {
+    mockRequests = [];
+    mockIsLoading = true;
+    renderPage();
+
+    expect(screen.queryByText("No content requests yet.")).not.toBeInTheDocument();
   });
 
   it("shows filter-specific empty text", async () => {

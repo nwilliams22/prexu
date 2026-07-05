@@ -8,9 +8,7 @@ import SplashScreen from "./components/SplashScreen";
 import { useAutoUpdate } from "./hooks/useAutoUpdate";
 import { useAuth, useAuthState, AuthProvider } from "./hooks/useAuth";
 import AppProviders from "./contexts/AppProviders";
-import { getLibrarySections, getRecentlyAddedBySection, getOnDeck } from "./services/plex-library";
-import { groupRecentlyAdded } from "./utils/groupRecentlyAdded";
-import { cacheSet } from "./services/api-cache";
+import { prefetchDashboardData } from "./utils/dashboardPrefetch";
 import { logger } from "./services/logger";
 
 // Lazy-loaded page components
@@ -185,47 +183,22 @@ function AppRoutes() {
       setAppReady(true);
     }, HARD_CAP_MS);
 
-    getLibrarySections(server.uri, server.accessToken)
-      .then((sections) => {
-        if (cancelled) return;
-        cacheSet(`library-sections:${server.uri}`, sections, 30 * 60 * 1000, true);
+    // Shared with useAuth's optimistic boot-time prefetch (prexu-0szx.9) —
+    // if that already kicked off (or finished) this exact fetch while the
+    // plex.tv token validation was still in flight, this reuses the same
+    // in-flight/settled promises instead of hitting the Plex server twice.
+    const handle = prefetchDashboardData(server);
 
-        const movieSections = sections.filter((s) => s.type === "movie");
-        const tvSections = sections.filter((s) => s.type === "show");
-        const uri = server.uri;
-        const token = server.accessToken;
-
-        // Independent fetches — each writes its own per-section cache and
-        // counts toward the quorum on settle (resolve OR reject).
-        getRecentlyAddedBySection(uri, token, movieSections, 30)
-          .then((items) => {
-            if (cancelled) return;
-            const sorted = items.sort((a, b) => b.addedAt - a.addedAt);
-            cacheSet(`dashboard:${uri}:movies`, sorted, 60 * 60 * 1000);
-          })
-          .finally(trackSettled("movies"));
-
-        getRecentlyAddedBySection(uri, token, tvSections, 30)
-          .then((items) => {
-            if (cancelled) return;
-            const grouped = groupRecentlyAdded(
-              items.sort((a, b) => b.addedAt - a.addedAt),
-            );
-            cacheSet(`dashboard:${uri}:shows`, grouped, 60 * 60 * 1000);
-          })
-          .finally(trackSettled("shows"));
-
-        getOnDeck(uri, token)
-          .then((items) => {
-            if (cancelled) return;
-            cacheSet(`dashboard:${uri}:deck`, items, 60 * 60 * 1000);
-          })
-          .finally(trackSettled("deck"));
-      })
-      .catch(() => {
+    handle.sectionsSettled.then((ok) => {
+      if (cancelled) return;
+      if (!ok) {
         // Sections failed entirely — dismiss splash, dashboard will retry
-        if (!cancelled) setAppReady(true);
-      });
+        setAppReady(true);
+      }
+    });
+    handle.movies.then(trackSettled("movies"));
+    handle.shows.then(trackSettled("shows"));
+    handle.deck.then(trackSettled("deck"));
 
     return () => {
       cancelled = true;

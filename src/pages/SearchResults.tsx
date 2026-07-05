@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { useSearch } from "../hooks/useSearch";
@@ -12,6 +12,20 @@ import { getMediaSubtitleShort, isWatched } from "../utils/media-helpers";
 import { useScrollRestoration } from "../hooks/useScrollRestoration";
 
 function SearchResults() {
+  // useSearch() has no retry/refresh of its own (it dedupes re-fetches of
+  // the same query via an internal ref) — bumping this key remounts
+  // SearchResultsView, which resets that ref and re-triggers the fetch for
+  // the current query as a full retry (prexu-0szx.17).
+  const [retryNonce, setRetryNonce] = useState(0);
+  return (
+    <SearchResultsView
+      key={retryNonce}
+      onRetry={() => setRetryNonce((n) => n + 1)}
+    />
+  );
+}
+
+function SearchResultsView({ onRetry }: { onRetry: () => void }) {
   const { server } = useAuth();
   const { query, results, isSearching, error } = useSearch();
   const navigate = useNavigate();
@@ -43,7 +57,7 @@ function SearchResults() {
         <h2 style={styles.title}>Search</h2>
       )}
 
-      {error && <ErrorState message={error} />}
+      {error && <ErrorState message={error} onRetry={onRetry} />}
 
       {/* Loading state */}
       {isSearching && (

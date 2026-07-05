@@ -1,7 +1,13 @@
 import { useState, useEffect, useRef } from "react";
 
-/** Minimum time (ms) the splash screen stays visible to avoid a flash. */
-const MIN_DISPLAY_MS = 2000;
+/**
+ * Minimum time (ms) the splash screen stays visible to avoid a flash.
+ * Was 2000ms (prexu-0szx.9) — long enough to feel like a stall on a warm
+ * boot where auth + the dashboard prefetch settle well under a second.
+ * 700ms still avoids a flash on a fast boot while cutting the fixed floor
+ * on every launch.
+ */
+const MIN_DISPLAY_MS = 700;
 
 interface SplashScreenProps {
   ready: boolean;

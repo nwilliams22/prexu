@@ -54,7 +54,7 @@ export default function AppProviders({ children }: AppProvidersProps) {
   );
   const prefsState = usePreferencesState(auth.activeUser?.id ?? null);
   const parentalState = useParentalControlsState(auth.activeUser?.id ?? null);
-  const downloadsState = useDownloadsState(auth.server ?? null);
+  const downloadsState = useDownloadsState(auth.server ?? null, toastState.toast);
   const activityState = useServerActivityState();
 
   return (

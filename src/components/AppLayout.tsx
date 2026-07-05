@@ -10,6 +10,7 @@ import { useBreakpoint, isMobile, isTabletOrBelow, isDesktopOrAbove } from "../h
 import { useFocusTrap } from "../hooks/useFocusTrap";
 import { useRouteAnnouncer } from "../hooks/useRouteAnnouncer";
 import { useNewContent } from "../hooks/useNewContent";
+import { useRouteTransitionSpinner } from "../hooks/useRouteTransitionSpinner";
 import Sidebar from "./Sidebar";
 import NavButtons from "./NavButtons";
 import SearchBar from "./SearchBar";
@@ -129,26 +130,13 @@ function AppLayout() {
   useFocusTrap(sidebarOverlayRef, sidebarOpen && tabletOrBelow);
   useRouteAnnouncer();
 
-  // Route-transition spinner — covers the gap between AppLayout/route mount
-  // and the destination page's first paint. Most visible when navigating
-  // FROM the player route, because AppLayout itself is freshly mounting
-  // (Player is rendered outside AppLayout). Without this overlay the user
-  // sees ~1s of static navy bg before the destination page renders content.
-  // The 600ms ceiling is empirical: covers the dev-mode gap observed in user
-  // testing while staying short enough that snappy transitions don't linger.
+  // Route-transition spinner — see useRouteTransitionSpinner for the full
+  // rationale (prexu-0szx.8). Scoped to the PlayBridge (/play/:ratingKey)
+  // exit gap; regular in-app navigations get a short pre-show delay so
+  // cached/instant page loads never flash an opaque overlay over content
+  // that's already painted.
   const location = useLocation();
-  const lastPathRef = useRef(location.pathname);
-  const [showTransitionSpinner, setShowTransitionSpinner] = useState(true);
-  useEffect(() => {
-    // Either the AppLayout just mounted (initial true) or pathname changed
-    // — either way, hide after the gap window closes.
-    if (location.pathname !== lastPathRef.current) {
-      lastPathRef.current = location.pathname;
-      setShowTransitionSpinner(true);
-    }
-    const id = window.setTimeout(() => setShowTransitionSpinner(false), 600);
-    return () => window.clearTimeout(id);
-  }, [location.pathname]);
+  const showTransitionSpinner = useRouteTransitionSpinner(location.pathname);
 
   // Close sidebar overlay on Escape
   useEffect(() => {

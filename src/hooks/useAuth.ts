@@ -22,6 +22,7 @@ import {
   logServerResolve,
 } from "../services/server-reachability";
 import { logger, redactUrl } from "../services/logger";
+import { prefetchDashboardData } from "../utils/dashboardPrefetch";
 
 const TOKEN_REVALIDATION_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -62,19 +63,51 @@ export function useAuthState(): AuthContextValue {
   // On mount, migrate storage then check for existing auth
   useEffect(() => {
     (async () => {
+      const bootStart = performance.now();
       try {
-        // Migrate sensitive data from localStorage to secure store (no-op if already done)
+        // Migrate sensitive data from localStorage to secure store (no-op if
+        // already done). Must complete BEFORE getAuth() — pre-migration the
+        // auth key still lives in localStorage, and the secure-store read
+        // below would (incorrectly) come back empty.
         await migrateToSecureStorage();
 
         const stored = await getAuth();
         if (stored?.authToken) {
-          // Validate the token is still good
-          const valid = await validateToken(stored.authToken);
+          // Validate the token against plex.tv (network round trip) and read
+          // the two local LazyStore entries concurrently — they're
+          // independent of each other and of the validation result, so
+          // serializing them behind the network hop (the old behavior) just
+          // wasted time on every cold boot (prexu-0szx.9).
+          const validateTokenPromise = validateToken(stored.authToken);
+          const serverPromise = getServer();
+          const userPromise = getActiveUser();
+
+          // Optimistic LAN prefetch: as soon as the stored server comes back
+          // (a local disk read with no dependency on plex.tv), warm the
+          // dashboard cache in parallel with the plex.tv validation instead
+          // of waiting for it to resolve first — overlaps the LAN round trip
+          // with the cloud one. If validation fails below we simply never
+          // surface this data (see dashboardPrefetch.ts for why that's safe).
+          void serverPromise.then((storedServer) => {
+            if (storedServer) prefetchDashboardData(storedServer);
+          });
+
+          const [valid, storedServer, storedUser] = await Promise.all([
+            validateTokenPromise,
+            serverPromise,
+            userPromise,
+          ]);
+
+          logger.debug("auth", "boot waterfall settled", {
+            elapsedMs: Math.round(performance.now() - bootStart),
+            valid,
+            hasServer: storedServer != null,
+            hasUser: storedUser != null,
+          });
+
           if (valid) {
             setAuthToken(stored.authToken);
 
-            // Also restore server selection
-            const storedServer = await getServer();
             if (storedServer) {
               // Restore optimistically so the UI is not blocked
               setServer(storedServer);
@@ -151,7 +184,6 @@ export function useAuthState(): AuthContextValue {
             }
 
             // Restore active user profile
-            const storedUser = await getActiveUser();
             if (storedUser) {
               setActiveUser(storedUser);
             }
