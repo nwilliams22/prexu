@@ -44,6 +44,11 @@ vi.mock("../hooks/useBreakpoint", () => ({
   isTabletOrBelow: () => false,
 }));
 
+const mockUseScrollRestoration = vi.fn();
+vi.mock("../hooks/useScrollRestoration", () => ({
+  useScrollRestoration: () => mockUseScrollRestoration(),
+}));
+
 function renderPage() {
   return render(
     <BrowserRouter>
@@ -63,6 +68,11 @@ describe("PlaylistsBrowser", () => {
   it("renders the Playlists heading", () => {
     renderPage();
     expect(screen.getByText("Playlists")).toBeInTheDocument();
+  });
+
+  it("uses scroll restoration so back-navigation doesn't jump to top (prexu-0szx.17)", () => {
+    renderPage();
+    expect(mockUseScrollRestoration).toHaveBeenCalled();
   });
 
   it("shows loading skeletons when loading", () => {

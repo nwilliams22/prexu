@@ -35,6 +35,11 @@ import type {
 export interface ContentRequestContextValue {
   /** All requests visible to the current user */
   requests: ContentRequest[];
+  /** True until the persisted request list has been read from storage.
+   *  Gates the empty state — without it, "No requests yet" flashes for a
+   *  frame before persisted requests (loaded async on mount) land
+   *  (prexu-0szx.17). */
+  isLoading: boolean;
   /** Number of unread requests (admin only) */
   unreadCount: number;
   /** Whether the relay is connected (needed for sending requests) */
@@ -92,6 +97,7 @@ export function useContentRequestState(
   const [requests, setRequests] = useState<ContentRequest[]>([]);
   const [lastRead, setLastRead] = useState(0);
   const [isRelayConnected, setIsRelayConnected] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const initializedRef = useRef(false);
 
   const isAdmin = activeUser?.isAdmin ?? false;
@@ -102,10 +108,14 @@ export function useContentRequestState(
     initializedRef.current = true;
 
     (async () => {
-      const stored = await getContentRequests();
-      if (stored.length > 0) setRequests(stored);
-      const ts = await getRequestsLastRead();
-      setLastRead(ts);
+      try {
+        const stored = await getContentRequests();
+        if (stored.length > 0) setRequests(stored);
+        const ts = await getRequestsLastRead();
+        setLastRead(ts);
+      } finally {
+        setIsLoading(false);
+      }
     })();
   }, []);
 
@@ -327,6 +337,7 @@ export function useContentRequestState(
 
   return {
     requests: visibleRequests,
+    isLoading,
     unreadCount,
     isRelayConnected,
     submitRequest,
