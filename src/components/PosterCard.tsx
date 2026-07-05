@@ -1,4 +1,4 @@
-import { useState, memo } from "react";
+import { useState, useRef, useEffect, memo } from "react";
 import { useIsScanning } from "../hooks/useServerActivity";
 import { useLazyImage } from "../hooks/useLazyImage";
 import type { MediaBadge } from "../utils/media-badges";
@@ -45,6 +45,11 @@ interface PosterCardProps {
    *  call sites that aren't in a horizontal row (single-poster
    *  contexts like hero) so the default 0ms delay is preserved. */
   index?: number;
+  /** Called with `ratingKey` after sustained (~150ms) hover or keyboard
+   *  focus — the hover-intent prefetch hook (prexu-0szx.15). Only wire
+   *  this at call sites whose onClick routes to the /item/ detail page;
+   *  collection/playlist cards must leave it unset. Requires `ratingKey`. */
+  onHoverIntent?: (ratingKey: string) => void;
 }
 
 /** Stagger window for the cardEnter fade-in. Tiles beyond
@@ -52,6 +57,11 @@ interface PosterCardProps {
  *  on a long shelf from feeling perceptibly slower than the first. */
 const STAGGER_STEP_MS = 30;
 const MAX_STAGGER_INDEX = 8;
+
+/** Sustained hover/focus duration before onHoverIntent fires — long enough
+ *  that sweeping the cursor across a shelf doesn't fan out prefetches, short
+ *  enough to beat the hover→click gap it exists to hide. */
+const HOVER_INTENT_DELAY_MS = 150;
 
 function PosterCard({
   imageUrl,
@@ -76,6 +86,7 @@ function PosterCard({
   ratingKey,
   mediaBadges,
   index,
+  onHoverIntent,
 }: PosterCardProps) {
   const staggerDelayMs =
     index === undefined
@@ -101,6 +112,36 @@ function PosterCard({
   const [active, setActive] = useState(false);
   const [playHovered, setPlayHovered] = useState(false);
   const height = Math.round(width * aspectRatio);
+
+  // Hover-intent prefetch timer (prexu-0szx.15). Latest props go through
+  // refs so the timer callback never fires with a stale onHoverIntent.
+  const hoverIntentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverIntentRef = useRef(onHoverIntent);
+  hoverIntentRef.current = onHoverIntent;
+  const ratingKeyRef = useRef(ratingKey);
+  ratingKeyRef.current = ratingKey;
+
+  const armHoverIntent = () => {
+    if (!hoverIntentRef.current || !ratingKeyRef.current) return;
+    if (hoverIntentTimerRef.current !== null) return; // already armed
+    hoverIntentTimerRef.current = setTimeout(() => {
+      hoverIntentTimerRef.current = null;
+      const key = ratingKeyRef.current;
+      if (key) hoverIntentRef.current?.(key);
+    }, HOVER_INTENT_DELAY_MS);
+  };
+
+  const cancelHoverIntent = () => {
+    if (hoverIntentTimerRef.current !== null) {
+      clearTimeout(hoverIntentTimerRef.current);
+      hoverIntentTimerRef.current = null;
+    }
+  };
+
+  // Clear a pending intent timer on unmount (virtualized rows unmount
+  // mid-scroll constantly — a fired prefetch for a card that scrolled
+  // away is wasted bandwidth).
+  useEffect(() => cancelHoverIntent, []);
 
   return (
     // <div role="button"> — not a real <button>. The card contains
@@ -128,10 +169,19 @@ function PosterCard({
           onContextMenu(e);
         }
       }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => { setHovered(false); setActive(false); }}
+      onMouseEnter={() => {
+        setHovered(true);
+        armHoverIntent();
+      }}
+      onMouseLeave={() => {
+        setHovered(false);
+        setActive(false);
+        cancelHoverIntent();
+      }}
       onMouseDown={() => setActive(true)}
       onMouseUp={() => setActive(false)}
+      onFocus={armHoverIntent}
+      onBlur={cancelHoverIntent}
       style={{
         ...styles.card,
         width,

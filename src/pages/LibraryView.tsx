@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
+import { useDetailPrefetch } from "../hooks/useDetailPrefetch";
 import { usePaginatedLibrary } from "../hooks/usePaginatedLibrary";
 import { useLibrary } from "../hooks/useLibrary";
 import { useFilterOptions } from "../hooks/useFilterOptions";
@@ -69,6 +70,7 @@ function LibraryView() {
   const { server } = useAuth();
   const { sections } = useLibrary();
   const navigate = useNavigate();
+  const prefetchDetail = useDetailPrefetch();
   const [searchParams, setSearchParams] = useSearchParams();
   const sentinelRef = useRef<HTMLDivElement>(null);
   const section = sections.find((s) => s.key === sectionId);
@@ -399,6 +401,7 @@ function LibraryView() {
         watched={isWatched(item)}
         unwatchedCount={getUnwatchedCount(item)}
         onClick={() => navigate(`/item/${item.ratingKey}`)}
+        onHoverIntent={prefetchDetail}
         onPlay={getPlayHandler(item)}
         mediaBadges={getItemMediaBadges(item)}
         showMoreButton
@@ -416,7 +419,7 @@ function LibraryView() {
       />
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [expandedKey, navigate, openContextMenu, getPlayHandler, posterUrl],
+    [expandedKey, navigate, openContextMenu, getPlayHandler, posterUrl, prefetchDetail],
   );
 
   const renderExpansion = useCallback(
