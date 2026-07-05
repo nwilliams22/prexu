@@ -9,6 +9,14 @@ subtitle scale, prexu-91k4), PR #39 (per-session mute, prexu-jphh),
 PR #40 (instant transitions, prexu-hg1j), PR #41 (Linux popout,
 prexu-axj4.10), and the open prexu-5jxx X11 sweep.
 
+Sections H–N cover the perf & UX sweep epic (prexu-0szx, PRs #42–#48):
+hls.js chunk split, streaming proxy, Linux mpv warmup + pump gate, relay
+client reuse, ItemDetail caching + hover prefetch, library abort /
+keep-prior-items / virtualization, boot waterfall + splash floor,
+transition-spinner scoping, download toasts, and Dashboard render hygiene.
+These are mostly cross-platform; run them in the same Wayland session as
+A–E unless a step says otherwise.
+
 ## Pre-flight
 
 1. Session type matters — run sections A–E on your normal **Wayland**
@@ -152,10 +160,131 @@ Log into an X11 session and repeat a compressed pass:
 4. Fullscreen toggle (F / button / double-click) in normal + popout modes.
 5. EOF → postplay → next episode flow still advances.
 
+## H. Startup & boot waterfall (PR #46, prexu-0szx.9)
+
+1. Cold launch (app fully quit, then `npm run tauri dev` or the built binary).
+   - Expect: splash screen holds ~0.7 s (was 2 s) plus fade; dashboard
+     appears noticeably sooner. No flash of the login page when a valid
+     session exists.
+   - Log (debug): `[auth] boot waterfall settled` with `elapsedMs`,
+     `valid`, `hasServer`, `hasUser` — note elapsedMs for comparison.
+2. Launch with the network cable pulled / Wi-Fi off (plex.tv unreachable,
+   LAN server unreachable).
+   - Expect: same behavior as before the change — no half-authenticated
+     state, no crash; the offline/error path renders as it did previously.
+3. Launch with a revoked/expired token (if testable): must land on login,
+   with no flash of dashboard content from the optimistic prefetch.
+
+## I. Route transitions & spinner scoping (PR #46, prexu-0szx.8)
+
+1. Navigate Dashboard → Library → a collection → back, quickly.
+   - Expect: NO full-screen spinner overlay on any of these — cached pages
+     paint immediately; slower pages may show their own skeletons, never
+     the opaque navy overlay. (Old behavior: every navigation got a solid
+     600 ms overlay.)
+2. Exit the player (stop from normal playback).
+   - Expect: unchanged from section D — last frame holds, dashboard
+     replaces it directly. The player-exit overlay path is explicitly
+     preserved; a navy stage reappearing here is a regression in the
+     spinner scoping.
+3. Deep-link entry (`prexu://` / Watch Together join) that lands on a
+   `/play/` route and then returns.
+   - Expect: leaving `/play/*` still shows the transition overlay (this is
+     the one navigation class that keeps it, gap-hiding for player exit).
+
+## J. ItemDetail cache, skeleton & hover prefetch (PRs #45/#48, prexu-0szx.3/.15)
+
+1. Open any movie's detail page from a cold app start.
+   - Expect: a detail-shaped skeleton (poster/title placeholders), not a
+     bare centered spinner, then content.
+2. Back to the library, immediately re-open the same item.
+   - Expect: detail renders instantly from cache (no skeleton, no blank),
+     refreshed in the background. (30 s TTL — within it, zero refetch
+     flicker.)
+3. Hover a poster card on Dashboard or Library for ≥150 ms without
+   clicking, then click.
+   - Expect: detail page renders instantly (cache warmed by hover).
+   - Logs (debug): `[detail] hover-intent prefetch` on hover, then
+     `warmItemDetailCache: prefetched` (or `already warm, skipping`); on
+     the subsequent click the metadata fetch is a cache hit.
+4. Sweep the cursor quickly across a whole shelf.
+   - Expect: NO burst of prefetch log lines — only sustained (≥150 ms)
+     hovers fire.
+5. Kill the Plex server (or drop LAN) and open an uncached item: ErrorState
+   now has a Retry button; restoring the network and clicking Retry loads
+   the page without a full app reload.
+
+## K. Library browsing: abort, keep-prior-items, virtualization (PRs #45/#47, prexu-0szx.5/.6/.7/.18)
+
+1. In a large library (1000+ items), switch filters/sorts rapidly.
+   - Expect: the grid keeps the previous items dimmed (aria-busy) until
+     the new result set arrives — no blank-grid flash. Rapid switching
+     must settle on the LAST selection (stale responses cancelled via
+     AbortController, not raced).
+2. Navigate away mid-load (enter a section, immediately go to Dashboard).
+   - Expect: no console/log errors from aborted fetches; Dashboard loads
+     without competing against orphaned full-section requests.
+3. Open a playlist with hundreds of items; scroll fast.
+   - Expect: smooth scrolling (rows virtualize); scroll position restores
+     on back-nav.
+4. CollectionsBrowser: type in the search box.
+   - Expect: filtering debounced (~200 ms), no per-keystroke jank with
+     hundreds of collections; alphabet jump still lands on the right
+     letter (within a row).
+5. Open a large collection (100+ items) in CollectionDetail; scroll.
+   - Expect: rows appear as you scroll (virtualized); per-item metadata
+     (cast strips, durations) loads for visible rows only — watch the
+     network panel: ~10 metadata requests initially, not one per item.
+6. Actor shelves on a movie detail page (prexu-0szx.4): open the same
+   movie twice within ~10 min.
+   - Expect: second visit renders actor shelves without refetching
+     (session cache); shelves are capped at ~20 items per actor.
+
+## L. Dashboard render hygiene (PR #47, prexu-0szx.13/.14)
+
+1. Start playback of anything on ANOTHER client of the same server, then
+   watch the Prexu Dashboard while idle.
+   - Expect: dashboard cards do NOT re-render/flicker on the session
+     poll cadence (React DevTools highlight-updates stays quiet on the
+     shelves; scanning badges still animate when a library scan runs).
+2. Poster cards still respond correctly: click → detail, right-click →
+   context menu, hover → play button, expand arrow on shows.
+
+## M. Download toasts (PR #46, prexu-0szx.16)
+
+1. Start a download, navigate elsewhere in the app, let it finish.
+   - Expect: a success toast names the item when it completes.
+2. Kill the network mid-download and let retries exhaust.
+   - Expect: exactly one failure toast AFTER the auto-retries exhaust
+     (not one per retry attempt).
+3. Cancel a download manually.
+   - Expect: NO toast (user-initiated cancel is silent).
+
+## N. Rust hot paths (PRs #43/#44, prexu-0szx.2/.10/.11/.12)
+
+1. Play a large LOCAL downloaded file; seek near the end repeatedly.
+   - Expect: app RSS stays flat (range requests stream; previously the
+     file tail was buffered into RAM — watch for multi-hundred-MB jumps).
+2. First playback after app start on Linux (mpv warmup, prexu-0szx.10).
+   - Expect: first-play cold start noticeably faster than pre-#44 (mpv
+     core pre-warmed at startup; compare against section A timings).
+3. During steady playback, check CPU of the app process (pump gate,
+   prexu-0szx.11).
+   - Expect: idle-playback CPU lower than pre-#44 (no 60 Hz property
+     polling; the pump wakes on mpv events).
+4. Watch Together over the relay for several minutes (prexu-0szx.12).
+   - Expect: no per-message connection churn (shared reqwest client);
+     relay logs stay clean under sustained sync traffic.
+
 ## Pass criteria
 
 - A–E all pass on Wayland; F recorded (pass or gap list) on X11.
+- H–N all pass in the same Wayland session (they're mostly
+  cross-platform; N.2/N.3 are Linux-specific).
 - No audio without video, no navy stages in transitions, no window
   geometry drift across popout cycles, no crash/abort anywhere.
+- No blank-grid flashes, no full-screen spinner on ordinary navigation,
+  no memory growth on local-file seeks, no card-list re-render churn
+  while remote sessions play.
 - File anything that fails as a bd bug referencing the section letter
   (e.g. "linux-test-plan E.4 popout drift") so fixes trace back here.
