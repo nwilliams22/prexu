@@ -12,7 +12,6 @@ import { usePreferences } from "../hooks/usePreferences";
 import { useParentalControls } from "../hooks/useParentalControls";
 import { useScrollRestoration } from "../hooks/useScrollRestoration";
 import { getImageUrl, getPlaceholderUrl, getImageSrcSet } from "../services/plex-library";
-import LibraryGrid from "../components/LibraryGrid";
 import VirtualizedLibraryGrid from "../components/VirtualizedLibraryGrid";
 import type { LibraryGridHandle } from "../components/VirtualizedLibraryGrid";
 import FilterBar from "../components/FilterBar";
@@ -434,6 +433,23 @@ function LibraryView() {
 
   const getItemKey = useCallback((item: PlexMediaItem, _index: number) => item.ratingKey, []);
 
+  // Collections sub-view render callback (prexu-0szx.7) — hundreds of
+  // collections previously all mounted at once via a plain LibraryGrid.
+  const renderCollectionCard = useCallback(
+    (c: PlexCollection) => (
+      <PosterCard
+        ratingKey={c.ratingKey}
+        imageUrl={c.thumb ? posterUrl(c.thumb) : ""}
+        title={c.title}
+        subtitle={`${c.childCount ?? 0} item${(c.childCount ?? 0) !== 1 ? "s" : ""}`}
+        onClick={() => navigate(`/collection/${c.ratingKey}`)}
+      />
+    ),
+    [posterUrl, navigate],
+  );
+
+  const getCollectionCardKey = useCallback((c: PlexCollection) => c.ratingKey, []);
+
   // Infinite scroll via IntersectionObserver
   useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -621,21 +637,16 @@ function LibraryView() {
             </div>
           )}
 
-          <LibraryGrid>
-            {collectionsLoading &&
-              Array.from({ length: 12 }).map((_, i) => <SkeletonCard key={i} />)}
-
-            {filteredCollections.map((c: PlexCollection) => (
-              <PosterCard
-                key={c.ratingKey}
-                ratingKey={c.ratingKey}
-                imageUrl={c.thumb ? posterUrl(c.thumb) : ""}
-                title={c.title}
-                subtitle={`${c.childCount ?? 0} item${(c.childCount ?? 0) !== 1 ? "s" : ""}`}
-                onClick={() => navigate(`/collection/${c.ratingKey}`)}
-              />
-            ))}
-          </LibraryGrid>
+          <VirtualizedLibraryGrid
+            items={filteredCollections}
+            renderItem={renderCollectionCard}
+            getKey={getCollectionCardKey}
+            header={
+              collectionsLoading
+                ? Array.from({ length: 12 }).map((_, i) => <SkeletonCard key={i} />)
+                : undefined
+            }
+          />
 
           {!collectionsLoading && !collectionsError && filteredCollections.length === 0 && (
             <EmptyState

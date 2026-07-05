@@ -18,6 +18,7 @@ import { useDetailItems } from "../hooks/useDetailItems";
 import type { PlexServerLike } from "../hooks/useDetailItems";
 import { usePlayAll } from "../hooks/usePlayAll";
 import LibraryGrid from "../components/LibraryGrid";
+import VirtualizedLibraryGrid from "../components/VirtualizedLibraryGrid";
 import PosterCard from "../components/PosterCard";
 import SkeletonCard from "../components/SkeletonCard";
 import EmptyState from "../components/EmptyState";
@@ -322,10 +323,46 @@ function PlaylistDetail() {
     [items],
   );
 
-  if (!server) return null;
+  // posterUrl / renderPlaylistItem must be declared with stable identities
+  // (useCallback) before any early return so hook order stays fixed, and so
+  // VirtualizedLibraryGrid's memoized rows don't get a fresh renderItem
+  // function every render.
+  const posterUrl = useCallback(
+    (thumb: string) =>
+      server ? getImageUrl(server.uri, server.accessToken, thumb, 300, 450) : "",
+    [server],
+  );
 
-  const posterUrl = (thumb: string) =>
-    getImageUrl(server.uri, server.accessToken, thumb, 300, 450);
+  const renderPlaylistItem = useCallback(
+    (item: PlexMediaItem, index: number) => (
+      <PosterCard
+        ratingKey={item.ratingKey}
+        imageUrl={posterUrl(getMediaPoster(item))}
+        title={getMediaTitle(item)}
+        subtitle={getMediaSubtitle(item)}
+        progress={getProgress(item)}
+        watched={isWatched(item)}
+        onClick={() => navigate(`/item/${item.ratingKey}`)}
+        onPlay={getPlayHandler(item)}
+        showMoreButton
+        onContextMenu={(e) =>
+          openContextMenu(e, item, getExtraMenuItems(item, index))
+        }
+        onMoreClick={(e) =>
+          openContextMenu(e, item, getExtraMenuItems(item, index))
+        }
+      />
+    ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [posterUrl, navigate, getPlayHandler, openContextMenu, getExtraMenuItems],
+  );
+
+  const getPlaylistItemKey = useCallback(
+    (item: PlexMediaItem, index: number) => `${item.ratingKey}-${index}`,
+    [],
+  );
+
+  if (!server) return null;
 
   const header =
     isEditing ? (
@@ -519,31 +556,17 @@ function PlaylistDetail() {
         </>
       }
     >
-      <LibraryGrid>
-        {!grouped &&
-          items.map((item, index) => (
-            <PosterCard
-              key={`${item.ratingKey}-${index}`}
-              ratingKey={item.ratingKey}
-              imageUrl={posterUrl(getMediaPoster(item))}
-              title={getMediaTitle(item)}
-              subtitle={getMediaSubtitle(item)}
-              progress={getProgress(item)}
-              watched={isWatched(item)}
-              onClick={() => navigate(`/item/${item.ratingKey}`)}
-              onPlay={getPlayHandler(item)}
-              showMoreButton
-              onContextMenu={(e) =>
-                openContextMenu(e, item, getExtraMenuItems(item, index))
-              }
-              onMoreClick={(e) =>
-                openContextMenu(e, item, getExtraMenuItems(item, index))
-              }
-            />
-          ))}
+      {!grouped && (
+        <VirtualizedLibraryGrid
+          items={items}
+          renderItem={renderPlaylistItem}
+          getKey={getPlaylistItemKey}
+        />
+      )}
 
-        {grouped &&
-          groups.map((group) => {
+      {grouped && (
+        <LibraryGrid>
+          {groups.map((group) => {
             if (group.type === "movie") {
               const item = group.items[0];
               if (!item) return null;
@@ -582,7 +605,8 @@ function PlaylistDetail() {
               />
             );
           })}
-      </LibraryGrid>
+        </LibraryGrid>
+      )}
 
       {/* Expanded show episodes */}
       {grouped && expandedShowKey && (() => {
