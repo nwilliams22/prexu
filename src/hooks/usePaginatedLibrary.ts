@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useAuth } from "./useAuth";
 import { getLibraryItems } from "../services/plex-library";
 import { cacheGet, cacheSet, cacheInvalidate } from "../services/api-cache";
+import { logger } from "../services/logger";
 import type { PlexMediaItem, LibraryFilters } from "../types/library";
 
 const PAGE_SIZE = 50;
@@ -9,6 +10,8 @@ const PAGE_SIZE = 50;
 const BG_BATCH_SIZE = 200;
 /** Cache TTL for library data (5 minutes) */
 const CACHE_TTL = 5 * 60 * 1000;
+/** Max concurrent background batch requests during a loadAll fetch (prexu-0szx.18) */
+const LOAD_ALL_CONCURRENCY = 4;
 
 interface CachedLibrary {
   items: PlexMediaItem[];
@@ -20,11 +23,102 @@ export interface UsePaginatedLibraryResult {
   items: PlexMediaItem[];
   isLoading: boolean;
   isLoadingMore: boolean;
+  /**
+   * True while a section/sort/filter change is refetching but the currently
+   * rendered `items` still belong to the PREVIOUS combination (kept visible
+   * instead of blanking to `[]`). Consumers can dim/aria-busy the grid.
+   */
+  isStale: boolean;
   hasMore: boolean;
   totalSize: number;
   error: string | null;
   loadMore: () => void;
   retry: () => void;
+}
+
+/**
+ * Fetch the remaining pages of a loadAll section with bounded concurrency,
+ * merging results back in offset order so the grid never renders out-of-order
+ * pages (sorted views depend on ascending-offset ordering). Buffers
+ * out-of-order completions and flushes the longest ready contiguous prefix in
+ * one `onFlush` call — this naturally coalesces multiple near-simultaneous
+ * batch completions into fewer state updates than the old one-batch-at-a-time
+ * sequential loop.
+ */
+async function fetchRemainingBatches(params: {
+  server: { uri: string; accessToken: string };
+  sectionId: string;
+  sort: string;
+  filters: LibraryFilters;
+  plexType: number | undefined;
+  startOffset: number;
+  total: number;
+  signal: AbortSignal;
+  onFlush: (items: PlexMediaItem[]) => void;
+}): Promise<PlexMediaItem[]> {
+  const { server, sectionId, sort, filters, plexType, startOffset, total, signal, onFlush } = params;
+
+  const offsets: number[] = [];
+  for (let o = startOffset; o < total; o += BG_BATCH_SIZE) offsets.push(o);
+  if (offsets.length === 0) return [];
+
+  const results = new Map<number, PlexMediaItem[]>();
+  let nextFlushIndex = 0;
+  let flushed: PlexMediaItem[] = [];
+  let stopped = false;
+
+  const tryFlush = () => {
+    let flushedAny = false;
+    while (nextFlushIndex < offsets.length && results.has(offsets[nextFlushIndex]!)) {
+      const batchItems = results.get(offsets[nextFlushIndex]!)!;
+      results.delete(offsets[nextFlushIndex]!);
+      flushed = flushed.concat(batchItems);
+      nextFlushIndex++;
+      flushedAny = true;
+      // Safety: server returned fewer/zero items than expected — stop asking for more.
+      if (batchItems.length === 0) {
+        stopped = true;
+        break;
+      }
+    }
+    if (flushedAny && !signal.aborted) {
+      onFlush(flushed);
+    }
+  };
+
+  let cursor = 0;
+  const worker = async () => {
+    while (!signal.aborted && !stopped && cursor < offsets.length) {
+      const offset = offsets[cursor++]!;
+      try {
+        const batch = await getLibraryItems(server.uri, server.accessToken, sectionId, {
+          start: offset,
+          size: BG_BATCH_SIZE,
+          sort,
+          filters,
+          type: plexType,
+          signal,
+        });
+        if (signal.aborted) return;
+        results.set(offset, batch.items);
+        tryFlush();
+      } catch (err) {
+        if (signal.aborted) return;
+        logger.warn("api", "usePaginatedLibrary: background batch failed, stopping load-all", {
+          sectionId,
+          offset,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        stopped = true;
+        return;
+      }
+    }
+  };
+
+  const workerCount = Math.min(LOAD_ALL_CONCURRENCY, offsets.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+
+  return flushed;
 }
 
 export function usePaginatedLibrary(
@@ -76,13 +170,15 @@ export function usePaginatedLibrary(
       return;
     }
 
-    let cancelled = false;
+    const controller = new AbortController();
     loadingRef.current = true;
 
     (async () => {
       setIsLoading(true);
       setError(null);
-      setItems([]);
+      // Keep whatever items are currently rendered (previous section/filter/
+      // sort) instead of blanking to [] — isStale (derived below) lets the
+      // UI dim the stale grid instead of flashing empty + skeleton.
       try {
         if (loadAll) {
           // ── Progressive loading: first batch fast, then background fill ──
@@ -91,10 +187,10 @@ export function usePaginatedLibrary(
             server.uri,
             server.accessToken,
             sectionId,
-            { start: 0, size: PAGE_SIZE, sort, filters, type: plexType }
+            { start: 0, size: PAGE_SIZE, sort, filters, type: plexType, signal: controller.signal }
           );
 
-          if (cancelled) return;
+          if (controller.signal.aborted) return;
 
           setItems(firstPage.items);
           setTotalSize(firstPage.totalSize);
@@ -108,32 +204,25 @@ export function usePaginatedLibrary(
           // If there are more items, fetch them in background batches
           if (firstPage.hasMore) {
             setIsLoadingMore(true);
-            let offset = firstPage.items.length;
-            const total = firstPage.totalSize;
-            const allItems = [...firstPage.items];
 
-            while (offset < total && !cancelled) {
-              const batch = await getLibraryItems(
-                server.uri,
-                server.accessToken,
-                sectionId,
-                { start: offset, size: BG_BATCH_SIZE, sort, filters, type: plexType }
-              );
+            const restItems = await fetchRemainingBatches({
+              server,
+              sectionId,
+              sort,
+              filters,
+              plexType,
+              startOffset: firstPage.items.length,
+              total: firstPage.totalSize,
+              signal: controller.signal,
+              onFlush: (flushedSoFar) => {
+                setItems([...firstPage.items, ...flushedSoFar]);
+              },
+            });
 
-              if (cancelled) return;
-
-              allItems.push(...batch.items);
-              setItems([...allItems]);
-              offset += batch.items.length;
-
-              // Safety: if server returned 0 items, stop to avoid infinite loop
-              if (batch.items.length === 0) break;
-            }
-
-            if (!cancelled) {
+            if (!controller.signal.aborted) {
               setIsLoadingMore(false);
-              // Cache the complete list
-              cacheSet(cacheKey, { items: allItems, totalSize: total, hasMore: false }, CACHE_TTL);
+              const allItems = [...firstPage.items, ...restItems];
+              cacheSet(cacheKey, { items: allItems, totalSize: firstPage.totalSize, hasMore: false }, CACHE_TTL);
             }
           }
         } else {
@@ -142,9 +231,9 @@ export function usePaginatedLibrary(
             server.uri,
             server.accessToken,
             sectionId,
-            { start: 0, size: PAGE_SIZE, sort, filters, type: plexType }
+            { start: 0, size: PAGE_SIZE, sort, filters, type: plexType, signal: controller.signal }
           );
-          if (!cancelled) {
+          if (!controller.signal.aborted) {
             setItems(result.items);
             setTotalSize(result.totalSize);
             setHasMore(result.hasMore);
@@ -152,13 +241,13 @@ export function usePaginatedLibrary(
           }
         }
       } catch (err) {
-        if (!cancelled) {
+        if (!controller.signal.aborted) {
           setError(
             err instanceof Error ? err.message : "Failed to load library"
           );
         }
       } finally {
-        if (!cancelled) {
+        if (!controller.signal.aborted) {
           setIsLoading(false);
           loadingRef.current = false;
         }
@@ -166,7 +255,7 @@ export function usePaginatedLibrary(
     })();
 
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [server, sectionId, sort, filtersKey, refreshTrigger, loadAll, plexType, cacheKey]);
 
@@ -203,5 +292,7 @@ export function usePaginatedLibrary(
     })();
   }, [server, sectionId, sort, filtersKey, hasMore, plexType, cacheKey, totalSize]);
 
-  return { items, isLoading, isLoadingMore, hasMore, totalSize, error, loadMore, retry };
+  const isStale = isLoading && items.length > 0;
+
+  return { items, isLoading, isLoadingMore, isStale, hasMore, totalSize, error, loadMore, retry };
 }

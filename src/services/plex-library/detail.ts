@@ -10,12 +10,14 @@ import type { PlexMediaContainer, PlexMediaItem } from "../../types/library";
 export async function getItemMetadata<T extends PlexMediaItem>(
   serverUri: string,
   serverToken: string,
-  ratingKey: string
+  ratingKey: string,
+  signal?: AbortSignal
 ): Promise<T> {
   const data = await fetchJson<PlexMediaContainer<T>>(
     serverUri,
     serverToken,
-    `/library/metadata/${ratingKey}?includeRatings=1&includeMarkers=1`
+    `/library/metadata/${ratingKey}?includeRatings=1&includeMarkers=1`,
+    signal
   );
   const items = data.MediaContainer.Metadata;
   const first = items?.[0];
@@ -48,12 +50,14 @@ export async function getAllShowEpisodes<T extends PlexMediaItem>(
 export async function getItemChildren<T extends PlexMediaItem>(
   serverUri: string,
   serverToken: string,
-  ratingKey: string
+  ratingKey: string,
+  signal?: AbortSignal
 ): Promise<T[]> {
   const data = await fetchJson<PlexMediaContainer<T>>(
     serverUri,
     serverToken,
-    `/library/metadata/${ratingKey}/children`
+    `/library/metadata/${ratingKey}/children`,
+    signal
   );
   return data.MediaContainer.Metadata ?? [];
 }

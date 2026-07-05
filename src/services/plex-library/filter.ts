@@ -24,6 +24,7 @@ export async function getLibraryItems(
     sort?: string;
     type?: number;
     filters?: LibraryFilters;
+    signal?: AbortSignal;
   } = {}
 ): Promise<PaginatedResult<PlexMediaItem>> {
   const params = new URLSearchParams();
@@ -56,7 +57,8 @@ export async function getLibraryItems(
   const data = await fetchJson<PlexMediaContainer<PlexMediaItem>>(
     serverUri,
     serverToken,
-    path
+    path,
+    options.signal
   );
 
   const mc = data.MediaContainer;
