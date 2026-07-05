@@ -32,6 +32,22 @@ function restoreFromStorage<T>(key: string): CacheEntry<T> | null {
   }
 }
 
+/**
+ * Get cached data even if past its TTL, flagging staleness so stale-while-
+ * revalidate consumers can render immediately while refetching in the
+ * background. Unlike {@link cacheGet}, this never evicts the entry itself —
+ * only {@link cacheSet} (overwrite) or {@link cacheInvalidate} remove it.
+ *
+ * Memory-only (no localStorage fallback) — SWR consumers like item-detail
+ * caching don't need cross-restart persistence, matching the project's
+ * in-memory-caching-only convention.
+ */
+export function cacheGetStale<T>(key: string): { data: T; stale: boolean } | null {
+  const entry = store.get(key);
+  if (!entry) return null;
+  return { data: entry.data as T, stale: Date.now() - entry.timestamp > entry.ttlMs };
+}
+
 /** Get cached data, or null if missing/expired. Checks localStorage fallback. */
 export function cacheGet<T>(key: string): T | null {
   // Check in-memory first
