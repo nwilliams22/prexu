@@ -1,5 +1,7 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useMemo, useCallback, memo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
+import type { NavigateFunction } from "react-router-dom";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAuth } from "../hooks/useAuth";
 import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
 import { useMediaContextMenu } from "../hooks/useMediaContextMenu";
@@ -8,6 +10,7 @@ import { useScrollRestoration } from "../hooks/useScrollRestoration";
 import { useDetailItems } from "../hooks/useDetailItems";
 import type { PlexServerLike } from "../hooks/useDetailItems";
 import { useItemDetails } from "../hooks/useItemDetails";
+import type { ItemDetail } from "../hooks/useItemDetails";
 import { usePlayAll } from "../hooks/usePlayAll";
 import {
   getItemMetadata,
@@ -21,6 +24,7 @@ import SectionHeader from "../components/SectionHeader";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
 import DetailPageShell from "../components/detail/DetailPageShell";
+import { findScrollAncestor } from "../components/VirtualizedLibraryGrid";
 import { isWatched, decodeHtmlEntities } from "../utils/media-helpers";
 import { detailStyles } from "../utils/detail-styles";
 import type {
@@ -40,6 +44,420 @@ function formatDuration(ms: number): string {
   return m > 0 ? `${h}h ${m}m` : `${h}h`;
 }
 
+export interface ItemRowProps {
+  item: PlexMediaItem;
+  /** Progressive metadata (cast, crew, genres, duration) for this item, if
+   *  it has loaded yet — undefined while pending or not-yet-requested. */
+  detail: ItemDetail | undefined;
+  /** Whether THIS item's own detail query is still in flight (drives the
+   *  per-row shimmer instead of a single shared loading flag, so unrelated
+   *  rows don't re-render together whenever any other row's fetch settles). */
+  isPending: boolean;
+  mobile: boolean;
+  thumbUrl: (thumb: string) => string;
+  actorThumbUrl: (thumb: string) => string;
+  navigate: NavigateFunction;
+  onContextMenu: (e: React.MouseEvent, item: PlexMediaItem) => void;
+  getPlayHandler: (
+    item: PlexMediaItem,
+  ) => ((e: React.MouseEvent) => void) | undefined;
+}
+
+/**
+ * A single collection row (poster + cast/crew/genre metadata + play button).
+ * Memoized and keyed by ratingKey (prexu-0szx.6) — with a stable `detail`
+ * Map reference (see useItemDetails) and stable callback props from the
+ * parent, an unrelated row's detail resolving or a sibling re-render no
+ * longer forces every mounted row to re-render.
+ *
+ * Exported (alongside CollectionItemsList below) so the memoization and
+ * virtualization/gated-fetch behavior can be verified directly in tests
+ * without driving the full CollectionDetail page through every hook.
+ */
+export const ItemRow = memo(function ItemRow({
+  item,
+  detail,
+  isPending,
+  mobile,
+  thumbUrl,
+  actorThumbUrl,
+  navigate,
+  onContextMenu,
+  getPlayHandler,
+}: ItemRowProps) {
+  const watched = isWatched(item);
+
+  // Extract typed fields from detail
+  const year = detail ? (detail as PlexMovie).year : undefined;
+  const duration = detail ? (detail as PlexMovie).duration : undefined;
+  const contentRating = detail
+    ? (detail as PlexMovie).contentRating
+    : undefined;
+  const audienceRating = detail
+    ? (detail as PlexMovie).audienceRating
+    : undefined;
+  const genres: PlexTag[] =
+    detail && "Genre" in detail ? (detail as PlexMovie).Genre ?? [] : [];
+  const directors: PlexTag[] =
+    detail && "Director" in detail
+      ? (detail as PlexMovie).Director ?? []
+      : [];
+  const roles: PlexRole[] = detail?.Role ?? [];
+  const topCast = roles.slice(0, 6);
+  const summary = detail?.summary ?? item.summary;
+
+  return (
+    <div
+      style={{
+        ...styles.itemRow,
+        ...(mobile ? styles.itemRowMobile : {}),
+        ...(watched ? { opacity: 0.7 } : {}),
+      }}
+      onClick={() => navigate(`/item/${item.ratingKey}`)}
+      onContextMenu={(e) => onContextMenu(e, item)}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          navigate(`/item/${item.ratingKey}`);
+        }
+      }}
+    >
+      {/* Poster thumbnail */}
+      <div style={styles.rowPosterWrap}>
+        <img
+          src={thumbUrl(item.thumb)}
+          alt={item.title}
+          style={styles.rowPoster}
+          loading="lazy"
+        />
+        {watched && (
+          <div style={styles.watchedBadge} title="Watched">
+            <svg
+              width={14}
+              height={14}
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={3}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          </div>
+        )}
+      </div>
+
+      {/* Info section */}
+      <div style={styles.rowInfo}>
+        {/* Title row */}
+        <div style={styles.rowTitleRow}>
+          <span style={styles.rowTitle}>{item.title}</span>
+          {year && <span style={styles.rowYear}>({year})</span>}
+          <div style={styles.rowBadges}>
+            {audienceRating != null && audienceRating > 0 && (
+              <span style={styles.ratingBadge}>
+                ★ {audienceRating.toFixed(1)}
+              </span>
+            )}
+            {contentRating && (
+              <span style={styles.contentRatingBadge}>{contentRating}</span>
+            )}
+          </div>
+        </div>
+
+        {/* Genre + duration row */}
+        {(genres.length > 0 || duration) && (
+          <div style={styles.rowMeta}>
+            {genres.length > 0 && (
+              <span style={styles.genreText}>
+                {genres.map((g) => g.tag).join(" · ")}
+              </span>
+            )}
+            {genres.length > 0 && duration && (
+              <span style={styles.metaSeparator}>{"·"}</span>
+            )}
+            {duration && (
+              <span style={styles.durationText}>
+                {formatDuration(duration)}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Director row */}
+        {directors.length > 0 && (
+          <div style={styles.directorRow}>
+            <span style={styles.directorLabel}>Director: </span>
+            <span style={styles.directorName}>
+              {directors.map((d) => d.tag).join(", ")}
+            </span>
+          </div>
+        )}
+
+        {/* Cast row */}
+        {topCast.length > 0 && (
+          <div style={styles.castRow}>
+            {topCast.map((role, i) => (
+              <span key={`${role.tag}-${role.role}`} style={styles.castItem}>
+                {role.thumb ? (
+                  <img
+                    src={actorThumbUrl(role.thumb)}
+                    alt=""
+                    style={styles.castAvatar}
+                    loading="lazy"
+                    onError={(e) => {
+                      // Replace broken image with initials fallback
+                      const img = e.currentTarget;
+                      const fallback = document.createElement("span");
+                      Object.assign(fallback.style, {
+                        width: "40px",
+                        height: "40px",
+                        borderRadius: "50%",
+                        background: "var(--bg-card)",
+                        border: "1px solid var(--border)",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontSize: "0.7rem",
+                        fontWeight: "600",
+                        color: "var(--text-secondary)",
+                        flexShrink: "0",
+                      });
+                      fallback.textContent = getInitials(role.tag);
+                      img.replaceWith(fallback);
+                    }}
+                  />
+                ) : (
+                  <span style={styles.castAvatarFallback}>
+                    {getInitials(role.tag)}
+                  </span>
+                )}
+                <span
+                  style={styles.castLink}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    navigate(
+                      `/actor/${encodeURIComponent(role.tag)}`,
+                      role.thumb ? { state: { thumb: role.thumb } } : undefined
+                    );
+                  }}
+                  role="link"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      navigate(
+                        `/actor/${encodeURIComponent(role.tag)}`,
+                        role.thumb
+                          ? { state: { thumb: role.thumb } }
+                          : undefined
+                      );
+                    }
+                  }}
+                >
+                  {role.tag}
+                </span>
+                {role.role && (
+                  <span style={styles.castRole}> as {role.role}</span>
+                )}
+                {i < topCast.length - 1 && (
+                  <span style={styles.castSeparator}>{"·"}</span>
+                )}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {/* Synopsis */}
+        {summary && (
+          <p style={styles.rowSynopsis}>
+            {decodeHtmlEntities(summary)}
+          </p>
+        )}
+
+        {/* Shimmer placeholder while details load */}
+        {!detail && isPending && (
+          <div style={styles.detailShimmer}>
+            <div className="shimmer" style={styles.shimmerLine} />
+            <div
+              className="shimmer"
+              style={{ ...styles.shimmerLine, width: "60%" }}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Play button (desktop only) */}
+      {!mobile && (
+        <button
+          style={styles.rowPlayButton}
+          onClick={(e) => {
+            e.stopPropagation();
+            const handler = getPlayHandler(item);
+            if (handler) handler(e);
+          }}
+          title={`Play ${item.title}`}
+          aria-label={`Play ${item.title}`}
+        >
+          <svg
+            width={18}
+            height={18}
+            viewBox="0 0 24 24"
+            fill="currentColor"
+          >
+            <polygon points="5,3 19,12 5,21" />
+          </svg>
+        </button>
+      )}
+    </div>
+  );
+});
+
+/** Rows beyond the visible window to keep mounted (and detail-fetched)
+ *  while scrolling, so data is already warm by the time a row scrolls
+ *  fully into view. */
+const DETAIL_OVERSCAN = 6;
+
+/** Below this item count, virtualization overhead isn't worth it — mirrors
+ *  VirtualizedLibraryGrid's own small-collection bypass. Exported for tests. */
+export const ROW_VIRTUALIZE_THRESHOLD = 50;
+
+export interface CollectionItemsListProps {
+  items: PlexMediaItem[];
+  mobile: boolean;
+  navigate: NavigateFunction;
+  onContextMenu: (e: React.MouseEvent, item: PlexMediaItem) => void;
+  getPlayHandler: (
+    item: PlexMediaItem,
+  ) => ((e: React.MouseEvent) => void) | undefined;
+  thumbUrl: (thumb: string) => string;
+  actorThumbUrl: (thumb: string) => string;
+}
+
+/**
+ * Row-virtualized item list for CollectionDetail (prexu-0szx.6).
+ *
+ * A full-library collection can be 100s of items, each rendered as a rich
+ * row (poster + up to 6 cast images). Mounting them all at once, combined
+ * with one getItemMetadata call PER item up front, was the O(n) fan-out +
+ * O(n^2) re-render cascade this fixes:
+ *  - Only visible (+ overscan) rows are mounted, via @tanstack/react-virtual
+ *    — the same virtualizer already used by VirtualizedLibraryGrid.
+ *  - Per-item detail queries (useItemDetails) are gated to that same
+ *    visible+overscan window instead of the full item list.
+ *  - Rows are memoized (ItemRow) and the detail Map has a stable identity
+ *    (see useItemDetails), so a row only re-renders when ITS OWN props
+ *    actually change.
+ */
+export function CollectionItemsList({
+  items,
+  mobile,
+  navigate,
+  onContextMenu,
+  getPlayHandler,
+  thumbUrl,
+  actorThumbUrl,
+}: CollectionItemsListProps) {
+  const parentRef = useRef<HTMLDivElement>(null);
+  const getScrollElement = useCallback(
+    () => findScrollAncestor(parentRef.current),
+    [],
+  );
+  const shouldVirtualize = items.length >= ROW_VIRTUALIZE_THRESHOLD;
+
+  // Always call the hook (keeps hook order stable as itemCount crosses the
+  // threshold) but only feed it real work when virtualizing — mirrors
+  // VirtualizedLibraryGrid's `count: virtualize ? rows.length : 0` pattern.
+  const virtualizer = useVirtualizer({
+    count: shouldVirtualize ? items.length : 0,
+    getScrollElement,
+    estimateSize: () => (mobile ? 280 : 230),
+    overscan: DETAIL_OVERSCAN,
+  });
+
+  const virtualItems = shouldVirtualize ? virtualizer.getVirtualItems() : [];
+
+  const visibleItems = useMemo(() => {
+    if (!shouldVirtualize) return items;
+    const result: PlexMediaItem[] = [];
+    for (const v of virtualItems) {
+      const item = items[v.index];
+      if (item) result.push(item);
+    }
+    return result;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shouldVirtualize, virtualItems, items]);
+
+  const { details: detailedItems, pendingKeys } = useItemDetails(visibleItems);
+
+  if (!shouldVirtualize) {
+    return (
+      <div style={styles.itemsList}>
+        {items.map((item) => (
+          <ItemRow
+            key={item.ratingKey}
+            item={item}
+            detail={detailedItems.get(item.ratingKey)}
+            isPending={pendingKeys.has(item.ratingKey)}
+            mobile={mobile}
+            thumbUrl={thumbUrl}
+            actorThumbUrl={actorThumbUrl}
+            navigate={navigate}
+            onContextMenu={onContextMenu}
+            getPlayHandler={getPlayHandler}
+          />
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      ref={parentRef}
+      style={{
+        position: "relative",
+        width: "100%",
+        height: `${virtualizer.getTotalSize()}px`,
+      }}
+    >
+      {virtualItems.map((virtualRow) => {
+        const item = items[virtualRow.index];
+        if (!item) return null;
+        return (
+          <div
+            key={item.ratingKey}
+            data-index={virtualRow.index}
+            ref={virtualizer.measureElement}
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              width: "100%",
+              transform: `translateY(${virtualRow.start}px)`,
+              paddingBottom: "6px",
+            }}
+          >
+            <ItemRow
+              item={item}
+              detail={detailedItems.get(item.ratingKey)}
+              isPending={pendingKeys.has(item.ratingKey)}
+              mobile={mobile}
+              thumbUrl={thumbUrl}
+              actorThumbUrl={actorThumbUrl}
+              navigate={navigate}
+              onContextMenu={onContextMenu}
+              getPlayHandler={getPlayHandler}
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 function CollectionDetail() {
   const { collectionKey } = useParams<{ collectionKey: string }>();
@@ -68,11 +486,6 @@ function CollectionDetail() {
     fetchItems: (s, key) => getCollectionItems(s.uri, s.accessToken, key),
   });
 
-  // Progressive per-item metadata (cast, crew, genres) — rows fill in as each
-  // item's detail query resolves.
-  const { details: detailedItems, isLoading: isLoadingDetails } =
-    useItemDetails(items);
-
   const { hasPlayableItems, playAll, shuffle } = usePlayAll(items);
 
   useEffect(() => {
@@ -82,16 +495,28 @@ function CollectionDetail() {
   // Compute watch progress
   const watchedCount = items.filter(isWatched).length;
 
+  // thumbUrl / actorThumbUrl are passed down to the memoized ItemRow list,
+  // so they must keep a stable identity (useCallback) — otherwise every
+  // CollectionDetail re-render would hand ItemRow "new" function props and
+  // defeat its memo. Declared before the early return so hook order stays
+  // fixed regardless of `server`.
+  const thumbUrl = useCallback(
+    (thumb: string) =>
+      server ? getImageUrl(server.uri, server.accessToken, thumb, 200, 300) : "",
+    [server],
+  );
+  const actorThumbUrl = useCallback(
+    (thumb: string) =>
+      server ? getImageUrl(server.uri, server.accessToken, thumb, 80, 80) : "",
+    [server],
+  );
+
   if (!server) return null;
 
   const posterUrl = (thumb: string) =>
     getImageUrl(server.uri, server.accessToken, thumb, 300, 450);
-  const thumbUrl = (thumb: string) =>
-    getImageUrl(server.uri, server.accessToken, thumb, 200, 300);
   const artUrl = (path: string) =>
     getImageUrl(server.uri, server.accessToken, path, 1920, 1080);
-  const actorThumbUrl = (thumb: string) =>
-    getImageUrl(server.uri, server.accessToken, thumb, 80, 80);
 
   const subtypeLabel =
     collection?.subtype === "show"
@@ -107,242 +532,6 @@ function CollectionDetail() {
         day: "numeric",
       })
     : null;
-
-  /** Render a single item detail row */
-  const renderItemRow = (item: PlexMediaItem) => {
-    const detail = detailedItems.get(item.ratingKey);
-    const watched = isWatched(item);
-
-    // Extract typed fields from detail
-    const year = detail ? (detail as PlexMovie).year : undefined;
-    const duration = detail ? (detail as PlexMovie).duration : undefined;
-    const contentRating = detail
-      ? (detail as PlexMovie).contentRating
-      : undefined;
-    const audienceRating = detail
-      ? (detail as PlexMovie).audienceRating
-      : undefined;
-    const genres: PlexTag[] =
-      detail && "Genre" in detail ? (detail as PlexMovie).Genre ?? [] : [];
-    const directors: PlexTag[] =
-      detail && "Director" in detail
-        ? (detail as PlexMovie).Director ?? []
-        : [];
-    const roles: PlexRole[] = detail?.Role ?? [];
-    const topCast = roles.slice(0, 6);
-    const summary = detail?.summary ?? item.summary;
-
-    return (
-      <div
-        key={item.ratingKey}
-        style={{
-          ...styles.itemRow,
-          ...(mobile ? styles.itemRowMobile : {}),
-          ...(watched ? { opacity: 0.7 } : {}),
-        }}
-        onClick={() => navigate(`/item/${item.ratingKey}`)}
-        onContextMenu={(e) => openContextMenu(e, item)}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            navigate(`/item/${item.ratingKey}`);
-          }
-        }}
-      >
-        {/* Poster thumbnail */}
-        <div style={styles.rowPosterWrap}>
-          <img
-            src={thumbUrl(item.thumb)}
-            alt={item.title}
-            style={styles.rowPoster}
-            loading="lazy"
-          />
-          {watched && (
-            <div style={styles.watchedBadge} title="Watched">
-              <svg
-                width={14}
-                height={14}
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={3}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <polyline points="20 6 9 17 4 12" />
-              </svg>
-            </div>
-          )}
-        </div>
-
-        {/* Info section */}
-        <div style={styles.rowInfo}>
-          {/* Title row */}
-          <div style={styles.rowTitleRow}>
-            <span style={styles.rowTitle}>{item.title}</span>
-            {year && <span style={styles.rowYear}>({year})</span>}
-            <div style={styles.rowBadges}>
-              {audienceRating != null && audienceRating > 0 && (
-                <span style={styles.ratingBadge}>
-                  ★ {audienceRating.toFixed(1)}
-                </span>
-              )}
-              {contentRating && (
-                <span style={styles.contentRatingBadge}>{contentRating}</span>
-              )}
-            </div>
-          </div>
-
-          {/* Genre + duration row */}
-          {(genres.length > 0 || duration) && (
-            <div style={styles.rowMeta}>
-              {genres.length > 0 && (
-                <span style={styles.genreText}>
-                  {genres.map((g) => g.tag).join(" · ")}
-                </span>
-              )}
-              {genres.length > 0 && duration && (
-                <span style={styles.metaSeparator}>{"·"}</span>
-              )}
-              {duration && (
-                <span style={styles.durationText}>
-                  {formatDuration(duration)}
-                </span>
-              )}
-            </div>
-          )}
-
-          {/* Director row */}
-          {directors.length > 0 && (
-            <div style={styles.directorRow}>
-              <span style={styles.directorLabel}>Director: </span>
-              <span style={styles.directorName}>
-                {directors.map((d) => d.tag).join(", ")}
-              </span>
-            </div>
-          )}
-
-          {/* Cast row */}
-          {topCast.length > 0 && (
-            <div style={styles.castRow}>
-              {topCast.map((role, i) => (
-                <span key={`${role.tag}-${role.role}`} style={styles.castItem}>
-                  {role.thumb ? (
-                    <img
-                      src={actorThumbUrl(role.thumb)}
-                      alt=""
-                      style={styles.castAvatar}
-                      loading="lazy"
-                      onError={(e) => {
-                        // Replace broken image with initials fallback
-                        const img = e.currentTarget;
-                        const fallback = document.createElement("span");
-                        Object.assign(fallback.style, {
-                          width: "40px",
-                          height: "40px",
-                          borderRadius: "50%",
-                          background: "var(--bg-card)",
-                          border: "1px solid var(--border)",
-                          display: "inline-flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          fontSize: "0.7rem",
-                          fontWeight: "600",
-                          color: "var(--text-secondary)",
-                          flexShrink: "0",
-                        });
-                        fallback.textContent = getInitials(role.tag);
-                        img.replaceWith(fallback);
-                      }}
-                    />
-                  ) : (
-                    <span style={styles.castAvatarFallback}>
-                      {getInitials(role.tag)}
-                    </span>
-                  )}
-                  <span
-                    style={styles.castLink}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      navigate(
-                        `/actor/${encodeURIComponent(role.tag)}`,
-                        role.thumb ? { state: { thumb: role.thumb } } : undefined
-                      );
-                    }}
-                    role="link"
-                    tabIndex={0}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.stopPropagation();
-                        e.preventDefault();
-                        navigate(
-                          `/actor/${encodeURIComponent(role.tag)}`,
-                          role.thumb
-                            ? { state: { thumb: role.thumb } }
-                            : undefined
-                        );
-                      }
-                    }}
-                  >
-                    {role.tag}
-                  </span>
-                  {role.role && (
-                    <span style={styles.castRole}> as {role.role}</span>
-                  )}
-                  {i < topCast.length - 1 && (
-                    <span style={styles.castSeparator}>{"·"}</span>
-                  )}
-                </span>
-              ))}
-            </div>
-          )}
-
-          {/* Synopsis */}
-          {summary && (
-            <p style={styles.rowSynopsis}>
-              {decodeHtmlEntities(summary)}
-            </p>
-          )}
-
-          {/* Shimmer placeholder while details load */}
-          {!detail && isLoadingDetails && (
-            <div style={styles.detailShimmer}>
-              <div className="shimmer" style={styles.shimmerLine} />
-              <div
-                className="shimmer"
-                style={{ ...styles.shimmerLine, width: "60%" }}
-              />
-            </div>
-          )}
-        </div>
-
-        {/* Play button (desktop only) */}
-        {!mobile && (
-          <button
-            style={styles.rowPlayButton}
-            onClick={(e) => {
-              e.stopPropagation();
-              const handler = getPlayHandler(item);
-              if (handler) handler(e);
-            }}
-            title={`Play ${item.title}`}
-            aria-label={`Play ${item.title}`}
-          >
-            <svg
-              width={18}
-              height={18}
-              viewBox="0 0 24 24"
-              fill="currentColor"
-            >
-              <polygon points="5,3 19,12 5,21" />
-            </svg>
-          </button>
-        )}
-      </div>
-    );
-  };
 
   // Loading state — no metadata yet means we have nothing to frame the page
   // with, so show a centered spinner (matches the original first-load UX).
@@ -539,7 +728,15 @@ function CollectionDetail() {
     >
       <div style={styles.itemsSection}>
         <SectionHeader title="In This Collection" count={totalSize} />
-        <div style={styles.itemsList}>{items.map(renderItemRow)}</div>
+        <CollectionItemsList
+          items={items}
+          mobile={mobile}
+          navigate={navigate}
+          onContextMenu={openContextMenu}
+          getPlayHandler={getPlayHandler}
+          thumbUrl={thumbUrl}
+          actorThumbUrl={actorThumbUrl}
+        />
       </div>
     </DetailPageShell>
   );
