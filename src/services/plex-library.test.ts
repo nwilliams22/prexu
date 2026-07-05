@@ -138,6 +138,34 @@ describe("plex-library — async functions", () => {
       expect(mockServerFetch).toHaveBeenCalledTimes(1);
     });
 
+    it("cache hits return fresh identities, not the cached reference (SWR re-render contract)", async () => {
+      // REGRESSION (PR #45 e2e): useLibrary's revalidation does
+      // setSections(await getLibrarySections(...)). When the cache handed back
+      // the same array reference, that setState was identity-equal, no
+      // re-render happened, and LibraryView's document.title effect never
+      // re-fired after the route announcer's generic fallback — the tab title
+      // stuck on "Library - Prexu". Every call must yield fresh identities,
+      // matching the fresh-JSON-parse behavior callers were built against.
+      mockServerFetch.mockResolvedValueOnce(
+        jsonResponse({
+          MediaContainer: {
+            size: 1,
+            Directory: [{ key: "1", title: "Movies", type: "movie" }],
+          },
+        })
+      );
+
+      const first = await getLibrarySections("https://server:32400", "token");
+      const second = await getLibrarySections("https://server:32400", "token");
+      const third = await getLibrarySections("https://server:32400", "token");
+
+      expect(second).toEqual(first);
+      expect(second).not.toBe(first);       // fresh array
+      expect(second[0]).not.toBe(first[0]); // fresh elements (deep copy)
+      expect(third).not.toBe(second);
+      expect(mockServerFetch).toHaveBeenCalledTimes(1);
+    });
+
     it("isolates the cache per server URI", async () => {
       mockServerFetch
         .mockResolvedValueOnce(

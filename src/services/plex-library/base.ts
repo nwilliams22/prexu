@@ -102,7 +102,13 @@ export async function getLibrarySections(
   const cached = cacheGet<LibrarySection[]>(cacheKey);
   if (cached) {
     logger.debug("api", "getLibrarySections: cache hit", { count: cached.length });
-    return cached;
+    // Return a deep copy, NOT the cached reference. Before this cache existed,
+    // every call produced a fresh JSON parse, and useLibrary's SWR
+    // revalidation relies on that: setSections(sameReference) is
+    // Object.is-equal, skips the re-render, and downstream effects keyed on
+    // section identity (e.g. LibraryView's document.title effect, which must
+    // re-fire AFTER the route announcer's fallback title) never re-run.
+    return structuredClone(cached);
   }
 
   const data = await fetchJson<PlexMediaContainer<never>>(
