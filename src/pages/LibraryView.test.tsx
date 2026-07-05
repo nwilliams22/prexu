@@ -274,6 +274,29 @@ describe("LibraryView", () => {
     expect(screen.getByText("The Matrix")).toBeInTheDocument();
   });
 
+  it("dims the grid with aria-busy while showing stale items during a filter/sort refetch (prexu-0szx.18)", () => {
+    mockUsePaginatedLibrary.mockReturnValue({
+      items: [
+        { ratingKey: "100", title: "Inception", thumb: "/t1", type: "movie" },
+      ],
+      isLoading: true,
+      isLoadingMore: false,
+      isStale: true,
+      hasMore: false,
+      totalSize: 1,
+      error: null,
+      loadMore: vi.fn(),
+      retry: vi.fn(),
+    });
+    renderPage();
+
+    // The previous item is still rendered, not blanked out...
+    expect(screen.getByText("Inception")).toBeInTheDocument();
+    // ...and the grid is marked busy for assistive tech / dimming.
+    const busyRegion = document.querySelector('[aria-busy="true"]');
+    expect(busyRegion).not.toBeNull();
+  });
+
   it("shows empty state when no items", () => {
     mockUsePaginatedLibrary.mockReturnValue({
       items: [],

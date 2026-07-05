@@ -6,6 +6,7 @@ import type { PlexResource, PlexServer, PlexConnection } from "../types/plex";
 import { logger, redactUrl } from "./logger";
 import type { HomeUser } from "../types/home-user";
 import { getClientIdentifier } from "./storage";
+import { cacheGet, cacheSet } from "./api-cache";
 import {
   validateResponse,
   plexUserResponseSchema,
@@ -22,7 +23,66 @@ const RETRY_ON_TIMEOUT = 1;
 // For identical GET requests that are already in-flight, share the response.
 // Keyed by token fingerprint + URL so a request authorized as one user is
 // never served to a caller using a different token (e.g. after switchHomeUser).
-const inflightRequests = new Map<string, Promise<Response>>();
+//
+// Each entry tracks a refCount of interested consumers so an AbortSignal from
+// ONE consumer (e.g. a React effect unmounting) never kills the underlying
+// network request while OTHER consumers are still waiting on it — the shared
+// fetch is only aborted once the last interested consumer has left.
+interface InflightEntry {
+  promise: Promise<Response>;
+  /** Drives the actual network request (merged with the per-attempt timeout signal in fetchOnce). */
+  controller: AbortController;
+  /** Number of callers still interested in this request. */
+  refCount: number;
+}
+const inflightRequests = new Map<string, InflightEntry>();
+
+function releaseConsumer(entry: InflightEntry): void {
+  entry.refCount = Math.max(0, entry.refCount - 1);
+  if (entry.refCount === 0) {
+    logger.debug("api", "timedFetch: last consumer left in-flight request, aborting");
+    entry.controller.abort(new DOMException("All consumers aborted", "AbortError"));
+  }
+}
+
+/**
+ * Wrap a shared in-flight entry's response promise for ONE consumer.
+ *
+ * Registers the consumer against the entry's refcount so the shared network
+ * request survives as long as anyone still wants it (see releaseConsumer —
+ * it only aborts once refCount hits zero). Consumers that never pass a
+ * signal are treated as "always interested" (their departure can't be
+ * observed), which is the safe default.
+ *
+ * If the caller supplies their own AbortSignal, THEIR returned promise
+ * rejects immediately when THEY abort — even though the underlying request
+ * may keep running to serve other consumers.
+ */
+function consumeShared(entry: InflightEntry, signal?: AbortSignal): Promise<Response> {
+  const dataPromise = entry.promise.then((r) => r.clone());
+  if (!signal) return dataPromise;
+  if (signal.aborted) {
+    releaseConsumer(entry);
+    return Promise.reject(new DOMException("Aborted", "AbortError"));
+  }
+  return new Promise<Response>((resolve, reject) => {
+    const onAbort = () => {
+      releaseConsumer(entry);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    dataPromise.then(
+      (response) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(response);
+      },
+      (err) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(err);
+      },
+    );
+  });
+}
 
 /** True if the error is a TimeoutError thrown by our timedFetch abort. */
 export function isTimeoutError(err: unknown): boolean {
@@ -74,6 +134,10 @@ function tokenFingerprint(init?: RequestInit): string {
  * token-redacted URL and elapsed ms so callers see
  * "Request timed out after Xms: <url>" instead of
  * the cryptic default "signal is aborted without reason".
+ *
+ * If the caller's own `init.signal` is already aborted, this fails fast with
+ * an `AbortError` (mirroring native `fetch()` behavior) instead of starting
+ * or joining a request.
  */
 export async function timedFetch(
   url: string,
@@ -89,24 +153,40 @@ export async function timedFetch(
     return fetchWithRetry(url, init, timeout, retries, method);
   }
 
+  if (init?.signal?.aborted) {
+    throw new DOMException("Aborted", "AbortError");
+  }
+
   // Dedup GET requests (keyed by token fingerprint + URL)
   const key = `${tokenFingerprint(init)}:${url}`;
   const existing = inflightRequests.get(key);
   if (existing) {
-    return existing.then((r) => r.clone());
+    existing.refCount++;
+    return consumeShared(existing, init?.signal ?? undefined);
   }
 
-  const promise = fetchWithRetry(url, init, timeout, retries, method);
-  inflightRequests.set(key, promise);
+  // The controller here is the "does anyone still want this?" master signal —
+  // separate from the per-attempt timeout controller inside fetchOnce. It's
+  // merged into the request in fetchOnce via init.signal.
+  const controller = new AbortController();
+  const promise = fetchWithRetry(
+    url,
+    { ...init, signal: controller.signal },
+    timeout,
+    retries,
+    method,
+  );
+  const entry: InflightEntry = { promise, controller, refCount: 1 };
+  inflightRequests.set(key, entry);
   // Detach cleanup as a side-effect; swallow rejection on this chain only
   // (consumers observe the real rejection via their own chains).
   promise
     .finally(() => inflightRequests.delete(key))
     .catch(() => {});
 
-  // The owner promise resolves to a never-consumed Response; every consumer
-  // (including this first caller) gets a clone so bodies are independent.
-  return promise.then((r) => r.clone());
+  // Every consumer (including this first caller) gets a clone so bodies are
+  // independent; consumeShared also wires up per-consumer abort rejection.
+  return consumeShared(entry, init?.signal ?? undefined);
 }
 
 async function fetchWithRetry(
@@ -340,14 +420,22 @@ export async function validateToken(authToken: string): Promise<boolean> {
   }
 }
 
-/** Make an authenticated request to a Plex server */
+/**
+ * Make an authenticated request to a Plex server.
+ *
+ * `signal` is optional and backward-compatible — pass an AbortController's
+ * signal from a fetching effect to cancel a stale request on cleanup (see
+ * timedFetch's dedup-safe refcounting: aborting one caller's signal never
+ * kills the request while other callers still want it).
+ */
 export async function serverFetch(
   serverUri: string,
   serverToken: string,
-  path: string
+  path: string,
+  signal?: AbortSignal
 ): Promise<Response> {
   const headers = await getServerHeaders(serverToken);
-  const response = await timedFetch(`${serverUri}${path}`, { headers });
+  const response = await timedFetch(`${serverUri}${path}`, { headers, signal });
 
   if (response.status === 401) {
     emitAuthInvalid();
@@ -358,8 +446,10 @@ export async function serverFetch(
 
 // ── Server Account ID ──
 
-/** Fetch the current user's account ID for use with the history endpoint */
-export async function getServerAccountId(
+const SERVER_ACCOUNT_ID_CACHE_TTL = 30 * 60 * 1000; // 30 minutes — rarely changes within a session
+
+/** Fetch the current user's account ID for use with the history endpoint. */
+async function fetchServerAccountId(
   serverUri: string,
   serverToken: string
 ): Promise<number | null> {
@@ -447,6 +537,32 @@ export async function getServerAccountId(
     logger.error(TAG, "getServerAccountId error:", err);
     return null;
   }
+}
+
+/**
+ * Fetch the current user's account ID for use with the history endpoint.
+ *
+ * Session-TTL cached (30 min) — the underlying strategy issues 1-3 requests
+ * (myplex/account, then root + accounts as a fallback) and the result almost
+ * never changes for a given server+token within a session. WatchHistory was
+ * re-running this on every mount; now it's a cache hit after the first call.
+ */
+export async function getServerAccountId(
+  serverUri: string,
+  serverToken: string
+): Promise<number | null> {
+  const cacheKey = `server-account-id:${serverUri}:${fnv1a(serverToken)}`;
+  const cached = cacheGet<number | null>(cacheKey);
+  if (cached !== null) {
+    logger.debug("WatchHistory", "getServerAccountId: cache hit", { serverUri, accountId: cached });
+    return cached;
+  }
+
+  const id = await fetchServerAccountId(serverUri, serverToken);
+  if (id !== null) {
+    cacheSet(cacheKey, id, SERVER_ACCOUNT_ID_CACHE_TTL);
+  }
+  return id;
 }
 
 // ── Plex User & Friends API ──

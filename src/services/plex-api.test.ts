@@ -1,4 +1,5 @@
-import { validateToken, getPlexUser, getHomeUsers, switchHomeUser, getPlexFriends, timedFetch, isTimeoutError, REQUEST_TIMEOUT_MS } from "./plex-api";
+import { validateToken, getPlexUser, getHomeUsers, switchHomeUser, getPlexFriends, timedFetch, isTimeoutError, REQUEST_TIMEOUT_MS, serverFetch, getServerAccountId } from "./plex-api";
+import { cacheClear } from "./api-cache";
 
 // Mock storage module
 vi.mock("./storage", () => ({
@@ -38,6 +39,7 @@ function xmlResponse(xml: string, status = 200): Response {
 describe("plex-api", () => {
   beforeEach(() => {
     mockFetch.mockReset();
+    cacheClear();
   });
 
   // ── validateToken ──
@@ -511,6 +513,96 @@ describe("plex-api", () => {
       await expect(r1.json()).resolves.toEqual({ who: "anon" });
       await expect(r2.json()).resolves.toEqual({ who: "authed" });
     });
+
+    // ── prexu-0szx.5: aborting a deduped consumer must not kill the shared request ──
+
+    it("aborting ONE deduped consumer does not abort the shared request while another consumer still needs it", async () => {
+      let fetchSignal: AbortSignal | undefined;
+      let resolveFetch!: (r: Response) => void;
+      mockFetch.mockImplementation((_url: string, opts: { signal: AbortSignal }) => {
+        fetchSignal = opts.signal;
+        return new Promise<Response>((res) => (resolveFetch = res));
+      });
+
+      const url = `https://example.test/abort-dedup-safe-${Date.now()}-${Math.random()}`;
+      const controllerA = new AbortController();
+      const controllerB = new AbortController();
+
+      const first = timedFetch(url, { signal: controllerA.signal });
+      const second = timedFetch(url, { signal: controllerB.signal }); // dedup hit while in-flight
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      // Consumer A leaves (e.g. its React effect unmounted) before the response arrives.
+      controllerA.abort();
+
+      // The underlying network request must still be alive — consumer B still wants it.
+      expect(fetchSignal?.aborted).toBe(false);
+
+      // Consumer A's own call rejects immediately (it aborted)...
+      await expect(first).rejects.toMatchObject({ name: "AbortError" });
+
+      // ...but consumer B, who never aborted, still gets the real response.
+      resolveFetch(jsonResponse({ ok: true }));
+      const response = await second;
+      await expect(response.json()).resolves.toEqual({ ok: true });
+    });
+
+    it("aborting the LAST remaining consumer does abort the shared underlying request", async () => {
+      let fetchSignal: AbortSignal | undefined;
+      mockFetch.mockImplementation((_url: string, opts: { signal: AbortSignal }) => {
+        fetchSignal = opts.signal;
+        return new Promise<Response>(() => {}); // never resolves on its own
+      });
+
+      const url = `https://example.test/abort-dedup-last-${Date.now()}-${Math.random()}`;
+      const controllerA = new AbortController();
+      const controllerB = new AbortController();
+
+      const first = timedFetch(url, { signal: controllerA.signal });
+      const second = timedFetch(url, { signal: controllerB.signal });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      controllerA.abort();
+      expect(fetchSignal?.aborted).toBe(false); // B is still around
+
+      controllerB.abort();
+      // Now that every known consumer has left, the shared request itself aborts.
+      expect(fetchSignal?.aborted).toBe(true);
+
+      await expect(first).rejects.toMatchObject({ name: "AbortError" });
+      await expect(second).rejects.toMatchObject({ name: "AbortError" });
+    });
+
+    it("a consumer whose signal is already aborted fails fast without joining the request", async () => {
+      mockFetch.mockImplementation(
+        () => new Promise<Response>(() => {}),
+      );
+
+      const url = `https://example.test/abort-preflight-${Date.now()}-${Math.random()}`;
+      const controller = new AbortController();
+      controller.abort();
+
+      await expect(
+        timedFetch(url, { signal: controller.signal }),
+      ).rejects.toMatchObject({ name: "AbortError" });
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it("solo (non-deduped) caller aborting still aborts the underlying request immediately", async () => {
+      let fetchSignal: AbortSignal | undefined;
+      mockFetch.mockImplementation((_url: string, opts: { signal: AbortSignal }) => {
+        fetchSignal = opts.signal;
+        return new Promise<Response>(() => {});
+      });
+
+      const url = `https://example.test/abort-solo-${Date.now()}-${Math.random()}`;
+      const controller = new AbortController();
+      const promise = timedFetch(url, { signal: controller.signal });
+
+      controller.abort();
+      expect(fetchSignal?.aborted).toBe(true);
+      await expect(promise).rejects.toMatchObject({ name: "AbortError" });
+    });
   });
 
   // ── getPlexFriends (prexu-0wq: merges v2 friends + v1 shared users) ──
@@ -622,6 +714,75 @@ describe("plex-api", () => {
       const friends = await getPlexFriends("token");
       expect(friends).toHaveLength(1);
       expect(friends[0].username).toBe("carol");
+    });
+  });
+
+  // ── getServerAccountId (prexu-0szx.4: session-TTL cache) ──
+
+  describe("getServerAccountId", () => {
+    it("caches the resolved account id so a second call skips the network", async () => {
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({ MyPlex: { id: 42 } }),
+      );
+
+      const first = await getServerAccountId("https://server:32400", "token");
+      expect(first).toBe(42);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      mockFetch.mockClear();
+      const second = await getServerAccountId("https://server:32400", "token");
+      expect(second).toBe(42);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it("does not cache a null result (all strategies failed)", async () => {
+      mockFetch.mockResolvedValue(jsonResponse({}, 500));
+
+      const first = await getServerAccountId("https://server:32400", "token");
+      expect(first).toBeNull();
+
+      mockFetch.mockClear();
+      mockFetch.mockResolvedValueOnce(jsonResponse({ MyPlex: { id: 7 } }));
+      const second = await getServerAccountId("https://server:32400", "token");
+      expect(second).toBe(7);
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    it("isolates the cache per server+token", async () => {
+      mockFetch
+        .mockResolvedValueOnce(jsonResponse({ MyPlex: { id: 1 } }))
+        .mockResolvedValueOnce(jsonResponse({ MyPlex: { id: 2 } }));
+
+      const a = await getServerAccountId("https://server:32400", "token-a");
+      const b = await getServerAccountId("https://server:32400", "token-b");
+
+      expect(a).toBe(1);
+      expect(b).toBe(2);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // ── serverFetch signal passthrough (prexu-0szx.5) ──
+
+  describe("serverFetch", () => {
+    it("forwards an AbortSignal to the underlying request", async () => {
+      let receivedSignal: AbortSignal | undefined;
+      mockFetch.mockImplementation((_url: string, opts: { signal?: AbortSignal }) => {
+        receivedSignal = opts.signal;
+        return Promise.resolve(jsonResponse({ ok: true }));
+      });
+
+      const controller = new AbortController();
+      await serverFetch("https://server:32400", "token", "/library/sections", controller.signal);
+
+      expect(receivedSignal).toBeDefined();
+      expect(receivedSignal?.aborted).toBe(false);
+    });
+
+    it("still works when no signal is provided (backward compatible)", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
+      const response = await serverFetch("https://server:32400", "token", "/library/sections");
+      expect(response.ok).toBe(true);
     });
   });
 });

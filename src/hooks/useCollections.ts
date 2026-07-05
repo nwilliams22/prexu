@@ -3,6 +3,7 @@ import { useAuth } from "./useAuth";
 import { useLibrary } from "./useLibrary";
 import { getCollections, getCollectionItems } from "../services/plex-library";
 import { cacheGet, cacheSet, cacheInvalidate } from "../services/api-cache";
+import { logger } from "../services/logger";
 import type { LibrarySection, PlexCollection } from "../types/library";
 
 export interface CollectionGroup {
@@ -135,17 +136,54 @@ export function useSectionCollections(
 
     let cancelled = false;
 
-    // Fetch items for each collection to determine if fully watched.
-    // Batched to avoid saturating browser connections (max 3 concurrent).
-    function fetchWatchedStatus(colls: PlexCollection[]) {
+    /**
+     * Determine watched status for a set of collections.
+     *
+     * Collections whose own metadata already carries leafCount/
+     * viewedLeafCount aggregates (Plex often returns these directly on the
+     * collection directory entry) are resolved for free — no extra request.
+     * Only collections missing those aggregates fall back to fetching their
+     * full children list, batched to avoid saturating browser connections
+     * (max 3 concurrent) — prexu-0szx.18.
+     */
+    function computeWatchedStatus(colls: PlexCollection[]) {
       if (!server || colls.length === 0) return;
+
+      const aggregateEntries: (readonly [string, boolean])[] = [];
+      const needsFetch: PlexCollection[] = [];
+      for (const c of colls) {
+        if (c.leafCount !== undefined && c.viewedLeafCount !== undefined) {
+          aggregateEntries.push([
+            c.ratingKey,
+            c.leafCount > 0 && c.viewedLeafCount >= c.leafCount,
+          ]);
+        } else {
+          needsFetch.push(c);
+        }
+      }
+
+      if (aggregateEntries.length > 0 && !cancelled) {
+        logger.debug("api", "useSectionCollections: resolved watched status from aggregates", {
+          sectionId,
+          count: aggregateEntries.length,
+        });
+        setWatchedMap((prev) => ({ ...prev, ...Object.fromEntries(aggregateEntries) }));
+      }
+
+      if (needsFetch.length === 0) {
+        if (!cancelled) {
+          cacheSet(watchedCacheKey, Object.fromEntries(aggregateEntries), CACHE_TTL);
+        }
+        return;
+      }
+
       const BATCH_SIZE = 3;
 
       (async () => {
-        const allEntries: (readonly [string, boolean])[] = [];
-        for (let i = 0; i < colls.length; i += BATCH_SIZE) {
+        const allEntries: (readonly [string, boolean])[] = [...aggregateEntries];
+        for (let i = 0; i < needsFetch.length; i += BATCH_SIZE) {
           if (cancelled) return;
-          const batch = colls.slice(i, i + BATCH_SIZE);
+          const batch = needsFetch.slice(i, i + BATCH_SIZE);
           const results = await Promise.all(
             batch.map(async (c) => {
               try {
@@ -201,9 +239,9 @@ export function useSectionCollections(
       setCollections(cached);
       if (cachedWatched) setWatchedMap(cachedWatched);
       setIsLoading(false);
-      // If collections are cached but watched status isn't, fetch watched status
+      // If collections are cached but watched status isn't, compute it
       if (!cachedWatched) {
-        fetchWatchedStatus(cached);
+        computeWatchedStatus(cached);
       }
       return () => { cancelled = true; };
     }
@@ -216,8 +254,8 @@ export function useSectionCollections(
         if (!cancelled) {
           setCollections(items);
           cacheSet(cacheKey, items, CACHE_TTL);
-          // Fetch watched status for each collection in the background
-          fetchWatchedStatus(items);
+          // Resolve watched status for each collection in the background
+          computeWatchedStatus(items);
         }
       })
       .catch((err) => {

@@ -1,4 +1,5 @@
-import { getRelatedItems } from "./related";
+import { getRelatedItems, getMediaByActor } from "./related";
+import { cacheClear } from "../api-cache";
 
 vi.mock("../plex-api", () => ({
   serverFetch: vi.fn(),
@@ -38,6 +39,7 @@ describe("getRelatedItems", () => {
   beforeEach(() => {
     mockServerFetch.mockReset();
     mockLoggerDebug.mockReset();
+    cacheClear();
   });
 
   describe("episode type", () => {
@@ -137,5 +139,103 @@ describe("getRelatedItems", () => {
       const calledPath: string = mockServerFetch.mock.calls[0][2] as string;
       expect(calledPath).toContain("/similar");
     });
+  });
+});
+
+// ── getMediaByActor (prexu-0szx.4) ──
+
+describe("getMediaByActor", () => {
+  beforeEach(() => {
+    mockServerFetch.mockReset();
+    mockLoggerDebug.mockReset();
+    cacheClear();
+  });
+
+  function sectionsResponse() {
+    return jsonResponse({
+      MediaContainer: {
+        Directory: [
+          { key: "1", title: "Movies", type: "movie" },
+          { key: "2", title: "TV Shows", type: "show" },
+          { key: "3", title: "Music", type: "artist" },
+        ],
+      },
+    });
+  }
+
+  it("queries only movie and show sections with a shelf-sized container", async () => {
+    mockServerFetch
+      .mockResolvedValueOnce(sectionsResponse())
+      .mockResolvedValueOnce(
+        jsonResponse({ MediaContainer: { Metadata: [{ ratingKey: "m1", title: "Movie A", type: "movie" }] } })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ MediaContainer: { Metadata: [{ ratingKey: "s1", title: "Show A", type: "show" }] } })
+      );
+
+    const result = await getMediaByActor(SERVER, TOKEN, "Some Actor");
+
+    expect(result.map((r) => r.ratingKey).sort()).toEqual(["m1", "s1"]);
+    // 1 sections call (uncached, first time) + 2 section queries (music skipped)
+    expect(mockServerFetch).toHaveBeenCalledTimes(3);
+
+    const sectionPaths = mockServerFetch.mock.calls.slice(1).map((c) => c[2] as string);
+    for (const path of sectionPaths) {
+      expect(path).toContain("X-Plex-Container-Size=20");
+    }
+    const showPath = sectionPaths.find((p) => p.startsWith("/library/sections/2/"));
+    expect(showPath).toContain("type=2");
+  });
+
+  it("dedupes items across sections by ratingKey", async () => {
+    mockServerFetch
+      .mockResolvedValueOnce(sectionsResponse())
+      .mockResolvedValueOnce(
+        jsonResponse({ MediaContainer: { Metadata: [{ ratingKey: "dup1", title: "Dup", type: "movie" }] } })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ MediaContainer: { Metadata: [{ ratingKey: "dup1", title: "Dup", type: "movie" }] } })
+      );
+
+    const result = await getMediaByActor(SERVER, TOKEN, "Actor");
+    expect(result).toHaveLength(1);
+  });
+
+  it("caches results per actor so a repeat call skips the network entirely", async () => {
+    mockServerFetch
+      .mockResolvedValueOnce(sectionsResponse())
+      .mockResolvedValueOnce(
+        jsonResponse({ MediaContainer: { Metadata: [{ ratingKey: "m1", title: "Movie A", type: "movie" }] } })
+      )
+      .mockResolvedValueOnce(jsonResponse({ MediaContainer: { Metadata: [] } }));
+
+    const first = await getMediaByActor(SERVER, TOKEN, "Cached Actor");
+    mockServerFetch.mockClear();
+
+    const second = await getMediaByActor(SERVER, TOKEN, "Cached Actor");
+
+    expect(second).toEqual(first);
+    expect(mockServerFetch).not.toHaveBeenCalled();
+  });
+
+  it("isolates the cache per actor name (sections stay shared/cached across actors)", async () => {
+    mockServerFetch
+      .mockResolvedValueOnce(sectionsResponse())
+      .mockResolvedValueOnce(
+        jsonResponse({ MediaContainer: { Metadata: [{ ratingKey: "m1", title: "Movie A", type: "movie" }] } })
+      )
+      .mockResolvedValueOnce(jsonResponse({ MediaContainer: { Metadata: [] } }))
+      .mockResolvedValueOnce(
+        jsonResponse({ MediaContainer: { Metadata: [{ ratingKey: "m2", title: "Movie B", type: "movie" }] } })
+      )
+      .mockResolvedValueOnce(jsonResponse({ MediaContainer: { Metadata: [] } }));
+
+    const a = await getMediaByActor(SERVER, TOKEN, "Actor A");
+    const b = await getMediaByActor(SERVER, TOKEN, "Actor B");
+
+    expect(a.map((i) => i.ratingKey)).toEqual(["m1"]);
+    expect(b.map((i) => i.ratingKey)).toEqual(["m2"]);
+    // sections fetched once total (cached in base.ts) + 2 section queries per actor = 5
+    expect(mockServerFetch).toHaveBeenCalledTimes(5);
   });
 });

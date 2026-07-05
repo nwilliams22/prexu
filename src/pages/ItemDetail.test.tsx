@@ -69,9 +69,18 @@ vi.mock("../components/PosterCard", () => ({
 }));
 
 vi.mock("../components/ErrorState", () => ({
-  default: ({ message }: { message: string }) => (
-    <div data-testid="error-state">{message}</div>
+  default: ({ message, onRetry }: { message: string; onRetry?: () => void }) => (
+    <div data-testid="error-state">
+      {message}
+      {onRetry && (
+        <button onClick={onRetry}>Retry</button>
+      )}
+    </div>
   ),
+}));
+
+vi.mock("../components/detail/DetailSkeleton", () => ({
+  default: () => <div data-testid="detail-skeleton" />,
 }));
 
 vi.mock("../components/detail/ItemHeroSection", () => ({
@@ -114,6 +123,7 @@ const makeDetailData = (
     item: Record<string, unknown> | null;
     isLoading: boolean;
     error: string | null;
+    refreshItem: () => void;
   }> = {}
 ) => ({
   item: null,
@@ -192,6 +202,23 @@ describe("ItemDetail", () => {
       )
     ).not.toThrow();
     expect(screen.getByTestId("hero-section")).toHaveTextContent("Inception");
+  });
+
+  it("renders a detail-shaped skeleton instead of a bare spinner while loading", () => {
+    mockUseItemDetailData.mockReturnValue(makeDetailData({ isLoading: true }));
+    renderItemDetail();
+    expect(screen.getByTestId("detail-skeleton")).toBeInTheDocument();
+  });
+
+  it("wires refreshItem as the error state's retry handler", () => {
+    const refreshItem = vi.fn();
+    mockUseItemDetailData.mockReturnValue(
+      makeDetailData({ error: "Network error", refreshItem })
+    );
+    renderItemDetail();
+
+    screen.getByRole("button", { name: "Retry" }).click();
+    expect(refreshItem).toHaveBeenCalledTimes(1);
   });
 
   it("toasts and redirects restricted content even while server is null", () => {

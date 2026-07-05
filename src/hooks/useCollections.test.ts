@@ -183,6 +183,47 @@ describe("useSectionCollections", () => {
     expect(result.current.watchedMap["c1"]).toBe(true);
   });
 
+  it("resolves watched status from leafCount/viewedLeafCount aggregates without fetching children (prexu-0szx.18)", async () => {
+    const colls = [
+      { ...makeCollection("c1", "Fully Watched"), leafCount: 5, viewedLeafCount: 5 },
+      { ...makeCollection("c2", "Partially Watched"), leafCount: 5, viewedLeafCount: 2 },
+    ];
+    mockGetCollections.mockResolvedValue(colls);
+
+    const { result } = renderHook(() => useSectionCollections("1"));
+
+    await waitFor(() => {
+      expect(result.current.watchedMap).toHaveProperty("c1");
+      expect(result.current.watchedMap).toHaveProperty("c2");
+    });
+
+    expect(result.current.watchedMap["c1"]).toBe(true);
+    expect(result.current.watchedMap["c2"]).toBe(false);
+    // No per-collection children fetch was needed — resolved from aggregates alone.
+    expect(mockGetCollectionItems).not.toHaveBeenCalled();
+  });
+
+  it("falls back to fetching children only for collections missing aggregates", async () => {
+    const withAggregates = { ...makeCollection("c1", "Has Aggregates"), leafCount: 3, viewedLeafCount: 3 };
+    const withoutAggregates = makeCollection("c2", "No Aggregates");
+    mockGetCollections.mockResolvedValue([withAggregates, withoutAggregates]);
+    mockGetCollectionItems.mockResolvedValue({
+      items: [{ ratingKey: "m1", viewCount: 1 }],
+    });
+
+    const { result } = renderHook(() => useSectionCollections("1"));
+
+    await waitFor(() => {
+      expect(result.current.watchedMap).toHaveProperty("c2");
+    });
+
+    expect(result.current.watchedMap["c1"]).toBe(true);
+    expect(result.current.watchedMap["c2"]).toBe(true);
+    // Only the collection lacking aggregates triggered a children fetch.
+    expect(mockGetCollectionItems).toHaveBeenCalledTimes(1);
+    expect(mockGetCollectionItems).toHaveBeenCalledWith("https://plex.test", "token", "c2");
+  });
+
   it("uses cache when available", () => {
     const colls = [makeCollection("c1", "Action")];
     const watchedMap = { c1: true };

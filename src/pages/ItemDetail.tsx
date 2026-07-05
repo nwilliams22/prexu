@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { usePlayerSession } from "../contexts/PlayerContext";
 import { useAuth } from "../hooks/useAuth";
@@ -17,12 +17,14 @@ import EpisodeListSection from "../components/detail/EpisodeListSection";
 import CastSection from "../components/detail/CastSection";
 import AdminActionsBar from "../components/detail/AdminActionsBar";
 import RatingsSection from "../components/detail/RatingsSection";
+import DetailSkeleton from "../components/detail/DetailSkeleton";
 import type {
   PlexMovie,
   PlexShow,
   PlexSeason,
   PlexEpisode,
   PlexChapter,
+  PlexRole,
 } from "../types/library";
 import { detailStyles } from "../utils/detail-styles";
 import { isWatched } from "../utils/media-helpers";
@@ -59,6 +61,25 @@ function ItemDetail() {
   } = useItemDetailData();
 
   const { seasonFading, switchSeason } = useSeasonSwitch(setItem, setEpisodes);
+
+  // Season-specific cast, aggregated from episode roles (e.g. anthology
+  // shows) with a fallback to the parent show's cast. Only rendered on the
+  // "season" branch below, but memoized here (top level, unconditional) since
+  // hooks can't live inside a conditional render branch — this used to
+  // recompute on every render via an inline IIFE.
+  const seasonCastRoles = useMemo<PlexRole[] | undefined>(() => {
+    const roles: PlexRole[] = [];
+    const seen = new Set<string>();
+    for (const ep of episodes) {
+      for (const role of ep.Role ?? []) {
+        if (!seen.has(role.tag)) {
+          seen.add(role.tag);
+          roles.push(role);
+        }
+      }
+    }
+    return roles.length > 0 ? roles : parentShow?.Role;
+  }, [episodes, parentShow]);
 
   // Redirect restricted content
   const itemRating = item ? (item as { contentRating?: string }).contentRating : undefined;
@@ -207,17 +228,13 @@ function ItemDetail() {
   };
 
   if (isLoading) {
-    return (
-      <div style={styles.loadingContainer}>
-        <div className="loading-spinner" />
-      </div>
-    );
+    return <DetailSkeleton />;
   }
 
   if (error || !item) {
     return (
       <div style={styles.container}>
-        <ErrorState message={error ?? "Item not found"} />
+        <ErrorState message={error ?? "Item not found"} onRetry={refreshItem} />
       </div>
     );
   }
@@ -516,26 +533,12 @@ function ItemDetail() {
             />
           }
         />
-        {(() => {
-          // Aggregate cast from episodes for season-specific cast (e.g. anthology shows)
-          const seasonRoles: import("../types/library").PlexRole[] = [];
-          const seen = new Set<string>();
-          for (const ep of episodes) {
-            for (const role of ep.Role ?? []) {
-              if (!seen.has(role.tag)) {
-                seen.add(role.tag);
-                seasonRoles.push(role);
-              }
-            }
-          }
-          const roles = seasonRoles.length > 0 ? seasonRoles : parentShow?.Role;
-          return roles && roles.length > 0 ? (
-            <CastSection
-              roles={roles}
-              actorThumbUrl={actorThumbUrl}
-            />
-          ) : null;
-        })()}
+        {seasonCastRoles && seasonCastRoles.length > 0 && (
+          <CastSection
+            roles={seasonCastRoles}
+            actorThumbUrl={actorThumbUrl}
+          />
+        )}
       </div>
     );
   }
@@ -557,12 +560,6 @@ const styles: Record<string, React.CSSProperties> = {
     position: "relative",
     paddingBottom: "2rem",
     overflow: "hidden",
-  },
-  loadingContainer: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: "4rem",
   },
   section: {
     position: "relative",
