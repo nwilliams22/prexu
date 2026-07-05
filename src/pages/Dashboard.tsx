@@ -9,6 +9,7 @@ import { useDashboard } from "../hooks/useDashboard";
 import { useMediaContextMenu } from "../hooks/useMediaContextMenu";
 import { usePlayAction } from "../hooks/usePlayAction";
 import { useStableItemCallback } from "../hooks/useStableItemCallback";
+import { useDetailPrefetch } from "../hooks/useDetailPrefetch";
 import {
   getImageUrl,
   getPlaceholderUrl,
@@ -158,6 +159,10 @@ function Dashboard() {
     onRefresh: refresh,
   });
   const { getPlayHandler, playOverlay } = usePlayAction();
+  // Hover-intent prefetch (prexu-0szx.15): every shelf card's onClick
+  // routes to /item/<its own ratingKey>, so the card-supplied key warms
+  // exactly the detail bundle the click will render.
+  const prefetchDetail = useDetailPrefetch();
 
   // Stable per-ratingKey onClick/onContextMenu handlers (prexu-0szx.13) —
   // these shelves render ~80 PosterCards total and are NOT virtualized, so
@@ -467,6 +472,7 @@ function Dashboard() {
                     onClick={stableDeckNavigate(item.ratingKey, item, (it) =>
                       navigate(`/item/${it.ratingKey}`),
                     )}
+                    onHoverIntent={prefetchDetail}
                     onPlay={getPlayHandler(item)}
                     mediaBadges={getItemMediaBadges(item)}
                     showMoreButton
@@ -519,6 +525,7 @@ function Dashboard() {
                   onClick={stableMovieNavigate(item.ratingKey, item, (it) =>
                     navigate(`/item/${it.ratingKey}`),
                   )}
+                  onHoverIntent={prefetchDetail}
                   onPlay={getPlayHandler(item)}
                   mediaBadges={getItemMediaBadges(item)}
                   showMoreButton
@@ -581,6 +588,7 @@ function Dashboard() {
                     onClick={stableShowNavigate(group.groupKey, group, (g) =>
                       navigate(`/item/${g.groupKey}`),
                     )}
+                    onHoverIntent={prefetchDetail}
                     onExpand={
                       isShowGroup
                         ? () => {
