@@ -8,6 +8,7 @@ import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useBreakpoint, isMobile, isTabletOrBelow } from "../hooks/useBreakpoint";
 import { useAsyncData } from "../hooks/useAsyncData";
+import { useDelayedFlag } from "../hooks/useDelayedFlag";
 import {
   isTmdbAvailable,
   getTmdbMovieDetail,
@@ -17,6 +18,11 @@ import {
   type TmdbTvDetail,
 } from "../services/tmdb";
 import HorizontalRow from "../components/HorizontalRow";
+import ErrorState from "../components/ErrorState";
+
+/** Loading/error gap before the skeleton is allowed to show — a fast,
+ *  cache-warm load never flashes it (prexu-0szx.17). */
+const LOADING_SKELETON_DELAY_MS = 150;
 
 /** Format runtime in hours and minutes */
 function formatRuntime(minutes: number | null): string {
@@ -42,7 +48,7 @@ function DiscoverDetail() {
 
   const isMovie = mediaType === "movie";
 
-  const { data: detail, isLoading, error } = useAsyncData(
+  const { data: detail, isLoading, error, refresh } = useAsyncData(
     async () => {
       const available = await isTmdbAvailable();
       if (!available) throw new Error("TMDb proxy not available on relay server.");
@@ -65,18 +71,30 @@ function DiscoverDetail() {
     [tmdbId, mediaType],
   );
 
+  // Pre-show delay so a fast/cache-warm load never flashes the skeleton
+  // (same pattern as ActorDetail and the AppLayout transition spinner,
+  // prexu-0szx.17 / prexu-0szx.8).
+  const showLoadingSkeleton = useDelayedFlag(isLoading, LOADING_SKELETON_DELAY_MS);
+
   if (isLoading) {
+    if (!showLoadingSkeleton) return null;
     return (
-      <div style={styles.loadingContainer}>
-        <div className="loading-spinner" />
+      <div style={styles.container}>
+        <div style={styles.skeletonHero}>
+          <div className="shimmer" style={styles.skeletonPoster} />
+          <div style={styles.skeletonHeroText}>
+            <div className="shimmer" style={styles.skeletonTitleLine} />
+            <div className="shimmer" style={styles.skeletonMetaLine} />
+          </div>
+        </div>
       </div>
     );
   }
 
   if (error || !detail) {
     return (
-      <div style={styles.errorContainer}>
-        <p style={{ color: "var(--error)" }}>{error ?? "Not found"}</p>
+      <div style={styles.container}>
+        <ErrorState message={error ?? "Not found"} onRetry={refresh} />
       </div>
     );
   }
@@ -515,14 +533,32 @@ const styles: Record<string, React.CSSProperties> = {
     margin: 0,
     lineHeight: 1.5,
   },
-  loadingContainer: {
+  skeletonHero: {
     display: "flex",
-    justifyContent: "center",
-    padding: "4rem 0",
+    gap: "2rem",
+    padding: "2.5rem 3rem",
   },
-  errorContainer: {
+  skeletonPoster: {
+    width: 300,
+    height: 450,
+    borderRadius: "10px",
+    flexShrink: 0,
+  },
+  skeletonHeroText: {
+    flex: 1,
     display: "flex",
-    justifyContent: "center",
-    padding: "3rem 0",
+    flexDirection: "column",
+    gap: "1rem",
+    paddingTop: "1rem",
+  },
+  skeletonTitleLine: {
+    height: "2.5rem",
+    width: "60%",
+    borderRadius: "6px",
+  },
+  skeletonMetaLine: {
+    height: "1.25rem",
+    width: "40%",
+    borderRadius: "6px",
   },
 };

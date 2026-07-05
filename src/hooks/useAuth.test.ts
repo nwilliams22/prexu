@@ -44,11 +44,19 @@ vi.mock("../services/logger", async (importOriginal) => ({
   },
 }));
 
+// Mock the optimistic dashboard prefetch so tests don't trigger real
+// network/Tauri calls — assert on call args instead (prexu-0szx.9).
+vi.mock("../utils/dashboardPrefetch", () => ({
+  prefetchDashboardData: vi.fn(),
+}));
+
 import * as storage from "../services/storage";
 import * as plexApi from "../services/plex-api";
+import { prefetchDashboardData } from "../utils/dashboardPrefetch";
 
 const mockStorage = vi.mocked(storage);
 const mockPlexApi = vi.mocked(plexApi);
+const mockPrefetch = vi.mocked(prefetchDashboardData);
 
 describe("useAuthState", () => {
   beforeEach(() => {
@@ -125,6 +133,86 @@ describe("useAuthState", () => {
 
     expect(result.current.isAuthenticated).toBe(false);
     expect(mockStorage.clearAuth).toHaveBeenCalled();
+  });
+
+  it("discards the optimistic prefetch and leaks no state when validation fails, even though the server read raced ahead of it", async () => {
+    // The server/user LazyStore reads and the optimistic prefetch fire
+    // before validateToken resolves (prexu-0szx.9's parallelized boot) —
+    // this asserts that a subsequently-failed validation still results in
+    // a fully logged-out state with nothing surfaced from the race.
+    mockStorage.getAuth.mockResolvedValue({
+      authToken: "expired-token",
+      clientIdentifier: "client-id",
+    });
+    const storedServer = {
+      name: "Server",
+      clientIdentifier: "server-id",
+      accessToken: "server-token",
+      uri: "https://server:32400",
+    };
+    mockStorage.getServer.mockResolvedValue(storedServer);
+    mockStorage.getActiveUser.mockResolvedValue({
+      id: 1,
+      title: "User",
+      username: "user",
+      thumb: "",
+      isAdmin: true,
+      isHomeUser: false,
+    });
+    mockPlexApi.validateToken.mockResolvedValue(false);
+
+    const { result } = renderHook(() => useAuthState());
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    // No leaked optimistic state: fully logged out despite the server read
+    // having already resolved (and the prefetch having already fired).
+    expect(result.current.isAuthenticated).toBe(false);
+    expect(result.current.authToken).toBeNull();
+    expect(result.current.server).toBeNull();
+    expect(result.current.activeUser).toBeNull();
+    expect(result.current.serverSelected).toBe(false);
+    expect(mockStorage.clearAuth).toHaveBeenCalled();
+  });
+
+  it("kicks off the dashboard prefetch optimistically, in parallel with token validation", async () => {
+    mockStorage.getAuth.mockResolvedValue({
+      authToken: "stored-token",
+      clientIdentifier: "client-id",
+    });
+    const storedServer = {
+      name: "Server",
+      clientIdentifier: "server-id",
+      accessToken: "server-token",
+      uri: "https://server:32400",
+    };
+    mockStorage.getServer.mockResolvedValue(storedServer);
+
+    // Slow validateToken so we can assert prefetch already fired before it settles.
+    let resolveValidate!: (v: boolean) => void;
+    mockPlexApi.validateToken.mockReturnValue(
+      new Promise((res) => (resolveValidate = res)),
+    );
+
+    const { result } = renderHook(() => useAuthState());
+
+    await waitFor(() => {
+      expect(mockPrefetch).toHaveBeenCalledWith(storedServer);
+    });
+    // Prefetch fired while validation is still pending — the boot hasn't
+    // finished yet, proving the two ran in parallel rather than serially.
+    expect(result.current.isLoading).toBe(true);
+
+    await act(async () => {
+      resolveValidate(true);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
   });
 
   it("login() saves auth, sets token, fetches user", async () => {

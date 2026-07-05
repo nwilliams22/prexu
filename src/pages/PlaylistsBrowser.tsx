@@ -1,6 +1,7 @@
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { usePlaylists } from "../hooks/usePlaylists";
+import { useScrollRestoration } from "../hooks/useScrollRestoration";
 import { getImageUrl } from "../services/plex-library";
 import LibraryGrid from "../components/LibraryGrid";
 import PosterCard from "../components/PosterCard";
@@ -12,6 +13,9 @@ function PlaylistsBrowser() {
   const { server } = useAuth();
   const navigate = useNavigate();
   const { playlists, isLoading, error, retry } = usePlaylists();
+  // Only grid page missing scroll restoration — back-nav jumped to top
+  // instead of the scroll position the user left (prexu-0szx.17).
+  useScrollRestoration();
 
   if (!server) return null;
 

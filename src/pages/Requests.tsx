@@ -19,6 +19,7 @@ function Requests() {
   const { activeUser } = useAuth();
   const {
     requests,
+    isLoading,
     respondToRequest,
     dismissRequest,
     markAllRead,
@@ -116,7 +117,11 @@ function Requests() {
 
       {/* Request list */}
       <div style={styles.list}>
-        {filtered.length === 0 && (
+        {/* Gated on isLoading — the persisted request list loads async on
+            mount, so rendering this unconditionally on `filtered.length === 0`
+            flashed "No requests yet" for a frame before real data landed
+            (prexu-0szx.17). */}
+        {!isLoading && filtered.length === 0 && (
           <div style={styles.emptyState}>
             <svg
               width={40}

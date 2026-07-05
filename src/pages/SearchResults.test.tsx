@@ -56,8 +56,13 @@ vi.mock("../components/EmptyState", () => ({
 }));
 
 vi.mock("../components/ErrorState", () => ({
-  default: ({ message }: { message: string }) => (
-    <div data-testid="error-state">{message}</div>
+  default: ({ message, onRetry }: { message: string; onRetry?: () => void }) => (
+    <div data-testid="error-state">
+      {message}
+      {onRetry && (
+        <button onClick={onRetry}>Retry</button>
+      )}
+    </div>
   ),
 }));
 
@@ -140,6 +145,27 @@ describe("SearchResults", () => {
     expect(screen.getByText("Movies")).toBeInTheDocument();
     expect(screen.getByText("Batman Begins")).toBeInTheDocument();
     expect(screen.getByText("The Dark Knight")).toBeInTheDocument();
+  });
+
+  it("shows an ErrorState with a working Retry button on error (prexu-0szx.17)", async () => {
+    const { default: userEvent } = await import("@testing-library/user-event");
+    mockUseSearch.mockReturnValue({
+      query: "batman",
+      results: [],
+      isSearching: false,
+      error: "Search failed",
+    });
+    renderWithRouter("batman");
+
+    expect(screen.getByTestId("error-state")).toHaveTextContent("Search failed");
+    const callsBefore = mockUseSearch.mock.calls.length;
+
+    const user = userEvent.setup();
+    await user.click(screen.getByText("Retry"));
+
+    // Retry remounts the inner view (useSearch has no refresh of its own),
+    // which re-invokes useSearch to re-run its fetch effect.
+    expect(mockUseSearch.mock.calls.length).toBeGreaterThan(callsBefore);
   });
 
   it("shows 'Start typing' when no query", () => {

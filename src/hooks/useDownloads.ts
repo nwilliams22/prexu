@@ -15,6 +15,24 @@ import {
 import { getDownloadItems, saveDownloadItems } from "../services/storage";
 import { logger } from "../services/logger";
 import type { DownloadItem, DownloadProgressEvent } from "../types/downloads";
+import type { ToastVariant } from "../types/toast";
+
+/**
+ * Matches `ToastContextValue["toast"]` (src/hooks/useToast.ts) without
+ * importing the whole context module. `useDownloadsState` is invoked
+ * directly inside AppProviders' function body, BEFORE the JSX tree that
+ * renders `<ToastProvider>` — calling `useToast()` from in here would look
+ * up a ToastContext ancestor that doesn't exist yet at that call site, so
+ * the dispatcher is threaded in as a parameter instead (AppProviders
+ * already has `toastState.toast` in scope at the point it calls this hook).
+ */
+export type DownloadToastFn = (
+  message: string,
+  variant?: ToastVariant,
+  duration?: number,
+) => void;
+
+const noopToast: DownloadToastFn = () => {};
 
 // Serialized on purpose: the Plex server drops the in-flight file stream
 // with IncompleteBody the moment a second full-file GET starts (observed
@@ -52,6 +70,7 @@ function isTauriRuntime(): boolean {
 
 export function useDownloadsState(
   server: { uri: string; accessToken: string } | null,
+  toast: DownloadToastFn = noopToast,
 ): DownloadsContextValue {
   const [downloads, setDownloads] = useState<DownloadItem[]>([]);
   // Bumped when a retry backoff elapses so the queue effect re-runs;
@@ -62,6 +81,13 @@ export function useDownloadsState(
   const retryTimersRef = useRef(new Set<ReturnType<typeof setTimeout>>());
   const serverRef = useRef(server);
   serverRef.current = server;
+  // Mirrors `downloads` for the progress-event listener below, whose effect
+  // has an empty dep array (it subscribes once) — reading `downloads`
+  // directly there would close over a stale, empty array on first mount.
+  const downloadsRef = useRef(downloads);
+  downloadsRef.current = downloads;
+  const toastRef = useRef(toast);
+  toastRef.current = toast;
 
   useEffect(() => {
     const timers = retryTimersRef.current;
@@ -110,6 +136,14 @@ export function useDownloadsState(
           const { ratingKey, bytesDownloaded, status, errorMessage } =
             event.payload;
 
+          // Looked up before setDownloads so the toast has the item's title
+          // even though the state update below is what actually applies the
+          // new status — reading from the ref (not the `downloads` state
+          // this effect closed over on mount) keeps it current.
+          const title =
+            downloadsRef.current.find((d) => d.ratingKey === ratingKey)
+              ?.title ?? "Download";
+
           setDownloads((prev) =>
             prev.map((item) => {
               if (item.ratingKey !== ratingKey) return item;
@@ -134,7 +168,13 @@ export function useDownloadsState(
           }
           if (status === "complete") {
             autoRetriesRef.current.delete(ratingKey);
+            logger.info("downloads", "download complete", { ratingKey, title });
+            toastRef.current(`"${title}" downloaded`, "success");
           }
+          // Note: a "error" status here may still be auto-retried by the
+          // queue-processor effect below — the failure toast fires only
+          // once retries are exhausted (see that effect's catch handler).
+          // "cancelled" never toasts — it's always user-initiated.
         },
       );
     })();
@@ -238,6 +278,11 @@ export function useDownloadsState(
               : d,
           ),
         );
+        // Auto-retries exhausted — this is the one point that knows the
+        // failure is final rather than a transient error about to be
+        // retried, so the toast fires here rather than off the raw
+        // "error" progress-event status.
+        toastRef.current(`"${item.title}" download failed`, "error");
       });
     }
     // retryTick re-runs this effect when a retry backoff elapses.

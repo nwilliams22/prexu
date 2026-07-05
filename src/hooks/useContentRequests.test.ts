@@ -59,6 +59,41 @@ describe("useContentRequestState", () => {
     expect(result.current.isRelayConnected).toBe(false);
   });
 
+  it("starts isLoading true and flips false once the persisted list has loaded (prexu-0szx.17)", async () => {
+    mockGetContentRequests.mockResolvedValue([]);
+    const { result } = renderHook(() => useContentRequestState("token", adminUser));
+
+    expect(result.current.isLoading).toBe(true);
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+  });
+
+  it("flips isLoading false even if the persisted list is non-empty", async () => {
+    const stored = [{
+      requestId: "r9",
+      tmdbId: 1,
+      mediaType: "movie" as const,
+      title: "Loaded",
+      year: "2024",
+      posterPath: null,
+      overview: "",
+      requesterUsername: "user",
+      requesterThumb: "",
+      status: "pending" as const,
+      requestedAt: 1000,
+    }];
+    mockGetContentRequests.mockResolvedValue(stored);
+
+    const { result } = renderHook(() => useContentRequestState("token", adminUser));
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+    expect(result.current.requests).toHaveLength(1);
+  });
+
   it("loads persisted requests on mount", async () => {
     const stored = [{
       requestId: "r1",

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { useBreakpoint, isMobile, isTabletOrBelow } from "../hooks/useBreakpoint";
@@ -6,19 +6,49 @@ import { useScrollRestoration } from "../hooks/useScrollRestoration";
 import { useTmdbPersonData } from "../hooks/useTmdbPersonData";
 import { usePlexActorMedia } from "../hooks/usePlexActorMedia";
 import { useFrequentCollaborators } from "../hooks/useFrequentCollaborators";
+import { useDelayedFlag } from "../hooks/useDelayedFlag";
 import { calcAge, getYear } from "../utils/actor-helpers";
 import { getImageUrl } from "../services/plex-library";
 import { getTmdbImageUrl, type TmdbCreditEntry } from "../services/tmdb";
 import HorizontalRow from "../components/HorizontalRow";
 import PosterCard from "../components/PosterCard";
+import SkeletonCard from "../components/SkeletonCard";
+import ErrorState from "../components/ErrorState";
 import ActorCreditsSection from "../components/actor/ActorCreditsSection";
 import ActorCollaboratorsSection from "../components/actor/ActorCollaboratorsSection";
 import type { PlexMediaItem } from "../types/library";
 import { getInitials, formatDate } from "../utils/text-format";
 import { isWatched } from "../utils/media-helpers";
 
+/** Loading/error gap before the skeleton is allowed to show — a fast,
+ *  cache-warm load never flashes it (prexu-0szx.17). */
+const LOADING_SKELETON_DELAY_MS = 150;
+
 function ActorDetail() {
   const { actorName } = useParams<{ actorName: string }>();
+  // Neither useTmdbPersonData nor usePlexActorMedia expose a retry/refresh
+  // callback — bumping this key remounts ActorDetailView from scratch,
+  // which re-runs both hooks' fetch effects as a full retry.
+  const [retryNonce, setRetryNonce] = useState(0);
+
+  if (!actorName) return null;
+
+  return (
+    <ActorDetailView
+      key={retryNonce}
+      actorName={actorName}
+      onRetry={() => setRetryNonce((n) => n + 1)}
+    />
+  );
+}
+
+function ActorDetailView({
+  actorName,
+  onRetry,
+}: {
+  actorName: string;
+  onRetry: () => void;
+}) {
   const { server } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -32,9 +62,7 @@ function ActorDetail() {
   const [bioExpanded, setBioExpanded] = useState(false);
 
   // Set document title
-  if (actorName) {
-    document.title = `${actorName} - Prexu`;
-  }
+  document.title = `${actorName} - Prexu`;
 
   // ── Data hooks ──
   const tmdb = useTmdbPersonData(actorName);
@@ -54,6 +82,7 @@ function ActorDetail() {
 
   const isLoading = tmdb.isLoading || plex.isLoading;
   const error = tmdb.error ?? plex.error;
+  const showLoadingSkeleton = useDelayedFlag(isLoading, LOADING_SKELETON_DELAY_MS);
 
   // Photo: prefer TMDB profile, fall back to Plex thumb
   const tmdbPhotoUrl = tmdb.personDetail?.profile_path
@@ -72,8 +101,10 @@ function ActorDetail() {
 
   const photoSize = mobile ? 140 : tablet ? 200 : 260;
 
-  // Build filmography count for stats
-  const filmographyCount = (() => {
+  // Build filmography count for stats — memoized: this dedup scan over
+  // tmdb.credits doesn't need to re-run on every render (e.g. toggling
+  // bioExpanded), only when the credits list itself actually changes.
+  const filmographyCount = useMemo(() => {
     const seen = new Set<number>();
     return tmdb.credits
       .filter((c) => c.character)
@@ -82,9 +113,7 @@ function ActorDetail() {
         seen.add(c.id);
         return true;
       }).length;
-  })();
-
-  if (!actorName) return null;
+  }, [tmdb.credits]);
 
   const bio = tmdb.personDetail?.biography;
   const bioTruncated = bio && bio.length > 400 && !bioExpanded;
@@ -93,8 +122,9 @@ function ActorDetail() {
   const age = tmdb.personDetail ? calcAge(tmdb.personDetail.birthday, tmdb.personDetail.deathday) : null;
   const department = tmdb.personDetail?.known_for_department ?? "Actor";
 
-  // Featured role: highest-rated server item from credits
-  const featuredItem = (() => {
+  // Featured role: highest-rated server item from credits — memoized for
+  // the same reason as filmographyCount above.
+  const featuredItem = useMemo(() => {
     if (tmdb.credits.length === 0) return null;
     const serverCredits = tmdb.credits
       .filter((c) => c.character && plex.serverItemMap.has((c.title ?? c.name ?? "").toLowerCase()))
@@ -105,7 +135,7 @@ function ActorDetail() {
     const title = c.title ?? c.name ?? "";
     const plexItem = plex.serverItemMap.get(title.toLowerCase());
     return { credit: c, title, plexItem };
-  })();
+  }, [tmdb.credits, plex.serverItemMap]);
 
   return (
     <div style={styles.container}>
@@ -207,18 +237,18 @@ function ActorDetail() {
         )}
       </div>
 
-      {/* Loading */}
-      {isLoading && (
-        <div style={styles.loadingContainer}>
-          <div className="loading-spinner" />
+      {/* Loading — delayed skeleton so a fast/cached load never flashes it */}
+      {isLoading && showLoadingSkeleton && (
+        <div style={styles.skeletonRow}>
+          {Array.from({ length: 6 }).map((_, i) => (
+            <SkeletonCard key={i} width={200} aspectRatio={1.5} index={i} />
+          ))}
         </div>
       )}
 
       {/* Error */}
-      {error && (
-        <div style={styles.errorContainer}>
-          <p style={{ color: "var(--error)" }}>{error}</p>
-        </div>
+      {error && !isLoading && (
+        <ErrorState message={error} onRetry={onRetry} />
       )}
 
       {/* Content */}
@@ -576,15 +606,11 @@ const styles: Record<string, React.CSSProperties> = {
   section: {
     marginBottom: "2rem",
   },
-  loadingContainer: {
+  skeletonRow: {
     display: "flex",
-    justifyContent: "center",
-    padding: "3rem 0",
-  },
-  errorContainer: {
-    display: "flex",
-    justifyContent: "center",
-    padding: "2rem 0",
+    gap: "1rem",
+    marginBottom: "2rem",
+    overflow: "hidden",
   },
   emptyContainer: {
     display: "flex",
