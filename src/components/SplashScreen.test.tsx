@@ -40,9 +40,9 @@ describe("SplashScreen", () => {
     // Before min display time elapses, still visible with opacity 1
     expect(container.firstChild).not.toBeNull();
 
-    // Advance past MIN_DISPLAY_MS (2000ms)
+    // Advance past MIN_DISPLAY_MS (700ms)
     act(() => {
-      vi.advanceTimersByTime(2100);
+      vi.advanceTimersByTime(800);
     });
     // After fade starts, opacity should be 0
     const outerDiv = container.firstChild as HTMLElement;
@@ -53,9 +53,9 @@ describe("SplashScreen", () => {
 
   it("becomes hidden after fade out completes", () => {
     render(<SplashScreen ready={true} />);
-    // Advance past MIN_DISPLAY_MS + fade duration (2000 + 400 = 2400ms)
+    // Advance past MIN_DISPLAY_MS + fade duration (700 + 400 = 1100ms)
     act(() => {
-      vi.advanceTimersByTime(2500);
+      vi.advanceTimersByTime(1200);
     });
     expect(screen.queryByText("Prexu")).not.toBeInTheDocument();
   });
