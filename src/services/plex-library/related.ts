@@ -5,6 +5,7 @@
 import { fetchMetadata, fetchHubs } from "./base";
 import { getLibrarySections } from "./base";
 import { logger } from "../logger";
+import { cacheGet, cacheSet } from "../api-cache";
 import type { PlexMediaItem, PlexHub } from "../../types/library";
 
 // ── Related Items ──
@@ -19,7 +20,8 @@ export async function getRelatedItems(
   serverUri: string,
   serverToken: string,
   ratingKey: string,
-  itemType?: string
+  itemType?: string,
+  signal?: AbortSignal,
 ): Promise<PlexMediaItem[]> {
   if (itemType === "episode") {
     logger.debug("api", "getRelatedItems: skipping /similar for episode", { ratingKey });
@@ -33,6 +35,7 @@ export async function getRelatedItems(
       serverToken,
       `/library/metadata/${ratingKey}/similar`,
       "getRelatedItems:similar",
+      signal,
     );
     if (items.length > 0) return items;
   } catch {
@@ -45,6 +48,7 @@ export async function getRelatedItems(
       serverToken,
       `/library/metadata/${ratingKey}/related`,
       "getRelatedItems:related",
+      signal,
     );
     if (items.length > 0) return items;
   } catch {
@@ -57,6 +61,7 @@ export async function getRelatedItems(
       serverToken,
       `/hubs/metadata/${ratingKey}`,
       "getRelatedItems:hubs",
+      signal,
     );
     // Collect items from all relevant hubs (similar, related, recommendations)
     const items: PlexMediaItem[] = [];
@@ -95,27 +100,53 @@ export async function getRelatedItems(
 export async function getExtras(
   serverUri: string,
   serverToken: string,
-  ratingKey: string
+  ratingKey: string,
+  signal?: AbortSignal,
 ): Promise<PlexMediaItem[]> {
   return fetchMetadata(
     serverUri,
     serverToken,
     `/library/metadata/${ratingKey}/extras`,
     "getExtras",
+    signal,
   );
 }
 
 /**
+ * Shelf size for "More with [Actor]" rows — this is a horizontal-scroll shelf
+ * on the detail page, not a full library listing, so there's no reason to
+ * pull 200 full-metadata items per section (prexu-0szx.4).
+ */
+const ACTOR_SHELF_SIZE = 20;
+
+/** Session-TTL cache for actor media lookups — an actor's filmography barely
+ *  changes within a session, and this fans out to every movie+show section
+ *  for BOTH lead actors on every detail view (prexu-0szx.4). */
+const ACTOR_MEDIA_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+
+/**
  * Find all media featuring a specific actor across all library sections.
  * Uses the Plex library filter endpoint which is more thorough than hub search.
+ *
+ * Cached per server+actor (session TTL) and capped to a shelf-sized page —
+ * this is rendered as a "More with [Actor]" horizontal row, not a full
+ * library listing.
  */
 export async function getMediaByActor(
   serverUri: string,
   serverToken: string,
-  actorName: string
+  actorName: string,
+  signal?: AbortSignal,
 ): Promise<PlexMediaItem[]> {
-  // First get all library sections
-  const sections = await getLibrarySections(serverUri, serverToken);
+  const cacheKey = `actor-media:${serverUri}:${actorName}`;
+  const cached = cacheGet<PlexMediaItem[]>(cacheKey);
+  if (cached) {
+    logger.debug("api", "getMediaByActor: cache hit", { actorName, count: cached.length });
+    return cached;
+  }
+
+  // First get all library sections (itself cached — see base.ts)
+  const sections = await getLibrarySections(serverUri, serverToken, signal);
   const movieAndShowSections = sections.filter(
     (s) => s.type === "movie" || s.type === "show"
   );
@@ -124,7 +155,7 @@ export async function getMediaByActor(
   const results = await Promise.allSettled(
     movieAndShowSections.map(async (section) => {
       const params = new URLSearchParams({
-        "X-Plex-Container-Size": "200",
+        "X-Plex-Container-Size": String(ACTOR_SHELF_SIZE),
         sort: "titleSort:asc",
         actor: actorName,
       });
@@ -133,7 +164,7 @@ export async function getMediaByActor(
         params.set("type", "2");
       }
       const path = `/library/sections/${section.key}/all?${params.toString()}`;
-      return fetchMetadata(serverUri, serverToken, path, "getMediaByActor");
+      return fetchMetadata(serverUri, serverToken, path, "getMediaByActor", signal);
     })
   );
 
@@ -150,6 +181,7 @@ export async function getMediaByActor(
       }
     }
   }
+  cacheSet(cacheKey, items, ACTOR_MEDIA_CACHE_TTL);
   return items;
 }
 
