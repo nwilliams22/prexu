@@ -159,7 +159,7 @@ function LibraryView() {
   const shouldLoadAll =
     isAlphaSortable && hasActiveFilters;
 
-  const { items, isLoading, isLoadingMore, hasMore, totalSize, error, loadMore, retry } =
+  const { items, isLoading, isLoadingMore, isStale, hasMore, totalSize, error, loadMore, retry } =
     usePaginatedLibrary(sectionId, sort, filters, {
       loadAll: shouldLoadAll,
       type: section?.type === "show" ? 2 : section?.type === "movie" ? 1 : undefined,
@@ -512,7 +512,10 @@ function LibraryView() {
             </>
           )}
 
-          <div>
+          {/* aria-busy + dim while a filter/sort/section change is refetching —
+              the grid keeps showing the previous results (isStale) instead of
+              blanking to a skeleton until the new page resolves. */}
+          <div aria-busy={isStale} style={isStale ? styles.staleGrid : undefined}>
             <VirtualizedLibraryGrid
               ref={gridApiRef}
               items={filteredItems}
@@ -521,7 +524,7 @@ function LibraryView() {
               expandedKey={expandedKey}
               renderExpansion={renderExpansion}
               header={
-                isLoading
+                isLoading && items.length === 0
                   ? Array.from({ length: 24 }).map((_, i) => <SkeletonCard key={i} />)
                   : undefined
               }
@@ -687,6 +690,11 @@ const styles: Record<string, React.CSSProperties> = {
     color: "var(--text-secondary)",
     fontSize: "0.85rem",
     padding: "0.5rem 0",
+  },
+  /** Dims the grid while it's showing the previous filter/sort's items during a refetch. */
+  staleGrid: {
+    opacity: 0.5,
+    transition: "opacity 0.15s ease",
   },
   sentinel: {
     height: "1px",
