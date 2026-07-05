@@ -215,6 +215,49 @@ describe("getItemMediaBadges", () => {
     expect(badges![1].label).toBe("HDR");
     expect(badges![2].label).toBe("Atmos");
   });
+
+  // prexu-0szx.13: repeated calls with the SAME item object must return the
+  // SAME array reference — otherwise every PosterCard call site's
+  // `mediaBadges={getItemMediaBadges(item)}` hands React.memo a "changed"
+  // prop on every render even when nothing about the item changed.
+  describe("memoization by item identity (prexu-0szx.13)", () => {
+    it("returns the same array reference on repeated calls with the same item", () => {
+      const item = {
+        Media: [
+          {
+            id: 1, duration: 7200000, bitrate: 8000,
+            videoResolution: "1080", videoCodec: "h264",
+            audioCodec: "aac", audioChannels: 2,
+          } as PlexMediaInfo,
+        ],
+      };
+      const first = getItemMediaBadges(item);
+      const second = getItemMediaBadges(item);
+      expect(second).toBe(first);
+    });
+
+    it("returns the same undefined result on repeated calls for a badge-less item", () => {
+      const item = { Media: [] };
+      expect(getItemMediaBadges(item)).toBeUndefined();
+      expect(getItemMediaBadges(item)).toBeUndefined();
+    });
+
+    it("computes independently for two different item objects with equal data", () => {
+      const media = {
+        id: 1, duration: 7200000, bitrate: 8000,
+        videoResolution: "1080", videoCodec: "h264",
+        audioCodec: "aac", audioChannels: 2,
+      } as PlexMediaInfo;
+      const itemA = { Media: [media] };
+      const itemB = { Media: [media] };
+      const badgesA = getItemMediaBadges(itemA);
+      const badgesB = getItemMediaBadges(itemB);
+      // Different item objects are cached independently...
+      expect(badgesB).not.toBe(badgesA);
+      // ...but produce equal content.
+      expect(badgesB).toEqual(badgesA);
+    });
+  });
 });
 
 describe("extractStreamsForBadges", () => {

@@ -137,20 +137,41 @@ export function formatBitrate(bitrate: number): string {
   return `${bitrate} Kbps`;
 }
 
+// Cache getItemMediaBadges results per item OBJECT identity (prexu-0szx.13).
+// Call sites do `mediaBadges={getItemMediaBadges(item)}` inline on every
+// render — a fresh array every call means PosterCard's memo() never sees
+// an equal `mediaBadges` prop and re-renders regardless of anything else
+// actually changing. Item objects themselves come from react-query/fetch
+// results and keep a stable reference until the underlying data is
+// refetched, so a WeakMap keyed on that reference is safe: it naturally
+// "invalidates" when a genuinely new item object appears, and entries are
+// garbage-collected once the item itself is no longer referenced anywhere.
+const badgeCache = new WeakMap<PlexMediaItem, MediaBadge[] | undefined>();
+
 /**
  * Extract media badges from a PlexMediaItem that may carry Media[] at runtime.
  * Returns undefined when no media info is present or when no badges apply.
+ *
+ * Memoized per item identity — calling this repeatedly with the SAME item
+ * object returns the SAME array reference (or the same `undefined`).
  */
 export function getItemMediaBadges(
   item: PlexMediaItem,
 ): MediaBadge[] | undefined {
+  if (badgeCache.has(item)) return badgeCache.get(item);
+
   // PlexMovie / PlexEpisode extend PlexMediaItem with Media[]; the base
   // type doesn't declare it, so narrow at runtime.
   const media = (item as { Media?: PlexMediaInfo[] }).Media?.[0];
-  if (!media) return undefined;
+  if (!media) {
+    badgeCache.set(item, undefined);
+    return undefined;
+  }
   const { videoStream, audioStream } = extractStreamsForBadges(media);
   const badges = getMediaBadges(media, videoStream, audioStream);
-  return badges.length > 0 ? badges : undefined;
+  const result = badges.length > 0 ? badges : undefined;
+  badgeCache.set(item, result);
+  return result;
 }
 
 /**

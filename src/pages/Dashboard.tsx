@@ -8,6 +8,7 @@ import { useScrollRestoration } from "../hooks/useScrollRestoration";
 import { useDashboard } from "../hooks/useDashboard";
 import { useMediaContextMenu } from "../hooks/useMediaContextMenu";
 import { usePlayAction } from "../hooks/usePlayAction";
+import { useStableItemCallback } from "../hooks/useStableItemCallback";
 import {
   getImageUrl,
   getPlaceholderUrl,
@@ -157,6 +158,28 @@ function Dashboard() {
     onRefresh: refresh,
   });
   const { getPlayHandler, playOverlay } = usePlayAction();
+
+  // Stable per-ratingKey onClick/onContextMenu handlers (prexu-0szx.13) —
+  // these shelves render ~80 PosterCards total and are NOT virtualized, so
+  // an inline `onClick={() => navigate(...)}` per item (a fresh closure
+  // every render) defeated PosterCard's memo() on every Dashboard
+  // re-render. One cache per shelf keeps ratingKeys from different shelves
+  // from sharing a namespace.
+  const stableDeckNavigate = useStableItemCallback<PlexMediaItem, () => void>();
+  const stableDeckContextMenu = useStableItemCallback<
+    PlexMediaItem,
+    (e: React.MouseEvent) => void
+  >();
+  const stableMovieNavigate = useStableItemCallback<PlexMediaItem, () => void>();
+  const stableMovieContextMenu = useStableItemCallback<
+    PlexMediaItem,
+    (e: React.MouseEvent) => void
+  >();
+  const stableShowNavigate = useStableItemCallback<GroupedRecentItem, () => void>();
+  const stableShowContextMenu = useStableItemCallback<
+    GroupedRecentItem,
+    (e: React.MouseEvent) => void
+  >();
 
   // Map ratingKey → PlexMediaItem for hero slide play handler
   const heroItemMap = useMemo(() => {
@@ -441,12 +464,18 @@ function Dashboard() {
                     }
                     progress={getProgress(item)}
                     width={posterWidth}
-                    onClick={() => navigate(`/item/${item.ratingKey}`)}
+                    onClick={stableDeckNavigate(item.ratingKey, item, (it) =>
+                      navigate(`/item/${it.ratingKey}`),
+                    )}
                     onPlay={getPlayHandler(item)}
                     mediaBadges={getItemMediaBadges(item)}
                     showMoreButton
-                    onContextMenu={(e) => openContextMenu(e, item, onDeckExtras(item))}
-                    onMoreClick={(e) => openContextMenu(e, item, onDeckExtras(item))}
+                    onContextMenu={stableDeckContextMenu(item.ratingKey, item, (it, e) =>
+                      openContextMenu(e, it, onDeckExtras(it)),
+                    )}
+                    onMoreClick={stableDeckContextMenu(item.ratingKey, item, (it, e) =>
+                      openContextMenu(e, it, onDeckExtras(it)),
+                    )}
                   />
                 );
               })}
@@ -487,12 +516,18 @@ function Dashboard() {
                   subtitle={getSubtitle(item)}
                   width={posterWidth}
                   watched={isWatched(item)}
-                  onClick={() => navigate(`/item/${item.ratingKey}`)}
+                  onClick={stableMovieNavigate(item.ratingKey, item, (it) =>
+                    navigate(`/item/${it.ratingKey}`),
+                  )}
                   onPlay={getPlayHandler(item)}
                   mediaBadges={getItemMediaBadges(item)}
                   showMoreButton
-                  onContextMenu={(e) => openContextMenu(e, item)}
-                  onMoreClick={(e) => openContextMenu(e, item)}
+                  onContextMenu={stableMovieContextMenu(item.ratingKey, item, (it, e) =>
+                    openContextMenu(e, it),
+                  )}
+                  onMoreClick={stableMovieContextMenu(item.ratingKey, item, (it, e) =>
+                    openContextMenu(e, it),
+                  )}
                 />
               ))}
             </HorizontalRow>
@@ -543,7 +578,9 @@ function Dashboard() {
                         ? `+${group.episodeCount}`
                         : "NEW"
                     }
-                    onClick={() => navigate(`/item/${group.groupKey}`)}
+                    onClick={stableShowNavigate(group.groupKey, group, (g) =>
+                      navigate(`/item/${g.groupKey}`),
+                    )}
                     onExpand={
                       isShowGroup
                         ? () => {
@@ -560,14 +597,14 @@ function Dashboard() {
                         : undefined
                     }
                     isExpanded={isActive}
-  
+
                     showMoreButton
-                    onContextMenu={(e) =>
-                      openContextMenu(e, group.representativeItem)
-                    }
-                    onMoreClick={(e) =>
-                      openContextMenu(e, group.representativeItem)
-                    }
+                    onContextMenu={stableShowContextMenu(group.groupKey, group, (g, e) =>
+                      openContextMenu(e, g.representativeItem),
+                    )}
+                    onMoreClick={stableShowContextMenu(group.groupKey, group, (g, e) =>
+                      openContextMenu(e, g.representativeItem),
+                    )}
                   />
                 </div>
               );

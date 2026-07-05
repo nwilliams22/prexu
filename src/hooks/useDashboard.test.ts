@@ -18,8 +18,9 @@ vi.mock("./useLibrary", () => ({
   }),
 }));
 
+let mockCompletionCounter = 0;
 vi.mock("./useServerActivity", () => ({
-  useServerActivity: () => ({ completionCounter: 0 }),
+  useCompletionCounter: () => mockCompletionCounter,
 }));
 
 const mockGetRecentlyAddedBySection = vi.fn(() => Promise.resolve([]));
@@ -56,6 +57,7 @@ function makeTvItem(key: string, title: string) {
 describe("useDashboard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockCompletionCounter = 0;
     mockCacheGet.mockReturnValue(null);
     mockGetRecentlyAddedBySection.mockResolvedValue([]);
     mockGetOnDeck.mockResolvedValue([]);
@@ -223,5 +225,42 @@ describe("useDashboard", () => {
     expect(result.current.recentMovies).toEqual(expect.any(Array));
     expect(result.current.recentShows).toEqual(expect.any(Array));
     expect(result.current.onDeck).toEqual(expect.any(Array));
+  });
+
+  // prexu-0szx.14: useDashboard reads completionCounter via the narrow
+  // useCompletionCounter() selector (not the full useServerActivity()
+  // context) specifically so it can auto-refresh when an activity finishes
+  // without subscribing to session/activity churn. Verify the refresh
+  // trigger itself still fires correctly through that narrower hook.
+  it("auto-refreshes when completionCounter increases", async () => {
+    const { result, rerender } = renderHook(() => useDashboard());
+
+    await waitFor(() => {
+      expect(result.current.loading.movies).toBe(false);
+    });
+
+    mockCacheInvalidate.mockClear();
+    mockCompletionCounter = 1;
+    rerender();
+
+    await waitFor(() => {
+      expect(mockCacheInvalidate).toHaveBeenCalledWith("dashboard:https://plex.test:movies");
+    });
+    expect(mockCacheInvalidate).toHaveBeenCalledWith("dashboard:https://plex.test:shows");
+    expect(mockCacheInvalidate).toHaveBeenCalledWith("dashboard:https://plex.test:deck");
+  });
+
+  it("does not refresh again if completionCounter stays the same across renders", async () => {
+    const { result, rerender } = renderHook(() => useDashboard());
+
+    await waitFor(() => {
+      expect(result.current.loading.movies).toBe(false);
+    });
+
+    mockCacheInvalidate.mockClear();
+    rerender();
+    rerender();
+
+    expect(mockCacheInvalidate).not.toHaveBeenCalled();
   });
 });

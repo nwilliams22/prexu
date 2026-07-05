@@ -13,7 +13,7 @@
  * - `playOverlay` renders whichever popover is active — include it in JSX.
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useAuth } from "./useAuth";
 import { usePlayerSession } from "../contexts/PlayerContext";
 import { getItemMetadata } from "../services/plex-library";
@@ -48,28 +48,54 @@ export function usePlayAction(): UsePlayActionResult {
   const { server } = useAuth();
   const [prompt, setPrompt] = useState<PromptState | null>(null);
 
+  // getPlayHandler(item) used to return a BRAND NEW closure on every call —
+  // even though the hook's own useCallback identity was stable, every list
+  // render site does `onPlay={getPlayHandler(item)}`, so PosterCard always
+  // saw a "changed" onPlay prop and React.memo could never skip it
+  // (prexu-0szx.13). Cache one handler PER ratingKey instead: the returned
+  // closure reads the item from `itemsRef` at click time (never stale) and
+  // `play`/`server` from refs, so its own identity never needs to change —
+  // only the ratingKey determines which cached handler is returned.
+  const itemsRef = useRef(new Map<string, PlexMediaItem>());
+  const handlersRef = useRef(new Map<string, (e: React.MouseEvent) => void>());
+  const playRef = useRef(play);
+  playRef.current = play;
+  const serverRef = useRef(server);
+  serverRef.current = server;
+
   const getPlayHandler = useCallback(
     (item: PlexMediaItem): ((e: React.MouseEvent) => void) | undefined => {
       if (!PLAYABLE_TYPES.has(item.type)) return undefined;
 
-      return (e: React.MouseEvent) => {
+      // Keep the latest item data warm so the cached handler (created once
+      // below) always reads fresh viewOffset/ratingKey at click time.
+      itemsRef.current.set(item.ratingKey, item);
+
+      const cached = handlersRef.current.get(item.ratingKey);
+      if (cached) return cached;
+
+      const handler = (e: React.MouseEvent) => {
         e.stopPropagation();
 
-        if (!server) {
-          play(item.ratingKey);
+        const current = itemsRef.current.get(item.ratingKey) ?? item;
+        const currentServer = serverRef.current;
+        const currentPlay = playRef.current;
+
+        if (!currentServer) {
+          currentPlay(current.ratingKey);
           return;
         }
 
         const position = { x: e.clientX, y: e.clientY };
         const cachedOffset =
-          (item as { viewOffset?: number }).viewOffset ?? 0;
+          (current as { viewOffset?: number }).viewOffset ?? 0;
 
         // Fast path: dashboard/onDeck items already carry viewOffset, so
         // we can render the popover instantly with no network round trip.
         if (cachedOffset > 0) {
           setPrompt({
             kind: "resume",
-            ratingKey: item.ratingKey,
+            ratingKey: current.ratingKey,
             viewOffset: cachedOffset,
             position,
           });
@@ -81,12 +107,12 @@ export function usePlayAction(): UsePlayActionResult {
         // a metadata fetch. The actual resume position used at playback
         // time comes from the FRESH metadata fetched inside initPlayback,
         // so a slightly stale cache only affects the popover label.
-        setPrompt({ kind: "checking", ratingKey: item.ratingKey, position });
+        setPrompt({ kind: "checking", ratingKey: current.ratingKey, position });
 
         getItemMetadata<PlexMediaItem>(
-          server.uri,
-          server.accessToken,
-          item.ratingKey,
+          currentServer.uri,
+          currentServer.accessToken,
+          current.ratingKey,
         )
           .then((fullItem) => {
             const viewOffset =
@@ -95,11 +121,11 @@ export function usePlayAction(): UsePlayActionResult {
             // Race-guard: another item may have been clicked in the
             // meantime; only update state if we're still showing this one.
             setPrompt((prev) => {
-              if (prev?.ratingKey !== item.ratingKey) return prev;
+              if (prev?.ratingKey !== current.ratingKey) return prev;
               if (viewOffset > 0) {
                 return {
                   kind: "resume",
-                  ratingKey: item.ratingKey,
+                  ratingKey: current.ratingKey,
                   viewOffset,
                   position,
                 };
@@ -108,18 +134,21 @@ export function usePlayAction(): UsePlayActionResult {
             });
 
             if (viewOffset === 0) {
-              play(item.ratingKey);
+              playRef.current(current.ratingKey);
             }
           })
           .catch(() => {
             setPrompt((prev) =>
-              prev?.ratingKey === item.ratingKey ? null : prev,
+              prev?.ratingKey === current.ratingKey ? null : prev,
             );
-            play(item.ratingKey);
+            playRef.current(current.ratingKey);
           });
       };
+
+      handlersRef.current.set(item.ratingKey, handler);
+      return handler;
     },
-    [play, server],
+    [],
   );
 
   let playOverlay: React.ReactNode = null;

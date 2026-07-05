@@ -151,6 +151,72 @@ const noopScanningStore: ScanningStore = {
 const ScanningStoreContext = createContext<ScanningStore>(noopScanningStore);
 export const ScanningStoreProvider = ScanningStoreContext.Provider;
 
+// ── Completion-counter store (isolates counter-only consumers) ──
+//
+// completionCounter used to live in the same memoized context value as the
+// fast-churning `sessions`/`activities` arrays (prexu-0szx.14). Any consumer
+// that only reads completionCounter (e.g. useDashboard, which triggers a
+// refresh whenever an activity finishes) still re-rendered on every session
+// update, because useContext re-renders on ANY change to the provided value
+// object, regardless of which fields the component actually destructures.
+// Same fix as scanningIds: move the counter into its own external store so
+// `useCompletionCounter()` only notifies subscribers when the counter itself
+// changes.
+
+export interface CompletionCounterStore {
+  /** Subscribe to counter changes. Returns an unsubscribe function. */
+  subscribe: (listener: () => void) => () => void;
+  /** Immutable snapshot of the current counter value. */
+  getSnapshot: () => number;
+  /** Bump the counter and notify subscribers. */
+  increment: () => void;
+}
+
+export function createCompletionCounterStore(): CompletionCounterStore {
+  let count = 0;
+  const listeners = new Set<() => void>();
+  const emit = () => {
+    for (const listener of listeners) listener();
+  };
+  return {
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    getSnapshot: () => count,
+    increment() {
+      count += 1;
+      logger.trace("activity", "completion counter incremented", { count });
+      emit();
+    },
+  };
+}
+
+/** Inert store used when no provider is mounted (e.g. bare component tests). */
+const noopCompletionCounterStore: CompletionCounterStore = {
+  subscribe: () => () => {},
+  getSnapshot: () => 0,
+  increment: () => {},
+};
+
+const CompletionCounterStoreContext = createContext<CompletionCounterStore>(
+  noopCompletionCounterStore,
+);
+export const CompletionCounterStoreProvider = CompletionCounterStoreContext.Provider;
+
+/**
+ * Narrow selector: the current completion counter, without subscribing to
+ * sessions/activities churn. Use this instead of destructuring
+ * `completionCounter` off `useServerActivity()` whenever that's the ONLY
+ * field a consumer needs (prexu-0szx.14).
+ */
+export function useCompletionCounter(): number {
+  const store = useContext(CompletionCounterStoreContext);
+  return useSyncExternalStore(store.subscribe, store.getSnapshot);
+}
+
 /**
  * Narrow selector: is this ratingKey currently being scanned/updated?
  * Re-renders the caller ONLY when the boolean for this key flips —
@@ -178,16 +244,16 @@ const POLL_FALLBACK_INTERVAL = 30_000; // 30 s — only used when WebSocket is d
 const WS_RECONNECT_DELAY = 5_000;
 const TIMELINE_DEBOUNCE_MS = 1_000; // debounce rapid timeline notifications
 
-/** Full provider state: context value plus the scanning store to provide. */
+/** Full provider state: context value plus the scanning/counter stores to provide. */
 export interface ServerActivityState extends ServerActivityValue {
   scanningStore: ScanningStore;
+  completionCounterStore: CompletionCounterStore;
 }
 
 export function useServerActivityState(): ServerActivityState {
   const { server } = useAuth();
   const [activities, setActivities] = useState<PlexActivity[]>([]);
   const [sessions, setSessions] = useState<PlexSession[]>([]);
-  const [completionCounter, setCompletionCounter] = useState(0);
 
   // Scanning ids live outside React state so poster cards can subscribe
   // per-key (see ScanningStore above). One store per provider instance.
@@ -196,6 +262,15 @@ export function useServerActivityState(): ServerActivityState {
     scanningStoreRef.current = createScanningStore();
   }
   const scanningStore = scanningStoreRef.current;
+
+  // completionCounter lives outside React state too (see CompletionCounterStore
+  // above) so counter-only consumers (useDashboard) don't subscribe to
+  // sessions/activities churn (prexu-0szx.14). One store per provider instance.
+  const completionCounterStoreRef = useRef<CompletionCounterStore | null>(null);
+  if (completionCounterStoreRef.current === null) {
+    completionCounterStoreRef.current = createCompletionCounterStore();
+  }
+  const completionCounterStore = completionCounterStoreRef.current;
 
   // Timers for auto-removing scanning IDs after a short TTL
   const scanTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -266,7 +341,7 @@ export function useServerActivityState(): ServerActivityState {
               setActivities((prev) =>
                 prev.filter((a) => a.uuid !== notif.uuid),
               );
-              setCompletionCounter((c) => c + 1);
+              completionCounterStore.increment();
             } else {
               // started or updated — upsert the activity
               const activity = notif.Activity;
@@ -276,7 +351,7 @@ export function useServerActivityState(): ServerActivityState {
                 setActivities((prev) =>
                   prev.filter((a) => a.uuid !== activity.uuid),
                 );
-                setCompletionCounter((c) => c + 1);
+                completionCounterStore.increment();
               } else {
                 setActivities((prev) => {
                   const idx = prev.findIndex(
@@ -322,7 +397,7 @@ export function useServerActivityState(): ServerActivityState {
           if (timelineDebounce) clearTimeout(timelineDebounce);
           timelineDebounce = setTimeout(() => {
             if (mountedRef.current) {
-              setCompletionCounter((c) => c + 1);
+              completionCounterStore.increment();
             }
           }, TIMELINE_DEBOUNCE_MS);
           break;
@@ -391,12 +466,22 @@ export function useServerActivityState(): ServerActivityState {
         ws.close();
       }
     };
-  }, [server, scanningStore]);
+  }, [server, scanningStore, completionCounterStore]);
 
   // Full-set view for legacy consumers reading scanningIds off the context.
   const scanningIds = useSyncExternalStore(
     scanningStore.subscribe,
     scanningStore.getSnapshot,
+  );
+
+  // Legacy view for consumers reading completionCounter off the full
+  // context (ActivityPanel/ActivityButton don't need it, but the field
+  // stays for API compatibility — prexu-0szx.14 consumers that want
+  // ISOLATION from sessions/activities churn should use
+  // useCompletionCounter() instead, see above).
+  const completionCounter = useSyncExternalStore(
+    completionCounterStore.subscribe,
+    completionCounterStore.getSnapshot,
   );
 
   // Memoized so the context provider value is referentially stable across
@@ -409,8 +494,9 @@ export function useServerActivityState(): ServerActivityState {
       completionCounter,
       scanningIds,
       scanningStore,
+      completionCounterStore,
     }),
-    [activities, sessions, completionCounter, scanningIds, scanningStore],
+    [activities, sessions, completionCounter, scanningIds, scanningStore, completionCounterStore],
   );
 }
 

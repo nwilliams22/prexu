@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useRef } from "react";
+import { useState, useMemo, useCallback, useRef, useEffect, createRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { useCollections } from "../hooks/useCollections";
@@ -6,13 +6,21 @@ import { usePreferences } from "../hooks/usePreferences";
 import { useScrollRestoration } from "../hooks/useScrollRestoration";
 import { getImageUrl } from "../services/plex-library";
 import LibraryGrid from "../components/LibraryGrid";
+import VirtualizedLibraryGrid from "../components/VirtualizedLibraryGrid";
+import type { LibraryGridHandle } from "../components/VirtualizedLibraryGrid";
 import PosterCard from "../components/PosterCard";
 import SkeletonCard from "../components/SkeletonCard";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
 import AlphaJumpBar from "../components/AlphaJumpBar";
+import { logger } from "../services/logger";
+import type { PlexCollection } from "../types/library";
 
 type SortOption = "alpha-asc" | "alpha-desc" | "items-desc" | "items-asc";
+
+/** Debounce delay for the collections search input (prexu-0szx.7) — avoids
+ *  re-filtering/re-sorting the whole collections list on every keystroke. */
+const SEARCH_DEBOUNCE_MS = 200;
 
 function CollectionsBrowser() {
   const { server } = useAuth();
@@ -22,11 +30,34 @@ function CollectionsBrowser() {
   const minSize = preferences.appearance.minCollectionSize;
   useScrollRestoration();
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState<SortOption>("alpha-asc");
-  const gridContainerRef = useRef<HTMLDivElement>(null);
+
+  // Debounce the search query so large collection lists aren't re-filtered
+  // and re-sorted on every keystroke (prexu-0szx.7).
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  // One imperative grid handle per library section — used to scroll the
+  // right section's virtualized grid into view on an alpha-jump (each
+  // section renders its own VirtualizedLibraryGrid, so a single flat
+  // scrollToIndex can't span sections).
+  const gridRefsMap = useRef(new Map<string, React.RefObject<LibraryGridHandle | null>>());
+  const getGridRef = useCallback((sectionKey: string) => {
+    let ref = gridRefsMap.current.get(sectionKey);
+    if (!ref) {
+      ref = createRef<LibraryGridHandle>();
+      gridRefsMap.current.set(sectionKey, ref);
+    }
+    return ref;
+  }, []);
 
   const filteredCollections = useMemo(() => {
-    const query = searchQuery.toLowerCase();
+    const query = debouncedSearchQuery.toLowerCase();
     return collections
       .map((group) => ({
         ...group,
@@ -48,7 +79,7 @@ function CollectionsBrowser() {
           }),
       }))
       .filter((group) => group.items.length > 0);
-  }, [collections, searchQuery, sortBy, minSize]);
+  }, [collections, debouncedSearchQuery, sortBy, minSize]);
 
   const totalCount = useMemo(
     () => filteredCollections.reduce((sum, g) => sum + g.items.length, 0),
@@ -73,27 +104,64 @@ function CollectionsBrowser() {
     return letters;
   }, [allFilteredItems]);
 
-  const handleAlphaJump = useCallback((letter: string) => {
-    if (!gridContainerRef.current) return;
-    const cards = gridContainerRef.current.querySelectorAll("[data-title-sort]");
-    for (const card of cards) {
-      const titleSort = card.getAttribute("data-title-sort") || "";
-      const first = titleSort.charAt(0).toUpperCase();
-      const matches = letter === "#" ? !/[A-Z]/.test(first) : first === letter;
-      if (matches) {
-        card.scrollIntoView({ behavior: "smooth", block: "center" });
-        return;
+  // Scrolls the first matching collection into view. Each section renders
+  // its own VirtualizedLibraryGrid (off-screen cards may be unmounted), so
+  // we can no longer scan the DOM for a matching node — instead find the
+  // matching item's index within its section and drive that section's
+  // imperative scrollToIndex handle.
+  const handleAlphaJump = useCallback(
+    (letter: string) => {
+      for (const group of filteredCollections) {
+        const idx = group.items.findIndex((c) => {
+          const first = c.title.charAt(0).toUpperCase();
+          return letter === "#" ? !/[A-Z]/.test(first) : first === letter;
+        });
+        if (idx >= 0) {
+          const ref = gridRefsMap.current.get(group.section.key);
+          if (ref?.current) {
+            logger.debug("library:scrubber", "collections alpha jump", {
+              letter,
+              sectionKey: group.section.key,
+              index: idx,
+            });
+            ref.current.scrollToIndex(idx);
+            return;
+          }
+        }
       }
-    }
-  }, []);
+      logger.debug("library:scrubber", "collections alpha jump miss", { letter });
+    },
+    [filteredCollections],
+  );
 
   const showAlphaJump =
     !isLoading && allFilteredItems.length > 0 && (sortBy === "alpha-asc" || sortBy === "alpha-desc");
 
-  if (!server) return null;
+  const posterUrl = useCallback(
+    (thumb: string) =>
+      server ? getImageUrl(server.uri, server.accessToken, thumb, 300, 450) : "",
+    [server],
+  );
 
-  const posterUrl = (thumb: string) =>
-    getImageUrl(server.uri, server.accessToken, thumb, 300, 450);
+  const renderCollectionItem = useCallback(
+    (collection: PlexCollection) => (
+      <PosterCard
+        ratingKey={collection.ratingKey}
+        imageUrl={posterUrl(collection.thumb)}
+        title={collection.title}
+        subtitle={`${collection.childCount} item${collection.childCount !== 1 ? "s" : ""}`}
+        onClick={() => navigate(`/collection/${collection.ratingKey}`)}
+      />
+    ),
+    [posterUrl, navigate],
+  );
+
+  const getCollectionKey = useCallback(
+    (collection: PlexCollection) => collection.ratingKey,
+    [],
+  );
+
+  if (!server) return null;
 
   return (
     <div style={styles.container}>
@@ -142,25 +210,18 @@ function CollectionsBrowser() {
         </LibraryGrid>
       )}
 
-      <div ref={gridContainerRef}>
+      <div>
         {!isLoading &&
           !error &&
           filteredCollections.map((group) => (
             <section key={group.section.key} style={styles.section}>
               <h3 style={styles.sectionTitle}>{group.section.title}</h3>
-              <LibraryGrid>
-                {group.items.map((collection) => (
-                  <div key={collection.ratingKey} data-title-sort={collection.title}>
-                    <PosterCard
-                      ratingKey={collection.ratingKey}
-                      imageUrl={posterUrl(collection.thumb)}
-                      title={collection.title}
-                      subtitle={`${collection.childCount} item${collection.childCount !== 1 ? "s" : ""}`}
-                      onClick={() => navigate(`/collection/${collection.ratingKey}`)}
-                    />
-                  </div>
-                ))}
-              </LibraryGrid>
+              <VirtualizedLibraryGrid
+                ref={getGridRef(group.section.key)}
+                items={group.items}
+                renderItem={renderCollectionItem}
+                getKey={getCollectionKey}
+              />
             </section>
           ))}
       </div>

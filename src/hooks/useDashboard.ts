@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useAuth } from "./useAuth";
 import { useLibrary } from "./useLibrary";
-import { useServerActivity } from "./useServerActivity";
+import { useCompletionCounter } from "./useServerActivity";
 import { getRecentlyAddedBySection, getOnDeck } from "../services/plex-library";
 import { cacheGet, cacheSet, cacheInvalidate } from "../services/api-cache";
 import { onWatchStateChanged } from "../services/watch-state-events";
@@ -33,7 +33,12 @@ function deckKey(uri: string) { return `dashboard:${uri}:deck`; }
 export function useDashboard(): UseDashboardResult {
   const { server } = useAuth();
   const { sections } = useLibrary();
-  const { completionCounter } = useServerActivity();
+  // Narrow subscription (prexu-0szx.14): completionCounter is the ONLY
+  // field this hook needs from server activity. Reading it via
+  // useServerActivity() would re-render on every session/activity update
+  // (anything playing on the server), since that context bundles
+  // fast-churning sessions/activities into the same memoized value.
+  const completionCounter = useCompletionCounter();
 
   const [recentMovies, setRecentMovies] = useState<PlexMediaItem[]>(() =>
     server ? cacheGet<PlexMediaItem[]>(moviesKey(server.uri)) ?? [] : [],

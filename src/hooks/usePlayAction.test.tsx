@@ -129,4 +129,59 @@ describe("usePlayAction", () => {
     const showItem = makeMovie({ type: "show" });
     expect(result.current.getPlayHandler(showItem)).toBeUndefined();
   });
+
+  // prexu-0szx.13: getPlayHandler(item) used to return a brand-new closure
+  // on every call, so every PosterCard call site's `onPlay={getPlayHandler(item)}`
+  // handed React.memo a "changed" prop on every render regardless of
+  // anything else. The fix caches one handler per ratingKey.
+  describe("handler identity stability (prexu-0szx.13)", () => {
+    it("returns the SAME handler for the same ratingKey across renders", () => {
+      const { result, rerender } = renderHook(() => usePlayAction(), { wrapper });
+      const item = makeMovie({ ratingKey: "1" });
+
+      const first = result.current.getPlayHandler(item);
+      rerender();
+      const second = result.current.getPlayHandler(item);
+
+      expect(first).toBeDefined();
+      expect(second).toBe(first);
+    });
+
+    it("returns DIFFERENT handlers for different ratingKeys", () => {
+      const { result } = renderHook(() => usePlayAction(), { wrapper });
+      const a = result.current.getPlayHandler(makeMovie({ ratingKey: "1" }));
+      const b = result.current.getPlayHandler(makeMovie({ ratingKey: "2" }));
+      expect(a).not.toBe(b);
+    });
+
+    it("reads fresh item data (e.g. an updated viewOffset) even though the handler identity stays the same", async () => {
+      const { result, rerender } = renderHook(() => usePlayAction(), { wrapper });
+
+      // First render: no cached offset yet.
+      const handler = result.current.getPlayHandler(makeMovie({ ratingKey: "1", viewOffset: 0 }));
+      mockGetItemMetadata.mockResolvedValue({ viewOffset: 0 });
+      act(() => {
+        handler!(makeClickEvent());
+      });
+      await waitFor(() => expect(mockPlay).toHaveBeenCalledWith("1"));
+      mockPlay.mockClear();
+      mockGetItemMetadata.mockClear();
+
+      // Parent re-renders with an updated item (viewOffset now populated) —
+      // getPlayHandler returns the SAME cached closure identity...
+      rerender();
+      const sameHandler = result.current.getPlayHandler(
+        makeMovie({ ratingKey: "1", viewOffset: 60_000 }),
+      );
+      expect(sameHandler).toBe(handler);
+
+      // ...but invoking it uses the LATEST item data, not what was
+      // captured when the handler was first created.
+      act(() => {
+        sameHandler!(makeClickEvent());
+      });
+      expect(mockGetItemMetadata).not.toHaveBeenCalled();
+      expect(result.current.playOverlay).not.toBeNull();
+    });
+  });
 });

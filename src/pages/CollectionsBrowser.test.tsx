@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { BrowserRouter } from "react-router-dom";
 import CollectionsBrowser from "./CollectionsBrowser";
@@ -157,9 +157,39 @@ describe("CollectionsBrowser", () => {
     const searchInput = screen.getByPlaceholderText("Search collections...");
     await user.type(searchInput, "Marvel");
 
+    // Search is debounced (prexu-0szx.7) — the filtered result lands
+    // shortly after the last keystroke, not synchronously.
+    await waitFor(() => {
+      expect(screen.queryByText("DC")).not.toBeInTheDocument();
+    });
     expect(screen.getByText("Marvel")).toBeInTheDocument();
-    expect(screen.queryByText("DC")).not.toBeInTheDocument();
     expect(screen.queryByText("Horror")).not.toBeInTheDocument();
+  });
+
+  it("does not filter immediately on keystroke (debounced search)", async () => {
+    const user = userEvent.setup();
+    mockCollections = [
+      {
+        section: { key: "1", title: "Movies", type: "movie", agent: "", scanner: "", thumb: "", art: "", updatedAt: 0 },
+        items: [
+          { ratingKey: "10", title: "Marvel", thumb: "/t/10", childCount: 20 },
+          { ratingKey: "11", title: "DC", thumb: "/t/11", childCount: 8 },
+        ],
+      },
+    ];
+    renderPage();
+
+    const searchInput = screen.getByPlaceholderText("Search collections...");
+    await user.type(searchInput, "Marvel");
+
+    // Immediately after typing (before the debounce fires) both cards
+    // should still be present — proves the filter isn't re-running on
+    // every keystroke.
+    expect(screen.getByText("DC")).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(screen.queryByText("DC")).not.toBeInTheDocument();
+    });
   });
 
   it("shows total count of filtered collections", () => {

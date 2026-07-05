@@ -33,6 +33,22 @@ export interface LibraryGridHandle {
   scrollToIndex: (index: number) => void;
 }
 
+/**
+ * Walk up from `el` to find the nearest scrollable ancestor (overflow-y
+ * auto/scroll), falling back to `document.documentElement` for whole-page
+ * scrolling. Shared by every virtualizer in the app (grid or row/list mode)
+ * so they all locate the same scroll container the same way.
+ */
+export function findScrollAncestor(el: HTMLElement | null): Element {
+  let current = el?.parentElement ?? null;
+  while (current) {
+    const overflow = getComputedStyle(current).overflowY;
+    if (overflow === "auto" || overflow === "scroll") return current;
+    current = current.parentElement;
+  }
+  return document.documentElement;
+}
+
 interface VirtualizedLibraryGridProps<T> {
   items: T[];
   renderItem: (item: T, index: number) => ReactNode;
@@ -127,15 +143,10 @@ function VirtualizedLibraryGrid<T>({
     return result;
   }, [virtualize, items, cols, expandedKey, renderExpansion, getKey]);
 
-  const getScrollElement = useCallback(() => {
-    let el = parentRef.current?.parentElement;
-    while (el) {
-      const overflow = getComputedStyle(el).overflowY;
-      if (overflow === "auto" || overflow === "scroll") return el;
-      el = el.parentElement;
-    }
-    return document.documentElement;
-  }, []);
+  const getScrollElement = useCallback(
+    () => findScrollAncestor(parentRef.current),
+    [],
+  );
 
   const virtualizer = useVirtualizer({
     count: virtualize ? rows.length : 0,
