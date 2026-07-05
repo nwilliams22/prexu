@@ -17,6 +17,7 @@ vi.mock("./plex-api", () => ({
 }));
 
 import { serverFetch } from "./plex-api";
+import { cacheClear } from "./api-cache";
 const mockServerFetch = vi.mocked(serverFetch);
 
 function jsonResponse(data: unknown, status = 200): Response {
@@ -84,6 +85,9 @@ describe("plex-library — pure functions", () => {
 describe("plex-library — async functions", () => {
   beforeEach(() => {
     mockServerFetch.mockReset();
+    // getLibrarySections is now short-TTL cached (prexu-0szx.18) — clear
+    // between tests so one test's response doesn't leak into the next.
+    cacheClear();
   });
 
   // ── getLibrarySections ──
@@ -115,6 +119,44 @@ describe("plex-library — async functions", () => {
 
       const sections = await getLibrarySections("https://server:32400", "token");
       expect(sections).toEqual([]);
+    });
+
+    it("caches sections so a second call within the TTL skips the network (prexu-0szx.18)", async () => {
+      mockServerFetch.mockResolvedValueOnce(
+        jsonResponse({
+          MediaContainer: {
+            size: 1,
+            Directory: [{ key: "1", title: "Movies", type: "movie" }],
+          },
+        })
+      );
+
+      const first = await getLibrarySections("https://server:32400", "token");
+      const second = await getLibrarySections("https://server:32400", "token");
+
+      expect(first).toEqual(second);
+      expect(mockServerFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("isolates the cache per server URI", async () => {
+      mockServerFetch
+        .mockResolvedValueOnce(
+          jsonResponse({
+            MediaContainer: { size: 1, Directory: [{ key: "1", title: "Server A", type: "movie" }] },
+          })
+        )
+        .mockResolvedValueOnce(
+          jsonResponse({
+            MediaContainer: { size: 1, Directory: [{ key: "2", title: "Server B", type: "movie" }] },
+          })
+        );
+
+      const a = await getLibrarySections("https://server-a:32400", "token");
+      const b = await getLibrarySections("https://server-b:32400", "token");
+
+      expect(a[0].title).toBe("Server A");
+      expect(b[0].title).toBe("Server B");
+      expect(mockServerFetch).toHaveBeenCalledTimes(2);
     });
   });
 

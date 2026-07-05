@@ -3,6 +3,8 @@
  */
 
 import { serverFetch } from "../plex-api";
+import { cacheGet, cacheSet } from "../api-cache";
+import { logger } from "../logger";
 import type {
   LibrarySection,
   PlexMediaContainer,
@@ -12,13 +14,20 @@ import type {
 import { validateResponse, librarySectionsResponseSchema } from "../validation";
 import { metadataContainerSchema, safeParsePlex } from "../plex-schemas";
 
-/** JSON fetch helper — shared by all plex-library modules */
+/**
+ * JSON fetch helper — shared by all plex-library modules.
+ *
+ * `signal` is optional and backward-compatible: pass an AbortController's
+ * signal from a fetching effect so a stale request is cancelled on cleanup
+ * instead of running to completion and discarding its result.
+ */
 export async function fetchJson<T>(
   serverUri: string,
   serverToken: string,
-  path: string
+  path: string,
+  signal?: AbortSignal
 ): Promise<T> {
-  const response = await serverFetch(serverUri, serverToken, path);
+  const response = await serverFetch(serverUri, serverToken, path, signal);
   if (!response.ok) {
     throw new Error(
       `Plex API error: ${response.status} ${response.statusText}`
@@ -40,8 +49,9 @@ export async function fetchMetadata(
   serverToken: string,
   path: string,
   label: string,
+  signal?: AbortSignal,
 ): Promise<PlexMediaItem[]> {
-  const raw = await fetchJson<unknown>(serverUri, serverToken, path);
+  const raw = await fetchJson<unknown>(serverUri, serverToken, path, signal);
   const data = safeParsePlex(metadataContainerSchema, raw, label, {
     MediaContainer: { size: 0 },
   });
@@ -58,8 +68,9 @@ export async function fetchHubs(
   serverToken: string,
   path: string,
   label: string,
+  signal?: AbortSignal,
 ): Promise<PlexHub[]> {
-  const raw = await fetchJson<unknown>(serverUri, serverToken, path);
+  const raw = await fetchJson<unknown>(serverUri, serverToken, path, signal);
   const data = safeParsePlex(metadataContainerSchema, raw, label, {
     MediaContainer: { size: 0 },
   });
@@ -68,15 +79,40 @@ export async function fetchHubs(
 
 // ── Library Sections ──
 
+/**
+ * Short-TTL cache for the section list — call sites like getMediaByActor's
+ * per-actor fan-out and collection lookups call this service function
+ * directly (bypassing useLibrary's hook-level cache) and all want the same
+ * nearly-static data. A 60s TTL keeps it cheap without going stale for a
+ * whole session (sections rarely change).
+ *
+ * Deliberately namespaced apart from useLibrary's own `library-sections:`
+ * cache key (30 min, persisted) — that hook always revalidates in the
+ * background on its own schedule, and this cache must not shorten or
+ * collide with that contract.
+ */
+const SECTIONS_CACHE_TTL = 60 * 1000;
+
 export async function getLibrarySections(
   serverUri: string,
-  serverToken: string
+  serverToken: string,
+  signal?: AbortSignal,
 ): Promise<LibrarySection[]> {
+  const cacheKey = `svc-sections:${serverUri}`;
+  const cached = cacheGet<LibrarySection[]>(cacheKey);
+  if (cached) {
+    logger.debug("api", "getLibrarySections: cache hit", { count: cached.length });
+    return cached;
+  }
+
   const data = await fetchJson<PlexMediaContainer<never>>(
     serverUri,
     serverToken,
-    "/library/sections"
+    "/library/sections",
+    signal,
   );
   validateResponse(librarySectionsResponseSchema, data, "getLibrarySections");
-  return data.MediaContainer.Directory ?? [];
+  const sections = data.MediaContainer.Directory ?? [];
+  cacheSet(cacheKey, sections, SECTIONS_CACHE_TTL);
+  return sections;
 }

@@ -13,12 +13,14 @@ import type {
 export async function getCollections(
   serverUri: string,
   serverToken: string,
-  sectionId: string
+  sectionId: string,
+  signal?: AbortSignal
 ): Promise<PlexCollection[]> {
   const data = await fetchJson<PlexMediaContainer<PlexCollection>>(
     serverUri,
     serverToken,
-    `/library/sections/${sectionId}/collections`
+    `/library/sections/${sectionId}/collections`,
+    signal
   );
   return data.MediaContainer.Metadata ?? [];
 }
@@ -27,7 +29,7 @@ export async function getCollectionItems(
   serverUri: string,
   serverToken: string,
   collectionKey: string,
-  options: { start?: number; size?: number } = {}
+  options: { start?: number; size?: number; signal?: AbortSignal } = {}
 ): Promise<PaginatedResult<PlexMediaItem>> {
   const params = new URLSearchParams();
   if (options.start !== undefined)
@@ -41,7 +43,8 @@ export async function getCollectionItems(
   const data = await fetchJson<PlexMediaContainer<PlexMediaItem>>(
     serverUri,
     serverToken,
-    path
+    path,
+    options.signal
   );
 
   const mc = data.MediaContainer;
