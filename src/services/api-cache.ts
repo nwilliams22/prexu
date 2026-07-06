@@ -118,6 +118,29 @@ export function cacheInvalidatePrefix(prefix: string): void {
   }
 }
 
+/** Remove all entries matching a predicate function. */
+export function cacheInvalidateWhere(predicate: (key: string) => boolean): void {
+  const keysToDelete: string[] = [];
+  for (const key of store.keys()) {
+    if (predicate(key)) {
+      keysToDelete.push(key);
+    }
+  }
+  for (const key of keysToDelete) {
+    store.delete(key);
+  }
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const storageKey = localStorage.key(i);
+      if (storageKey && predicate(storageKey.slice(STORAGE_PREFIX.length))) {
+        localStorage.removeItem(storageKey);
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
 /** Clear all cached data (memory + localStorage). */
 export function cacheClear(): void {
   store.clear();
