@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
+import { logger } from "../services/logger";
 import { usePlayerSession } from "../contexts/PlayerContext";
 import { useAuth } from "../hooks/useAuth";
 import { usePreferences } from "../hooks/usePreferences";
@@ -127,6 +128,58 @@ function getGroupSubtitle(group: GroupedRecentItem): string {
 }
 
 function Dashboard() {
+  // Two-phase mount (prexu-r56j): React Router v7 wraps navigation state
+  // updates in React.startTransition (verified against the installed
+  // react-router package — dom-export.js / chunk-2YMDXNOJ.js both call
+  // React.startTransition around the data router's setState), so the OLD
+  // route stays visible and interactive until the NEW route's first render
+  // COMMITS. useDashboard() seeds every shelf synchronously from the warm
+  // cache (prexu-6qi5.3), so before this change the first (and only)
+  // commit rendered HeroSlideshow plus every shelf's full PosterCard tree
+  // in one shot. On slow hardware that commit alone took seconds — the
+  // transition simply never committed during that time, so the previous
+  // LibraryView sat frozen on screen instead of anything "loading".
+  //
+  // Fix: gate real shelf content behind `shelvesReady`, which starts false
+  // and flips true from a plain `useEffect` (a local setState — NOT wrapped
+  // in the router's startTransition). The first commit therefore always
+  // renders only the page frame + skeleton rows, which is cheap regardless
+  // of cache warmth, so it's what the transition commits — quickly. The
+  // effect fires once that skeleton frame has painted and triggers a
+  // second, ordinary-priority render that mounts the real shelves.
+  //
+  // useDeferredValue was considered and rejected: the shelf arrays are
+  // already fully populated by useDashboard's cache-seeded useState
+  // initializers before the first render even runs, so there is no stale
+  // value for useDeferredValue to keep showing while a fresh one computes —
+  // deferring `onDeck` on the very first render just returns `onDeck`. The
+  // problem here isn't stale-vs-fresh data (useDeferredValue's use case);
+  // it's that the mount's first commit is unconditionally expensive. A
+  // boolean gate that starts false is the direct way to make it cheap.
+  const mountStartRef = useRef<number | null>(null);
+  if (mountStartRef.current === null) {
+    mountStartRef.current = performance.now();
+    logger.debug("dashboard", "first render start");
+  }
+  const [shelvesReady, setShelvesReady] = useState(false);
+
+  useLayoutEffect(() => {
+    logger.debug("dashboard", "first commit", {
+      ms: Math.round(performance.now() - (mountStartRef.current ?? performance.now())),
+    });
+  }, []);
+
+  useEffect(() => {
+    setShelvesReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!shelvesReady) return;
+    logger.debug("dashboard", "shelves committed", {
+      ms: Math.round(performance.now() - (mountStartRef.current ?? performance.now())),
+    });
+  }, [shelvesReady]);
+
   const { server } = useAuth();
   const { preferences } = usePreferences();
   useScrollRestoration();
@@ -430,7 +483,7 @@ function Dashboard() {
 
       {/* Continue Watching */}
       {sections.continueWatching && (
-        loading.deck && onDeck.length === 0 ? (
+        !shelvesReady || (loading.deck && onDeck.length === 0) ? (
           <section style={styles.section}>
             <h3 style={styles.sectionTitle}>Continue Watching</h3>
             <div style={styles.skeletonRow}>
@@ -492,7 +545,7 @@ function Dashboard() {
 
       {/* Recently Added in Movies */}
       {sections.recentMovies && (
-        loading.movies && recentMovies.length === 0 ? (
+        !shelvesReady || (loading.movies && recentMovies.length === 0) ? (
           <section style={styles.section}>
             <h3 style={styles.sectionTitle}>Recently Added in Movies</h3>
             <div style={styles.skeletonRow}>
@@ -544,7 +597,7 @@ function Dashboard() {
 
       {/* Recently Added in TV Shows */}
       {sections.recentShows && (
-        loading.shows && recentShows.length === 0 ? (
+        !shelvesReady || (loading.shows && recentShows.length === 0) ? (
           <section style={styles.section}>
             <h3 style={styles.sectionTitle}>Recently Added in TV Shows</h3>
             <div style={styles.skeletonRow}>
