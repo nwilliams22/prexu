@@ -128,6 +128,30 @@ async function fetchDetailBundle(
 }
 
 /**
+ * Structural equality for two detail bundles. Used to decide whether a
+ * background revalidation actually changed anything before re-applying it —
+ * skipping a no-op re-apply avoids handing out a fresh `item`/array object
+ * identity on every same-item revalidation, which otherwise cascades into
+ * the related/extras/actors and collection effects (previously keyed on
+ * `item` by reference) re-firing for no reason and visibly re-clearing the
+ * shelves. Bundles are small (one item plus a handful of season/episode/
+ * sibling children) and this only runs once per navigation (when
+ * revalidating a stale cache entry), so a full structural comparison isn't a
+ * hot path — and it correctly catches any genuine change (title, cast,
+ * watch state updated from another device, etc.) rather than relying on a
+ * single field like `updatedAt` that wouldn't reflect a watch-state-only
+ * change.
+ */
+function detailBundlesEqual(a: DetailCachePayload, b: DetailCachePayload): boolean {
+  if (a === b) return true;
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Warm the item-detail cache for a ratingKey without mounting the detail
  * page — the entry point for prexu-0szx.15's hover-intent prefetch from
  * PosterCard. No-ops if a fresh (non-stale) entry is already cached.
@@ -188,6 +212,12 @@ export function useItemDetailData(): ItemDetailData {
     forceRevalidateRef.current = true;
     setRefreshKey((k) => k + 1);
   }, []);
+  // Tracks the ratingKey the shelf state (related/extras/actors/collection)
+  // was last populated for, so the primary effect can tell a same-item
+  // revalidation (cache-serve, background refresh, manual refreshItem())
+  // apart from an actual navigation to a different item — only the latter
+  // should clear the shelves.
+  const previousRatingKeyRef = useRef<string | undefined>(undefined);
 
   // Fetch item metadata + children — cached (stale-while-revalidate) and abortable.
   useEffect(() => {
@@ -198,13 +228,24 @@ export function useItemDetailData(): ItemDetailData {
     const forceRevalidate = forceRevalidateRef.current;
     forceRevalidateRef.current = false;
 
+    const isDifferentItem = previousRatingKeyRef.current !== ratingKey;
+    previousRatingKeyRef.current = ratingKey;
+
     // Secondary "shelf" state (related/extras/actors/collection) isn't part
-    // of the cached bundle above — it's always cleared here and repopulated
-    // by the effect below (keyed on `item`), same as before this change.
-    setRelated([]);
-    setExtras([]);
-    setMoreWithActors([]);
-    setCollectionItems(null);
+    // of the cached bundle above. Only clear it when navigating to a
+    // DIFFERENT item — a same-item revalidation (stale-while-revalidate or a
+    // manual refreshItem()) must leave already-loaded shelves in place so
+    // the page doesn't visibly blank-then-reload while showing the same
+    // item. The effects below repopulate them, keyed on ratingKey.
+    if (isDifferentItem) {
+      logger.debug("detail", "useItemDetailData: navigated to a different item, clearing shelves", {
+        ratingKey,
+      });
+      setRelated([]);
+      setExtras([]);
+      setMoreWithActors([]);
+      setCollectionItems(null);
+    }
 
     const applyBundle = (bundle: DetailCachePayload): boolean => {
       if (
@@ -269,6 +310,16 @@ export function useItemDetailData(): ItemDetailData {
       .then((bundle) => {
         if (controller.signal.aborted) return;
         cacheSet(key, bundle, DETAIL_CACHE_TTL);
+        if (cached && detailBundlesEqual(cached.data, bundle)) {
+          // Revalidation confirmed nothing changed — skip re-applying so we
+          // don't hand out a new `item` object identity for no reason (that
+          // identity churn is what previously re-fired the shelf/collection
+          // effects and produced a visible refresh flash).
+          logger.debug("detail", "useItemDetailData: revalidation unchanged, skipping re-apply", {
+            ratingKey,
+          });
+          return;
+        }
         applyBundle(bundle);
       })
       .catch((err) => {
@@ -343,7 +394,12 @@ export function useItemDetailData(): ItemDetailData {
     return () => {
       controller.abort();
     };
-  }, [server, ratingKey, item]);
+    // Keyed on item?.ratingKey (stable across a same-item revalidation) —
+    // not on `item` itself — so a background refresh that produces a new
+    // `item` object identity (same underlying data) doesn't abort in-flight
+    // shelf fetches and restart them from scratch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [server, ratingKey, item?.ratingKey]);
 
   // Fetch collection items if this movie belongs to a collection
   useEffect(() => {
@@ -395,7 +451,11 @@ export function useItemDetailData(): ItemDetailData {
     return () => {
       controller.abort();
     };
-  }, [server, item, ratingKey, sections]);
+    // Same reasoning as the related/extras/actors effect above: key on
+    // item?.ratingKey, not `item`, so same-item revalidation doesn't restart
+    // the collection lookup.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [server, item?.ratingKey, ratingKey, sections]);
 
   return {
     item,
