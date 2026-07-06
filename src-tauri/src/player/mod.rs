@@ -144,6 +144,19 @@ pub struct PlayerState {
     /// `commands::popout`'s Linux section).
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     pub(crate) pre_popout_geometry: Mutex<Option<(i32, i32, u32, u32)>>,
+    /// True if the main window was maximized immediately before
+    /// `player_enter_popout` unmaximized it (Linux/Wayland fix, prexu-6qi5.4).
+    /// GTK's `gtk_window_resize` no-ops on a maximized toplevel, and tao's own
+    /// GTK edge-drag hit-test explicitly bails out while
+    /// `window.is_maximized()` — so pop-out must unmaximize before it can
+    /// shrink the window or accept an edge-drag resize. `player_exit_popout`
+    /// re-maximizes the window when this was `Some(true)`, after restoring
+    /// the pre-popout geometry. `None` when not currently in pop-out (mirrors
+    /// `pre_popout_geometry`). Windows/macOS never touch this — the Windows
+    /// popout path resizes via raw Win32 `SetWindowPos`, which has no such
+    /// maximized-toplevel restriction.
+    #[cfg(target_os = "linux")]
+    pub(crate) pre_popout_maximized: Mutex<Option<bool>>,
     /// Latched on `WindowEvent::Focused(false)`, consumed on the next
     /// `WindowEvent::Focused(true)`. Gates `reassert_host_on_focus`
     /// so the host SetWindowPos storm only fires on an actual
@@ -262,6 +275,8 @@ impl PlayerState {
             trailing_scheduled: AtomicBool::new(false),
             #[cfg(any(target_os = "windows", target_os = "linux"))]
             pre_popout_geometry: Mutex::new(None),
+            #[cfg(target_os = "linux")]
+            pre_popout_maximized: Mutex::new(None),
             #[cfg(target_os = "windows")]
             pending_focus_reassert: AtomicBool::new(false),
             timeline_ctx: Mutex::new(None),
