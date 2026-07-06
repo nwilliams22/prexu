@@ -38,6 +38,13 @@ interface SkipButtonsProps {
    *  Play/Pause button (always mounted) so the tick change is a real DOM
    *  mutation the WebView can key a repaint off, not just an inert prop. */
   reflowTick?: number;
+  /** Drop prev/next-episode buttons at narrow widths (prexu-52ky). Computed
+   *  by ControlsBottomBar from its measured row width — see
+   *  `controlsCompaction.ts`. Play/pause and stop are never gated by this. */
+  hideEpisodeNav?: boolean;
+  /** Drop the prev/next-chapter (or 30s rewind/forward fallback) buttons at
+   *  narrow widths (prexu-52ky), same source as `hideEpisodeNav`. */
+  hideChapterNav?: boolean;
 }
 
 function SkipButtons({
@@ -55,6 +62,8 @@ function SkipButtons({
   iconSmall,
   iconLarge,
   reflowTick = 0,
+  hideEpisodeNav = false,
+  hideChapterNav = false,
 }: SkipButtonsProps) {
   const [skipIndicator, setSkipIndicator] = useState<string | null>(null);
   const skipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -143,8 +152,9 @@ function SkipButtons({
         </div>
       )}
 
-      {/* Previous episode */}
-      {onPrevEpisode && (
+      {/* Previous episode — dropped first at narrow widths (prexu-52ky):
+          "extras" relative to the core stop/skip/play-pause transport. */}
+      {onPrevEpisode && !hideEpisodeNav && (
         <button onClick={onPrevEpisode} style={btnStyle} aria-label="Previous episode">
           <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="currentColor">
             <rect x={4} y={5} width={3} height={14} rx={0.5} />
@@ -153,17 +163,20 @@ function SkipButtons({
         </button>
       )}
 
-      {/* Chapter back / 30s */}
-      <button
-        onClick={() => handleChapterSkip("prev")}
-        style={btnStyle}
-        aria-label={chapters && chapters.length > 0 ? "Previous chapter" : "Rewind 30 seconds"}
-      >
-        <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-          <polyline points="11 17 6 12 11 7" />
-          <polyline points="18 17 13 12 18 7" />
-        </svg>
-      </button>
+      {/* Chapter back / 30s — also an "extra" dropped alongside episode nav
+          at narrow widths (prexu-52ky). */}
+      {!hideChapterNav && (
+        <button
+          onClick={() => handleChapterSkip("prev")}
+          style={btnStyle}
+          aria-label={chapters && chapters.length > 0 ? "Previous chapter" : "Rewind 30 seconds"}
+        >
+          <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="11 17 6 12 11 7" />
+            <polyline points="18 17 13 12 18 7" />
+          </svg>
+        </button>
+      )}
 
       {/* 10s back — hold to accelerate */}
       <button
@@ -227,19 +240,21 @@ function SkipButtons({
       </button>
 
       {/* Chapter forward / 30s */}
-      <button
-        onClick={() => handleChapterSkip("next")}
-        style={btnStyle}
-        aria-label={chapters && chapters.length > 0 ? "Next chapter" : "Forward 30 seconds"}
-      >
-        <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-          <polyline points="13 17 18 12 13 7" />
-          <polyline points="6 17 11 12 6 7" />
-        </svg>
-      </button>
+      {!hideChapterNav && (
+        <button
+          onClick={() => handleChapterSkip("next")}
+          style={btnStyle}
+          aria-label={chapters && chapters.length > 0 ? "Next chapter" : "Forward 30 seconds"}
+        >
+          <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="13 17 18 12 13 7" />
+            <polyline points="6 17 11 12 6 7" />
+          </svg>
+        </button>
+      )}
 
       {/* Next episode */}
-      {onNextEpisode && (
+      {onNextEpisode && !hideEpisodeNav && (
         <button onClick={onNextEpisode} style={btnStyle} aria-label="Next episode">
           <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="currentColor">
             <polygon points="6,5 15,12 6,19" />
