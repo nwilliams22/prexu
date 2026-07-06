@@ -87,6 +87,14 @@ export function useTimelineReporting(
         ratingKey,
         timeMs: Math.round(timeMs),
       });
+      // Diagnostic for prexu-ix52: the offset actually sent at stop (0, via
+      // unscrobble, for an early stop) so a hardware run can confirm what
+      // left the client before comparing against what PMS reports back.
+      logger.debug("playback", "final offset sent at stop", {
+        ratingKey,
+        timeMs: 0,
+        branch: "unscrobble",
+      });
       const { uri, accessToken } = server;
       // End the Plex "Now Playing" session promptly (prexu-9cj5). /:/unscrobble
       // only clears the resume marker — it does NOT tell the server playback
@@ -142,6 +150,7 @@ export function useTimelineReporting(
       .catch((err) =>
         logger.warn("playback", "stopped beacon failed", {
           ratingKey,
+          timeMs: Math.round(timeMs),
           error: err instanceof Error ? err.message : String(err),
         }),
       );

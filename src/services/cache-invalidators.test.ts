@@ -1,6 +1,11 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, vi, afterEach, beforeAll } from "vitest";
 import { cacheSet, cacheGet, cacheInvalidateWhere, cacheClear } from "./api-cache";
-import { invalidateDeckCaches } from "./cache-invalidators";
+import {
+  invalidateDeckCaches,
+  initializeCacheInvalidators,
+  DECK_INVALIDATION_DELAY_MS,
+} from "./cache-invalidators";
+import { emitWatchStateChanged } from "./watch-state-events";
 
 describe("cache-invalidators", () => {
   beforeEach(() => {
@@ -140,6 +145,62 @@ describe("cache-invalidators", () => {
       );
 
       localStorage.removeItem(preferenceKey);
+    });
+  });
+
+  // initializeCacheInvalidators wires a listener that never unsubscribes
+  // (by design — it must outlive Dashboard mount/unmount cycles), so it is
+  // initialized exactly ONCE for this whole describe block rather than per
+  // test. Calling it again per-test would stack additional listeners on
+  // `window` and each would independently schedule its own invalidation,
+  // making call-count assertions meaningless.
+  describe("initializeCacheInvalidators (deck invalidation delay, prexu-ix52)", () => {
+    beforeAll(() => {
+      initializeCacheInvalidators();
+    });
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      // Drain any timers this test scheduled before switching back to real
+      // timers, so a leftover scheduled invalidation can't fire during a
+      // later test that expects real timers.
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    });
+
+    it("does not invalidate the deck cache synchronously when watch state changes", () => {
+      const deckKey = "dashboard:http://server:32400:deck";
+      cacheSet(deckKey, [{ title: "Deck Item" }], 60 * 60 * 1000);
+
+      emitWatchStateChanged();
+
+      // Still present immediately after the event — the reaction is delayed.
+      expect(cacheGet(deckKey)).not.toBeNull();
+    });
+
+    it("invalidates the deck cache once DECK_INVALIDATION_DELAY_MS has elapsed", () => {
+      const deckKey = "dashboard:http://server:32400:deck";
+      cacheSet(deckKey, [{ title: "Deck Item" }], 60 * 60 * 1000);
+
+      emitWatchStateChanged();
+      vi.advanceTimersByTime(DECK_INVALIDATION_DELAY_MS);
+
+      expect(cacheGet(deckKey)).toBeNull();
+    });
+
+    it("does not invalidate 1ms before the delay elapses (boundary)", () => {
+      const deckKey = "dashboard:http://server:32400:deck";
+      cacheSet(deckKey, [{ title: "Deck Item" }], 60 * 60 * 1000);
+
+      emitWatchStateChanged();
+      vi.advanceTimersByTime(DECK_INVALIDATION_DELAY_MS - 1);
+      expect(cacheGet(deckKey)).not.toBeNull();
+
+      vi.advanceTimersByTime(1);
+      expect(cacheGet(deckKey)).toBeNull();
     });
   });
 });

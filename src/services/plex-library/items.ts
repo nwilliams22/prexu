@@ -4,6 +4,7 @@
 
 import { fetchMetadata } from "./base";
 import { getLibraryItems as getItems } from "./filter";
+import { logger } from "../logger";
 import type { LibrarySection, PlexMediaItem } from "../../types/library";
 
 // Re-export getLibraryItems from filter module for barrel
@@ -64,5 +65,21 @@ export async function getOnDeck(
   serverUri: string,
   serverToken: string
 ): Promise<PlexMediaItem[]> {
-  return fetchMetadata(serverUri, serverToken, "/library/onDeck", "getOnDeck");
+  const items = await fetchMetadata(
+    serverUri,
+    serverToken,
+    "/library/onDeck",
+    "getOnDeck",
+  );
+  // Diagnostic for prexu-ix52: the viewOffset PMS actually returned for each
+  // deck entry on this refetch, so a hardware run can be lined up against
+  // "final offset sent at stop" (plex-playback.ts) to see whether a refetch
+  // landed before or after PMS finished ingesting the stop write.
+  logger.debug("api", "onDeck refetch viewOffsets", {
+    items: items.map((item) => ({
+      ratingKey: item.ratingKey,
+      viewOffset: item.viewOffset ?? 0,
+    })),
+  });
+  return items;
 }
