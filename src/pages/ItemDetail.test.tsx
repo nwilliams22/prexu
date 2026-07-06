@@ -85,10 +85,17 @@ vi.mock("../components/detail/DetailSkeleton", () => ({
   default: () => <div data-testid="detail-skeleton" />,
 }));
 
+// prexu-xl4l: captures every prop bag ItemHeroSection receives so tests can
+// assert reference stability across re-renders (e.g. a shelvesLoading flip)
+// — proving ItemDetail's useCallback-wrapped artUrl/posterUrl/onFixMatch
+// actually let the hero's memo() skip re-rendering, rather than being a
+// no-op wrap around still-fresh-every-render closures.
+const heroSectionCalls = vi.hoisted(() => ({ props: [] as Record<string, unknown>[] }));
 vi.mock("../components/detail/ItemHeroSection", () => ({
-  default: ({ item }: { item: { title: string } }) => (
-    <div data-testid="hero-section">{item.title}</div>
-  ),
+  default: (props: { item: { title: string } } & Record<string, unknown>) => {
+    heroSectionCalls.props.push(props);
+    return <div data-testid="hero-section">{props.item.title}</div>;
+  },
 }));
 
 vi.mock("../components/detail/EpisodeListSection", () => ({
@@ -140,6 +147,7 @@ const makeDetailData = (
     collectionItems: { collection: Record<string, unknown>; items: Record<string, unknown>[] } | null;
     shelvesLoading: boolean;
     collectionLoading: boolean;
+    setShowFixMatch: (v: boolean) => void;
   }> = {}
 ) => ({
   item: null,
@@ -188,6 +196,7 @@ function renderItemDetail() {
 describe("ItemDetail", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    heroSectionCalls.props = [];
     mockUseAuth.mockReturnValue(makeAuth());
     mockUseParentalControls.mockReturnValue({
       restrictionsEnabled: false,
@@ -387,6 +396,74 @@ describe("ItemDetail", () => {
       expect(screen.queryByTestId("shelf-skeleton-related")).not.toBeInTheDocument();
       expect(screen.queryByTestId("row-Extras")).not.toBeInTheDocument();
       expect(screen.queryByTestId("row-Related")).not.toBeInTheDocument();
+    });
+  });
+
+  // prexu-xl4l: third iteration on the entry-flash issue. PRs #63 and #73
+  // fixed two mechanisms, but hardware still perceived a flash. The prime
+  // suspect traced to ItemHeroSection's backdrop <img> (fixed there — see
+  // ItemHeroSection.test.tsx). These tests cover the ItemDetail-level half
+  // of that fix: ItemHeroSection is now memo()-wrapped like the Dashboard
+  // hero (PR #71), which only pays off if the props ItemDetail passes it
+  // are themselves stable across re-renders that don't actually change
+  // anything the hero renders (e.g. a shelvesLoading flip).
+  describe("hero prop and container stability across a shelvesLoading flip (prexu-xl4l)", () => {
+    it("keeps artUrl/posterUrl/onFixMatch referentially stable so ItemHeroSection's memo() can skip re-rendering", () => {
+      // setShowFixMatch must be the *same* mock across both renders — in the
+      // real hook it's a raw useState setter, which React guarantees is
+      // stable for the component's whole lifetime. A fresh vi.fn() per
+      // mockReturnValue() call (like makeDetailData()'s default) would
+      // simulate a setter identity change that never happens in practice,
+      // which is exactly the kind of prop instability handleFixMatch's
+      // useCallback is meant to isolate the hero from.
+      const setShowFixMatch = vi.fn();
+      mockUseItemDetailData.mockReturnValue(
+        makeDetailData({ item: movieItem, shelvesLoading: true, collectionLoading: true, setShowFixMatch })
+      );
+      const { rerender } = renderItemDetail();
+      expect(heroSectionCalls.props).toHaveLength(1);
+      const before = heroSectionCalls.props[0];
+
+      mockUseItemDetailData.mockReturnValue(
+        makeDetailData({ item: movieItem, shelvesLoading: false, collectionLoading: false, setShowFixMatch })
+      );
+      rerender(
+        <MemoryRouter>
+          <ItemDetail />
+        </MemoryRouter>
+      );
+
+      const after = heroSectionCalls.props[heroSectionCalls.props.length - 1];
+      expect(after).not.toBe(before);
+      expect(after.artUrl).toBe(before.artUrl);
+      expect(after.posterUrl).toBe(before.posterUrl);
+      expect(after.onFixMatch).toBe(before.onFixMatch);
+      // item itself is untouched by the shelvesLoading flip (PR #63's
+      // apply-only-changed-keys behavior extends to this unrelated flag).
+      expect(after.item).toBe(before.item);
+    });
+
+    it("does not toggle opacity or otherwise animate the page container when shelves flip from loading to loaded", () => {
+      mockUseItemDetailData.mockReturnValue(
+        makeDetailData({ item: movieItem, shelvesLoading: true, collectionLoading: true })
+      );
+      const { rerender } = renderItemDetail();
+      const containerBefore = screen.getByTestId("hero-section").parentElement as HTMLElement;
+      expect(containerBefore.style.opacity).toBe("");
+      const styleAttrBefore = containerBefore.getAttribute("style");
+
+      mockUseItemDetailData.mockReturnValue(
+        makeDetailData({ item: movieItem, shelvesLoading: false, collectionLoading: false })
+      );
+      rerender(
+        <MemoryRouter>
+          <ItemDetail />
+        </MemoryRouter>
+      );
+
+      const containerAfter = screen.getByTestId("hero-section").parentElement as HTMLElement;
+      expect(containerAfter.style.opacity).toBe("");
+      expect(containerAfter.getAttribute("style")).toBe(styleAttrBefore);
     });
   });
 });

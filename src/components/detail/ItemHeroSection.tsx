@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useCallback, useLayoutEffect, memo } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { useBreakpoint, isMobile } from "../../hooks/useBreakpoint";
@@ -53,7 +53,7 @@ interface ItemHeroSectionProps {
   serverToken?: string;
 }
 
-export default function ItemHeroSection({
+function ItemHeroSection({
   item,
   artUrl,
   posterUrl,
@@ -80,6 +80,40 @@ export default function ItemHeroSection({
   // Fresh subtitle streams fetched after an on-demand download. The item prop
   // is stale until the page refetches, which only happens on modal close.
   const [tracksOverride, setTracksOverride] = useState<PlexStream[] | null>(null);
+
+  // Timing instrumentation (prexu-xl4l): the backdrop below is the prime
+  // suspect for the "flash shortly after cached content paints" perceived on
+  // hardware after PRs #63/#73 fixed the two other mechanisms. mountStartRef
+  // stands in for entry time (this component mounts in the same commit as
+  // the page's core content, so its own mount is a close proxy) — pairing
+  // "hero committed" (was *this* render/commit itself slow) against "hero
+  // backdrop image loaded" (was the image decode/paint slow) lets a future
+  // hardware repro's [detail] log lines pinpoint which one, if either,
+  // coincides with any remaining visible flash.
+  const mountStartRef = useRef<number | null>(null);
+  if (mountStartRef.current === null) {
+    mountStartRef.current = performance.now();
+  }
+  const loggedBackdropLoadRef = useRef(false);
+
+  useLayoutEffect(() => {
+    logger.debug("detail", "ItemHeroSection: hero committed", {
+      ratingKey: item.ratingKey,
+      deltaMs: Math.round(performance.now() - (mountStartRef.current ?? performance.now())),
+    });
+    // Re-arm the "first image load" log on navigation to a different item —
+    // otherwise a same-mount-instance season switch (seasonFading) or
+    // similar in-place item swap would keep the stale ref from a prior item.
+    loggedBackdropLoadRef.current = false;
+  }, [item.ratingKey]);
+
+  const handleBackdropLoad = useCallback(() => {
+    if (loggedBackdropLoadRef.current) return;
+    loggedBackdropLoadRef.current = true;
+    logger.debug("detail", "ItemHeroSection: hero backdrop image loaded", {
+      deltaMs: Math.round(performance.now() - (mountStartRef.current ?? performance.now())),
+    });
+  }, []);
 
   const openSubtitleSearch = () => {
     setSubtitleOverride(undefined);
@@ -246,7 +280,10 @@ export default function ItemHeroSection({
         <img
           src={movie.art ? artUrl(movie.art) : posterUrl(movie.thumb)}
           alt=""
-          loading="lazy"
+          loading="eager"
+          decoding="async"
+          data-testid="hero-backdrop"
+          onLoad={handleBackdropLoad}
           style={movie.art ? styles.pageBgArt : styles.pageBgArtFallback}
         />
         <div style={styles.pageBgOverlay} />
@@ -258,6 +295,8 @@ export default function ItemHeroSection({
           <img
             src={posterUrl(movie.thumb)}
             alt={movie.title}
+            loading="eager"
+            decoding="async"
             style={{
               ...styles.heroPoster,
               width: mobile ? "160px" : bp === "large" ? "280px" : "240px",
@@ -435,7 +474,10 @@ export default function ItemHeroSection({
         <img
           src={show.art ? artUrl(show.art) : posterUrl(show.thumb)}
           alt=""
-          loading="lazy"
+          loading="eager"
+          decoding="async"
+          data-testid="hero-backdrop"
+          onLoad={handleBackdropLoad}
           style={show.art ? styles.pageBgArt : styles.pageBgArtFallback}
         />
         <div style={styles.pageBgOverlay} />
@@ -447,6 +489,8 @@ export default function ItemHeroSection({
           <img
             src={posterUrl(show.thumb)}
             alt={show.title}
+            loading="eager"
+            decoding="async"
             style={{
               ...styles.heroPoster,
               width: mobile ? "160px" : bp === "large" ? "280px" : "240px",
@@ -532,7 +576,10 @@ export default function ItemHeroSection({
         <img
           src={bgArt ? artUrl(bgArt) : posterUrl(season.parentThumb || season.thumb)}
           alt=""
-          loading="lazy"
+          loading="eager"
+          decoding="async"
+          data-testid="hero-backdrop"
+          onLoad={handleBackdropLoad}
           style={bgArt ? styles.pageBgArt : styles.pageBgArtFallback}
         />
         <div style={styles.pageBgOverlay} />
@@ -546,6 +593,8 @@ export default function ItemHeroSection({
           <img
             src={posterUrl(season.thumb)}
             alt={season.title}
+            loading="eager"
+            decoding="async"
             style={{
               ...styles.heroPoster,
               width: mobile ? "160px" : bp === "large" ? "240px" : "200px",
@@ -638,7 +687,10 @@ export default function ItemHeroSection({
         <img
           src={(ep.grandparentArt || ep.art) ? artUrl(ep.grandparentArt || ep.art) : posterUrl(ep.thumb)}
           alt=""
-          loading="lazy"
+          loading="eager"
+          decoding="async"
+          data-testid="hero-backdrop"
+          onLoad={handleBackdropLoad}
           style={(ep.grandparentArt || ep.art) ? styles.pageBgArt : styles.pageBgArtFallback}
         />
         <div style={styles.pageBgOverlay} />
@@ -651,6 +703,8 @@ export default function ItemHeroSection({
           <img
             src={epThumbSrc}
             alt={ep.title}
+            loading="eager"
+            decoding="async"
             style={{
               ...styles.episodeHeroThumb,
               width: mobile ? "100%" : bp === "large" ? "480px" : "420px",
@@ -829,8 +883,12 @@ export default function ItemHeroSection({
 
 const styles: Record<string, React.CSSProperties> = {
   ...detailStyles,
+  // aspectRatio matches the 780x440 dimensions requested via the episode
+  // branch's posterUrl override (ItemDetail.tsx) — reserves the box so the
+  // thumb's arrival doesn't grow the hero row height (prexu-xl4l).
   episodeHeroThumb: {
     width: "360px",
+    aspectRatio: "780 / 440",
     borderRadius: "10px",
     boxShadow: "0 6px 30px rgba(0,0,0,0.6)",
     flexShrink: 0,
@@ -958,3 +1016,12 @@ const styles: Record<string, React.CSSProperties> = {
     boxShadow: "0 12px 40px rgba(0,0,0,0.5)",
   },
 };
+
+// Memoized (prexu-xl4l), mirroring HeroSlideshow's PR #71 treatment:
+// ItemDetail re-renders on every shelvesLoading/collectionLoading flip
+// (PR #73's reserved-space skeletons), and ItemHeroSection's own props
+// (item, artUrl, posterUrl, onFixMatch) are otherwise unchanged across
+// those commits once ItemDetail.tsx stabilizes its callbacks with
+// useCallback — memo() skips re-rendering (and re-diffing the whole
+// hero subtree, including the subtitle modal portal) for those commits.
+export default memo(ItemHeroSection);

@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { usePlayerSession } from "../contexts/PlayerContext";
 import { useAuth } from "../hooks/useAuth";
@@ -97,20 +97,49 @@ function ItemDetail() {
     }
   }, [restricted, toast, navigate]);
 
-  if (!server) return null;
+  // Stable across renders (prexu-xl4l): these used to be plain arrow
+  // functions redefined on every render, which meant ItemHeroSection (now
+  // memo()-wrapped, mirroring the Dashboard hero's PR #71 treatment) always
+  // saw new artUrl/posterUrl prop identities and re-rendered/re-diffed even
+  // when nothing about the item or shelves actually changed for it — e.g.
+  // every shelvesLoading flip from PR #73. useCallback must be called
+  // unconditionally (Rules of Hooks), so this is defined above the
+  // `if (!server) return null` below rather than after it; the `server?.`
+  // fallbacks are never actually exercised since JSX using these closures
+  // only renders once `server` is non-null.
+  const serverUri = server?.uri ?? "";
+  const serverToken = server?.accessToken ?? "";
+  const artUrl = useCallback(
+    (path: string) => getImageUrl(serverUri, serverToken, path, 1920, 1080),
+    [serverUri, serverToken],
+  );
+  const posterUrl = useCallback(
+    (path: string) => getImageUrl(serverUri, serverToken, path, 300, 450),
+    [serverUri, serverToken],
+  );
+  const posterPlaceholder = useCallback(
+    (path: string) => getPlaceholderUrl(serverUri, serverToken, path),
+    [serverUri, serverToken],
+  );
+  const posterSrcSet = useCallback(
+    (path: string) => getImageSrcSet(serverUri, serverToken, path, 300),
+    [serverUri, serverToken],
+  );
+  const episodeThumbUrl = useCallback(
+    (path: string) => getImageUrl(serverUri, serverToken, path, 400, 225),
+    [serverUri, serverToken],
+  );
+  const actorThumbUrl = useCallback(
+    (path: string) => getImageUrl(serverUri, serverToken, path, 440, 440),
+    [serverUri, serverToken],
+  );
+  const episodeHeroPosterUrl = useCallback(
+    (path: string) => getImageUrl(serverUri, serverToken, path, 780, 440),
+    [serverUri, serverToken],
+  );
+  const handleFixMatch = useCallback(() => setShowFixMatch(true), [setShowFixMatch]);
 
-  const artUrl = (path: string) =>
-    getImageUrl(server.uri, server.accessToken, path, 1920, 1080);
-  const posterUrl = (path: string) =>
-    getImageUrl(server.uri, server.accessToken, path, 300, 450);
-  const posterPlaceholder = (path: string) =>
-    getPlaceholderUrl(server.uri, server.accessToken, path);
-  const posterSrcSet = (path: string) =>
-    getImageSrcSet(server.uri, server.accessToken, path, 300);
-  const episodeThumbUrl = (path: string) =>
-    getImageUrl(server.uri, server.accessToken, path, 400, 225);
-  const actorThumbUrl = (path: string) =>
-    getImageUrl(server.uri, server.accessToken, path, 440, 440);
+  if (!server) return null;
 
   const formatDuration = (ms: number): string => {
     const mins = Math.round(ms / 60000);
@@ -297,7 +326,7 @@ function ItemDetail() {
           artUrl={artUrl}
           posterUrl={posterUrl}
           isAdmin={isAdmin}
-          onFixMatch={() => setShowFixMatch(true)}
+          onFixMatch={handleFixMatch}
           refreshItem={refreshItem}
           serverUri={server.uri}
           serverToken={server.accessToken}
@@ -348,7 +377,7 @@ function ItemDetail() {
           artUrl={artUrl}
           posterUrl={posterUrl}
           isAdmin={isAdmin}
-          onFixMatch={() => setShowFixMatch(true)}
+          onFixMatch={handleFixMatch}
           refreshItem={refreshItem}
         />
         <RatingsSection
@@ -441,9 +470,9 @@ function ItemDetail() {
         <ItemHeroSection
           item={ep}
           artUrl={artUrl}
-          posterUrl={(path: string) => getImageUrl(server.uri, server.accessToken, path, 780, 440)}
+          posterUrl={episodeHeroPosterUrl}
           isAdmin={isAdmin}
-          onFixMatch={() => setShowFixMatch(true)}
+          onFixMatch={handleFixMatch}
           refreshItem={refreshItem}
           serverUri={server.uri}
           serverToken={server.accessToken}
@@ -504,7 +533,7 @@ function ItemDetail() {
           artUrl={artUrl}
           posterUrl={posterUrl}
           isAdmin={isAdmin}
-          onFixMatch={() => setShowFixMatch(true)}
+          onFixMatch={handleFixMatch}
           refreshItem={refreshItem}
           seasonFading={seasonFading}
           parentShow={parentShow}

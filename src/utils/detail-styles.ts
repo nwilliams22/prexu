@@ -65,9 +65,16 @@ export const detailStyles: Record<string, React.CSSProperties> = {
     zIndex: 1,
   },
 
-  /** Poster image (240px wide, rounded, shadow) */
+  /**
+   * Poster image (240px wide, rounded, shadow). aspectRatio reserves the
+   * box at the requested 300x450 dimensions (see plex-library/images.ts
+   * getImageUrl callers) so the poster's own arrival never grows the hero
+   * row's height and pushes content below it — width alone doesn't reserve
+   * height until the image's natural dimensions are known (prexu-xl4l).
+   */
   heroPoster: {
     width: "240px",
+    aspectRatio: "2 / 3",
     borderRadius: "10px",
     boxShadow: "0 6px 30px rgba(0,0,0,0.6)",
     flexShrink: 0,
