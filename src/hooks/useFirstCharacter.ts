@@ -45,7 +45,7 @@ export function useFirstCharacter(
 
   const cacheKey = useMemo(() => {
     if (!server || !sectionId || !enabled) return "";
-    return `firstCharacter:${server.uri}:${sectionId}`;
+    return `firstCharacter.v2:${server.uri}:${sectionId}`;
   }, [server, sectionId, enabled]);
 
   const [buckets, setBuckets] = useState<FirstCharacterBucket[]>(() => {
