@@ -21,7 +21,10 @@ vi.mock("../../services/logger", () => ({
 
 import { reportTimeline, reportTimelineBeacon } from "../../services/plex-playback";
 import { markAsUnwatched } from "../../services/plex-library";
-import { onWatchStateChanged } from "../../services/watch-state-events";
+import {
+  onWatchStateChanged,
+  onWatchStateChangedDetail,
+} from "../../services/watch-state-events";
 
 const SERVER = { uri: "https://server:32400", accessToken: "tok" };
 
@@ -184,5 +187,71 @@ describe("useTimelineReporting.reportStopped", () => {
     });
     expect(markAsUnwatched).not.toHaveBeenCalled();
     expect(reportTimelineBeacon).not.toHaveBeenCalled();
+  });
+
+  // prexu-8nl0: the client knows the final viewOffset at stop time — the
+  // event now carries it so listeners (cache-invalidators.ts) can patch
+  // caches directly instead of waiting on a refetch that can race PMS's own
+  // async ingestion of the write.
+  describe("offset payload on the watch-state-changed event (prexu-8nl0)", () => {
+    it("carries viewOffsetMs: 0 and reset: true after an early-stop clear", async () => {
+      const handler = vi.fn();
+      const off = onWatchStateChangedDetail(handler);
+      const result = setup();
+      act(() => {
+        result.current.ratingKeyRef.current = "66324";
+        result.current.durationRef.current = 1244;
+        result.current.currentTimeRef.current = 3.17;
+        result.current.reportStopped();
+      });
+      await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+      expect(handler).toHaveBeenCalledWith({
+        ratingKey: "66324",
+        viewOffsetMs: 0,
+        reset: true,
+      });
+      off();
+    });
+
+    it("carries the rounded resume position (no reset flag) after a resume-offset beacon", async () => {
+      const handler = vi.fn();
+      const off = onWatchStateChangedDetail(handler);
+      const result = setup();
+      act(() => {
+        result.current.ratingKeyRef.current = "66324";
+        result.current.durationRef.current = 1244;
+        result.current.currentTimeRef.current = 188.4; // 188,400ms
+        result.current.reportStopped();
+      });
+      await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+      expect(handler).toHaveBeenCalledWith({
+        ratingKey: "66324",
+        viewOffsetMs: 188_400,
+        reset: undefined,
+      });
+      off();
+    });
+
+    it("does NOT emit an offset payload when the stopped beacon rejects", async () => {
+      const handler = vi.fn();
+      const off = onWatchStateChangedDetail(handler);
+      vi.mocked(reportTimelineBeacon).mockRejectedValueOnce(
+        new Error("reportTimelineBeacon failed: 500 Internal Server Error"),
+      );
+      const result = setup();
+      act(() => {
+        result.current.ratingKeyRef.current = "66324";
+        result.current.durationRef.current = 1244;
+        result.current.currentTimeRef.current = 90;
+        result.current.reportStopped();
+      });
+      await vi.waitFor(() =>
+        expect(vi.mocked(reportTimelineBeacon)).toHaveBeenCalledTimes(1),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(handler).not.toHaveBeenCalled();
+      off();
+    });
   });
 });

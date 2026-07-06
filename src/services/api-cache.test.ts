@@ -1,4 +1,12 @@
-import { cacheGet, cacheSet, cacheInvalidate, cacheInvalidatePrefix, cacheClear } from "./api-cache";
+import {
+  cacheGet,
+  cacheSet,
+  cacheInvalidate,
+  cacheInvalidatePrefix,
+  cacheClear,
+  cacheUpdateWhere,
+  cacheGetAge,
+} from "./api-cache";
 
 describe("api-cache", () => {
   beforeEach(() => {
@@ -155,6 +163,70 @@ describe("api-cache", () => {
     it("works when cache is already empty", () => {
       cacheClear();
       expect(cacheGet("anything")).toBeNull();
+    });
+  });
+
+  // ── cacheUpdateWhere (prexu-8nl0) ──
+
+  describe("cacheUpdateWhere", () => {
+    it("replaces the data of matching entries via the updater", () => {
+      cacheSet("dashboard:s1:deck", [{ ratingKey: "1", viewOffset: 100 }], 60_000);
+      cacheSet("dashboard:s2:deck", [{ ratingKey: "1", viewOffset: 200 }], 60_000);
+      cacheSet("dashboard:s1:movies", [{ ratingKey: "1", viewOffset: 999 }], 60_000);
+
+      const updated = cacheUpdateWhere<{ ratingKey: string; viewOffset: number }[]>(
+        (key) => key.endsWith(":deck"),
+        (items) => items.map((i) => (i.ratingKey === "1" ? { ...i, viewOffset: 5_000 } : i)),
+      );
+
+      expect(updated).toBe(2);
+      expect(cacheGet("dashboard:s1:deck")).toEqual([{ ratingKey: "1", viewOffset: 5_000 }]);
+      expect(cacheGet("dashboard:s2:deck")).toEqual([{ ratingKey: "1", viewOffset: 5_000 }]);
+      // Non-matching key untouched, even though its content looks similar.
+      expect(cacheGet("dashboard:s1:movies")).toEqual([{ ratingKey: "1", viewOffset: 999 }]);
+    });
+
+    it("leaves an entry alone when the updater returns undefined", () => {
+      cacheSet("dashboard:s1:deck", [{ ratingKey: "1", viewOffset: 100 }], 60_000);
+
+      const updated = cacheUpdateWhere<{ ratingKey: string; viewOffset: number }[]>(
+        (key) => key.endsWith(":deck"),
+        () => undefined,
+      );
+
+      expect(updated).toBe(0);
+      expect(cacheGet("dashboard:s1:deck")).toEqual([{ ratingKey: "1", viewOffset: 100 }]);
+    });
+
+    it("leaves an entry alone when the updater returns the same reference", () => {
+      const data = [{ ratingKey: "1", viewOffset: 100 }];
+      cacheSet("dashboard:s1:deck", data, 60_000);
+
+      const updated = cacheUpdateWhere((key) => key.endsWith(":deck"), (d) => d);
+
+      expect(updated).toBe(0);
+      expect(cacheGet("dashboard:s1:deck")).toBe(data);
+    });
+
+    it("preserves the entry's original age/TTL instead of resetting the freshness clock", () => {
+      cacheSet("dashboard:s1:deck", [{ ratingKey: "1", viewOffset: 100 }], 60_000);
+      vi.advanceTimersByTime(10_000);
+
+      cacheUpdateWhere<{ ratingKey: string; viewOffset: number }[]>(
+        (key) => key.endsWith(":deck"),
+        (items) => items.map((i) => ({ ...i, viewOffset: 5_000 })),
+      );
+
+      // A patch is not a fresh fetch — the entry should read as ~10s old,
+      // not 0s old, so downstream freshness checks (useDashboard's
+      // STALE_THRESHOLD) aren't fooled into treating it as brand-new.
+      expect(cacheGetAge("dashboard:s1:deck")).toBe(10_000);
+    });
+
+    it("does not throw and updates nothing when no keys match", () => {
+      cacheSet("key1", "a", 60_000);
+      expect(() => cacheUpdateWhere(() => false, (d) => d)).not.toThrow();
+      expect(cacheGet("key1")).toBe("a");
     });
   });
 

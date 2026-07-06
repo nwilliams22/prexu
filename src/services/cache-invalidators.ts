@@ -4,9 +4,10 @@
  * Dashboard component is unmounted (e.g., while the Player overlay is active).
  */
 
-import { cacheInvalidateWhere } from "./api-cache";
-import { onWatchStateChanged } from "./watch-state-events";
+import { cacheInvalidateWhere, cacheUpdateWhere } from "./api-cache";
+import { onWatchStateChangedDetail } from "./watch-state-events";
 import { logger } from "./logger";
+import type { PlexMediaItem } from "../types/library";
 
 /**
  * Delay between the watch-state-changed event and the deck cache
@@ -39,7 +40,27 @@ export function initializeCacheInvalidators(): void {
   // Item-detail cache entries (prexu-lz4t) are invalidated on the SAME
   // event, but WITHOUT the delay — see invalidateItemDetailCaches' doc
   // comment for why that asymmetry is correct rather than an oversight.
-  const unsubscribe = onWatchStateChanged((ratingKey) => {
+  const unsubscribe = onWatchStateChangedDetail(({ ratingKey, viewOffsetMs, reset }) => {
+    // prexu-8nl0: the event now (optionally) carries the exact viewOffset the
+    // player just wrote to the server. When it does, PATCH the caches with
+    // that known-correct value BEFORE any invalidation runs, instead of
+    // waiting on a refetch — any refetch (this module's own delayed one, or
+    // useDashboard's own immediate on-event refetch, or a hover-prefetch of
+    // the item-detail bundle) can still land before PMS finishes ingesting
+    // the write and re-cache the PRE-stop value. See patchDeckCaches /
+    // patchItemDetailCache / applyOffsetFloors below for the full mechanism.
+    const hasOffset = ratingKey !== undefined && viewOffsetMs !== undefined;
+    if (hasOffset) {
+      registerOffsetFloor(ratingKey, viewOffsetMs, Boolean(reset));
+      const deckEntriesPatched = patchDeckCaches(ratingKey, viewOffsetMs);
+      const detailPatched = patchItemDetailCache(ratingKey, viewOffsetMs);
+      logger.debug("playback", "patch applied", {
+        ratingKey,
+        offset: viewOffsetMs,
+        entriesPatched: deckEntriesPatched + (detailPatched ? 1 : 0),
+      });
+    }
+
     logger.debug("api", "deck cache invalidation scheduled", {
       delayMs: DECK_INVALIDATION_DELAY_MS,
     });
@@ -47,7 +68,20 @@ export function initializeCacheInvalidators(): void {
       invalidateDeckCaches();
     }, DECK_INVALIDATION_DELAY_MS);
 
-    invalidateItemDetailCaches(ratingKey);
+    if (hasOffset) {
+      // The item-detail entry (if any) was already patched in place above
+      // with correct, fresh data — deleting it here (the old unconditional
+      // invalidation) would just erase that patch and force an unguarded
+      // refetch that could reintroduce the exact race this is fixing. Skip
+      // it for this key; the delayed deck invalidation above still runs as a
+      // belt-and-braces resync for anything the offset-only patch can't
+      // reach (e.g. an item entering/leaving the deck).
+      logger.debug("detail", "item-detail cache patched, skipping immediate invalidation", {
+        ratingKey,
+      });
+    } else {
+      invalidateItemDetailCaches(ratingKey);
+    }
   });
 
   // Keep listener alive for the lifetime of the app (never unsubscribe)
@@ -136,4 +170,169 @@ function invalidateItemDetailCaches(ratingKey?: string): void {
   logger.debug("detail", "invalidated item-detail cache on watch state change", {
     ratingKey,
   });
+}
+
+// ── Optimistic offset patch (prexu-8nl0) ──
+//
+// PR #69's investigation showed the render path itself is correct (PosterCard
+// repaints on a viewOffset change; the resume popover reads live data) — the
+// remaining staleness is a server-timing race: after a verified stop write,
+// ANY refetch (this module's delayed deck invalidation, useDashboard's own
+// immediate on-event refetch, or a hover-prefetch of the item-detail bundle)
+// can land before PMS finishes ingesting the write and re-cache the PRE-stop
+// viewOffset — for up to the deck's 60-minute TTL or the item-detail bundle's
+// 30s TTL. Waiting out server timing more (a longer delay, more invalidation)
+// can only ever narrow that window, not close it.
+//
+// The client already knows the final offset at stop time — it's the exact
+// value just beaconed to the server. So instead of depending on a refetch to
+// eventually reflect it, the functions below patch it directly into the
+// caches the moment the event fires, and a short-lived "floor" registry
+// protects against an in-flight (or immediately-triggered) refetch that
+// resolves with stale data before the patch's effective window would
+// otherwise be overwritten by it.
+
+/**
+ * Patch every cached deck entry's matching item (by ratingKey) with a
+ * known-correct viewOffset, in place. Entries without that ratingKey, and
+ * entries for unrelated items within a matching entry, are left untouched.
+ * Returns how many deck cache entries (servers) actually contained a match.
+ */
+function patchDeckCaches(ratingKey: string, viewOffsetMs: number): number {
+  return cacheUpdateWhere<PlexMediaItem[]>(
+    (key) => key.startsWith("dashboard:") && key.endsWith(":deck"),
+    (items) => {
+      const idx = items.findIndex((item) => item.ratingKey === ratingKey);
+      if (idx === -1) return undefined;
+      const next = items.slice();
+      next[idx] = { ...next[idx]!, viewOffset: viewOffsetMs };
+      return next;
+    },
+  );
+}
+
+/**
+ * Minimal shape of an item-detail cache bundle (see useItemDetailData's
+ * private `DetailCachePayload`) — only the field this patch touches. Kept
+ * local rather than importing the (unexported) real type: useItemDetailData.ts
+ * is owned by another workstream and this module only ever needs to read/
+ * write `item.viewOffset` on the cached bundle.
+ */
+interface DetailBundleLike {
+  item: PlexMediaItem;
+  [key: string]: unknown;
+}
+
+/**
+ * Patch the cached item-detail bundle for `ratingKey` (every server) with a
+ * known-correct `item.viewOffset`, in place, leaving every other field of the
+ * bundle (seasons/episodes/parentShow/siblings) untouched. Returns whether a
+ * matching entry was found and patched.
+ */
+function patchItemDetailCache(ratingKey: string, viewOffsetMs: number): boolean {
+  let patched = false;
+  cacheUpdateWhere<DetailBundleLike>(
+    (key) => key.startsWith("item-detail:") && key.endsWith(`:${ratingKey}`),
+    (bundle) => {
+      if (!bundle?.item) return undefined;
+      patched = true;
+      return { ...bundle, item: { ...bundle.item, viewOffset: viewOffsetMs } };
+    },
+  );
+  return patched;
+}
+
+/**
+ * How long a just-recorded offset "wins" over a fetched value for the same
+ * ratingKey. Bridges the gap between the synchronous patch above and a
+ * refetch that's already in flight (or gets triggered immediately after, e.g.
+ * useDashboard's own watch-state-changed listener refetching the deck on the
+ * same event) — see {@link applyOffsetFloors} for the exact merge rule.
+ */
+export const OFFSET_FLOOR_WINDOW_MS = 5_000;
+
+interface OffsetFloor {
+  viewOffsetMs: number;
+  /** True for an early-stop resume-marker clear — see WatchStateChangedDetail.reset. */
+  reset: boolean;
+  expiresAt: number;
+}
+
+const offsetFloors = new Map<string, OffsetFloor>();
+
+/**
+ * Record a known-correct offset for `ratingKey`, expiring after
+ * {@link OFFSET_FLOOR_WINDOW_MS}. Exported (in addition to being called from
+ * this module's own event handler) purely so tests can set up a floor
+ * directly — it has no dependency on the cache primitives (unlike
+ * patchDeckCaches/patchItemDetailCache), so it's safe to call from a test
+ * context that mocks api-cache narrowly (e.g. useDashboard.test.ts).
+ */
+export function registerOffsetFloor(ratingKey: string, viewOffsetMs: number, reset: boolean): void {
+  offsetFloors.set(ratingKey, {
+    viewOffsetMs,
+    reset,
+    expiresAt: Date.now() + OFFSET_FLOOR_WINDOW_MS,
+  });
+}
+
+/**
+ * Apply any live offset floor to a freshly fetched item list (prexu-8nl0).
+ *
+ * Race being guarded against: useDashboard's own watch-state-changed listener
+ * refetches the deck immediately on the same event this module patches the
+ * cache from — a refetch PMS may not have finished ingesting yet, so its
+ * response can still carry the PRE-stop viewOffset. Left unguarded, that
+ * refetch's result would silently overwrite the correct, client-known value
+ * the patch just wrote moments earlier.
+ *
+ * Merge rule per item, while its floor hasn't expired:
+ * - `reset` floors (an early-stop `/:/unscrobble` clear) always win: the
+ *   client just told the server there is no resume point, so any nonzero
+ *   fetched offset is definitionally the stale pre-stop value, never a newer
+ *   one.
+ * - Otherwise (a recorded resume offset), the LARGER of the two wins — the
+ *   floor guards against a stale/smaller fetched value, while a fetched value
+ *   that's equal or larger reflects confirmed-ingested (or newer) progress
+ *   and is trusted as-is.
+ *
+ * Expired floors are lazily dropped as they're encountered. Callers (e.g.
+ * useDashboard's fetchDeck, right after `getOnDeck` resolves) should run every
+ * network response for onDeck items through this before it's applied to state
+ * or cache — it is a no-op (returns the same array reference) once no floors
+ * are live.
+ */
+export function applyOffsetFloors<T extends { ratingKey: string; viewOffset?: number }>(
+  items: T[],
+): T[] {
+  if (offsetFloors.size === 0) return items;
+  const now = Date.now();
+  let changed = false;
+  const next = items.map((item) => {
+    const floor = offsetFloors.get(item.ratingKey);
+    if (!floor) return item;
+    if (floor.expiresAt <= now) {
+      offsetFloors.delete(item.ratingKey);
+      return item;
+    }
+    const fetched = item.viewOffset ?? 0;
+    const resolved = floor.reset ? floor.viewOffsetMs : Math.max(fetched, floor.viewOffsetMs);
+    if (resolved === fetched) return item;
+    changed = true;
+    logger.debug("playback", "stale response overridden", {
+      ratingKey: item.ratingKey,
+      serverOffset: fetched,
+      patchedOffset: resolved,
+    });
+    return { ...item, viewOffset: resolved };
+  });
+  return changed ? next : items;
+}
+
+/**
+ * Test-only escape hatch to reset the offset-floor registry between tests
+ * that don't go through a full module reset. Not used in production code.
+ */
+export function __clearOffsetFloorsForTests(): void {
+  offsetFloors.clear();
 }

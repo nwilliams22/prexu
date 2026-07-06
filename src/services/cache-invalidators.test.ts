@@ -4,6 +4,9 @@ import {
   invalidateDeckCaches,
   initializeCacheInvalidators,
   DECK_INVALIDATION_DELAY_MS,
+  applyOffsetFloors,
+  registerOffsetFloor,
+  __clearOffsetFloorsForTests,
 } from "./cache-invalidators";
 import { emitWatchStateChanged } from "./watch-state-events";
 
@@ -11,10 +14,12 @@ describe("cache-invalidators", () => {
   beforeEach(() => {
     cacheClear();
     vi.clearAllMocks();
+    __clearOffsetFloorsForTests();
   });
 
   afterEach(() => {
     cacheClear();
+    __clearOffsetFloorsForTests();
   });
 
   describe("invalidateDeckCaches", () => {
@@ -269,6 +274,161 @@ describe("cache-invalidators", () => {
         // ...but the deck entry is untouched until its own delayed
         // invalidation fires (still pending — no timers advanced here).
         expect(cacheGet(deckKey)).not.toBeNull();
+      });
+    });
+
+    // Optimistic offset patch (prexu-8nl0): when the watch-state-changed
+    // event carries a viewOffsetMs, the deck/item-detail caches are patched
+    // in place with that known-correct value BEFORE any invalidation runs,
+    // instead of depending on a refetch to eventually reflect it.
+    describe("optimistic offset patch (prexu-8nl0)", () => {
+      it("patches the matching item's viewOffset in a deck cache entry, leaving unrelated items and entries untouched", () => {
+        const deckKey = "dashboard:http://server:32400:deck";
+        const otherDeckKey = "dashboard:http://server2:32400:deck";
+        const moviesKey = "dashboard:http://server:32400:movies";
+        cacheSet(
+          deckKey,
+          [
+            { ratingKey: "501", title: "Target", viewOffset: 10_000 },
+            { ratingKey: "999", title: "Unrelated", viewOffset: 20_000 },
+          ],
+          60 * 60 * 1000,
+        );
+        cacheSet(otherDeckKey, [{ ratingKey: "999", title: "Unrelated 2" }], 60 * 60 * 1000);
+        cacheSet(moviesKey, [{ ratingKey: "501", title: "Not deck" }], 60 * 60 * 1000);
+
+        emitWatchStateChanged("501", { viewOffsetMs: 185_000 });
+
+        expect(cacheGet(deckKey)).toEqual([
+          { ratingKey: "501", title: "Target", viewOffset: 185_000 },
+          { ratingKey: "999", title: "Unrelated", viewOffset: 20_000 },
+        ]);
+        // Entry with no matching ratingKey is left exactly as-is.
+        expect(cacheGet(otherDeckKey)).toEqual([{ ratingKey: "999", title: "Unrelated 2" }]);
+        // Non-deck dashboard entry untouched even though it contains the ratingKey.
+        expect(cacheGet(moviesKey)).toEqual([{ ratingKey: "501", title: "Not deck" }]);
+      });
+
+      it("patches bundle.item.viewOffset in an item-detail cache entry, leaving unrelated entries untouched", () => {
+        const targetKey = "item-detail:http://server:32400:501";
+        const otherKey = "item-detail:http://server:32400:999";
+        cacheSet(
+          targetKey,
+          { item: { ratingKey: "501", viewOffset: 10_000 }, seasons: [] },
+          30_000,
+        );
+        cacheSet(otherKey, { item: { ratingKey: "999", viewOffset: 20_000 }, seasons: [] }, 30_000);
+
+        emitWatchStateChanged("501", { viewOffsetMs: 185_000 });
+
+        expect(cacheGet(targetKey)).toEqual({
+          item: { ratingKey: "501", viewOffset: 185_000 },
+          seasons: [],
+        });
+        expect(cacheGet(otherKey)).toEqual({
+          item: { ratingKey: "999", viewOffset: 20_000 },
+          seasons: [],
+        });
+      });
+
+      it("does NOT immediately invalidate the item-detail entry it just patched (unlike the no-offset path)", () => {
+        const detailKey = "item-detail:http://server:32400:501";
+        cacheSet(detailKey, { item: { ratingKey: "501", viewOffset: 10_000 } }, 30_000);
+
+        emitWatchStateChanged("501", { viewOffsetMs: 185_000 });
+
+        // Patched, not deleted — the fix's whole point is this entry stays
+        // correct without needing a refetch.
+        expect(cacheGet(detailKey)).toEqual({
+          item: { ratingKey: "501", viewOffset: 185_000 },
+        });
+      });
+
+      it("still schedules the delayed deck invalidation as a belt-and-braces resync when an offset is present", () => {
+        const deckKey = "dashboard:http://server:32400:deck";
+        cacheSet(deckKey, [{ ratingKey: "501", viewOffset: 10_000 }], 60 * 60 * 1000);
+
+        emitWatchStateChanged("501", { viewOffsetMs: 185_000 });
+
+        // Patched immediately...
+        expect(cacheGet(deckKey)).toEqual([{ ratingKey: "501", viewOffset: 185_000 }]);
+
+        // ...and still invalidated once the existing delay elapses (PR #64
+        // timing unchanged).
+        vi.advanceTimersByTime(DECK_INVALIDATION_DELAY_MS);
+        expect(cacheGet(deckKey)).toBeNull();
+      });
+
+      it("falls back to invalidate-only (old behavior) when the event carries no offset", () => {
+        const detailKey = "item-detail:http://server:32400:501";
+        cacheSet(detailKey, { item: { ratingKey: "501", viewOffset: 10_000 } }, 30_000);
+
+        emitWatchStateChanged("501");
+
+        expect(cacheGet(detailKey)).toBeNull();
+      });
+
+      it("does nothing to caches when only an offset is present but no ratingKey (falls back to broad item-detail sweep)", () => {
+        const detailKey = "item-detail:http://server:32400:501";
+        const deckKey = "dashboard:http://server:32400:deck";
+        cacheSet(detailKey, { item: { ratingKey: "501", viewOffset: 10_000 } }, 30_000);
+        cacheSet(deckKey, [{ ratingKey: "501", viewOffset: 10_000 }], 60 * 60 * 1000);
+
+        // No ratingKey on the event — nothing to key a patch off of.
+        emitWatchStateChanged(undefined, { viewOffsetMs: 185_000 });
+
+        expect(cacheGet(detailKey)).toBeNull();
+        // Deck is untouched until the delayed invalidation (unchanged path).
+        expect(cacheGet(deckKey)).not.toBeNull();
+      });
+    });
+
+    // applyOffsetFloors is the merge guard useDashboard's fetchDeck consults
+    // right after getOnDeck() resolves, so a refetch that lands before PMS
+    // finishes ingesting the stop write can't silently regress the patch
+    // above. Unit-tested directly here since it's pure/synchronous.
+    describe("applyOffsetFloors merge guard (prexu-8nl0)", () => {
+      it("is a no-op (same array reference) when no floors are registered", () => {
+        const items = [{ ratingKey: "501", viewOffset: 10_000 }];
+        expect(applyOffsetFloors(items)).toBe(items);
+      });
+
+      it("overrides a stale (smaller) fetched offset with the floor value", () => {
+        registerOffsetFloor("501", 185_000, false);
+        const result = applyOffsetFloors([{ ratingKey: "501", viewOffset: 10_000 }]);
+        expect(result).toEqual([{ ratingKey: "501", viewOffset: 185_000 }]);
+      });
+
+      it("trusts a fetched offset that is equal to or larger than the floor (newer/larger server offsets win)", () => {
+        registerOffsetFloor("501", 185_000, false);
+        const result = applyOffsetFloors([{ ratingKey: "501", viewOffset: 200_000 }]);
+        expect(result).toEqual([{ ratingKey: "501", viewOffset: 200_000 }]);
+      });
+
+      it("leaves items with no matching floor untouched", () => {
+        registerOffsetFloor("501", 185_000, false);
+        const items = [{ ratingKey: "999", viewOffset: 10_000 }];
+        expect(applyOffsetFloors(items)).toBe(items);
+      });
+
+      it("a reset floor always wins, even over a much larger fetched offset", () => {
+        registerOffsetFloor("501", 0, true);
+        const result = applyOffsetFloors([{ ratingKey: "501", viewOffset: 185_000 }]);
+        expect(result).toEqual([{ ratingKey: "501", viewOffset: 0 }]);
+      });
+
+      it("stops overriding once the floor's window has expired", () => {
+        registerOffsetFloor("501", 185_000, false);
+        vi.advanceTimersByTime(5_001);
+        const items = [{ ratingKey: "501", viewOffset: 10_000 }];
+        expect(applyOffsetFloors(items)).toBe(items);
+      });
+
+      it("still protects right up to the boundary of the floor window", () => {
+        registerOffsetFloor("501", 185_000, false);
+        vi.advanceTimersByTime(4_999);
+        const result = applyOffsetFloors([{ ratingKey: "501", viewOffset: 10_000 }]);
+        expect(result).toEqual([{ ratingKey: "501", viewOffset: 185_000 }]);
       });
     });
   });
