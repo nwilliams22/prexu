@@ -41,7 +41,10 @@ import { logger } from "../services/logger";
 interface PersistedLibraryState {
   sort?: string;
   genre?: string;
+  /** @deprecated legacy single-year filter — migrated to yearMin/yearMax on read */
   year?: string;
+  yearMin?: string;
+  yearMax?: string;
   contentRating?: string;
   resolution?: string;
   unwatched?: boolean;
@@ -57,7 +60,7 @@ function getPersistedFilters(sectionId: string): PersistedLibraryState | null {
 }
 
 function persistFilters(sectionId: string, state: PersistedLibraryState): void {
-  const hasValues = state.sort || state.genre || state.year || state.contentRating || state.resolution || state.unwatched;
+  const hasValues = state.sort || state.genre || state.yearMin || state.yearMax || state.contentRating || state.resolution || state.unwatched;
   if (hasValues) {
     localStorage.setItem(`${STORAGE_KEYS.LIBRARY_FILTERS}:${sectionId}`, JSON.stringify(state));
   } else {
@@ -133,6 +136,7 @@ function LibraryView() {
 
     // If URL already has filter/sort params, don't override — user navigated with explicit params
     const hasUrlFilters = searchParams.has("genre") || searchParams.has("year") ||
+      searchParams.has("yearMin") || searchParams.has("yearMax") ||
       searchParams.has("contentRating") || searchParams.has("resolution") ||
       searchParams.has("unwatched") || searchParams.has("sort");
     if (hasUrlFilters) return;
@@ -143,7 +147,13 @@ function LibraryView() {
     const updates: Record<string, string> = {};
     if (persisted.sort && persisted.sort !== "titleSort:asc") updates.sort = persisted.sort;
     if (persisted.genre) updates.genre = persisted.genre;
-    if (persisted.year) updates.year = persisted.year;
+    // Migrate a legacy single-year persisted filter (pre-range) to the new
+    // yearMin/yearMax fields — an old exact-year selection becomes a
+    // single-year range.
+    const persistedYearMin = persisted.yearMin ?? persisted.year;
+    const persistedYearMax = persisted.yearMax ?? persisted.year;
+    if (persistedYearMin) updates.yearMin = persistedYearMin;
+    if (persistedYearMax) updates.yearMax = persistedYearMax;
     if (persisted.contentRating) updates.contentRating = persisted.contentRating;
     if (persisted.resolution) updates.resolution = persisted.resolution;
     if (persisted.unwatched) updates.unwatched = "1";
@@ -164,12 +174,18 @@ function LibraryView() {
   const filters = useMemo<LibraryFilters>(() => {
     const f: LibraryFilters = {};
     const genre = searchParams.get("genre");
-    const year = searchParams.get("year");
+    // Legacy single-year param (pre-range) — a bookmarked/shared URL from
+    // before ranges existed. Migrated to an exact yearMin===yearMax range
+    // unless the URL already carries the new yearMin/yearMax params.
+    const legacyYear = searchParams.get("year");
+    const yearMin = searchParams.get("yearMin") ?? legacyYear;
+    const yearMax = searchParams.get("yearMax") ?? legacyYear;
     const contentRating = searchParams.get("contentRating");
     const resolution = searchParams.get("resolution");
     const unwatched = searchParams.get("unwatched");
     if (genre) f.genre = genre;
-    if (year) f.year = year;
+    if (yearMin) f.yearMin = yearMin;
+    if (yearMax) f.yearMax = yearMax;
     if (contentRating) f.contentRating = contentRating;
     if (resolution) f.resolution = resolution;
     if (unwatched === "1") f.unwatched = true;
@@ -180,7 +196,7 @@ function LibraryView() {
   // Declared early so it can be referenced by both shouldLoadAll and useFirstCharIndex
   // (both of which must be computed before usePaginatedLibrary is called).
   const hasActiveFilters =
-    !!filters.genre || !!filters.year || !!filters.contentRating || !!filters.resolution || !!filters.unwatched;
+    !!filters.genre || !!filters.yearMin || !!filters.yearMax || !!filters.contentRating || !!filters.resolution || !!filters.unwatched;
 
   // Whether alpha-jump bar is applicable for the current sort
   const isAlphaSortable =
@@ -411,9 +427,22 @@ function LibraryView() {
 
   const handleFiltersChange = useCallback(
     (newFilters: LibraryFilters) => {
+      logger.debug("library", "filters changed", {
+        sectionId,
+        genre: newFilters.genre,
+        yearMin: newFilters.yearMin,
+        yearMax: newFilters.yearMax,
+        contentRating: newFilters.contentRating,
+        resolution: newFilters.resolution,
+        unwatched: newFilters.unwatched,
+      });
       updateSearchParams({
         genre: newFilters.genre || undefined,
-        year: newFilters.year || undefined,
+        yearMin: newFilters.yearMin || undefined,
+        yearMax: newFilters.yearMax || undefined,
+        // Clear any legacy single-year param the moment the user touches
+        // filters again — yearMin/yearMax are now the source of truth.
+        year: undefined,
         contentRating: newFilters.contentRating || undefined,
         resolution: newFilters.resolution || undefined,
         unwatched: newFilters.unwatched ? "1" : undefined,
@@ -423,7 +452,8 @@ function LibraryView() {
         persistFilters(sectionId, {
           sort: persisted.sort,
           genre: newFilters.genre,
-          year: newFilters.year,
+          yearMin: newFilters.yearMin,
+          yearMax: newFilters.yearMax,
           contentRating: newFilters.contentRating,
           resolution: newFilters.resolution,
           unwatched: newFilters.unwatched,

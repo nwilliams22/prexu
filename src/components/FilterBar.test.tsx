@@ -36,11 +36,12 @@ describe("FilterBar", () => {
     onSortChange: vi.fn(),
   };
 
-  it("renders genre, year, and content rating selects", () => {
+  it("renders genre, year range, and content rating selects", () => {
     render(<FilterBar {...defaultProps} />);
 
     expect(screen.getByText("All Genres")).toBeInTheDocument();
-    expect(screen.getByText("All Years")).toBeInTheDocument();
+    expect(screen.getByLabelText("Year from")).toBeInTheDocument();
+    expect(screen.getByLabelText("Year to")).toBeInTheDocument();
     expect(screen.getByText("All Ratings")).toBeInTheDocument();
   });
 
@@ -69,16 +70,40 @@ describe("FilterBar", () => {
     expect(onFiltersChange).toHaveBeenCalledWith({ genre: "action" });
   });
 
-  it("calls onFiltersChange when year is selected", async () => {
+  it("calls onFiltersChange when year-from is selected", async () => {
     const user = userEvent.setup();
     const onFiltersChange = vi.fn();
 
     render(<FilterBar {...defaultProps} onFiltersChange={onFiltersChange} />);
 
-    const yearSelect = screen.getAllByRole("combobox")[1];
-    await user.selectOptions(yearSelect, "2024");
+    await user.selectOptions(screen.getByLabelText("Year from"), "2023");
 
-    expect(onFiltersChange).toHaveBeenCalledWith({ year: "2024" });
+    expect(onFiltersChange).toHaveBeenCalledWith({ yearMin: "2023" });
+  });
+
+  it("calls onFiltersChange when year-to is selected", async () => {
+    const user = userEvent.setup();
+    const onFiltersChange = vi.fn();
+
+    render(<FilterBar {...defaultProps} onFiltersChange={onFiltersChange} />);
+
+    await user.selectOptions(screen.getByLabelText("Year to"), "2024");
+
+    expect(onFiltersChange).toHaveBeenCalledWith({ yearMax: "2024" });
+  });
+
+  it("merges yearMin into existing filters when year-from is changed", async () => {
+    const user = userEvent.setup();
+    const onFiltersChange = vi.fn();
+    const filters: LibraryFilters = { yearMax: "2024" };
+
+    render(
+      <FilterBar {...defaultProps} filters={filters} onFiltersChange={onFiltersChange} />
+    );
+
+    await user.selectOptions(screen.getByLabelText("Year from"), "2023");
+
+    expect(onFiltersChange).toHaveBeenCalledWith({ yearMax: "2024", yearMin: "2023" });
   });
 
   it("calls onFiltersChange when unwatched toggle is clicked", async () => {
@@ -94,7 +119,8 @@ describe("FilterBar", () => {
   it("shows active filter chips when filters are applied", () => {
     const filters: LibraryFilters = {
       genre: "action",
-      year: "2024",
+      yearMin: "2024",
+      yearMax: "2024",
     };
 
     render(<FilterBar {...defaultProps} filters={filters} />);
@@ -102,7 +128,53 @@ describe("FilterBar", () => {
     // "Action" appears in both the select option and the chip;
     // use the remove button to verify chips exist
     expect(screen.getByLabelText("Remove Action filter")).toBeInTheDocument();
+    // A single-year range (yearMin === yearMax) collapses to a single label.
     expect(screen.getByLabelText("Remove 2024 filter")).toBeInTheDocument();
+  });
+
+  it("shows a from–to chip label for a genuine year range", () => {
+    const filters: LibraryFilters = { yearMin: "1980", yearMax: "1989" };
+
+    render(<FilterBar {...defaultProps} filters={filters} />);
+
+    expect(screen.getByLabelText("Remove 1980–1989 filter")).toBeInTheDocument();
+  });
+
+  it("shows an open-ended chip label when only yearMin is set", () => {
+    const filters: LibraryFilters = { yearMin: "1980" };
+
+    render(<FilterBar {...defaultProps} filters={filters} />);
+
+    expect(screen.getByLabelText("Remove 1980+ filter")).toBeInTheDocument();
+  });
+
+  it("shows an open-ended chip label when only yearMax is set", () => {
+    const filters: LibraryFilters = { yearMax: "1989" };
+
+    render(<FilterBar {...defaultProps} filters={filters} />);
+
+    expect(screen.getByLabelText("Remove –1989 filter")).toBeInTheDocument();
+  });
+
+  it("clears both yearMin and yearMax when the year-range chip is removed", async () => {
+    const user = userEvent.setup();
+    const onFiltersChange = vi.fn();
+    const filters: LibraryFilters = { genre: "action", yearMin: "1980", yearMax: "1989" };
+
+    render(
+      <FilterBar {...defaultProps} filters={filters} onFiltersChange={onFiltersChange} />
+    );
+
+    await user.click(screen.getByLabelText("Remove 1980–1989 filter"));
+
+    expect(onFiltersChange).toHaveBeenCalledWith({ genre: "action" });
+  });
+
+  it("treats a year range as an active filter for the Clear Filters button", () => {
+    const filters: LibraryFilters = { yearMin: "1980", yearMax: "1989" };
+
+    render(<FilterBar {...defaultProps} filters={filters} />);
+    expect(screen.getByText("Clear Filters")).toBeInTheDocument();
   });
 
   it("shows Clear Filters button when filters are active", () => {
@@ -133,14 +205,14 @@ describe("FilterBar", () => {
   it("removes individual filter via chip remove button", async () => {
     const user = userEvent.setup();
     const onFiltersChange = vi.fn();
-    const filters: LibraryFilters = { genre: "action", year: "2024" };
+    const filters: LibraryFilters = { genre: "action", yearMin: "2024", yearMax: "2024" };
 
     render(
       <FilterBar {...defaultProps} filters={filters} onFiltersChange={onFiltersChange} />
     );
 
     await user.click(screen.getByLabelText("Remove Action filter"));
-    expect(onFiltersChange).toHaveBeenCalledWith({ year: "2024" });
+    expect(onFiltersChange).toHaveBeenCalledWith({ yearMin: "2024", yearMax: "2024" });
   });
 
   it("shows Unwatched chip when unwatched filter is active", () => {
