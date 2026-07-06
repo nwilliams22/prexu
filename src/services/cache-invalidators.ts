@@ -245,11 +245,29 @@ function patchItemDetailCache(ratingKey: string, viewOffsetMs: number): boolean 
 /**
  * How long a just-recorded offset "wins" over a fetched value for the same
  * ratingKey. Bridges the gap between the synchronous patch above and a
- * refetch that's already in flight (or gets triggered immediately after, e.g.
- * useDashboard's own watch-state-changed listener refetching the deck on the
- * same event) — see {@link applyOffsetFloors} for the exact merge rule.
+ * refetch that's already in flight (or gets triggered shortly after, e.g.
+ * useDashboard's own watch-state-changed listener refetching the deck —
+ * see that hook's listener, which now delays its own trigger by
+ * DECK_INVALIDATION_DELAY_MS for the same ingestion-timing reason this
+ * module's own backstop invalidation does) — see {@link applyOffsetFloors}
+ * for the exact merge rule.
+ *
+ * prexu-dqfc: previously a flat 5s, timed from the moment the event fires.
+ * That raced useDashboard's refetch, which (before this fix) started at
+ * T+0 — a hardware repro showed a real PMS onDeck-rebuild response landing
+ * AFTER a flat 5s window had already expired, cementing the pre-stop
+ * offset into both React state and the 60-minute deck cache with no other
+ * invalidation pending to ever correct it (the module-level backstop
+ * invalidation had already fired at T+DECK_INVALIDATION_DELAY_MS, and
+ * deleting an already-stale-refetched cache entry doesn't touch the
+ * already-rendered state). Now that the refetch itself is deliberately
+ * delayed by DECK_INVALIDATION_DELAY_MS (giving PMS the same ingestion
+ * buffer the backstop invalidation already trusted), the floor must cover
+ * that same delay PLUS the original network-latency margin the flat 5s
+ * was sized for — otherwise widening the pre-fetch delay would just eat
+ * into the floor's remaining protection for the fetch's own round trip.
  */
-export const OFFSET_FLOOR_WINDOW_MS = 5_000;
+export const OFFSET_FLOOR_WINDOW_MS = DECK_INVALIDATION_DELAY_MS + 5_000;
 
 interface OffsetFloor {
   viewOffsetMs: number;
