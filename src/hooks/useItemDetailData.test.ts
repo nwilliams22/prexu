@@ -30,9 +30,11 @@ vi.mock("./usePreferences", () => ({
   usePreferences: () => mockUsePreferences(),
 }));
 
-const stableSections: never[] = [];
+const mockUseLibrary = vi.fn(() => ({
+  sections: [] as { key: string; type: string }[],
+}));
 vi.mock("./useLibrary", () => ({
-  useLibrary: () => ({ sections: stableSections }),
+  useLibrary: () => mockUseLibrary(),
 }));
 
 const mockGetItemMetadata = vi.fn();
@@ -75,6 +77,7 @@ describe("useItemDetailData", () => {
     mockGetMediaByActor.mockResolvedValue([]);
     mockGetCollections.mockResolvedValue([]);
     mockGetCollectionItems.mockResolvedValue({ items: [] });
+    mockUseLibrary.mockReturnValue({ sections: [] });
   });
 
   it("cold load: fetches metadata and populates item", async () => {
@@ -250,6 +253,109 @@ describe("useItemDetailData", () => {
     expect(result.current.extras.length).toBe(1);
     expect(mockGetRelatedItems).toHaveBeenCalledTimes(1);
     expect(mockGetExtras).toHaveBeenCalledTimes(1);
+  });
+
+  // prexu-ct5k: a warm-cache entry paints core content (hero/cast) instantly
+  // from the synchronous cache-hit path, but the related/extras/actors shelf
+  // fetch is a real (micro-tasked) network call that lands well after that
+  // first paint. Without a reserved-space flag, ItemDetail renders nothing
+  // for those shelves until the fetch resolves, so their arrival pushes the
+  // already-painted page around — the "entry flash" this issue fixes.
+  describe("shelf/collection reserved-space flags (prexu-ct5k)", () => {
+    it("shelvesLoading is already true in the same commit as a cache-hit core paint, then clears once shelves arrive", async () => {
+      mockGetItemMetadata.mockResolvedValueOnce(makeMovie("1", "Cached Movie"));
+      await warmItemDetailCache(stableServer, "1");
+      mockGetItemMetadata.mockClear();
+
+      mockGetRelatedItems.mockResolvedValueOnce([makeMovie("99", "Related Movie")]);
+      mockGetExtras.mockResolvedValueOnce([makeMovie("98", "Trailer")]);
+
+      const { result } = renderHook(() => useItemDetailData());
+
+      // Core content and shelvesLoading=true land together, synchronously,
+      // from the cache-hit path — the shelf fetch (a real Promise) hasn't
+      // had a chance to resolve yet at this point.
+      expect(result.current.item?.title).toBe("Cached Movie");
+      expect(result.current.isLoading).toBe(false);
+      expect(result.current.shelvesLoading).toBe(true);
+
+      await waitFor(() => {
+        expect(result.current.shelvesLoading).toBe(false);
+      });
+
+      // Shelf data replaced the reservation; core stayed exactly as it was.
+      expect(result.current.related.length).toBe(1);
+      expect(result.current.extras.length).toBe(1);
+      expect(result.current.item?.title).toBe("Cached Movie");
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    it("collectionLoading reserves space across the async collection lookup, then clears when it resolves", async () => {
+      const cachedMovie = {
+        ...makeMovie("1", "Cached Movie"),
+        Collection: [{ tag: "Marvel" }],
+      };
+      mockGetItemMetadata.mockResolvedValueOnce(cachedMovie);
+      await warmItemDetailCache(stableServer, "1");
+      mockGetItemMetadata.mockClear();
+
+      // A real movie section so the collection lookup effect actually
+      // awaits a (mocked) network call instead of resolving synchronously.
+      mockUseLibrary.mockReturnValue({ sections: [{ key: "1", type: "movie" }] });
+      mockGetCollections.mockResolvedValueOnce([{ ratingKey: "c1", title: "Marvel" }]);
+      mockGetCollectionItems.mockResolvedValueOnce({
+        items: [makeMovie("55", "Other Marvel Movie")],
+      });
+
+      const { result } = renderHook(() => useItemDetailData());
+
+      expect(result.current.item?.title).toBe("Cached Movie");
+      expect(result.current.collectionLoading).toBe(true);
+      expect(result.current.collectionItems).toBeNull();
+
+      await waitFor(() => {
+        expect(result.current.collectionLoading).toBe(false);
+      });
+      expect(result.current.collectionItems?.items.length).toBe(1);
+    });
+
+    it("collectionLoading resolves to false without ever showing a reservation for a movie with no collection", async () => {
+      mockGetItemMetadata.mockResolvedValueOnce(makeMovie("1", "Plain Movie"));
+      await warmItemDetailCache(stableServer, "1");
+      mockGetItemMetadata.mockClear();
+
+      const { result } = renderHook(() => useItemDetailData());
+
+      await waitFor(() => {
+        expect(result.current.collectionLoading).toBe(false);
+      });
+      expect(result.current.collectionItems).toBeNull();
+      expect(mockGetCollections).not.toHaveBeenCalled();
+    });
+
+    it("navigating to a different item re-arms both reserved-space flags", async () => {
+      mockGetItemMetadata.mockResolvedValueOnce(makeMovie("1", "Movie 1"));
+      mockGetRelatedItems.mockResolvedValueOnce([makeMovie("99", "Related Movie")]);
+
+      const { result, rerender } = renderHook(() => useItemDetailData());
+
+      await waitFor(() => expect(result.current.shelvesLoading).toBe(false));
+      expect(result.current.related.length).toBe(1);
+
+      currentRatingKey = "2";
+      mockGetItemMetadata.mockResolvedValueOnce(makeMovie("2", "Movie 2"));
+      mockGetRelatedItems.mockResolvedValueOnce([]);
+
+      rerender();
+
+      // Navigating to a different item re-arms the reservation immediately,
+      // in the same tick shelves are cleared — not one render later.
+      expect(result.current.shelvesLoading).toBe(true);
+      expect(result.current.related).toEqual([]);
+
+      await waitFor(() => expect(result.current.item?.title).toBe("Movie 2"));
+      await waitFor(() => expect(result.current.shelvesLoading).toBe(false));
+    });
   });
 
   it("revalidation with only item-level watch-state changed applies silently: no scroll reset, no loading flip, unrelated bundle fields keep their prior reference (prexu-adiv)", async () => {
