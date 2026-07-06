@@ -306,6 +306,34 @@ describe("prepareSource", () => {
     expect(result.viewOffset).toBe(0);
   });
 
+  // prexu-ix52: with no offsetOverride (the "Resume" popover / detail-page
+  // Resume button path — neither passes an explicit offset, see
+  // usePlayAction.tsx / ItemHeroSection.tsx), prepareSource must use the
+  // FRESH item.viewOffset from the getItemMetadata call it just made, never
+  // a value the caller already had cached (e.g. from the onDeck shelf).
+  // This is what makes the actual resume position immune to onDeck cache
+  // staleness — only the popover LABEL can go stale, not the seek target.
+  it("uses the freshly-fetched item.viewOffset when no offsetOverride is given", async () => {
+    const movie = createPlexMovie({ viewOffset: 280_000, Media: [createPlexMediaInfo()] });
+    mockGetItemMetadata.mockResolvedValue(movie);
+
+    const result = await prepareSource({
+      server: SERVER,
+      ratingKey: RATING_KEY,
+      preferences: makePrefs({ directPlayPreference: "always" }),
+      // No offsetOverride — mirrors the real "Resume" click path.
+    });
+
+    expect(result.viewOffset).toBe(280_000);
+    // getItemMetadata is the only source consulted for the offset — the
+    // caller passed nothing else in for prepareSource to read.
+    expect(mockGetItemMetadata).toHaveBeenCalledWith(
+      SERVER.uri,
+      SERVER.accessToken,
+      RATING_KEY,
+    );
+  });
+
   // Extra: metadata fetch and local-file lookup run concurrently, not as a
   // waterfall. Both must be invoked before either promise resolves, and
   // resolving the local-path lookup FIRST must not break anything.
