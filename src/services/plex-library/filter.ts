@@ -37,7 +37,17 @@ export async function getLibraryItems(
 
   // Apply filters
   if (options.filters?.genre) params.set("genre", options.filters.genre);
-  if (options.filters?.year) params.set("year", options.filters.year);
+  // Year range — Plex's filter query language appends the operator directly
+  // to the field name and lets the mandatory `key=value` separator supply
+  // the "=" half of >=/<= (so the wire pair `year>=1980` is field name
+  // "year>" + value "1980"). Verified against Plex's documented filter
+  // operators (`=`, `!=`, `>=`, `<=` — plexopedia.com/plex-media-server/api/filter
+  // and the Arcanemagus/plex-api wiki's Plex-Web-API-Overview page both list
+  // this exact syntax for numeric fields like year). `URLSearchParams`
+  // percent-encodes ">"/"<" in the key, which decodes back to the same pair
+  // server-side — confirmed by round-tripping through URLSearchParams here.
+  if (options.filters?.yearMin) params.set("year>", options.filters.yearMin);
+  if (options.filters?.yearMax) params.set("year<", options.filters.yearMax);
   if (options.filters?.contentRating)
     params.set("contentRating", options.filters.contentRating);
   if (options.filters?.resolution)

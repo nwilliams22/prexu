@@ -278,6 +278,94 @@ describe("plex-library — async functions", () => {
       expect(path).toContain("X-Plex-Container-Start=50");
       expect(path).toContain("X-Plex-Container-Size=25");
     });
+
+    // ── Year range operators (prexu-6qi5.8) ──
+    //
+    // Plex's filter query language appends the operator to the field name
+    // and lets the mandatory `key=value` separator supply the "=" half of
+    // >=/<=, so the wire pair `year>=1980` is field name "year>" + value
+    // "1980". URLSearchParams percent-encodes ">"/"<" in the key (e.g.
+    // "year%3E=1980"), which decodes back to the identical key/value pair —
+    // these assertions check for the encoded form actually sent over HTTP.
+
+    it("sends year>= for yearMin", async () => {
+      mockServerFetch.mockResolvedValueOnce(
+        jsonResponse({ MediaContainer: { size: 0, totalSize: 0, Metadata: [] } })
+      );
+
+      await getLibraryItems("https://server:32400", "token", "1", {
+        filters: { yearMin: "1980" },
+      });
+
+      const path = mockServerFetch.mock.calls[0][2];
+      expect(path).toContain("year%3E=1980");
+      expect(path).not.toContain("year%3C");
+    });
+
+    it("sends year<= for yearMax", async () => {
+      mockServerFetch.mockResolvedValueOnce(
+        jsonResponse({ MediaContainer: { size: 0, totalSize: 0, Metadata: [] } })
+      );
+
+      await getLibraryItems("https://server:32400", "token", "1", {
+        filters: { yearMax: "1989" },
+      });
+
+      const path = mockServerFetch.mock.calls[0][2];
+      expect(path).toContain("year%3C=1989");
+      expect(path).not.toContain("year%3E");
+    });
+
+    it("sends both bounds for a full year range", async () => {
+      mockServerFetch.mockResolvedValueOnce(
+        jsonResponse({ MediaContainer: { size: 0, totalSize: 0, Metadata: [] } })
+      );
+
+      await getLibraryItems("https://server:32400", "token", "1", {
+        filters: { yearMin: "1980", yearMax: "1989" },
+      });
+
+      const path = mockServerFetch.mock.calls[0][2];
+      expect(path).toContain("year%3E=1980");
+      expect(path).toContain("year%3C=1989");
+
+      // Round-trip through URLSearchParams to confirm the server-side
+      // decode recovers the documented `year>`/`year<` operator keys.
+      const query = path.split("?")[1] ?? "";
+      const decoded = new URLSearchParams(query);
+      expect(decoded.get("year>")).toBe("1980");
+      expect(decoded.get("year<")).toBe("1989");
+    });
+
+    it("combines a year range with other filters (ANDed, per Plex's filter semantics)", async () => {
+      mockServerFetch.mockResolvedValueOnce(
+        jsonResponse({ MediaContainer: { size: 0, totalSize: 0, Metadata: [] } })
+      );
+
+      await getLibraryItems("https://server:32400", "token", "1", {
+        filters: { genre: "Documentary", yearMin: "1980", yearMax: "1989", unwatched: true },
+      });
+
+      const path = mockServerFetch.mock.calls[0][2];
+      expect(path).toContain("genre=Documentary");
+      expect(path).toContain("year%3E=1980");
+      expect(path).toContain("year%3C=1989");
+      expect(path).toContain("unwatched=1");
+    });
+
+    it("omits year params entirely when no range bound is set", async () => {
+      mockServerFetch.mockResolvedValueOnce(
+        jsonResponse({ MediaContainer: { size: 0, totalSize: 0, Metadata: [] } })
+      );
+
+      await getLibraryItems("https://server:32400", "token", "1", {
+        filters: { genre: "Action" },
+      });
+
+      const path = mockServerFetch.mock.calls[0][2];
+      expect(path).not.toContain("year%3E");
+      expect(path).not.toContain("year%3C");
+    });
   });
 
   // ── searchLibrary ──

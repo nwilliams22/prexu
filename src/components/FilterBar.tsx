@@ -42,7 +42,8 @@ function FilterBar({
 
   const hasActiveFilters =
     !!filters.genre ||
-    !!filters.year ||
+    !!filters.yearMin ||
+    !!filters.yearMax ||
     (!hideContentRating && !!filters.contentRating) ||
     !!filters.resolution ||
     !!filters.unwatched;
@@ -57,6 +58,13 @@ function FilterBar({
     onFiltersChange(next);
   };
 
+  const clearYearRange = () => {
+    const next = { ...filters };
+    delete next.yearMin;
+    delete next.yearMax;
+    onFiltersChange(next);
+  };
+
   const clearAll = () => onFiltersChange({});
 
   // Find display titles for active filter chips
@@ -68,11 +76,22 @@ function FilterBar({
       onRemove: () => updateFilter("genre", ""),
     });
   }
-  if (filters.year) {
-    const match = years.find((y) => y.key === filters.year);
+  if (filters.yearMin || filters.yearMax) {
+    const fromMatch = years.find((y) => y.key === filters.yearMin);
+    const toMatch = years.find((y) => y.key === filters.yearMax);
+    const fromLabel = fromMatch?.title ?? filters.yearMin;
+    const toLabel = toMatch?.title ?? filters.yearMax;
+    let label: string;
+    if (filters.yearMin && filters.yearMax) {
+      label = filters.yearMin === filters.yearMax ? fromLabel! : `${fromLabel}–${toLabel}`;
+    } else if (filters.yearMin) {
+      label = `${fromLabel}+`;
+    } else {
+      label = `–${toLabel}`;
+    }
     activeChips.push({
-      label: match?.title ?? filters.year,
-      onRemove: () => updateFilter("year", ""),
+      label,
+      onRemove: clearYearRange,
     });
   }
   if (filters.contentRating && !hideContentRating) {
@@ -117,20 +136,39 @@ function FilterBar({
           ))}
         </select>
 
-        <select
-          aria-label="Year filter"
-          value={filters.year ?? ""}
-          onChange={(e) => updateFilter("year", e.target.value)}
-          style={{ ...styles.select, ...touchPadding }}
-          disabled={isLoading}
-        >
-          <option value="">All Years</option>
-          {years.map((y) => (
-            <option key={y.key} value={y.key}>
-              {y.title}
-            </option>
-          ))}
-        </select>
+        <div style={styles.yearRangeGroup}>
+          <select
+            aria-label="Year from"
+            value={filters.yearMin ?? ""}
+            onChange={(e) => updateFilter("yearMin", e.target.value)}
+            style={{ ...styles.select, ...touchPadding }}
+            disabled={isLoading}
+          >
+            <option value="">Year (from)</option>
+            {years.map((y) => (
+              <option key={y.key} value={y.key}>
+                {y.title}
+              </option>
+            ))}
+          </select>
+          <span aria-hidden="true" style={styles.yearRangeSeparator}>
+            &ndash;
+          </span>
+          <select
+            aria-label="Year to"
+            value={filters.yearMax ?? ""}
+            onChange={(e) => updateFilter("yearMax", e.target.value)}
+            style={{ ...styles.select, ...touchPadding }}
+            disabled={isLoading}
+          >
+            <option value="">Year (to)</option>
+            {years.map((y) => (
+              <option key={y.key} value={y.key}>
+                {y.title}
+              </option>
+            ))}
+          </select>
+        </div>
 
         {!hideContentRating && (
           <select
@@ -257,6 +295,15 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "0.4rem 0.6rem",
     fontSize: "0.85rem",
     cursor: "pointer",
+  },
+  yearRangeGroup: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.3rem",
+  },
+  yearRangeSeparator: {
+    color: "var(--text-secondary)",
+    fontSize: "0.85rem",
   },
   toggleButton: {
     background: "transparent",
