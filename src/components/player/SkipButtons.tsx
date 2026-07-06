@@ -31,6 +31,13 @@ interface SkipButtonsProps {
   mobile: boolean;
   iconSmall: number;
   iconLarge: number;
+  /** Viewport-resize nudge counter, forwarded from ControlsBottomBar
+   *  (prexu-trbl). This component is independently memoized (see docblock
+   *  above) with no prop tied to window size, so a plain resize otherwise
+   *  never reconciles it — rendered as a `data-*` attribute on the
+   *  Play/Pause button (always mounted) so the tick change is a real DOM
+   *  mutation the WebView can key a repaint off, not just an inert prop. */
+  reflowTick?: number;
 }
 
 function SkipButtons({
@@ -47,6 +54,7 @@ function SkipButtons({
   mobile,
   iconSmall,
   iconLarge,
+  reflowTick = 0,
 }: SkipButtonsProps) {
   const [skipIndicator, setSkipIndicator] = useState<string | null>(null);
   const skipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -184,7 +192,12 @@ function SkipButtons({
       )}
 
       {/* Play / Pause */}
-      <button onClick={togglePlay} style={btnStyle} aria-label={isPlaying ? "Pause" : "Play"}>
+      <button
+        onClick={togglePlay}
+        style={btnStyle}
+        aria-label={isPlaying ? "Pause" : "Play"}
+        data-reflow-tick={reflowTick}
+      >
         {isPlaying ? (
           <svg width={iconLarge} height={iconLarge} viewBox="0 0 24 24" fill="currentColor">
             <rect x={6} y={4} width={4} height={16} rx={1} />

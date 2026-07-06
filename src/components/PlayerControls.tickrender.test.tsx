@@ -191,9 +191,9 @@ function fireTimePos(seconds: number) {
 
 const noop = () => {};
 
-function Harness({ ratingKey }: { ratingKey: string }) {
+function Harness({ ratingKey, reflowTick }: { ratingKey: string; reflowTick?: number }) {
   const player = useNativePlayer(ratingKey);
-  return <PlayerControls player={player} onExit={noop} visible />;
+  return <PlayerControls player={player} onExit={noop} visible reflowTick={reflowTick} />;
 }
 
 describe("player chrome render counts on time-pos ticks (prexu-bgz.5)", () => {
@@ -243,5 +243,29 @@ describe("player chrome render counts on time-pos ticks (prexu-bgz.5)", () => {
     });
 
     expect(counters.skipButtons).toBeGreaterThan(skipButtonsBefore);
+  });
+
+  it("re-renders the memoized bottom-bar chrome when reflowTick changes, within one act() flush (prexu-trbl)", async () => {
+    const { getByTestId, rerender } = render(
+      <Harness ratingKey="123" reflowTick={0} />,
+    );
+
+    await waitFor(() => {
+      expect(eventHandlers["player://time-pos"]?.length ?? 0).toBeGreaterThan(0);
+    });
+    await act(async () => {});
+
+    const skipButtonsBefore = counters.skipButtons;
+
+    // A handful of time-pos ticks alone must NOT be enough (covered above);
+    // reflowTick changing — exactly what Player.tsx's viewport ResizeObserver
+    // does on popout-exit/fullscreen-enter — must force a real re-render of
+    // this otherwise-memoized subtree in the same flush, not seconds later.
+    act(() => {
+      rerender(<Harness ratingKey="123" reflowTick={1} />);
+    });
+
+    expect(counters.skipButtons).toBeGreaterThan(skipButtonsBefore);
+    expect(getByTestId("skip-buttons")).toBeTruthy();
   });
 });

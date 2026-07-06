@@ -75,9 +75,19 @@ interface PlayerControlsProps {
   subtitleSearch?: SubtitleSearchProps;
   /** True while any bottom-bar popup is open — pins controls visible. */
   onPanelPinChange?: (pinned: boolean) => void;
+  /** Bumped by Player.tsx's viewport-resize ResizeObserver (prexu-0p3).
+   *  ControlsBottomBar is memoized over tick-stable props so it skips the
+   *  4 Hz time-pos churn — but that also means it never notices a plain
+   *  viewport resize (popout-exit, fullscreen-enter) on its own. Forwarding
+   *  this defeats that memo just for real resizes, forcing a DOM commit in
+   *  its subtree so the WebView repaints it at the new size instead of
+   *  leaving it stale for seconds (prexu-trbl). Optional/defaulted so
+   *  existing test harnesses that don't care about resize don't need to
+   *  wire it up. */
+  reflowTick?: number;
 }
 
-function PlayerControls({ player, onExit, onPrevious, visible, suppressTransition, syncIndicator, chapters, onSeek, onActivity, onNextEpisode, onPrevEpisode, audioEnhancements, onAudioEnhancementChange, pip, minimize, queue, subtitleSearch, onPanelPinChange }: PlayerControlsProps) {
+function PlayerControls({ player, onExit, onPrevious, visible, suppressTransition, syncIndicator, chapters, onSeek, onActivity, onNextEpisode, onPrevEpisode, audioEnhancements, onAudioEnhancementChange, pip, minimize, queue, subtitleSearch, onPanelPinChange, reflowTick = 0 }: PlayerControlsProps) {
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
   const [previousHovered, setPreviousHovered] = useState(false);
@@ -206,6 +216,7 @@ function PlayerControls({ player, onExit, onPrevious, visible, suppressTransitio
           ratingKey={subtitleSearch?.ratingKey}
           onSubtitleDownloaded={subtitleSearch?.onDownloaded}
           onPanelPinChange={onPanelPinChange}
+          reflowTick={reflowTick}
         />
       </div>
     </div>
