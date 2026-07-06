@@ -18,6 +18,23 @@
 //!   Windows (same file + keys); monitor persistence is not ported — the
 //!   popout opens on the monitor the main window is currently on.
 //!
+//! ## Subtitle-safe margin (prexu-v45v, Linux only)
+//! The Linux pop-out reserves a bottom strip of mpv's video area (via the
+//! same `video-margin-ratio-*` machinery `commands::minimize` uses for its
+//! corner inset) so subtitles don't draw underneath the floating
+//! `ControlsBottomBar` — see the doc comment above
+//! `POPOUT_SUBTITLE_MARGIN_RATIO` further down. Windows does NOT get the
+//! same fix here: Windows pop-out composites mpv's video onto the main
+//! HWND's own DirectComposition surface (`player::composition_host`) with no
+//! existing margin-ratio/sub-scale wiring at all — unlike Windows *minimize*,
+//! which sidesteps the whole class of problem by giving mpv a genuinely
+//! separate, corner-sized host window (see `commands::minimize`'s module
+//! doc — "two different mechanisms implement the same user-visible inset").
+//! Adding an equivalent to the composition-hosted path would mean wiring new
+//! mpv property calls into `composition_host.rs` (a real code change, not a
+//! parity flip of existing plumbing) and cannot be verified without Windows
+//! hardware, so it is left as a follow-up rather than guessed at here.
+//!
 //! ## Wayland caveats (X11 has full parity)
 //! - `set_position` / `outer_position` are no-ops / meaningless (the
 //!   protocol has no global window coordinates), so corner placement and
@@ -62,6 +79,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_store::StoreExt;
 
 use crate::player::{MinimizeCorner, PlayerState};
+#[cfg(target_os = "linux")]
+use crate::player::MinimizeState;
 #[cfg(target_os = "windows")]
 use super::win32_monitor::{decode_device_name, monitor_info, resync_host, work_area_from_info};
 
@@ -1104,6 +1123,82 @@ fn configured_main_min_size(
     (w, h)
 }
 
+// ── Subtitle-safe bottom margin (prexu-v45v) ───────────────────────────────
+//
+// Hardware screenshots showed mpv-rendered subtitles drawing UNDERNEATH
+// ControlsBottomBar in the pop-out window — minimize mode never has this
+// problem because `commands::minimize` already insets mpv's video area away
+// from its corner rect via `video-margin-ratio-*` (see that module's docs).
+// Pop-out had no equivalent: `player_enter_popout` resizes/repositions the
+// whole window but never touches mpv's margins, so mpv always renders subs
+// against the full surface, right under the floating controls overlay.
+//
+// Rather than inventing a second margin-application mechanism, this reuses
+// minimize's exactly: `PlayerState::{set,get}_minimize` / `MinimizeState` and
+// `linux_compositor::{apply_margins_now,clear_margins_now}` (all already
+// `pub(crate)` and already called from this file's Linux `enter`/`exit`
+// commands for the pop-out↔minimize mutual-exclusion clear above). Popout
+// and in-window minimize are mutually exclusive, so borrowing the same
+// storage slot for a different purpose while pop-out is active is safe: by
+// the time `player_enter_popout` runs, any real minimize inset has already
+// been cleared (see the `state.get_minimize().is_some()` guard earlier in
+// `enter`), and `player_exit_popout` clears it again before returning.
+
+/// Fraction of the pop-out window's height reserved at the bottom for
+/// subtitles, so mpv keeps its video (and, via `sub_compensation`, its
+/// subtitle layer) above the floating `ControlsBottomBar` overlay.
+///
+/// A CONSTANT ratio, not a measured pixel height: unlike minimize's inset
+/// rect (an explicit width/height the frontend requests because it also
+/// draws a matching resize handle), the pop-out controls bar's rendered
+/// height is owned entirely by React (`ControlsBottomBar`/`PlayerControls`,
+/// padding- and content-driven, no fixed constant) and isn't observable from
+/// Rust without plumbing a live DOM measurement across the IPC boundary for
+/// every pop-out resize. Measured against the project default 480x270
+/// pop-out (`POPOUT_DEFAULT_WIDTH`/`HEIGHT`), the transport row plus its
+/// bottom padding is roughly 45-55 logical px — about 17-20% of 270 — so a
+/// flat 18% leaves comfortable headroom across the whole pop-out size range
+/// (200x120 floor to the 60%-of-work-area ceiling) without needing to track
+/// the exact DOM height.
+#[cfg(target_os = "linux")]
+const POPOUT_SUBTITLE_MARGIN_RATIO: f64 = 0.18;
+
+/// Build the `MinimizeState` that, once run through
+/// `commands::minimize::compute_margin_ratios` (via `apply_margins_now`),
+/// produces a BOTTOM-ONLY inset of `POPOUT_SUBTITLE_MARGIN_RATIO * height`
+/// with zero left/right/top margin — i.e. mpv keeps filling the pop-out
+/// window's full width and reserves only a bottom strip.
+///
+/// Why this particular (width, height, padding, corner) reproduces that:
+/// `compute_margin_ratios`'s per-axis formula is `padding_side = padding /
+/// total` (the side touching the anchored corner) and `far_side = (total -
+/// size - padding) / total` (the opposite side). With `padding: 0` and
+/// `width` equal to the pop-out's actual width, the width axis has
+/// `size == total` so BOTH `padding_side` and `far_side` are 0 — no
+/// horizontal margin regardless of corner. With `height` set to the video
+/// area's target height (window height minus the reserved strip) and
+/// `corner: TopLeft`, the height axis's anchored (padding) side is TOP — 0,
+/// as always with `padding: 0` — and the far side is BOTTOM, which absorbs
+/// exactly the reserved strip.
+///
+/// Pure and unit-tested (see `popout_subtitle_margin` below) — no GTK/Tauri
+/// types involved, matching the existing `compute_margin_ratios` /
+/// `corner_origin` pure-helper convention in this module.
+#[cfg(target_os = "linux")]
+fn compute_popout_subtitle_margin_state(width: u32, height: u32) -> MinimizeState {
+    let reserved = ((height as f64) * POPOUT_SUBTITLE_MARGIN_RATIO).round() as u32;
+    // `.max(1)`: never request a zero-height video rect even for the
+    // smallest allowed pop-out (the 120px logical min-size floor), mirroring
+    // `corner_origin`'s own `.max(1)` guard against degenerate rects.
+    let video_height = height.saturating_sub(reserved).max(1);
+    MinimizeState {
+        width,
+        height: video_height,
+        padding: 0,
+        corner: MinimizeCorner::TopLeft,
+    }
+}
+
 /// Number of times `schedule_popout_resize_retry` checks whether the
 /// requested pop-out size actually applied before giving up.
 #[cfg(target_os = "linux")]
@@ -1609,6 +1704,36 @@ pub async fn player_enter_popout(
     // case (resize lands first try) costs nothing beyond the one check.
     schedule_popout_resize_retry(&app, &main, (w, h));
 
+    // prexu-v45v: reserve a subtitle-safe bottom strip — see the module
+    // section doc above `POPOUT_SUBTITLE_MARGIN_RATIO` for why this rides
+    // minimize's existing video-margin-ratio machinery instead of a new one.
+    // Sequenced AFTER the resize/verify above (never before — must not race
+    // ahead of PRs #65/#67/#77's sanitize/retry/tile-break sequence) so a
+    // mid-flight `player_exit_popout` cleanly cancels via its own
+    // `set_minimize(None)` + `clear_margins_now` rather than this call
+    // re-arming a margin the exit path already tore down.
+    //
+    // `apply_margins_now` reads the GLArea's CURRENT allocation, which may
+    // still be the PRE-popout size at this exact point if the `set_size`
+    // above hasn't been honoured by the compositor yet (the same Wayland
+    // deferral `schedule_popout_resize_retry` exists for) — that races a
+    // possibly-stale ratio into effect for one frame, but is self-correcting:
+    // `compute_popout_subtitle_margin_state` is built from the REQUESTED
+    // (w, h), and `linux_compositor`'s GLArea `resize` handler re-runs
+    // `compute_margin_ratios` against the stored state on every subsequent
+    // allocation change (including the one the real resize eventually fires),
+    // converging on the correct bottom-only inset once the window actually
+    // reaches (w, h).
+    let sub_margin_state = compute_popout_subtitle_margin_state(w, h);
+    if let Err(e) = state.set_minimize(Some(sub_margin_state)) {
+        log::warn!("[player:popout] failed to store subtitle-margin state: {e}");
+    }
+    crate::player::linux_compositor::apply_margins_now(&app);
+    log::info!(
+        "[player:popout] applied subtitle-safe bottom margin (ratio={:.3}) for popout {w}x{h}",
+        POPOUT_SUBTITLE_MARGIN_RATIO
+    );
+
     // Persist the chosen corner + size for next session (same store + keys
     // as Windows). A failure here is not fatal.
     match app.store(PopoutStore::path()) {
@@ -1648,6 +1773,18 @@ pub async fn player_exit_popout(
     let main = app
         .get_webview_window("main")
         .ok_or_else(|| "main webview window not found".to_string())?;
+
+    // prexu-v45v: clear the subtitle-safe margin applied on enter — same
+    // clear_margins_now bracket as player_exit_minimize, run unconditionally
+    // and up front (before any early return below) so a popout exit mid-
+    // flight (e.g. right after enter, before the resize-retry loop settles)
+    // never leaves an inset ghost behind. Safe unconditionally: pop-out and
+    // in-window minimize are mutually exclusive (player_enter_popout clears
+    // any real minimize inset before applying its own margin state, see
+    // above), so PlayerState::linux_minimize can only be holding OUR popout
+    // margin state — or already be `None` — by the time exit runs.
+    let _ = state.set_minimize(None);
+    crate::player::linux_compositor::clear_margins_now(&app);
 
     // Persist the user's drag/resize BEFORE restoring, so the next enter
     // reopens where they left it — same round-trip as Windows. On Wayland
@@ -2130,6 +2267,105 @@ mod tests {
         // Guard against accidental aliasing with the monitor key (Windows-only).
         assert_ne!(PopoutStore::key_corner(), PopoutStore::key_monitor());
         assert_ne!(PopoutStore::key_size(), PopoutStore::key_monitor());
+    }
+
+    // ---- compute_popout_subtitle_margin_state (prexu-v45v) ----------------
+    //
+    // Pure — feeds straight into commands::minimize::compute_margin_ratios,
+    // whose own margin_ratios_* tests already cover that formula; these
+    // tests only check the (width, height, padding, corner) this function
+    // hands it produce a bottom-only inset (left=right=top=0) for the
+    // pop-out's actual dimensions.
+    #[cfg(target_os = "linux")]
+    mod popout_subtitle_margin {
+        use super::super::*;
+        use crate::player::commands::minimize::compute_margin_ratios;
+
+        fn close(a: f64, b: f64) {
+            assert!(
+                (a - b).abs() < 1e-9,
+                "expected {a} ~= {b} (diff {})",
+                (a - b).abs()
+            );
+        }
+
+        #[test]
+        fn reserves_zero_horizontal_margin_regardless_of_size() {
+            // width == the full pop-out width always -> left/right ratios 0.
+            let mini = compute_popout_subtitle_margin_state(480, 270);
+            assert_eq!(mini.width, 480);
+            assert_eq!(mini.padding, 0);
+            assert_eq!(mini.corner, MinimizeCorner::TopLeft);
+
+            let (left, right, _top, _bottom) = compute_margin_ratios(480, 270, mini);
+            assert_eq!(left, 0.0);
+            assert_eq!(right, 0.0);
+        }
+
+        #[test]
+        fn reserves_zero_top_margin() {
+            // corner: TopLeft + padding: 0 -> the anchored (top) side is
+            // always 0, only the far (bottom) side absorbs the strip.
+            let mini = compute_popout_subtitle_margin_state(480, 270);
+            let (_left, _right, top, _bottom) = compute_margin_ratios(480, 270, mini);
+            assert_eq!(top, 0.0);
+        }
+
+        #[test]
+        fn bottom_margin_matches_configured_ratio_at_default_popout_size() {
+            // `reserved` rounds to the nearest logical px (48.6 -> 49 at
+            // 480x270), so the resulting ratio is only approximately
+            // POPOUT_SUBTITLE_MARGIN_RATIO — within half a pixel's worth,
+            // not exact. `bottom_margin_matches_configured_ratio_at_a_resized_
+            // popout` below covers a size where the rounding is exact.
+            let mini = compute_popout_subtitle_margin_state(480, 270);
+            let (_left, _right, _top, bottom) = compute_margin_ratios(480, 270, mini);
+            let diff = (bottom - POPOUT_SUBTITLE_MARGIN_RATIO).abs();
+            assert!(
+                diff < 1.0 / 270.0,
+                "bottom ratio {bottom} strayed more than one rounded px from {POPOUT_SUBTITLE_MARGIN_RATIO} (diff {diff})"
+            );
+        }
+
+        #[test]
+        fn bottom_margin_matches_configured_ratio_at_a_resized_popout() {
+            // Ratio-based reservation is size-independent at the moment
+            // it's computed (the same (width, height) pop-out dimensions
+            // player_enter_popout just resized to) — verify at a
+            // non-default size too (e.g. a user-resized 800x500 pop-out).
+            let mini = compute_popout_subtitle_margin_state(800, 500);
+            let (left, right, top, bottom) = compute_margin_ratios(800, 500, mini);
+            assert_eq!(left, 0.0);
+            assert_eq!(right, 0.0);
+            assert_eq!(top, 0.0);
+            close(bottom, POPOUT_SUBTITLE_MARGIN_RATIO);
+        }
+
+        #[test]
+        fn video_height_never_collapses_to_zero_at_the_popout_min_size_floor() {
+            // POPOUT_MIN_HEIGHT is 120 logical px; 18% of that is ~22px,
+            // leaving a still-sane ~98px video height, well above the
+            // `.max(1)` degenerate floor this guards against.
+            let mini = compute_popout_subtitle_margin_state(200, 120);
+            assert!(mini.height >= 1);
+            assert!(mini.height < 120);
+        }
+
+        #[test]
+        fn video_height_is_smaller_than_full_height_by_roughly_the_ratio() {
+            let mini = compute_popout_subtitle_margin_state(480, 270);
+            let expected_reserved = (270.0 * POPOUT_SUBTITLE_MARGIN_RATIO).round() as u32;
+            assert_eq!(mini.height, 270 - expected_reserved);
+        }
+
+        #[test]
+        fn margin_ratio_constant_is_a_modest_fraction() {
+            // Sanity bound: neither degenerate-zero (no fix at all) nor so
+            // large it eats most of the video (a modest strip, not a
+            // second minimize-sized inset).
+            assert!(POPOUT_SUBTITLE_MARGIN_RATIO > 0.0);
+            assert!(POPOUT_SUBTITLE_MARGIN_RATIO < 0.4);
+        }
     }
 
     // ---- configured_main_min_size (prexu-6qi5.4 review fix) --------------
