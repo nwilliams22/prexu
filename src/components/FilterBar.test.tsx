@@ -70,7 +70,7 @@ describe("FilterBar", () => {
     expect(onFiltersChange).toHaveBeenCalledWith({ genre: "action" });
   });
 
-  it("calls onFiltersChange when year-from is selected", async () => {
+  it("auto-fills year-to when year-from is selected with no upper bound set (exact-year default, prexu-nhgu)", async () => {
     const user = userEvent.setup();
     const onFiltersChange = vi.fn();
 
@@ -78,7 +78,7 @@ describe("FilterBar", () => {
 
     await user.selectOptions(screen.getByLabelText("Year from"), "2023");
 
-    expect(onFiltersChange).toHaveBeenCalledWith({ yearMin: "2023" });
+    expect(onFiltersChange).toHaveBeenCalledWith({ yearMin: "2023", yearMax: "2023" });
   });
 
   it("calls onFiltersChange when year-to is selected", async () => {
@@ -222,6 +222,126 @@ describe("FilterBar", () => {
     // Button text + chip text
     const unwatchedElements = screen.getAllByText("Unwatched");
     expect(unwatchedElements.length).toBeGreaterThanOrEqual(1);
+  });
+
+  // ── Exact-year default for the year selects (prexu-nhgu) ──
+  //
+  // FilterBar is controlled, so each flow is: interaction → assert the
+  // onFiltersChange payload, then render with that payload as `filters` to
+  // assert the chip label the user would see next.
+
+  it("flow: exact-year select — from-year with 'to' unset auto-fills both bounds and chips as the bare year", async () => {
+    const user = userEvent.setup();
+    const onFiltersChange = vi.fn();
+
+    const { rerender } = render(
+      <FilterBar {...defaultProps} onFiltersChange={onFiltersChange} />
+    );
+    await user.selectOptions(screen.getByLabelText("Year from"), "2023");
+
+    const payload = onFiltersChange.mock.calls[0][0];
+    expect(payload).toEqual({ yearMin: "2023", yearMax: "2023" });
+
+    rerender(<FilterBar {...defaultProps} filters={payload} onFiltersChange={onFiltersChange} />);
+    expect(screen.getByLabelText("Remove 2023 filter")).toBeInTheDocument();
+  });
+
+  it("flow: widen — changing 'to' to a later year after an exact-year selection produces a range chip", async () => {
+    const user = userEvent.setup();
+    const onFiltersChange = vi.fn();
+    const filters: LibraryFilters = { yearMin: "2023", yearMax: "2023" };
+
+    const { rerender } = render(
+      <FilterBar {...defaultProps} filters={filters} onFiltersChange={onFiltersChange} />
+    );
+    await user.selectOptions(screen.getByLabelText("Year to"), "2024");
+
+    const payload = onFiltersChange.mock.calls[0][0];
+    expect(payload).toEqual({ yearMin: "2023", yearMax: "2024" });
+
+    rerender(<FilterBar {...defaultProps} filters={payload} onFiltersChange={onFiltersChange} />);
+    expect(screen.getByLabelText("Remove 2023–2024 filter")).toBeInTheDocument();
+  });
+
+  it("flow: open-ended — setting 'to' back to Any clears only the upper bound and chips as 'year+'", async () => {
+    const user = userEvent.setup();
+    const onFiltersChange = vi.fn();
+    const filters: LibraryFilters = { yearMin: "2023", yearMax: "2023" };
+
+    const { rerender } = render(
+      <FilterBar {...defaultProps} filters={filters} onFiltersChange={onFiltersChange} />
+    );
+    await user.selectOptions(screen.getByLabelText("Year to"), "");
+
+    const payload = onFiltersChange.mock.calls[0][0];
+    expect(payload).toEqual({ yearMin: "2023" });
+
+    rerender(<FilterBar {...defaultProps} filters={payload} onFiltersChange={onFiltersChange} />);
+    expect(screen.getByLabelText("Remove 2023+ filter")).toBeInTheDocument();
+  });
+
+  it("flow: to-only — selecting only a 'to' year keeps the open-ended-lower behavior and chips as '–year'", async () => {
+    const user = userEvent.setup();
+    const onFiltersChange = vi.fn();
+
+    const { rerender } = render(
+      <FilterBar {...defaultProps} onFiltersChange={onFiltersChange} />
+    );
+    await user.selectOptions(screen.getByLabelText("Year to"), "2024");
+
+    const payload = onFiltersChange.mock.calls[0][0];
+    expect(payload).toEqual({ yearMax: "2024" });
+
+    rerender(<FilterBar {...defaultProps} filters={payload} onFiltersChange={onFiltersChange} />);
+    expect(screen.getByLabelText("Remove –2024 filter")).toBeInTheDocument();
+  });
+
+  it("does not auto-fill 'to' when it already has a value (editing an existing range's lower bound)", async () => {
+    const user = userEvent.setup();
+    const onFiltersChange = vi.fn();
+    const filters: LibraryFilters = { yearMax: "2024" };
+
+    render(
+      <FilterBar {...defaultProps} filters={filters} onFiltersChange={onFiltersChange} />
+    );
+    await user.selectOptions(screen.getByLabelText("Year from"), "2023");
+
+    expect(onFiltersChange).toHaveBeenCalledWith({ yearMin: "2023", yearMax: "2024" });
+  });
+
+  it("keeps the Any option available on the 'to' select while a 'from' year is set", () => {
+    const filters: LibraryFilters = { yearMin: "2023", yearMax: "2023" };
+
+    render(<FilterBar {...defaultProps} filters={filters} />);
+
+    const toSelect = screen.getByLabelText("Year to") as HTMLSelectElement;
+    const optionValues = Array.from(toSelect.options).map((o) => o.value);
+    expect(optionValues).toContain(""); // "Any"/empty stays selectable
+  });
+
+  // ── Explicit dark theming for native selects (prexu-1ua0) ──
+  //
+  // WebKitGTK (Linux) renders <select> with the platform's LIGHT menulist
+  // theme regardless of author background/color unless native appearance is
+  // opted out — so every select must carry the explicit token-based styling
+  // (and the custom chevron that replaces the lost native arrow).
+
+  it("paints every select explicitly with theme tokens instead of native form-control theming (prexu-1ua0)", () => {
+    render(<FilterBar {...defaultProps} />);
+
+    const selects = screen.getAllByRole("combobox");
+    // genre, year from, year to, rating, resolution, sort
+    expect(selects).toHaveLength(6);
+
+    for (const select of selects) {
+      const style = (select as HTMLElement).style;
+      expect(style.appearance).toBe("none");
+      expect(style.backgroundColor).toBe("var(--bg-card)");
+      expect(style.color).toBe("var(--text-primary)");
+      expect(style.border).toBe("1px solid var(--border)");
+      // Inline SVG chevron re-adding the dropdown affordance.
+      expect(style.backgroundImage).toContain("data:image/svg+xml");
+    }
   });
 
   it("has no axe violations", async () => {

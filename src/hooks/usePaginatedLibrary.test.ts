@@ -379,6 +379,56 @@ describe("usePaginatedLibrary", () => {
     expect(mockGetLibraryItems).toHaveBeenCalledTimes(5);
   });
 
+  // ── isFillComplete (prexu-hb1p: client-side cross-filtered facets) ──
+
+  it("isFillComplete is false before totalSize is known (cold start)", () => {
+    mockGetLibraryItems.mockReturnValue(new Promise(() => {}));
+    const { result } = renderHook(() => usePaginatedLibrary("1", "titleSort:asc", {}, { loadAll: true }));
+
+    expect(result.current.isFillComplete).toBe(false);
+  });
+
+  it("isFillComplete is false while a loadAll background fill is still in progress", async () => {
+    mockGetLibraryItems
+      .mockResolvedValueOnce({ items: makeItems(50, 0), totalSize: 100, hasMore: true })
+      .mockReturnValue(new Promise(() => {})); // background batch never resolves in this window
+
+    const { result } = renderHook(() =>
+      usePaginatedLibrary("1", "titleSort:asc", {}, { loadAll: true })
+    );
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+    // First page is in, but only 50 of 100 total slots are populated.
+    expect(result.current.isFillComplete).toBe(false);
+  });
+
+  it("isFillComplete flips true once every slot in the store is populated", async () => {
+    const firstPage = makeItems(50, 0);
+    const secondBatch = makeItems(50, 50);
+    mockGetLibraryItems
+      .mockResolvedValueOnce({ items: firstPage, totalSize: 100, hasMore: true })
+      .mockResolvedValueOnce({ items: secondBatch, totalSize: 100, hasMore: false });
+
+    const { result } = renderHook(() =>
+      usePaginatedLibrary("1", "titleSort:asc", {}, { loadAll: true })
+    );
+
+    // Wait for the first page (isLoading's initial value is `true`, so this
+    // is a genuine state transition to wait on) before checking
+    // isLoadingMore — whose initial value is already `false`, so waiting on
+    // it alone could spuriously resolve before the background fetch ever ran.
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+    await waitFor(() => {
+      expect(result.current.isLoadingMore).toBe(false);
+    });
+    expect(result.current.items).toHaveLength(100);
+    expect(result.current.isFillComplete).toBe(true);
+  });
+
   it("keeps previously loaded items visible (isStale) instead of blanking on a filter/sort change", async () => {
     mockGetLibraryItems.mockResolvedValueOnce({
       items: makeItems(10),

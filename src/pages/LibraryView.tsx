@@ -5,6 +5,7 @@ import { useDetailPrefetch } from "../hooks/useDetailPrefetch";
 import { usePaginatedLibrary } from "../hooks/usePaginatedLibrary";
 import { useLibrary } from "../hooks/useLibrary";
 import { useFilterOptions } from "../hooks/useFilterOptions";
+import { useConstrainedFilterOptions } from "../hooks/useConstrainedFilterOptions";
 import { useMediaContextMenu } from "../hooks/useMediaContextMenu";
 import { usePlayAction } from "../hooks/usePlayAction";
 import { useSectionCollections } from "../hooks/useCollections";
@@ -219,20 +220,54 @@ function LibraryView() {
   const useFirstCharIndex =
     isAlphaSortable && !firstCharError && !hasActiveFilters;
 
-  // Only force-load every item when on a non-default sort (non-titleSort)
-  // that has no firstCharacter index support, or when filters are active
-  // and the user is still on a titleSort. For the common default-sort case
-  // with no filters we now rely on the firstCharacter API instead.
-  const shouldLoadAll =
-    isAlphaSortable && hasActiveFilters;
+  // Force-load every item whenever any filter is active, regardless of sort.
+  // Originally this only applied on alpha-sortable (titleSort) views — but
+  // client-side cross-filtered facets (prexu-hb1p) need the full filtered
+  // result set in memory to derive "which years/ratings/resolutions actually
+  // occur" for the OTHER dropdowns, and that only works if loadAll ran. Any
+  // active filter already pays this same loadAll cost on titleSort views, so
+  // extending it to every sort is the same cost class, just applied more
+  // broadly.
+  const shouldLoadAll = hasActiveFilters;
 
-  const { items, isLoading, isStale, totalSize, error, ensureRange, retry } =
+  const { items, isLoading, isStale, totalSize, error, isFillComplete, ensureRange, retry } =
     usePaginatedLibrary(sectionId, sort, filters, {
       loadAll: shouldLoadAll,
       type: section?.type === "show" ? 2 : section?.type === "movie" ? 1 : undefined,
     });
-  const { genres, years, contentRatings, resolutions, isLoading: filtersLoading } =
-    useFilterOptions(sectionId);
+  const {
+    genres: serverGenres,
+    years: serverYears,
+    contentRatings: serverContentRatings,
+    resolutions: serverResolutions,
+    isLoading: filtersLoading,
+  } = useFilterOptions(sectionId);
+
+  // Section-wide server options are memoized as a single object so
+  // useConstrainedFilterOptions gets a stable reference when nothing about
+  // them has actually changed (they're re-derived from four separate
+  // useState values on every useFilterOptions render).
+  const serverFilterOptions = useMemo(
+    () => ({
+      genres: serverGenres,
+      years: serverYears,
+      contentRatings: serverContentRatings,
+      resolutions: serverResolutions,
+    }),
+    [serverGenres, serverYears, serverContentRatings, serverResolutions],
+  );
+
+  // Client-side cross-filtered ("faceted") dropdown options (prexu-hb1p) —
+  // see useConstrainedFilterOptions for the full contract. Falls back to
+  // serverFilterOptions untouched whenever no filter is active or the
+  // background fill hasn't finished yet.
+  const { genres, years, contentRatings, resolutions } = useConstrainedFilterOptions({
+    serverOptions: serverFilterOptions,
+    items,
+    hasActiveFilters,
+    isFillComplete,
+    filters,
+  });
   const { restrictionsEnabled, isItemAllowed } = useParentalControls();
   const { openContextMenu, overlays: menuOverlays } = useMediaContextMenu();
   const { getPlayHandler, playOverlay } = usePlayAction();

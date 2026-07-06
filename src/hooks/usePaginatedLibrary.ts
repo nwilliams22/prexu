@@ -50,6 +50,16 @@ export interface UsePaginatedLibraryResult {
   totalSize: number;
   error: string | null;
   /**
+   * True once every index in `[0, totalSize)` has a defined item — i.e. the
+   * store is fully (not sparsely) populated. In `loadAll` mode this flips
+   * true when the progressive background fill finishes; in ranged mode it
+   * flips true once the user has (incidentally) scrolled through the whole
+   * section. Consumers that derive client-side facets from `items` (e.g.
+   * cross-filtered filter dropdowns, prexu-hb1p) should gate on this so they
+   * never narrow options off of a partial result set.
+   */
+  isFillComplete: boolean;
+  /**
    * Request that the item range `[startIndex, endIndex)` be present in
    * `items`, expanding it by a small overscan margin. Safe to call on every
    * scroll/virtualizer-range tick — in-flight fetches for chunks already
@@ -427,5 +437,14 @@ export function usePaginatedLibrary(
 
   const isStale = isLoading && items.some((item) => item !== undefined);
 
-  return { items, isLoading, isLoadingMore, isStale, totalSize, error, ensureRange, retry };
+  // Populated-count vs. totalSize, not `isLoadingMore`: the latter also
+  // toggles for ranged-mode chunk fetches unrelated to a full-section fill,
+  // so it can't be trusted as a "the whole store is dense" signal on its own.
+  const populatedCount = useMemo(
+    () => items.reduce((count, item) => (item !== undefined ? count + 1 : count), 0),
+    [items],
+  );
+  const isFillComplete = totalSize > 0 && populatedCount >= totalSize;
+
+  return { items, isLoading, isLoadingMore, isStale, totalSize, error, isFillComplete, ensureRange, retry };
 }
