@@ -250,6 +250,88 @@ describe("useItemDetailData", () => {
     expect(mockGetExtras).toHaveBeenCalledTimes(1);
   });
 
+  it("revalidation with only item-level watch-state changed applies silently: no scroll reset, no loading flip, unrelated bundle fields keep their prior reference (prexu-adiv)", async () => {
+    const main = document.createElement("main");
+    document.body.appendChild(main);
+    main.scrollTop = 500;
+    const scrollToSpy = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+
+    // Simulates the reported repro: the item was cached before playback,
+    // then the user watched (or is watching) it elsewhere, so only
+    // viewOffset differs on the revalidated bundle — everything else
+    // (seasons/episodes/siblings, all empty arrays for a movie) is
+    // content-identical.
+    const cachedMovie = { ...makeMovie("1", "Movie 1"), viewOffset: 1000 };
+    mockGetItemMetadata.mockResolvedValueOnce(cachedMovie);
+    await warmItemDetailCache(stableServer, "1");
+    mockGetItemMetadata.mockClear();
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 31_000); // past the 30s TTL
+    mockGetItemMetadata.mockResolvedValueOnce({ ...cachedMovie, viewOffset: 45_000 });
+
+    const { result } = renderHook(() => useItemDetailData());
+
+    const seasonsBefore = result.current.seasons;
+    const episodesBefore = result.current.episodes;
+    const siblingEpisodesBefore = result.current.siblingEpisodes;
+    const siblingSeasonsBefore = result.current.siblingSeasons;
+    expect(result.current.item?.viewOffset).toBe(1000);
+    expect(result.current.isLoading).toBe(false);
+
+    vi.useRealTimers();
+
+    await waitFor(() => {
+      expect(result.current.item?.viewOffset).toBe(45_000);
+    });
+
+    // The only thing that visibly changed is the item's own viewOffset —
+    // seasons/episodes/siblings were never re-set, so they keep the exact
+    // same array reference (not just deep-equal) as before the
+    // revalidation. isLoading never flipped back to true (no skeleton
+    // flash) and nothing touched scroll position (no full-page reset).
+    expect(result.current.seasons).toBe(seasonsBefore);
+    expect(result.current.episodes).toBe(episodesBefore);
+    expect(result.current.siblingEpisodes).toBe(siblingEpisodesBefore);
+    expect(result.current.siblingSeasons).toBe(siblingSeasonsBefore);
+    expect(result.current.isLoading).toBe(false);
+    expect(main.scrollTop).toBe(500);
+    expect(scrollToSpy).not.toHaveBeenCalled();
+
+    scrollToSpy.mockRestore();
+    document.body.removeChild(main);
+  });
+
+  it("logs which top-level bundle keys and item fields differ when a revalidation changes data (prexu-adiv)", async () => {
+    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+
+    const cachedMovie = { ...makeMovie("1", "Movie 1"), viewOffset: 1000 };
+    mockGetItemMetadata.mockResolvedValueOnce(cachedMovie);
+    await warmItemDetailCache(stableServer, "1");
+    mockGetItemMetadata.mockClear();
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 31_000);
+    mockGetItemMetadata.mockResolvedValueOnce({ ...cachedMovie, viewOffset: 45_000 });
+
+    const { result } = renderHook(() => useItemDetailData());
+    vi.useRealTimers();
+
+    await waitFor(() => {
+      expect(result.current.item?.viewOffset).toBe(45_000);
+    });
+
+    const call = debugSpy.mock.calls.find(
+      ([msg]) => typeof msg === "string" && msg.includes("applying only the changed bundle fields"),
+    );
+    expect(call).toBeTruthy();
+    const logged = call?.[0] as string;
+    expect(logged).toContain('"changedKeys":["item"]');
+    expect(logged).toContain('"itemFieldDiffs":["viewOffset"]');
+
+    debugSpy.mockRestore();
+  });
+
   it("refreshItem() (forced same-item revalidation) does not clear already-loaded shelves", async () => {
     mockGetItemMetadata.mockResolvedValueOnce(makeMovie("1", "Original"));
     await warmItemDetailCache(stableServer, "1");

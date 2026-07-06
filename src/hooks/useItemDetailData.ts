@@ -127,28 +127,83 @@ async function fetchDetailBundle(
   return { item: metadata, seasons, episodes, parentShow, siblingSeasons, siblingEpisodes };
 }
 
-/**
- * Structural equality for two detail bundles. Used to decide whether a
- * background revalidation actually changed anything before re-applying it —
- * skipping a no-op re-apply avoids handing out a fresh `item`/array object
- * identity on every same-item revalidation, which otherwise cascades into
- * the related/extras/actors and collection effects (previously keyed on
- * `item` by reference) re-firing for no reason and visibly re-clearing the
- * shelves. Bundles are small (one item plus a handful of season/episode/
- * sibling children) and this only runs once per navigation (when
- * revalidating a stale cache entry), so a full structural comparison isn't a
- * hot path — and it correctly catches any genuine change (title, cast,
- * watch state updated from another device, etc.) rather than relying on a
- * single field like `updatedAt` that wouldn't reflect a watch-state-only
- * change.
- */
-function detailBundlesEqual(a: DetailCachePayload, b: DetailCachePayload): boolean {
+/** Top-level fields of a detail bundle, diffed independently — see {@link diffBundleKeys}. */
+const BUNDLE_KEYS = [
+  "item",
+  "seasons",
+  "episodes",
+  "parentShow",
+  "siblingSeasons",
+  "siblingEpisodes",
+] as const;
+type BundleKey = (typeof BUNDLE_KEYS)[number];
+
+/** Deep-equal via JSON serialization — fine for these small, JSON-shaped payloads. */
+function deepEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   try {
     return JSON.stringify(a) === JSON.stringify(b);
   } catch {
     return false;
   }
+}
+
+/**
+ * Structural equality for two detail bundles. Used to decide whether a
+ * background revalidation is a *complete* no-op (skip re-apply entirely) —
+ * skipping a no-op re-apply avoids handing out a fresh `item`/array object
+ * identity on every same-item revalidation, which otherwise cascades into
+ * the related/extras/actors and collection effects re-firing for no reason.
+ *
+ * In practice this rarely returns true for an item that's being (or was
+ * just) watched. Plex writes `viewOffset` on every timeline tick during
+ * active playback (roughly every 10s, from any session/device) and bumps
+ * `viewCount`/`lastViewedAt`/`viewedLeafCount` the instant a play session
+ * crosses the "watched" threshold — exactly the "user had just watched
+ * something" case this bug report describes. Those fields live on `item`
+ * directly (movie/episode) and inside `seasons`/`episodes`/`siblingEpisodes`
+ * (e.g. a sibling episode's own watch state, or a season's
+ * `viewedLeafCount`), so a full-bundle comparison is defeated by any one of
+ * them changing anywhere in the bundle — even when the change is invisible
+ * on this page (a different episode's viewOffset ticking while this show's
+ * page happens to be open).
+ *
+ * Rather than trying to special-case which fields are "safe" to ignore (and
+ * risk silently dropping a real watch-state update the user needs to see —
+ * the resume time, the watched checkmark), the fetch handler below applies
+ * updates per top-level bundle key (see {@link diffBundleKeys}) instead of
+ * replacing all six pieces of state whenever any field anywhere differs.
+ * That keeps the blast radius of a watch-state-only change limited to
+ * `item` (the hero re-renders) instead of also replacing seasons/episodes/
+ * siblings with fresh-but-content-identical arrays, which previously forced
+ * the whole page (hero + season grid + episode list + cast) through one
+ * large simultaneous re-render for a one-field change.
+ */
+function detailBundlesEqual(a: DetailCachePayload, b: DetailCachePayload): boolean {
+  if (a === b) return true;
+  return BUNDLE_KEYS.every((k) => deepEqual(a[k], b[k]));
+}
+
+/** Which top-level bundle fields differ between a cached bundle and a revalidation. */
+function diffBundleKeys(a: DetailCachePayload, b: DetailCachePayload): BundleKey[] {
+  return BUNDLE_KEYS.filter((k) => !deepEqual(a[k], b[k]));
+}
+
+/**
+ * Which fields on the item itself differ — narrows an `item` bundle-key
+ * diff down to the actual field(s) that jittered (e.g. `viewOffset`,
+ * `viewCount`, `Genre` if child-array ordering shifted). Logged at debug so
+ * a real repro tells us definitively which field is responsible.
+ */
+function diffItemFields(a: PlexMediaItem, b: PlexMediaItem): string[] {
+  const keys = new Set<string>([...Object.keys(a), ...Object.keys(b)]);
+  const diffs: string[] = [];
+  for (const k of keys) {
+    if (!deepEqual((a as unknown as Record<string, unknown>)[k], (b as unknown as Record<string, unknown>)[k])) {
+      diffs.push(k);
+    }
+  }
+  return diffs;
 }
 
 /**
@@ -247,7 +302,16 @@ export function useItemDetailData(): ItemDetailData {
       setCollectionItems(null);
     }
 
-    const applyBundle = (bundle: DetailCachePayload): boolean => {
+    // `onlyKeys`, when passed, restricts the apply to the bundle fields that
+    // actually changed (see diffBundleKeys below) instead of unconditionally
+    // replacing all six pieces of state. A watch-state-only revalidation
+    // (viewOffset ticking, a watched checkmark flipping) then only touches
+    // `item` — seasons/episodes/siblings keep their previous object
+    // identity, so React has nothing new to reconcile for the season grid,
+    // episode list, or cast sections, and the visible update is limited to
+    // the hero section that actually changed instead of reading as a
+    // full-page refresh.
+    const applyBundle = (bundle: DetailCachePayload, onlyKeys?: readonly BundleKey[]): boolean => {
       if (
         bundle.item.type === "show" &&
         bundle.seasons.length === 1 &&
@@ -256,12 +320,13 @@ export function useItemDetailData(): ItemDetailData {
         navigate(`/item/${bundle.seasons[0]!.ratingKey}`, { replace: true });
         return false;
       }
-      setItem(bundle.item);
-      setSeasons(bundle.seasons);
-      setEpisodes(bundle.episodes);
-      setParentShow(bundle.parentShow);
-      setSiblingSeasons(bundle.siblingSeasons);
-      setSiblingEpisodes(bundle.siblingEpisodes);
+      const shouldApply = (k: BundleKey) => !onlyKeys || onlyKeys.includes(k);
+      if (shouldApply("item")) setItem(bundle.item);
+      if (shouldApply("seasons")) setSeasons(bundle.seasons);
+      if (shouldApply("episodes")) setEpisodes(bundle.episodes);
+      if (shouldApply("parentShow")) setParentShow(bundle.parentShow);
+      if (shouldApply("siblingSeasons")) setSiblingSeasons(bundle.siblingSeasons);
+      if (shouldApply("siblingEpisodes")) setSiblingEpisodes(bundle.siblingEpisodes);
       return true;
     };
 
@@ -310,14 +375,32 @@ export function useItemDetailData(): ItemDetailData {
       .then((bundle) => {
         if (controller.signal.aborted) return;
         cacheSet(key, bundle, DETAIL_CACHE_TTL);
-        if (cached && detailBundlesEqual(cached.data, bundle)) {
-          // Revalidation confirmed nothing changed — skip re-applying so we
-          // don't hand out a new `item` object identity for no reason (that
-          // identity churn is what previously re-fired the shelf/collection
-          // effects and produced a visible refresh flash).
-          logger.debug("detail", "useItemDetailData: revalidation unchanged, skipping re-apply", {
-            ratingKey,
-          });
+        if (cached) {
+          if (detailBundlesEqual(cached.data, bundle)) {
+            // Revalidation confirmed nothing changed — skip re-applying so we
+            // don't hand out a new `item` object identity for no reason (that
+            // identity churn is what previously re-fired the shelf/collection
+            // effects and produced a visible refresh flash).
+            logger.debug("detail", "useItemDetailData: revalidation unchanged, skipping re-apply", {
+              ratingKey,
+            });
+            return;
+          }
+          // Not a full no-op — log exactly which bundle field(s) (and, for
+          // `item`, which item field(s)) jittered, then only apply those
+          // fields instead of replacing the whole bundle. See
+          // detailBundlesEqual's doc comment for why a full-bundle equality
+          // check alone isn't enough to keep this silent.
+          const changedKeys = diffBundleKeys(cached.data, bundle);
+          const itemFieldDiffs = changedKeys.includes("item")
+            ? diffItemFields(cached.data.item, bundle.item)
+            : [];
+          logger.debug(
+            "detail",
+            "useItemDetailData: revalidation changed, applying only the changed bundle fields",
+            { ratingKey, changedKeys, itemFieldDiffs },
+          );
+          applyBundle(bundle, changedKeys);
           return;
         }
         applyBundle(bundle);
