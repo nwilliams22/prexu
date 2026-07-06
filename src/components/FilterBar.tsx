@@ -67,6 +67,28 @@ function FilterBar({
     onFiltersChange(next);
   };
 
+  /**
+   * Year-from select handler (prexu-nhgu). Picking a 'from' year while 'to'
+   * is unset auto-fills 'to' with the same year, because the common intent
+   * is an EXACT year — the chip collapses to just "1985". Widening to a
+   * range is then an explicit second step on the 'to' select, and setting
+   * 'to' back to "Any" clears only the upper bound for the old open-ended
+   * "1985+" behavior. When 'to' already has a value it is left alone (the
+   * user is editing an existing range's lower bound).
+   */
+  const handleYearFromChange = (value: string) => {
+    const next = { ...filters };
+    if (value === "") {
+      delete next.yearMin;
+    } else {
+      next.yearMin = value;
+      if (!filters.yearMax) {
+        next.yearMax = value;
+      }
+    }
+    onFiltersChange(next);
+  };
+
   const clearYearRange = () => {
     const next = { ...filters };
     delete next.yearMin;
@@ -149,7 +171,7 @@ function FilterBar({
           <select
             aria-label="Year from"
             value={filters.yearMin ?? ""}
-            onChange={(e) => updateFilter("yearMin", e.target.value)}
+            onChange={(e) => handleYearFromChange(e.target.value)}
             style={selectStyle}
             disabled={isLoading}
           >
