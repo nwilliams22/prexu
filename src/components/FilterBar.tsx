@@ -75,6 +75,9 @@ function FilterBar({
    * 'to' back to "Any" clears only the upper bound for the old open-ended
    * "1985+" behavior. When 'to' already has a value it is left alone (the
    * user is editing an existing range's lower bound).
+   *
+   * If the user picks a from year that is greater than the existing 'to' year,
+   * set 'to' equal to the new 'from' year to prevent inverted ranges (prexu-w7va).
    */
   const handleYearFromChange = (value: string) => {
     const next = { ...filters };
@@ -84,6 +87,28 @@ function FilterBar({
       next.yearMin = value;
       if (!filters.yearMax) {
         next.yearMax = value;
+      } else if (filters.yearMax && value > filters.yearMax) {
+        // Prevent inverted range: if new from > existing to, set to = from
+        next.yearMax = value;
+      }
+    }
+    onFiltersChange(next);
+  };
+
+  /**
+   * Year-to select handler. If the user picks a 'to' year that is less than
+   * the existing 'from' year, set 'from' equal to the new 'to' year to prevent
+   * inverted ranges (prexu-w7va).
+   */
+  const handleYearToChange = (value: string) => {
+    const next = { ...filters };
+    if (value === "") {
+      delete next.yearMax;
+    } else {
+      next.yearMax = value;
+      if (filters.yearMin && value < filters.yearMin) {
+        // Prevent inverted range: if new to < existing from, set from = to
+        next.yearMin = value;
       }
     }
     onFiltersChange(next);
@@ -97,6 +122,28 @@ function FilterBar({
   };
 
   const clearAll = () => onFiltersChange({});
+
+  /**
+   * Get year options for the 'from' select: all years <= yearMax (if set).
+   * Always includes empty string for "Any" option.
+   */
+  const getYearFromOptions = (): FilterOption[] => {
+    if (!filters.yearMax) {
+      return years;
+    }
+    return years.filter((y) => y.key <= filters.yearMax!);
+  };
+
+  /**
+   * Get year options for the 'to' select: all years >= yearMin (if set).
+   * Always includes empty string for "Any" option.
+   */
+  const getYearToOptions = (): FilterOption[] => {
+    if (!filters.yearMin) {
+      return years;
+    }
+    return years.filter((y) => y.key >= filters.yearMin!);
+  };
 
   // Find display titles for active filter chips
   const activeChips: { label: string; onRemove: () => void }[] = [];
@@ -176,7 +223,7 @@ function FilterBar({
             disabled={isLoading}
           >
             <option value="">Year (from)</option>
-            {years.map((y) => (
+            {getYearFromOptions().map((y) => (
               <option key={y.key} value={y.key}>
                 {y.title}
               </option>
@@ -188,12 +235,12 @@ function FilterBar({
           <select
             aria-label="Year to"
             value={filters.yearMax ?? ""}
-            onChange={(e) => updateFilter("yearMax", e.target.value)}
+            onChange={(e) => handleYearToChange(e.target.value)}
             style={selectStyle}
             disabled={isLoading}
           >
             <option value="">Year (to)</option>
-            {years.map((y) => (
+            {getYearToOptions().map((y) => (
               <option key={y.key} value={y.key}>
                 {y.title}
               </option>

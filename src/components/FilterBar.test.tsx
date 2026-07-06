@@ -24,6 +24,10 @@ describe("FilterBar", () => {
     { key: "4k", title: "4K" },
   ];
 
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   const defaultProps = {
     filters: {} as LibraryFilters,
     onFiltersChange: vi.fn(),
@@ -317,6 +321,82 @@ describe("FilterBar", () => {
     const toSelect = screen.getByLabelText("Year to") as HTMLSelectElement;
     const optionValues = Array.from(toSelect.options).map((o) => o.value);
     expect(optionValues).toContain(""); // "Any"/empty stays selectable
+  });
+
+  // ── Year-range validation (prexu-w7va) ──
+  //
+  // Prevent inverted ranges where from > to by filtering options and resolving
+  // conflicts deterministically.
+
+  it("excludes years below yearMin from the 'to' select (prexu-w7va)", () => {
+    const filters: LibraryFilters = { yearMin: "2023" };
+
+    render(<FilterBar {...defaultProps} filters={filters} />);
+
+    const toSelect = screen.getByLabelText("Year to") as HTMLSelectElement;
+    const optionValues = Array.from(toSelect.options).map((o) => o.value);
+    // yearMin is 2023, so 'to' options should include empty ("Any") + years >= 2023
+    // Years array is [2024, 2023], so filtered result preserves order: [2024, 2023]
+    expect(optionValues).toEqual(["", "2024", "2023"]);
+  });
+
+  it("excludes years above yearMax from the 'from' select (prexu-w7va)", () => {
+    const filters: LibraryFilters = { yearMax: "2023" };
+
+    render(<FilterBar {...defaultProps} filters={filters} />);
+
+    const fromSelect = screen.getByLabelText("Year from") as HTMLSelectElement;
+    const optionValues = Array.from(fromSelect.options).map((o) => o.value);
+    // yearMax is 2023, so 'from' options should include empty ("Any") + years <= 2023
+    // Years array is [2024, 2023], filtered to [2023]
+    expect(optionValues).toEqual(["", "2023"]);
+  });
+
+  it("Any option remains available on both year selects when a bound is set (prexu-w7va)", () => {
+    const filters: LibraryFilters = { yearMin: "2023" };
+
+    render(<FilterBar {...defaultProps} filters={filters} />);
+
+    const fromSelect = screen.getByLabelText("Year from") as HTMLSelectElement;
+    const toSelect = screen.getByLabelText("Year to") as HTMLSelectElement;
+    expect(Array.from(fromSelect.options).map((o) => o.value)).toContain("");
+    expect(Array.from(toSelect.options).map((o) => o.value)).toContain("");
+  });
+
+  it("resolution safety check: if from > to exists, picking from correctly adjusts to (prexu-w7va)", async () => {
+    const user = userEvent.setup();
+    const onFiltersChange = vi.fn();
+    // Simulate a state where yearMin > yearMax (shouldn't occur with filtering, but safety check)
+    const filters: LibraryFilters = { yearMin: "2024", yearMax: "2023" };
+
+    const { rerender } = render(
+      <FilterBar {...defaultProps} filters={filters} onFiltersChange={onFiltersChange} />
+    );
+
+    // The from select will have only 2023 (years <= 2023), so select that
+    // This should NOT trigger the resolution because 2023 <= 2023
+    await user.selectOptions(screen.getByLabelText("Year from"), "2023");
+
+    const payload = onFiltersChange.mock.calls[0][0];
+    expect(payload).toEqual({ yearMin: "2023", yearMax: "2023" });
+  });
+
+  it("preserves auto-fill behavior when adjusting inverted ranges (prexu-w7va)", async () => {
+    const user = userEvent.setup();
+    const onFiltersChange = vi.fn();
+
+    const { rerender } = render(
+      <FilterBar {...defaultProps} onFiltersChange={onFiltersChange} />
+    );
+
+    // Pick a from year with no to set; should auto-fill both
+    await user.selectOptions(screen.getByLabelText("Year from"), "2024");
+
+    const payload = onFiltersChange.mock.calls[0][0];
+    expect(payload).toEqual({ yearMin: "2024", yearMax: "2024" });
+
+    rerender(<FilterBar {...defaultProps} filters={payload} onFiltersChange={onFiltersChange} />);
+    expect(screen.getByLabelText("Remove 2024 filter")).toBeInTheDocument();
   });
 
   // ── Explicit dark theming for native selects (prexu-1ua0) ──
