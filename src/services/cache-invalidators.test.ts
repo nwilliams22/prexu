@@ -202,5 +202,74 @@ describe("cache-invalidators", () => {
       vi.advanceTimersByTime(1);
       expect(cacheGet(deckKey)).toBeNull();
     });
+
+    // Item-detail cache invalidation on watch-state change (prexu-lz4t).
+    // Nested here (rather than a sibling describe) so it reuses this block's
+    // single beforeAll(initializeCacheInvalidators()) and fake-timer
+    // before/afterEach instead of standing up a second listener on `window`.
+    describe("item-detail cache invalidation (prexu-lz4t)", () => {
+      it("invalidates only item-detail entries for the ratingKey on the event, immediately (no delay)", () => {
+        const targetKey = "item-detail:http://server:32400:501";
+        const otherKey = "item-detail:http://server:32400:999";
+        cacheSet(targetKey, { title: "Target" }, 30_000);
+        cacheSet(otherKey, { title: "Other" }, 30_000);
+
+        emitWatchStateChanged("501");
+
+        // No setTimeout needed — unlike the deck cache, item-detail
+        // invalidation is synchronous with the event.
+        expect(cacheGet(targetKey)).toBeNull();
+        expect(cacheGet(otherKey)).toEqual({ title: "Other" });
+      });
+
+      it("does not falsely match a ratingKey that is a numeric substring of another key's ratingKey", () => {
+        // "501" must not incorrectly match a stored entry for ratingKey "1501".
+        const similarKey = "item-detail:http://server:32400:1501";
+        cacheSet(similarKey, { title: "Different item" }, 30_000);
+
+        emitWatchStateChanged("501");
+
+        expect(cacheGet(similarKey)).toEqual({ title: "Different item" });
+      });
+
+      it("invalidates matching entries across every server when a ratingKey is given", () => {
+        const server1Key = "item-detail:http://server1:32400:501";
+        const server2Key = "item-detail:http://server2:32400:501";
+        cacheSet(server1Key, { title: "Server 1 copy" }, 30_000);
+        cacheSet(server2Key, { title: "Server 2 copy" }, 30_000);
+
+        emitWatchStateChanged("501");
+
+        expect(cacheGet(server1Key)).toBeNull();
+        expect(cacheGet(server2Key)).toBeNull();
+      });
+
+      it("falls back to invalidating every item-detail entry when the event carries no ratingKey", () => {
+        const keyA = "item-detail:http://server:32400:501";
+        const keyB = "item-detail:http://server:32400:999";
+        cacheSet(keyA, { title: "A" }, 30_000);
+        cacheSet(keyB, { title: "B" }, 30_000);
+
+        emitWatchStateChanged();
+
+        expect(cacheGet(keyA)).toBeNull();
+        expect(cacheGet(keyB)).toBeNull();
+      });
+
+      it("leaves non-item-detail cache entries alone regardless of ratingKey targeting", () => {
+        const deckKey = "dashboard:http://server:32400:deck";
+        const detailKey = "item-detail:http://server:32400:501";
+        cacheSet(deckKey, [{ title: "Deck Item" }], 60 * 60 * 1000);
+        cacheSet(detailKey, { title: "Detail" }, 30_000);
+
+        emitWatchStateChanged("501");
+
+        // Item-detail entry invalidated immediately...
+        expect(cacheGet(detailKey)).toBeNull();
+        // ...but the deck entry is untouched until its own delayed
+        // invalidation fires (still pending — no timers advanced here).
+        expect(cacheGet(deckKey)).not.toBeNull();
+      });
+    });
   });
 });
