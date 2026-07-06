@@ -5,6 +5,7 @@ import { useCompletionCounter } from "./useServerActivity";
 import { getRecentlyAddedBySection, getOnDeck } from "../services/plex-library";
 import { cacheGet, cacheGetAge, cacheSet, cacheInvalidate } from "../services/api-cache";
 import { onWatchStateChanged } from "../services/watch-state-events";
+import { applyOffsetFloors } from "../services/cache-invalidators";
 import { groupRecentlyAdded } from "../utils/groupRecentlyAdded";
 import { logger } from "../services/logger";
 import type { PlexMediaItem, GroupedRecentItem, LibrarySection } from "../types/library";
@@ -176,8 +177,15 @@ export function useDashboard(): UseDashboardResult {
     async (cancel: { cancelled: boolean }, uri: string, token: string) => {
       const startedAt = performance.now();
       try {
-        const items = await getOnDeck(uri, token);
+        const fetched = await getOnDeck(uri, token);
         if (cancel.cancelled) return;
+        // Stale-response guard (prexu-8nl0): this fetch can race PMS's own
+        // async ingestion of a just-completed stop write — see
+        // cache-invalidators.ts's optimistic offset patch for the full
+        // mechanism. applyOffsetFloors overrides any item whose fetched
+        // viewOffset is older than a value the player itself just reported,
+        // within a short window; it's a no-op once no floors are live.
+        const items = applyOffsetFloors(fetched);
         setOnDeckIfChanged(items);
         setErrors((prev) => (prev.deck === null ? prev : { ...prev, deck: null }));
         cacheSet(deckKey(uri), items, CACHE_TTL);

@@ -136,6 +136,38 @@ export function cacheInvalidatePrefix(prefix: string): void {
   }
 }
 
+/**
+ * Update in-memory cache entries in place, keyed by a predicate over the key
+ * (prexu-8nl0). Unlike {@link cacheInvalidateWhere} (which deletes matches),
+ * this REPLACES each matching entry's `data` via `updater` while preserving
+ * its original `timestamp`/`ttlMs` — a patch is not a fresh fetch, so the
+ * entry's freshness clock is left untouched.
+ *
+ * `updater` returning `undefined` (no applicable change, e.g. the entry's
+ * data doesn't contain the item being patched) or the SAME reference it was
+ * given leaves that entry alone. Returns the number of entries actually
+ * replaced.
+ *
+ * Memory-only (no localStorage) — matches {@link cacheGetStale}/
+ * {@link cacheGetAge}'s in-memory-only convention; today's callers (the
+ * optimistic deck/item-detail offset patch in cache-invalidators.ts) never
+ * persist these entries.
+ */
+export function cacheUpdateWhere<T>(
+  predicate: (key: string) => boolean,
+  updater: (data: T, key: string) => T | undefined,
+): number {
+  let updatedCount = 0;
+  for (const [key, entry] of store) {
+    if (!predicate(key)) continue;
+    const next = updater(entry.data as T, key);
+    if (next === undefined || next === entry.data) continue;
+    store.set(key, { ...entry, data: next });
+    updatedCount += 1;
+  }
+  return updatedCount;
+}
+
 /** Remove all entries matching a predicate function. */
 export function cacheInvalidateWhere(predicate: (key: string) => boolean): void {
   const keysToDelete: string[] = [];

@@ -120,7 +120,13 @@ export function useTimelineReporting(
           // won't refetch on its own) and this item's cached detail bundle
           // (prexu-lz4t) so a stale "Resume from" label isn't served from
           // the item-detail cache the next time this item is hovered/opened.
-          emitWatchStateChanged(ratingKey);
+          //
+          // viewOffsetMs: 0 + reset: true (prexu-8nl0) — the resume marker
+          // was just cleared via unscrobble, so 0 is the authoritative
+          // post-stop offset (not "unknown"). Listeners can patch caches with
+          // this value immediately instead of waiting on a refetch that can
+          // race PMS's own async ingestion of the write.
+          emitWatchStateChanged(ratingKey, { viewOffsetMs: 0, reset: true });
         })
         .catch((err) =>
           logger.warn("playback", "unscrobble failed", {
@@ -149,7 +155,13 @@ export function useTimelineReporting(
         // reflects the updated progress, and invalidate this item's cached
         // detail bundle (prexu-lz4t) so the detail page / hover-prefetch
         // don't keep serving the pre-playback viewOffset.
-        emitWatchStateChanged(ratingKey);
+        //
+        // viewOffsetMs (prexu-8nl0): the exact position just beaconed to the
+        // server (rounded the same way reportTimelineBeacon rounds it before
+        // sending, so it matches what PMS will actually store) — listeners
+        // can patch caches with this value immediately rather than waiting
+        // on a refetch that can race PMS's own async ingestion of the write.
+        emitWatchStateChanged(ratingKey, { viewOffsetMs: Math.round(timeMs) });
       })
       .catch((err) =>
         logger.warn("playback", "stopped beacon failed", {
