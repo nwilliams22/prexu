@@ -4,6 +4,7 @@ import {
   invalidateDeckCaches,
   initializeCacheInvalidators,
   DECK_INVALIDATION_DELAY_MS,
+  OFFSET_FLOOR_WINDOW_MS,
   applyOffsetFloors,
   registerOffsetFloor,
   __clearOffsetFloorsForTests,
@@ -419,16 +420,36 @@ describe("cache-invalidators", () => {
 
       it("stops overriding once the floor's window has expired", () => {
         registerOffsetFloor("501", 185_000, false);
-        vi.advanceTimersByTime(5_001);
+        vi.advanceTimersByTime(OFFSET_FLOOR_WINDOW_MS + 1);
         const items = [{ ratingKey: "501", viewOffset: 10_000 }];
         expect(applyOffsetFloors(items)).toBe(items);
       });
 
       it("still protects right up to the boundary of the floor window", () => {
         registerOffsetFloor("501", 185_000, false);
-        vi.advanceTimersByTime(4_999);
+        vi.advanceTimersByTime(OFFSET_FLOOR_WINDOW_MS - 1);
         const result = applyOffsetFloors([{ ratingKey: "501", viewOffset: 10_000 }]);
         expect(result).toEqual([{ ratingKey: "501", viewOffset: 185_000 }]);
+      });
+    });
+
+    // prexu-dqfc: OFFSET_FLOOR_WINDOW_MS used to be a flat 5s measured from
+    // the SAME instant useDashboard's own on-event listener fired its
+    // (undelayed) refetch. A hardware repro showed a real PMS onDeck-rebuild
+    // response landing after that flat window had already expired, cementing
+    // a stale pre-stop offset into both state and the 60-minute deck cache.
+    // The fix delays useDashboard's refetch by DECK_INVALIDATION_DELAY_MS (the
+    // same ingestion buffer this module's own backstop invalidation already
+    // trusted) and widens the floor to cover that delay PLUS the original
+    // network-latency margin — otherwise the delay would just eat into the
+    // floor's remaining protection for the fetch's own round trip.
+    describe("OFFSET_FLOOR_WINDOW_MS sizing (prexu-dqfc)", () => {
+      it("covers the deck-refresh scheduling delay plus the original network-latency margin", () => {
+        expect(OFFSET_FLOOR_WINDOW_MS).toBe(DECK_INVALIDATION_DELAY_MS + 5_000);
+      });
+
+      it("is strictly larger than the scheduling delay alone, so a same-tick refetch still has real protection left after the delay elapses", () => {
+        expect(OFFSET_FLOOR_WINDOW_MS).toBeGreaterThan(DECK_INVALIDATION_DELAY_MS);
       });
     });
   });

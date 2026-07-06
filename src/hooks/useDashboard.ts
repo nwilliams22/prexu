@@ -5,7 +5,7 @@ import { useCompletionCounter } from "./useServerActivity";
 import { getRecentlyAddedBySection, getOnDeck } from "../services/plex-library";
 import { cacheGet, cacheGetAge, cacheSet, cacheInvalidate } from "../services/api-cache";
 import { onWatchStateChanged } from "../services/watch-state-events";
-import { applyOffsetFloors } from "../services/cache-invalidators";
+import { applyOffsetFloors, DECK_INVALIDATION_DELAY_MS } from "../services/cache-invalidators";
 import { groupRecentlyAdded } from "../utils/groupRecentlyAdded";
 import { logger } from "../services/logger";
 import type { PlexMediaItem, GroupedRecentItem, LibrarySection } from "../types/library";
@@ -295,8 +295,41 @@ export function useDashboard(): UseDashboardResult {
   // early stop, or a new offset recorded). The player overlay never remounts
   // the dashboard, so without this the On Deck shelf would stay stale until an
   // app restart.
+  //
+  // prexu-dqfc: this refetch is deliberately delayed by
+  // DECK_INVALIDATION_DELAY_MS rather than firing at T+0. Before this change
+  // it raced PMS's async onDeck-rebuild far harder than cache-invalidators.ts's
+  // own backstop invalidation does (that module waits out the SAME delay
+  // before invalidating, precisely so a forced refetch doesn't land before
+  // PMS has ingested the stop write) — this hook's immediate refetch bypassed
+  // that calibration entirely, leaving the fixed-window offset floor
+  // (applyOffsetFloors, see cache-invalidators.ts) as the ONLY thing standing
+  // between an early refetch and a stale response. A hardware repro showed a
+  // real PMS response landing after the floor had already expired, cementing
+  // the pre-stop offset into both state and the 60-minute cache with nothing
+  // left to correct it. Aligning this refetch with the same ingestion buffer
+  // makes it far more likely PMS has already ingested by the time it fires,
+  // and turns the offset floor back into a backstop instead of the front
+  // line of defense against a same-tick race.
+  const deckRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    return onWatchStateChanged(() => refresh("deck"));
+    const unsubscribe = onWatchStateChanged(() => {
+      if (deckRefreshTimerRef.current) clearTimeout(deckRefreshTimerRef.current);
+      logger.debug("playback", "deck refresh scheduled after watch-state change", {
+        delayMs: DECK_INVALIDATION_DELAY_MS,
+      });
+      deckRefreshTimerRef.current = setTimeout(() => {
+        deckRefreshTimerRef.current = null;
+        refresh("deck");
+      }, DECK_INVALIDATION_DELAY_MS);
+    });
+    return () => {
+      unsubscribe();
+      if (deckRefreshTimerRef.current) {
+        clearTimeout(deckRefreshTimerRef.current);
+        deckRefreshTimerRef.current = null;
+      }
+    };
   }, [refresh]);
 
   // Auto-refresh on server activity completion
