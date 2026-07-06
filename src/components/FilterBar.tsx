@@ -40,6 +40,15 @@ function FilterBar({
   const touchMode = isTabletOrBelow(bp);
   const touchPadding = touchMode ? { padding: "0.6rem 0.75rem" } : {};
 
+  // Shared style for every select in the bar (genre, year from/to, rating,
+  // resolution, sort). Built once so the touch-mode `padding` shorthand can't
+  // clobber the right-hand room reserved for the custom chevron.
+  const selectStyle: React.CSSProperties = {
+    ...styles.select,
+    ...touchPadding,
+    paddingRight: "1.9rem",
+  };
+
   const hasActiveFilters =
     !!filters.genre ||
     !!filters.yearMin ||
@@ -125,7 +134,7 @@ function FilterBar({
           aria-label="Genre filter"
           value={filters.genre ?? ""}
           onChange={(e) => updateFilter("genre", e.target.value)}
-          style={{ ...styles.select, ...touchPadding }}
+          style={selectStyle}
           disabled={isLoading}
         >
           <option value="">All Genres</option>
@@ -141,7 +150,7 @@ function FilterBar({
             aria-label="Year from"
             value={filters.yearMin ?? ""}
             onChange={(e) => updateFilter("yearMin", e.target.value)}
-            style={{ ...styles.select, ...touchPadding }}
+            style={selectStyle}
             disabled={isLoading}
           >
             <option value="">Year (from)</option>
@@ -158,7 +167,7 @@ function FilterBar({
             aria-label="Year to"
             value={filters.yearMax ?? ""}
             onChange={(e) => updateFilter("yearMax", e.target.value)}
-            style={{ ...styles.select, ...touchPadding }}
+            style={selectStyle}
             disabled={isLoading}
           >
             <option value="">Year (to)</option>
@@ -175,7 +184,7 @@ function FilterBar({
             aria-label="Rating filter"
             value={filters.contentRating ?? ""}
             onChange={(e) => updateFilter("contentRating", e.target.value)}
-            style={{ ...styles.select, ...touchPadding }}
+            style={selectStyle}
             disabled={isLoading}
           >
             <option value="">All Ratings</option>
@@ -192,7 +201,7 @@ function FilterBar({
             aria-label="Resolution filter"
             value={filters.resolution ?? ""}
             onChange={(e) => updateFilter("resolution", e.target.value)}
-            style={{ ...styles.select, ...touchPadding }}
+            style={selectStyle}
             disabled={isLoading}
           >
             <option value="">All Qualities</option>
@@ -229,7 +238,7 @@ function FilterBar({
             aria-label="Sort by"
             value={currentSort}
             onChange={(e) => onSortChange(e.target.value)}
-            style={{ ...styles.select, ...touchPadding }}
+            style={selectStyle}
             disabled={isLoading}
           >
             {SORT_OPTIONS.map((opt) => (
@@ -288,11 +297,28 @@ const styles: Record<string, React.CSSProperties> = {
     flexWrap: "wrap",
   },
   select: {
-    background: "var(--bg-card)",
+    // Native menulist rendering isn't consistently overridable across
+    // WebViews — WebKitGTK (Linux) paints the platform's LIGHT GTK control
+    // regardless of author background/color, unreadable on the dark UI
+    // (prexu-1ua0). Opt out of native appearance entirely and paint the
+    // control explicitly with the app's theme tokens. The dropdown arrow
+    // disappears with `appearance: none`, so it's re-added as an inline SVG
+    // chevron (#98a—mid-gray—legible on both theme backgrounds). The popup
+    // list itself is themed via root `color-scheme` + the global
+    // `select option` rule in styles.css. Focus ring comes from the global
+    // `:focus-visible` rule.
+    appearance: "none",
+    WebkitAppearance: "none",
+    MozAppearance: "none",
+    backgroundColor: "var(--bg-card)",
+    backgroundImage:
+      "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23989eb0' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\")",
+    backgroundRepeat: "no-repeat",
+    backgroundPosition: "right 0.6rem center",
     color: "var(--text-primary)",
     border: "1px solid var(--border)",
     borderRadius: "8px",
-    padding: "0.4rem 0.6rem",
+    padding: "0.4rem 1.9rem 0.4rem 0.6rem",
     fontSize: "0.85rem",
     cursor: "pointer",
   },

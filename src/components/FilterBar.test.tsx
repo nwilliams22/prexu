@@ -224,6 +224,31 @@ describe("FilterBar", () => {
     expect(unwatchedElements.length).toBeGreaterThanOrEqual(1);
   });
 
+  // ── Explicit dark theming for native selects (prexu-1ua0) ──
+  //
+  // WebKitGTK (Linux) renders <select> with the platform's LIGHT menulist
+  // theme regardless of author background/color unless native appearance is
+  // opted out — so every select must carry the explicit token-based styling
+  // (and the custom chevron that replaces the lost native arrow).
+
+  it("paints every select explicitly with theme tokens instead of native form-control theming (prexu-1ua0)", () => {
+    render(<FilterBar {...defaultProps} />);
+
+    const selects = screen.getAllByRole("combobox");
+    // genre, year from, year to, rating, resolution, sort
+    expect(selects).toHaveLength(6);
+
+    for (const select of selects) {
+      const style = (select as HTMLElement).style;
+      expect(style.appearance).toBe("none");
+      expect(style.backgroundColor).toBe("var(--bg-card)");
+      expect(style.color).toBe("var(--text-primary)");
+      expect(style.border).toBe("1px solid var(--border)");
+      // Inline SVG chevron re-adding the dropdown affordance.
+      expect(style.backgroundImage).toContain("data:image/svg+xml");
+    }
+  });
+
   it("has no axe violations", async () => {
     const { container } = render(<FilterBar {...defaultProps} />);
     const results = await axe(container);
