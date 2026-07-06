@@ -19,12 +19,19 @@
 //!   popout opens on the monitor the main window is currently on.
 //!
 //! ## Subtitle-safe margin (prexu-v45v, Linux only)
-//! The Linux pop-out reserves a bottom strip of mpv's video area (via the
-//! same `video-margin-ratio-*` machinery `commands::minimize` uses for its
-//! corner inset) so subtitles don't draw underneath the floating
-//! `ControlsBottomBar` — see the doc comment above
-//! `POPOUT_SUBTITLE_MARGIN_RATIO` further down. Windows does NOT get the
-//! same fix here: Windows pop-out composites mpv's video onto the main
+//! The Linux pop-out reserves a bottom strip of mpv's video area so
+//! subtitles don't draw underneath the floating `ControlsBottomBar` — see
+//! the doc comment above `POPOUT_SUBTITLE_MARGIN_RATIO` further down. Unlike
+//! `commands::minimize`'s corner inset (a FIXED-PIXEL rect whose margins are
+//! recomputed against the live GtkGLArea allocation on every resize), the
+//! pop-out margin is stored ratio-native (`player::MarginState::
+//! PopoutBottomRatio`, prexu-fgrt) — a bottom-only ratio needs no allocation
+//! to resolve, so it can never drift out of sync with a resized pop-out
+//! window the way an enter-time-frozen pixel rect did. Both variants share
+//! the same `PlayerState::linux_margin` slot and the same
+//! `apply_margins_now`/GLArea-resize dispatch in `linux_compositor` — see
+//! `player::MarginState`'s doc for the full rationale. Windows does NOT get
+//! the same fix here: Windows pop-out composites mpv's video onto the main
 //! HWND's own DirectComposition surface (`player::composition_host`) with no
 //! existing margin-ratio/sub-scale wiring at all — unlike Windows *minimize*,
 //! which sidesteps the whole class of problem by giving mpv a genuinely
@@ -74,13 +81,62 @@
 //!
 //! Size + decoration changes work on both backends, so the popout is fully
 //! usable on Wayland — it just floats without OS-level pinning.
+//!
+//! ## Exit settling from a previously-tiled window (prexu-fgrt, Linux only)
+//! A hardware log showed the main window passing through THREE sizes over
+//! ~4 SECONDS on `exit_popout` when the popout had been entered from a
+//! tiled window (the tile-break case above): the stash-restore size
+//! (2010x2250) → an intermediate size (2100x2340, ~4.5% larger on both
+//! axes) → the window's tiled content size (1920x2112), where it stayed.
+//! The non-tiled exit path (a single `set_decorations(true)` + `set_size`)
+//! does not exhibit this — only a popout that went through the tile-break
+//! hide/show remap on enter (see the Wayland caveats above) does.
+//!
+//! **Evidence trail / reasoning:**
+//! - The geometry stash is captured (`outer_position`/`inner_size`) BEFORE
+//!   `probe_and_break_tile`'s possible hide/show remap, specifically because
+//!   that remap makes position/size queries "momentarily meaningless" (see
+//!   the doc comment on the `probe_and_break_tile` call site). That means
+//!   the stash can capture a size from partway through the tiled ⇄ floating
+//!   transition rather than a stable, settled one — a plausible source of
+//!   the mismatch between the stashed 2010x2250 and the eventually-settled
+//!   1920x2112.
+//! - The intermediate 2100x2340 is uniformly ~4.5% larger than the stash in
+//!   BOTH dimensions, not offset by a fixed pixel amount (as a titlebar/
+//!   decoration-extents miscalculation would produce) — consistent with
+//!   (but not confirmed to be) a transient DPI/scale recomputation during
+//!   the decorations-then-resize transition, though this is a hypothesis,
+//!   not a verified root cause.
+//! - Wayland gives clients no synchronous configure confirmation (the same
+//!   fact `schedule_popout_resize_retry`/prexu-rmm7 documents for enter). A
+//!   toplevel that was just unmapped/remapped by the tile-break fix is
+//!   "fresher" for configure-negotiation purposes than the long-lived
+//!   toplevel the original exit path (which "always succeeds" per
+//!   `schedule_popout_resize_retry`'s doc) was designed against — so it is
+//!   plausible the SAME decoration-vs-resize race enter's prexu-rmm7 fix
+//!   addresses also affects this specific exit case, even though it does
+//!   not affect the common (non-tiled) exit.
+//!
+//! **What shipped:** `player_exit_popout` mirrors enter's resize-before-
+//! decorations ordering AND enter's bounded verify-and-retry loop
+//! (`schedule_popout_exit_resize_retry`), gated strictly to the was-tiled
+//! case (`PlayerState::pre_popout_was_tiled`, set by `probe_and_break_tile`'s
+//! return value) so the non-tiled exit path — already correct and unrelated
+//! to this bug — is untouched. This is an honest, bounded mitigation using
+//! an already-proven mechanism (PR #67's own pattern, reused rather than
+//! reinvented), NOT a verified single-configure fix: the loop's ~600ms
+//! budget is well short of the observed ~4s settling window, so if the
+//! multi-configure behavior is genuinely compositor-driven (rather than a
+//! GTK-internal race the reordering can win), this will bound the churn but
+//! not eliminate the drift. Confirming which is the case, and whether
+//! restoring directly to the tiled content size (rather than the enter-time
+//! stash) would converge faster, needs hardware verification — left as a
+//! follow-up rather than guessed at further here.
 
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_store::StoreExt;
 
 use crate::player::{MinimizeCorner, PlayerState};
-#[cfg(target_os = "linux")]
-use crate::player::MinimizeState;
 #[cfg(target_os = "windows")]
 use super::win32_monitor::{decode_device_name, monitor_info, resync_host, work_area_from_info};
 
@@ -1123,7 +1179,7 @@ fn configured_main_min_size(
     (w, h)
 }
 
-// ── Subtitle-safe bottom margin (prexu-v45v) ───────────────────────────────
+// ── Subtitle-safe bottom margin (prexu-v45v, ratio-native since prexu-fgrt) ─
 //
 // Hardware screenshots showed mpv-rendered subtitles drawing UNDERNEATH
 // ControlsBottomBar in the pop-out window — minimize mode never has this
@@ -1134,70 +1190,50 @@ fn configured_main_min_size(
 // against the full surface, right under the floating controls overlay.
 //
 // Rather than inventing a second margin-application mechanism, this reuses
-// minimize's exactly: `PlayerState::{set,get}_minimize` / `MinimizeState` and
-// `linux_compositor::{apply_margins_now,clear_margins_now}` (all already
-// `pub(crate)` and already called from this file's Linux `enter`/`exit`
-// commands for the pop-out↔minimize mutual-exclusion clear above). Popout
-// and in-window minimize are mutually exclusive, so borrowing the same
-// storage slot for a different purpose while pop-out is active is safe: by
-// the time `player_enter_popout` runs, any real minimize inset has already
-// been cleared (see the `state.get_minimize().is_some()` guard earlier in
-// `enter`), and `player_exit_popout` clears it again before returning.
+// minimize's dispatch exactly: `linux_compositor::{apply_margins_now,
+// clear_margins_now}` (already `pub(crate)` and already called from this
+// file's Linux `enter`/`exit` commands for the pop-out↔minimize
+// mutual-exclusion clear above). Popout and in-window minimize are mutually
+// exclusive, so sharing `PlayerState::linux_margin` for a different purpose
+// while pop-out is active is safe: by the time `player_enter_popout` runs,
+// any real minimize inset has already been cleared (see the
+// `state.get_minimize().is_some()` guard earlier in `enter`), and
+// `player_exit_popout` clears it again before returning.
+//
+// PR #82 originally represented this bottom strip as a fake `MinimizeState`
+// rect (`width` = pop-out width, `height` = pop-out height minus the
+// reserved strip, `padding: 0`, `corner: TopLeft`) run through
+// `compute_margin_ratios` — reusing minimize's FIXED-PIXEL-rect math to
+// reproduce a ratio. That rect was frozen to whatever size the pop-out was
+// resized to at enter time, so every subsequent GTK allocation during a user
+// edge-resize recomputed against a STALE rect: once the live width no longer
+// matched the frozen one, `compute_margin_ratios` treated it as a
+// legitimately shrunk video area and logged a WARN on every allocation
+// (dozens per drag gesture), and a second pop-out enter could transiently
+// apply badly wrong ratios if `apply_margins_now` ran before the resize
+// landed. `player::MarginState::PopoutBottomRatio` (prexu-fgrt) replaces the
+// fake rect with the ratio itself — see that enum's doc for the full
+// before/after.
 
 /// Fraction of the pop-out window's height reserved at the bottom for
 /// subtitles, so mpv keeps its video (and, via `sub_compensation`, its
 /// subtitle layer) above the floating `ControlsBottomBar` overlay.
 ///
-/// A CONSTANT ratio, not a measured pixel height: unlike minimize's inset
-/// rect (an explicit width/height the frontend requests because it also
-/// draws a matching resize handle), the pop-out controls bar's rendered
-/// height is owned entirely by React (`ControlsBottomBar`/`PlayerControls`,
-/// padding- and content-driven, no fixed constant) and isn't observable from
-/// Rust without plumbing a live DOM measurement across the IPC boundary for
-/// every pop-out resize. Measured against the project default 480x270
-/// pop-out (`POPOUT_DEFAULT_WIDTH`/`HEIGHT`), the transport row plus its
-/// bottom padding is roughly 45-55 logical px — about 17-20% of 270 — so a
-/// flat 18% leaves comfortable headroom across the whole pop-out size range
-/// (200x120 floor to the 60%-of-work-area ceiling) without needing to track
-/// the exact DOM height.
+/// A CONSTANT ratio, not a measured pixel height: the pop-out controls bar's
+/// rendered height is owned entirely by React (`ControlsBottomBar`/
+/// `PlayerControls`, padding- and content-driven, no fixed constant) and
+/// isn't observable from Rust without plumbing a live DOM measurement across
+/// the IPC boundary for every pop-out resize. Measured against the project
+/// default 480x270 pop-out (`POPOUT_DEFAULT_WIDTH`/`HEIGHT`), the transport
+/// row plus its bottom padding is roughly 45-55 logical px — about 17-20% of
+/// 270 — so a flat 18% leaves comfortable headroom across the whole pop-out
+/// size range (200x120 floor to the 60%-of-work-area ceiling) without
+/// needing to track the exact DOM height. Fed directly into
+/// `player::MarginState::PopoutBottomRatio` — see that enum's `ratios()` for
+/// why no width/height computation is needed at all: the ratio IS the
+/// answer, independent of the live allocation.
 #[cfg(target_os = "linux")]
 const POPOUT_SUBTITLE_MARGIN_RATIO: f64 = 0.18;
-
-/// Build the `MinimizeState` that, once run through
-/// `commands::minimize::compute_margin_ratios` (via `apply_margins_now`),
-/// produces a BOTTOM-ONLY inset of `POPOUT_SUBTITLE_MARGIN_RATIO * height`
-/// with zero left/right/top margin — i.e. mpv keeps filling the pop-out
-/// window's full width and reserves only a bottom strip.
-///
-/// Why this particular (width, height, padding, corner) reproduces that:
-/// `compute_margin_ratios`'s per-axis formula is `padding_side = padding /
-/// total` (the side touching the anchored corner) and `far_side = (total -
-/// size - padding) / total` (the opposite side). With `padding: 0` and
-/// `width` equal to the pop-out's actual width, the width axis has
-/// `size == total` so BOTH `padding_side` and `far_side` are 0 — no
-/// horizontal margin regardless of corner. With `height` set to the video
-/// area's target height (window height minus the reserved strip) and
-/// `corner: TopLeft`, the height axis's anchored (padding) side is TOP — 0,
-/// as always with `padding: 0` — and the far side is BOTTOM, which absorbs
-/// exactly the reserved strip.
-///
-/// Pure and unit-tested (see `popout_subtitle_margin` below) — no GTK/Tauri
-/// types involved, matching the existing `compute_margin_ratios` /
-/// `corner_origin` pure-helper convention in this module.
-#[cfg(target_os = "linux")]
-fn compute_popout_subtitle_margin_state(width: u32, height: u32) -> MinimizeState {
-    let reserved = ((height as f64) * POPOUT_SUBTITLE_MARGIN_RATIO).round() as u32;
-    // `.max(1)`: never request a zero-height video rect even for the
-    // smallest allowed pop-out (the 120px logical min-size floor), mirroring
-    // `corner_origin`'s own `.max(1)` guard against degenerate rects.
-    let video_height = height.saturating_sub(reserved).max(1);
-    MinimizeState {
-        width,
-        height: video_height,
-        padding: 0,
-        corner: MinimizeCorner::TopLeft,
-    }
-}
 
 /// Number of times `schedule_popout_resize_retry` checks whether the
 /// requested pop-out size actually applied before giving up.
@@ -1290,6 +1326,21 @@ fn decide_popout_resize_retry(
 /// `player_exit_popout` takes the stash, so a user who pops back out during
 /// the ~600ms verify window cancels the loop naturally instead of fighting
 /// the exit-path resize.
+///
+/// # Margin timing (prexu-fgrt)
+/// The subtitle-safe bottom-ratio margin (see `apply_popout_subtitle_margin`)
+/// is applied from THIS loop's terminal tick (`Satisfied` or `GiveUp`),
+/// rather than synchronously inside `player_enter_popout` right after this
+/// function is called — keeping enter's geometry work in one linear sequence
+/// (tile-break → resize → verify → margin) instead of racing the margin
+/// apply against an in-flight resize. With the margin now stored ratio-
+/// native (`MarginState::PopoutBottomRatio`) this ordering is no longer
+/// load-bearing for CORRECTNESS of the ratio itself — a bottom ratio is the
+/// same fraction regardless of the live allocation — but it's kept anyway as
+/// the more defensible sequencing and to avoid setting margin state while
+/// resize/decoration changes may still be in flight. If `run_on_main_thread`
+/// scheduling itself fails (the loop never runs at all), the caller applies
+/// the margin directly as a fallback so the feature isn't silently lost.
 #[cfg(target_os = "linux")]
 fn schedule_popout_resize_retry(app: &AppHandle, main: &tauri::WebviewWindow, requested: (u32, u32)) {
     let win = main.clone();
@@ -1334,6 +1385,7 @@ fn schedule_popout_resize_retry(app: &AppHandle, main: &tauri::WebviewWindow, re
                         "[player:popout] resize-retry: confirmed {}x{} applied on attempt {n}",
                         requested.0, requested.1
                     );
+                    apply_popout_subtitle_margin(&app_handle);
                     glib::ControlFlow::Break
                 }
                 PopoutResizeRetryDecision::Retry => {
@@ -1356,13 +1408,131 @@ fn schedule_popout_resize_retry(app: &AppHandle, main: &tauri::WebviewWindow, re
                          the retry window; a subsequent user drag/resize will still correct it)",
                         actual.0, actual.1, requested.0, requested.1
                     );
+                    // Ratio-native margin applies regardless of whether the
+                    // requested SIZE itself ever landed — it's a fraction of
+                    // whatever the window ends up at, not tied to `requested`.
+                    apply_popout_subtitle_margin(&app_handle);
                     glib::ControlFlow::Break
                 }
             }
         });
     });
     if let Err(e) = scheduled {
-        log::warn!("[player:popout] resize-retry schedule failed: {:?}", e);
+        log::warn!(
+            "[player:popout] resize-retry schedule failed: {:?} — applying subtitle margin \
+             directly as a fallback since the verify loop will never run",
+            e
+        );
+        apply_popout_subtitle_margin(app);
+    }
+}
+
+/// Apply the pop-out's constant subtitle-safe bottom-ratio margin
+/// (`POPOUT_SUBTITLE_MARGIN_RATIO`) and store it as the active
+/// `MarginState` (prexu-fgrt). Called from `schedule_popout_resize_retry`'s
+/// terminal tick (`Satisfied` or `GiveUp`) — see that function's "Margin
+/// timing" doc section for why this is deferred rather than applied
+/// synchronously inside `player_enter_popout`.
+#[cfg(target_os = "linux")]
+fn apply_popout_subtitle_margin(app: &AppHandle) {
+    let state = app.state::<PlayerState>();
+    if let Err(e) = state.set_popout_margin_ratio(Some(POPOUT_SUBTITLE_MARGIN_RATIO)) {
+        log::warn!("[player:popout] failed to store subtitle-margin ratio: {e}");
+    }
+    crate::player::linux_compositor::apply_margins_now(app);
+    log::info!(
+        "[player:popout] applied subtitle-safe bottom margin ratio={:.3}",
+        POPOUT_SUBTITLE_MARGIN_RATIO
+    );
+}
+
+/// Mirrors `schedule_popout_resize_retry` for the EXIT restore path, guarded
+/// to the was-tiled case (prexu-fgrt) — see `player_exit_popout`'s call site
+/// and the module doc's "Exit settling" section for the hardware evidence
+/// motivating it: a previously-tiled window went through PR #77's hide/show
+/// remap on enter, so the toplevel restored on exit is "fresh" for Wayland
+/// configure-negotiation purposes the same way a newly opened window is —
+/// the bounded verify-and-retry loop prexu-rmm7 established for enter
+/// applies here for the same reason.
+///
+/// Reuses `decide_popout_resize_retry` (already pure and unit-tested) — the
+/// decision logic is identical, only the polled window/log tags differ.
+/// Unlike the enter-side loop there is no `pre_popout_geometry` stash left
+/// to cancel against (exit already took it), so this loop always runs to
+/// `Satisfied`/`GiveUp` rather than checking for a mid-flight cancellation;
+/// a user popping back out while this is still settling issues its own
+/// `set_size` via `player_enter_popout`, which simply supersedes whatever
+/// this loop's next tick would have set.
+///
+/// # Honesty about what this does and doesn't prove
+/// This bounds and accelerates the COMMON case the same way the enter-side
+/// loop does — it does not guarantee the single-configure exit the module
+/// doc's "Exit settling" section discusses as a hoped-for outcome. The
+/// hardware-observed settling spanned ~4 SECONDS across three sizes, well
+/// beyond this loop's ~600ms budget (`POPOUT_RESIZE_RETRY_MAX_ATTEMPTS` ×
+/// `POPOUT_RESIZE_RETRY_INTERVAL`), so if the multi-configure behavior is
+/// genuinely compositor-driven post-remap settling (rather than a GTK-
+/// internal decoration-vs-resize race this reordering can win, per the
+/// enter-side prexu-rmm7 precedent), this loop will `GiveUp` having only
+/// re-asserted the stash target a few times, not eliminated the drift. It's
+/// shipped as a directional, low-risk mitigation using an already-proven
+/// mechanism, not a verified fix — see the module doc for the full caveat.
+#[cfg(target_os = "linux")]
+fn schedule_popout_exit_resize_retry(app: &AppHandle, main: &tauri::WebviewWindow, requested: (u32, u32)) {
+    let win = main.clone();
+    let scheduled = app.run_on_main_thread(move || {
+        let attempt = std::cell::Cell::new(0u32);
+        glib::timeout_add_local(POPOUT_RESIZE_RETRY_INTERVAL, move || {
+            let n = attempt.get() + 1;
+            attempt.set(n);
+
+            let actual = match win.inner_size() {
+                Ok(s) => (s.width, s.height),
+                Err(e) => {
+                    log::warn!(
+                        "[player:popout] exit-resize-retry: inner_size query failed: {:?}",
+                        e
+                    );
+                    return glib::ControlFlow::Continue;
+                }
+            };
+
+            match decide_popout_resize_retry(requested, actual, n, POPOUT_RESIZE_RETRY_MAX_ATTEMPTS) {
+                PopoutResizeRetryDecision::Satisfied => {
+                    log::debug!(
+                        "[player:popout] exit-resize-retry: confirmed {}x{} applied on attempt {n}",
+                        requested.0, requested.1
+                    );
+                    glib::ControlFlow::Break
+                }
+                PopoutResizeRetryDecision::Retry => {
+                    log::debug!(
+                        "[player:popout] exit-resize-retry attempt {n}/{}: window is {}x{}, \
+                         expected {}x{} — re-issuing set_size",
+                        POPOUT_RESIZE_RETRY_MAX_ATTEMPTS, actual.0, actual.1, requested.0, requested.1
+                    );
+                    if let Err(e) =
+                        win.set_size(tauri::PhysicalSize::new(requested.0, requested.1))
+                    {
+                        log::warn!("[player:popout] exit-resize-retry set_size failed: {:?}", e);
+                    }
+                    glib::ControlFlow::Continue
+                }
+                PopoutResizeRetryDecision::GiveUp => {
+                    log::warn!(
+                        "[player:popout] exit-resize-retry: gave up after {n} attempts — window \
+                         settled at {}x{}, expected {}x{} (see the module doc's Exit settling \
+                         section — likely compositor-driven settling after the PR #77 hide/show \
+                         remap rather than something re-issuing set_size can win)",
+                        actual.0, actual.1, requested.0, requested.1
+                    );
+                    glib::ControlFlow::Break
+                }
+            }
+        });
+    });
+    if let Err(e) = scheduled {
+        log::warn!("[player:popout] exit-resize-retry schedule failed: {:?}", e);
     }
 }
 
@@ -1431,21 +1601,29 @@ const TILE_BREAK_MAIN_THREAD_BUDGET: std::time::Duration = std::time::Duration::
 /// the full state bits alongside is_maximized/is_fullscreen" without a
 /// second round trip to fetch them (they're already known to the caller via
 /// the cross-thread-safe `tauri::WebviewWindow` accessors).
+///
+/// Returns whether a tile was actually detected (and therefore broken).
+/// `player_enter_popout` persists this into `PlayerState::
+/// pre_popout_was_tiled` (prexu-fgrt) so `player_exit_popout` can special-
+/// case the exit-settling path for a previously-tiled window — see the
+/// module doc's "Exit settling" section. A failed probe (main-thread
+/// dispatch error, or the confirmation timing out) conservatively reports
+/// `false` — the exit path then behaves exactly as it did before prexu-fgrt.
 #[cfg(target_os = "linux")]
 fn probe_and_break_tile(
     app: &AppHandle,
     main: &tauri::WebviewWindow,
     was_maximized: bool,
     was_fullscreen: bool,
-) {
+) -> bool {
     let win = main.clone();
-    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let (tx, rx) = std::sync::mpsc::channel::<bool>();
     let dispatched = app.run_on_main_thread(move || {
         let gtk_window = match win.gtk_window() {
             Ok(w) => w,
             Err(e) => {
                 log::warn!("[player:popout] gtk_window() unavailable for tile probe: {e:?}");
-                let _ = tx.send(());
+                let _ = tx.send(false);
                 return;
             }
         };
@@ -1470,7 +1648,8 @@ fn probe_and_break_tile(
             gdk_state.bits()
         );
 
-        match decide_tile_break_strategy(gdk_state) {
+        let strategy = decide_tile_break_strategy(gdk_state);
+        match strategy {
             TileBreakStrategy::NoneNeeded => {
                 log::debug!("[player:popout] tile-break: no tiled_* bits set, nothing to do");
             }
@@ -1516,18 +1695,23 @@ fn probe_and_break_tile(
                 gtk::prelude::WidgetExt::show(&gtk_window);
             }
         }
-        let _ = tx.send(());
+        let _ = tx.send(matches!(strategy, TileBreakStrategy::BreakTile));
     });
     match dispatched {
-        Ok(()) => {
-            if rx.recv_timeout(TILE_BREAK_MAIN_THREAD_BUDGET).is_err() {
+        Ok(()) => match rx.recv_timeout(TILE_BREAK_MAIN_THREAD_BUDGET) {
+            Ok(was_tiled) => was_tiled,
+            Err(_) => {
                 log::warn!(
                     "[player:popout] tile-break: main-thread probe not confirmed within {:?}",
                     TILE_BREAK_MAIN_THREAD_BUDGET
                 );
+                false
             }
+        },
+        Err(e) => {
+            log::warn!("[player:popout] tile-break: run_on_main_thread failed: {e:?}");
+            false
         }
-        Err(e) => log::warn!("[player:popout] tile-break: run_on_main_thread failed: {e:?}"),
     }
 }
 
@@ -1630,7 +1814,15 @@ pub async fn player_enter_popout(
     // AFTER the geometry stash above (the hide/show remap it may perform
     // makes position/size queries momentarily meaningless) and BEFORE the
     // resize below.
-    probe_and_break_tile(&app, &main, was_maximized, was_fullscreen);
+    //
+    // prexu-fgrt: persist whether a tile was actually broken so
+    // `player_exit_popout` can special-case the exit-settling path for a
+    // previously-tiled window — see the module doc's "Exit settling"
+    // section for why a freshly remapped toplevel needs it.
+    let was_tiled = probe_and_break_tile(&app, &main, was_maximized, was_fullscreen);
+    if let Ok(mut t) = state.pre_popout_was_tiled.lock() {
+        *t = Some(was_tiled);
+    }
 
     let (wx, wy, ww, wh) = linux_work_area(&main)?;
     let (width, height) = sanitize_popout_size(width, height, ww, wh);
@@ -1702,37 +1894,14 @@ pub async fn player_enter_popout(
     // number of times if not — see `schedule_popout_resize_retry` doc for
     // the full design. Scheduled after the initial apply above so the common
     // case (resize lands first try) costs nothing beyond the one check.
-    schedule_popout_resize_retry(&app, &main, (w, h));
-
-    // prexu-v45v: reserve a subtitle-safe bottom strip — see the module
-    // section doc above `POPOUT_SUBTITLE_MARGIN_RATIO` for why this rides
-    // minimize's existing video-margin-ratio machinery instead of a new one.
-    // Sequenced AFTER the resize/verify above (never before — must not race
-    // ahead of PRs #65/#67/#77's sanitize/retry/tile-break sequence) so a
-    // mid-flight `player_exit_popout` cleanly cancels via its own
-    // `set_minimize(None)` + `clear_margins_now` rather than this call
-    // re-arming a margin the exit path already tore down.
     //
-    // `apply_margins_now` reads the GLArea's CURRENT allocation, which may
-    // still be the PRE-popout size at this exact point if the `set_size`
-    // above hasn't been honoured by the compositor yet (the same Wayland
-    // deferral `schedule_popout_resize_retry` exists for) — that races a
-    // possibly-stale ratio into effect for one frame, but is self-correcting:
-    // `compute_popout_subtitle_margin_state` is built from the REQUESTED
-    // (w, h), and `linux_compositor`'s GLArea `resize` handler re-runs
-    // `compute_margin_ratios` against the stored state on every subsequent
-    // allocation change (including the one the real resize eventually fires),
-    // converging on the correct bottom-only inset once the window actually
-    // reaches (w, h).
-    let sub_margin_state = compute_popout_subtitle_margin_state(w, h);
-    if let Err(e) = state.set_minimize(Some(sub_margin_state)) {
-        log::warn!("[player:popout] failed to store subtitle-margin state: {e}");
-    }
-    crate::player::linux_compositor::apply_margins_now(&app);
-    log::info!(
-        "[player:popout] applied subtitle-safe bottom margin (ratio={:.3}) for popout {w}x{h}",
-        POPOUT_SUBTITLE_MARGIN_RATIO
-    );
+    // prexu-v45v / prexu-fgrt: the subtitle-safe bottom-ratio margin is
+    // applied from THIS loop's terminal tick (`Satisfied` or `GiveUp`) —
+    // see `schedule_popout_resize_retry`'s "Margin timing" doc section —
+    // rather than synchronously here, so enter's geometry work stays one
+    // linear sequence (tile-break → resize → verify → margin) instead of
+    // applying a margin while the resize may still be in flight.
+    schedule_popout_resize_retry(&app, &main, (w, h));
 
     // Persist the chosen corner + size for next session (same store + keys
     // as Windows). A failure here is not fatal.
@@ -1781,8 +1950,10 @@ pub async fn player_exit_popout(
     // never leaves an inset ghost behind. Safe unconditionally: pop-out and
     // in-window minimize are mutually exclusive (player_enter_popout clears
     // any real minimize inset before applying its own margin state, see
-    // above), so PlayerState::linux_minimize can only be holding OUR popout
-    // margin state — or already be `None` — by the time exit runs.
+    // above), so `PlayerState::linux_margin` can only be holding OUR popout
+    // `MarginState::PopoutBottomRatio` — or already be `None` — by the time
+    // exit runs. `set_minimize(None)` clears `linux_margin` unconditionally
+    // regardless of which variant is active (see that method's doc).
     let _ = state.set_minimize(None);
     crate::player::linux_compositor::clear_margins_now(&app);
 
@@ -1877,6 +2048,17 @@ pub async fn player_exit_popout(
         .and_then(|mut m| m.take())
         .unwrap_or(false);
 
+    // Same take-alongside-the-stash treatment for the tile-break flag
+    // (prexu-fgrt) — see `PlayerState::pre_popout_was_tiled`'s doc and the
+    // module doc's "Exit settling" section for why this changes the restore
+    // path below.
+    let was_tiled = state
+        .pre_popout_was_tiled
+        .lock()
+        .ok()
+        .and_then(|mut t| t.take())
+        .unwrap_or(false);
+
     let stash = state
         .pre_popout_geometry
         .lock()
@@ -1907,14 +2089,38 @@ pub async fn player_exit_popout(
         log::warn!("[player:popout] set_min_size (restore) failed: {e}");
     }
 
-    main.set_decorations(true)
-        .map_err(|e| format!("popout set_decorations(true) failed: {e}"))?;
-    main.set_size(tauri::PhysicalSize::new(w, h))
-        .map_err(|e| format!("popout restore resize failed: {e}"))?;
-    if let Err(e) = main.set_position(tauri::PhysicalPosition::new(x, y)) {
-        log::warn!("[player:popout] restore set_position failed: {e}");
+    if was_tiled {
+        // prexu-fgrt: a previously-tiled popout went through PR #77's
+        // hide/show remap on enter, so this toplevel is "fresh" for Wayland
+        // configure-negotiation purposes the same way a newly created
+        // window is (see the module doc's "Exit settling" section for the
+        // hardware evidence). Mirror enter's own resize-before-decorations
+        // ordering (prexu-rmm7) — the reverse of this function's normal
+        // order — and back it with the same bounded verify-and-retry loop,
+        // rather than trusting a single `set_size` to land in one configure
+        // the way the non-tiled case reliably does.
+        main.set_size(tauri::PhysicalSize::new(w, h))
+            .map_err(|e| format!("popout restore resize failed: {e}"))?;
+        main.set_decorations(true)
+            .map_err(|e| format!("popout set_decorations(true) failed: {e}"))?;
+        if let Err(e) = main.set_position(tauri::PhysicalPosition::new(x, y)) {
+            log::warn!("[player:popout] restore set_position failed: {e}");
+        }
+        log::info!(
+            "[player:popout] restoring previously-tiled window to ({x},{y},{w}x{h}) — \
+             scheduling verify-and-retry (prexu-fgrt)"
+        );
+        schedule_popout_exit_resize_retry(&app, &main, (w, h));
+    } else {
+        main.set_decorations(true)
+            .map_err(|e| format!("popout set_decorations(true) failed: {e}"))?;
+        main.set_size(tauri::PhysicalSize::new(w, h))
+            .map_err(|e| format!("popout restore resize failed: {e}"))?;
+        if let Err(e) = main.set_position(tauri::PhysicalPosition::new(x, y)) {
+            log::warn!("[player:popout] restore set_position failed: {e}");
+        }
+        log::debug!("[player:popout] restored main to ({x},{y},{w}x{h})");
     }
-    log::debug!("[player:popout] restored main to ({x},{y},{w}x{h})");
 
     // Re-maximize AFTER restoring the windowed geometry above (prexu-6qi5.4)
     // — the geometry restore becomes the "normal" size GTK remembers for a
@@ -2269,17 +2475,23 @@ mod tests {
         assert_ne!(PopoutStore::key_size(), PopoutStore::key_monitor());
     }
 
-    // ---- compute_popout_subtitle_margin_state (prexu-v45v) ----------------
+    // ---- MarginState::PopoutBottomRatio ratio-native margin (prexu-fgrt) --
     //
-    // Pure — feeds straight into commands::minimize::compute_margin_ratios,
-    // whose own margin_ratios_* tests already cover that formula; these
-    // tests only check the (width, height, padding, corner) this function
-    // hands it produce a bottom-only inset (left=right=top=0) for the
-    // pop-out's actual dimensions.
+    // Replaces the old `compute_popout_subtitle_margin_state`-based tests
+    // (PR #82), now that the pop-out's subtitle-safe bottom strip is stored
+    // as a ratio-native `MarginState::PopoutBottomRatio` instead of a fake
+    // `MinimizeState` rect frozen to the pop-out's enter-time size. The
+    // whole point of the ratio-native representation is that `ratios()`
+    // needs no live-allocation-dependent math at all — these tests assert
+    // exactly that: the identical margin, regardless of what allocation
+    // it's evaluated against, including allocations that drift far from
+    // whatever size the pop-out was originally opened at (the hardware-log
+    // repro: a user edge-resize drifting the live GLArea allocation away
+    // from a frozen enter-time rect).
     #[cfg(target_os = "linux")]
-    mod popout_subtitle_margin {
+    mod popout_bottom_ratio_margin {
         use super::super::*;
-        use crate::player::commands::minimize::compute_margin_ratios;
+        use crate::player::MarginState;
 
         fn close(a: f64, b: f64) {
             assert!(
@@ -2290,81 +2502,118 @@ mod tests {
         }
 
         #[test]
-        fn reserves_zero_horizontal_margin_regardless_of_size() {
-            // width == the full pop-out width always -> left/right ratios 0.
-            let mini = compute_popout_subtitle_margin_state(480, 270);
-            assert_eq!(mini.width, 480);
-            assert_eq!(mini.padding, 0);
-            assert_eq!(mini.corner, MinimizeCorner::TopLeft);
-
-            let (left, right, _top, _bottom) = compute_margin_ratios(480, 270, mini);
-            assert_eq!(left, 0.0);
-            assert_eq!(right, 0.0);
+        fn reserves_zero_left_right_top_margin() {
+            let margin = MarginState::PopoutBottomRatio(POPOUT_SUBTITLE_MARGIN_RATIO);
+            let (left, right, top, _bottom) = margin.ratios(480, 270);
+            assert_eq!((left, right, top), (0.0, 0.0, 0.0));
         }
 
         #[test]
-        fn reserves_zero_top_margin() {
-            // corner: TopLeft + padding: 0 -> the anchored (top) side is
-            // always 0, only the far (bottom) side absorbs the strip.
-            let mini = compute_popout_subtitle_margin_state(480, 270);
-            let (_left, _right, top, _bottom) = compute_margin_ratios(480, 270, mini);
-            assert_eq!(top, 0.0);
+        fn bottom_ratio_matches_the_configured_constant_exactly() {
+            // Unlike the old pixel-rect + rounding path (rounding a reserved
+            // pixel height then dividing back out), the ratio-native
+            // representation IS the ratio — no rounding, no approximation.
+            let margin = MarginState::PopoutBottomRatio(POPOUT_SUBTITLE_MARGIN_RATIO);
+            let (_left, _right, _top, bottom) = margin.ratios(480, 270);
+            assert_eq!(bottom, POPOUT_SUBTITLE_MARGIN_RATIO);
         }
 
         #[test]
-        fn bottom_margin_matches_configured_ratio_at_default_popout_size() {
-            // `reserved` rounds to the nearest logical px (48.6 -> 49 at
-            // 480x270), so the resulting ratio is only approximately
-            // POPOUT_SUBTITLE_MARGIN_RATIO — within half a pixel's worth,
-            // not exact. `bottom_margin_matches_configured_ratio_at_a_resized_
-            // popout` below covers a size where the rounding is exact.
-            let mini = compute_popout_subtitle_margin_state(480, 270);
-            let (_left, _right, _top, bottom) = compute_margin_ratios(480, 270, mini);
-            let diff = (bottom - POPOUT_SUBTITLE_MARGIN_RATIO).abs();
-            assert!(
-                diff < 1.0 / 270.0,
-                "bottom ratio {bottom} strayed more than one rounded px from {POPOUT_SUBTITLE_MARGIN_RATIO} (diff {diff})"
-            );
+        fn ratio_is_invariant_across_arbitrary_allocations() {
+            // The regression this guards against (prexu-fgrt hardware log):
+            // every GTK allocation during a user edge-resize used to
+            // recompute against a STALE frozen rect, drifting the ratio and
+            // logging a WARN once the live size no longer matched the rect.
+            // A ratio-native margin must produce the IDENTICAL result no
+            // matter what allocation it's asked about.
+            let margin = MarginState::PopoutBottomRatio(POPOUT_SUBTITLE_MARGIN_RATIO);
+            let allocations = [
+                (480, 270),   // project default
+                (920, 640),   // hardware-log enter size
+                (917, 640),   // hardware-log mid-drag size (3px narrower)
+                (200, 120),   // pop-out min-size floor
+                (1920, 2112), // hardware-log stale/settled allocation
+                (100, 100),   // pathologically small
+            ];
+            for (w, h) in allocations {
+                let (left, right, top, bottom) = margin.ratios(w, h);
+                assert_eq!((left, right, top), (0.0, 0.0, 0.0), "at allocation {w}x{h}");
+                close(bottom, POPOUT_SUBTITLE_MARGIN_RATIO);
+            }
         }
 
         #[test]
-        fn bottom_margin_matches_configured_ratio_at_a_resized_popout() {
-            // Ratio-based reservation is size-independent at the moment
-            // it's computed (the same (width, height) pop-out dimensions
-            // player_enter_popout just resized to) — verify at a
-            // non-default size too (e.g. a user-resized 800x500 pop-out).
-            let mini = compute_popout_subtitle_margin_state(800, 500);
-            let (left, right, top, bottom) = compute_margin_ratios(800, 500, mini);
-            assert_eq!(left, 0.0);
-            assert_eq!(right, 0.0);
-            assert_eq!(top, 0.0);
-            close(bottom, POPOUT_SUBTITLE_MARGIN_RATIO);
-        }
-
-        #[test]
-        fn video_height_never_collapses_to_zero_at_the_popout_min_size_floor() {
-            // POPOUT_MIN_HEIGHT is 120 logical px; 18% of that is ~22px,
-            // leaving a still-sane ~98px video height, well above the
-            // `.max(1)` degenerate floor this guards against.
-            let mini = compute_popout_subtitle_margin_state(200, 120);
-            assert!(mini.height >= 1);
-            assert!(mini.height < 120);
-        }
-
-        #[test]
-        fn video_height_is_smaller_than_full_height_by_roughly_the_ratio() {
-            let mini = compute_popout_subtitle_margin_state(480, 270);
-            let expected_reserved = (270.0 * POPOUT_SUBTITLE_MARGIN_RATIO).round() as u32;
-            assert_eq!(mini.height, 270 - expected_reserved);
+        fn ratio_is_unaffected_by_zero_or_negative_allocation() {
+            // Unlike `compute_margin_ratios` (the fixed-rect path, which has
+            // an explicit degenerate-window branch), the ratio case performs
+            // no division by the allocation at all, so there is no
+            // degenerate case to guard — the ratio passes through unchanged.
+            let margin = MarginState::PopoutBottomRatio(POPOUT_SUBTITLE_MARGIN_RATIO);
+            assert_eq!(margin.ratios(0, 0), (0.0, 0.0, 0.0, POPOUT_SUBTITLE_MARGIN_RATIO));
+            assert_eq!(margin.ratios(-10, -5), (0.0, 0.0, 0.0, POPOUT_SUBTITLE_MARGIN_RATIO));
         }
 
         #[test]
         fn margin_ratio_constant_is_a_modest_fraction() {
-            // Sanity bound: neither degenerate-zero (no fix at all) nor so
-            // large it eats most of the video (a modest strip, not a
-            // second minimize-sized inset).
+            // Sanity bound carried over from the pre-fgrt tests: neither
+            // degenerate-zero (no fix at all) nor so large it eats most of
+            // the video (a modest strip, not a second minimize-sized inset).
             assert!(POPOUT_SUBTITLE_MARGIN_RATIO > 0.0);
             assert!(POPOUT_SUBTITLE_MARGIN_RATIO < 0.4);
+        }
+
+        // ---- PlayerState round trip: set_popout_margin_ratio / margin_ratios --
+
+        #[test]
+        fn player_state_popout_margin_round_trips_through_margin_ratios() {
+            let state = PlayerState::new();
+            state
+                .set_popout_margin_ratio(Some(POPOUT_SUBTITLE_MARGIN_RATIO))
+                .unwrap();
+            let ratios = state.margin_ratios(480, 270).unwrap();
+            assert_eq!(ratios, (0.0, 0.0, 0.0, POPOUT_SUBTITLE_MARGIN_RATIO));
+        }
+
+        #[test]
+        fn player_state_popout_margin_survives_reallocation_without_drift() {
+            // The hygiene fix in one line: resizing while the pop-out margin
+            // is active must produce the SAME ratio at every allocation,
+            // unlike the old fixed-rect path where a shrinking allocation
+            // triggered `compute_margin_ratios`'s `far_side_raw < 0` WARN
+            // branch.
+            let state = PlayerState::new();
+            state
+                .set_popout_margin_ratio(Some(POPOUT_SUBTITLE_MARGIN_RATIO))
+                .unwrap();
+            let a = state.margin_ratios(920, 640).unwrap();
+            let b = state.margin_ratios(917, 640).unwrap();
+            assert_eq!(a, b);
+        }
+
+        #[test]
+        fn player_state_get_minimize_returns_none_for_popout_margin() {
+            // get_minimize() is used by player_enter_popout's mutual-
+            // exclusion guard to detect a REAL leftover minimize inset
+            // specifically — a pop-out ratio margin must not be mistaken
+            // for one.
+            let state = PlayerState::new();
+            state
+                .set_popout_margin_ratio(Some(POPOUT_SUBTITLE_MARGIN_RATIO))
+                .unwrap();
+            assert!(state.get_minimize().is_none());
+        }
+
+        #[test]
+        fn player_state_set_minimize_none_clears_popout_margin_too() {
+            // set_minimize(None) is the general "clear whatever's active"
+            // used by both player_exit_minimize and player_exit_popout.
+            let state = PlayerState::new();
+            state
+                .set_popout_margin_ratio(Some(POPOUT_SUBTITLE_MARGIN_RATIO))
+                .unwrap();
+            assert!(state.margin_ratios(480, 270).is_some());
+            state.set_minimize(None).unwrap();
+            assert!(state.margin_ratios(480, 270).is_none());
         }
     }
 
@@ -2591,6 +2840,131 @@ mod tests {
             // no-op unmaximize() plus the remap, not skipped entirely.
             let d = decide_tile_break_strategy(WindowState::LEFT_TILED | WindowState::MAXIMIZED);
             assert_eq!(d, TileBreakStrategy::BreakTile);
+        }
+    }
+
+    // ---- PlayerState::pre_popout_was_tiled (prexu-fgrt) --------------------
+    //
+    // `probe_and_break_tile` itself needs a live GTK window and is exercised
+    // manually/on hardware (like `find_monitor_by_name`'s Win32 equivalent
+    // above); these tests cover the pure state-transition contract
+    // `player_enter_popout`/`player_exit_popout` rely on: a `Some(bool)`
+    // round-trips through exactly one take, and an unpaired exit (or a
+    // probe that never ran) treats "never recorded" the same as "was not
+    // tiled" — mirroring `pre_popout_maximized`'s existing `unwrap_or(false)`
+    // contract exactly.
+    #[cfg(target_os = "linux")]
+    mod pre_popout_was_tiled_state {
+        use crate::player::PlayerState;
+
+        #[test]
+        fn starts_none() {
+            let state = PlayerState::new();
+            assert!(state.pre_popout_was_tiled.lock().unwrap().is_none());
+        }
+
+        #[test]
+        fn round_trips_true_through_a_single_take() {
+            let state = PlayerState::new();
+            *state.pre_popout_was_tiled.lock().unwrap() = Some(true);
+            let taken = state.pre_popout_was_tiled.lock().unwrap().take();
+            assert_eq!(taken, Some(true));
+            assert!(state.pre_popout_was_tiled.lock().unwrap().is_none());
+        }
+
+        #[test]
+        fn round_trips_false_through_a_single_take() {
+            let state = PlayerState::new();
+            *state.pre_popout_was_tiled.lock().unwrap() = Some(false);
+            let taken = state.pre_popout_was_tiled.lock().unwrap().take();
+            assert_eq!(taken, Some(false));
+        }
+
+        #[test]
+        fn unpaired_exit_treats_never_recorded_as_not_tiled() {
+            // Mirrors player_exit_popout's `.unwrap_or(false)` — an exit
+            // called without a prior enter (or a probe that failed/timed
+            // out, per probe_and_break_tile's conservative `false` default)
+            // must take the normal (non-tiled) restore path, not panic or
+            // spuriously trigger the was-tiled branch.
+            let state = PlayerState::new();
+            let was_tiled = state
+                .pre_popout_was_tiled
+                .lock()
+                .ok()
+                .and_then(|mut t| t.take())
+                .unwrap_or(false);
+            assert!(!was_tiled);
+        }
+    }
+
+    // ---- schedule_popout_exit_resize_retry reuses decide_popout_resize_retry ---
+    //
+    // schedule_popout_exit_resize_retry itself needs a live GTK main loop
+    // (same as schedule_popout_resize_retry) and is not directly unit-
+    // testable, but it is a thin dispatch wrapper around the ALREADY pure
+    // and tested `decide_popout_resize_retry` — see the `popout_resize_retry`
+    // tests above, which cover the Satisfied/Retry/GiveUp decision this
+    // reuses verbatim for the exit path. This test just documents/locks in
+    // that reuse so a future refactor can't silently fork the exit path onto
+    // different (untested) decision logic.
+    #[cfg(target_os = "linux")]
+    mod exit_resize_retry_reuses_enter_decision {
+        use super::super::*;
+
+        #[test]
+        fn exit_and_enter_share_the_same_retry_budget_constants() {
+            // Both schedule_popout_resize_retry (enter) and
+            // schedule_popout_exit_resize_retry (exit) are parameterised by
+            // the SAME POPOUT_RESIZE_RETRY_MAX_ATTEMPTS /
+            // POPOUT_RESIZE_RETRY_INTERVAL constants — asserting this here
+            // means a change to one path's budget is visibly a change to
+            // both, not a silent divergence.
+            assert_eq!(POPOUT_RESIZE_RETRY_MAX_ATTEMPTS, 3);
+            assert_eq!(
+                POPOUT_RESIZE_RETRY_INTERVAL,
+                std::time::Duration::from_millis(200)
+            );
+        }
+
+        #[test]
+        fn decide_popout_resize_retry_satisfied_on_stash_target_match() {
+            // The exit path's "requested" is the pre-popout stash size
+            // rather than enter's persisted popout size, but the decision
+            // function is size-agnostic — a match is Satisfied regardless
+            // of which geometry the caller is verifying.
+            let stash = (2010, 2250);
+            let d = decide_popout_resize_retry(stash, stash, 1, POPOUT_RESIZE_RETRY_MAX_ATTEMPTS);
+            assert_eq!(d, PopoutResizeRetryDecision::Satisfied);
+        }
+
+        #[test]
+        fn decide_popout_resize_retry_retries_on_the_hardware_repro_intermediate_size() {
+            // Hardware-observed intermediate size (2100x2340) does not match
+            // the stash target (2010x2250) — must retry while attempts
+            // remain, exactly as the enter-side repro does for its own
+            // stale-size case.
+            let stash = (2010, 2250);
+            let intermediate = (2100, 2340);
+            let d = decide_popout_resize_retry(stash, intermediate, 1, POPOUT_RESIZE_RETRY_MAX_ATTEMPTS);
+            assert_eq!(d, PopoutResizeRetryDecision::Retry);
+        }
+
+        #[test]
+        fn decide_popout_resize_retry_gives_up_at_the_settled_tiled_content_size() {
+            // If the window has already drifted to the tiled content size
+            // (1920x2112) by the final attempt, the loop gives up rather
+            // than looping forever — matching the module doc's honest
+            // caveat that this cannot force convergence within the budget.
+            let stash = (2010, 2250);
+            let settled = (1920, 2112);
+            let d = decide_popout_resize_retry(
+                stash,
+                settled,
+                POPOUT_RESIZE_RETRY_MAX_ATTEMPTS,
+                POPOUT_RESIZE_RETRY_MAX_ATTEMPTS,
+            );
+            assert_eq!(d, PopoutResizeRetryDecision::GiveUp);
         }
     }
 }

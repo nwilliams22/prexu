@@ -732,10 +732,12 @@ fn apply_margin_ratios(comp: &Compositor, ratios: (f64, f64, f64, f64)) {
     );
 }
 
-/// Recompute margins from the current `PlayerState::get_minimize()` inset and
-/// the GLArea's CURRENT logical allocation, then apply them to mpv. Called by
-/// `player_enter_minimize` / `player_update_mini_geometry` after they store
-/// the new `MinimizeState`.
+/// Recompute margins from the current `PlayerState::margin_ratios()` (either
+/// the in-window minimize inset OR the pop-out's bottom-ratio margin — see
+/// `player::MarginState`, prexu-fgrt) against the GLArea's CURRENT logical
+/// allocation, then apply them to mpv. Called by `player_enter_minimize` /
+/// `player_update_mini_geometry` / `player_enter_popout` after they store the
+/// new margin state.
 ///
 /// Dispatches onto the GTK main thread and blocks (bounded by a timeout) so
 /// the command stays synchronous — mirroring the Windows `resync_host` call,
@@ -750,17 +752,16 @@ pub(crate) fn apply_margins_now(app: &AppHandle) {
             let _ = tx.send(());
             return;
         };
-        let Some(mini) = app2.state::<PlayerState>().get_minimize() else {
-            log::debug!("[player:linux] apply_margins_now: no minimize state, skipping");
+        let w = comp.gl_area.allocated_width();
+        let h = comp.gl_area.allocated_height();
+        let Some(ratios) = app2.state::<PlayerState>().margin_ratios(w, h) else {
+            log::debug!("[player:linux] apply_margins_now: no margin state, skipping");
             let _ = tx.send(());
             return;
         };
-        let w = comp.gl_area.allocated_width();
-        let h = comp.gl_area.allocated_height();
-        let ratios = crate::player::commands::minimize::compute_margin_ratios(w, h, mini);
         log::info!(
-            "[player:linux] apply_margins_now: allocation={w}x{h} corner={:?} ratios={:?}",
-            mini.corner, ratios
+            "[player:linux] apply_margins_now: allocation={w}x{h} ratios={:?}",
+            ratios
         );
         apply_margin_ratios(&comp, ratios);
         let _ = tx.send(());
@@ -910,24 +911,27 @@ fn wire_gl_area(comp: &Rc<Compositor>) {
     // current frame at the new allocation instead of leaving stale content.
     //
     // Also recompute + re-apply video-margin-ratio-* here (prexu-axj4.5):
-    // the mini inset is a FIXED px rect, so its ratios of the surface change
-    // on every resize while minimized — without this the mini region would
-    // drift out of the requested corner as soon as the user resized the main
-    // window. `get_minimize()` returns `None` when not minimized, so this is
-    // a no-op during normal (non-mini) playback. Runs on the GTK main thread
-    // (this is a GTK signal handler) — panic-free per the module invariant:
-    // `weak.upgrade()` early-returns if the compositor is gone, and
-    // `apply_margin_ratios` itself uses `try_borrow`.
+    // the minimize inset is a FIXED px rect, so its ratios of the surface
+    // change on every resize while minimized — without this the mini region
+    // would drift out of the requested corner as soon as the user resized
+    // the main window. `margin_ratios()` returns `None` when no margin is
+    // active, so this is a no-op during normal playback. For the pop-out's
+    // bottom-ratio margin (prexu-fgrt), the ratio is independent of `w`/`h`
+    // entirely — see `player::MarginState::PopoutBottomRatio` — so a resize
+    // here can never drift it out of sync or warn, unlike the fixed-rect
+    // minimize case. Runs on the GTK main thread (this is a GTK signal
+    // handler) — panic-free per the module invariant: `weak.upgrade()`
+    // early-returns if the compositor is gone, and `apply_margin_ratios`
+    // itself uses `try_borrow`.
     {
         let weak = Rc::downgrade(comp);
         comp.gl_area.connect_resize(move |area, w, h| {
             log::debug!("[player:linux] GLArea resize {w}x{h} — queueing repaint");
             area.queue_render();
             let Some(c) = weak.upgrade() else { return };
-            if let Some(mini) = c.app.state::<PlayerState>().get_minimize() {
-                let ratios = crate::player::commands::minimize::compute_margin_ratios(w, h, mini);
+            if let Some(ratios) = c.app.state::<PlayerState>().margin_ratios(w, h) {
                 log::debug!(
-                    "[player:linux] resize while minimized — recomputed ratios={:?}",
+                    "[player:linux] resize while margin active — recomputed ratios={:?}",
                     ratios
                 );
                 apply_margin_ratios(&c, ratios);

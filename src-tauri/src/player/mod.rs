@@ -157,6 +157,23 @@ pub struct PlayerState {
     /// maximized-toplevel restriction.
     #[cfg(target_os = "linux")]
     pub(crate) pre_popout_maximized: Mutex<Option<bool>>,
+    /// True if the main window was edge-tiled immediately before
+    /// `player_enter_popout` broke the tile via an unmap/remap of the
+    /// toplevel (prexu-7xxx tile-break, PR #77 — see `commands::popout`'s
+    /// `probe_and_break_tile`). `None` when not currently in pop-out (mirrors
+    /// `pre_popout_maximized`).
+    ///
+    /// Surfaced for `player_exit_popout` (prexu-fgrt): a hardware log showed
+    /// the main window passing through THREE sizes over ~4s on exit from a
+    /// previously-tiled pop-out, rather than landing in one configure like
+    /// the non-tiled case. A window that just went through the hide/show
+    /// remap is "fresh" for Wayland configure-negotiation purposes the same
+    /// way a newly created window is, so exit mirrors enter's own
+    /// resize-before-decorations ordering and bounded verify-and-retry loop
+    /// (prexu-rmm7) for this case specifically — see `commands::popout`'s
+    /// module doc "Exit settling" section for the full evidence trail.
+    #[cfg(target_os = "linux")]
+    pub(crate) pre_popout_was_tiled: Mutex<Option<bool>>,
     /// Latched on `WindowEvent::Focused(false)`, consumed on the next
     /// `WindowEvent::Focused(true)`. Gates `reassert_host_on_focus`
     /// so the host SetWindowPos storm only fires on an actual
@@ -175,15 +192,27 @@ pub struct PlayerState {
     /// own route-exit report; `report_stopped_on_close` takes it (one-shot)
     /// and reads the live position from mpv.
     timeline_ctx: Mutex<Option<TimelineCtx>>,
-    /// In-window mini-region state (Linux, prexu-axj4.5). Mirrors Windows'
-    /// `GeomState::minimize` but stored directly on `PlayerState` since Linux
-    /// has no `GeomState`/host-geometry-throttle machinery — GTK drives
-    /// resize directly and margins are recomputed live against the current
-    /// GLArea allocation (see `linux_compositor`'s GLArea `resize` handler
-    /// and `commands::minimize::apply_margins_now`). `None` when not
-    /// minimized.
+    /// Active `video-margin-ratio-*` application (Linux, prexu-axj4.5 /
+    /// prexu-v45v / prexu-fgrt). Mirrors Windows' `GeomState::minimize` but
+    /// stored directly on `PlayerState` since Linux has no `GeomState`/
+    /// host-geometry-throttle machinery — GTK drives resize directly and
+    /// margins are recomputed live against the current GLArea allocation
+    /// (see `linux_compositor`'s GLArea `resize` handler and
+    /// `commands::minimize::apply_margins_now`). `None` when no margin is
+    /// active.
+    ///
+    /// Holds a `MarginState` rather than a bare `MinimizeState` (prexu-fgrt)
+    /// because two structurally different callers share this one slot: the
+    /// in-window minimize corner-inset (a fixed-pixel rect whose margins DO
+    /// need recomputing against the live allocation) and the pop-out's
+    /// subtitle-safe bottom strip (a constant ratio that never depended on
+    /// the allocation at all — see `MarginState::PopoutBottomRatio`).
+    /// Representing the latter as a fake `MinimizeState` rect frozen to
+    /// whatever size the pop-out was at enter time caused stale-rect drift
+    /// and WARN spam on every resize once the window no longer matched that
+    /// frozen size.
     #[cfg(target_os = "linux")]
-    linux_minimize: Mutex<Option<MinimizeState>>,
+    linux_margin: Mutex<Option<MarginState>>,
     /// Notification primitive shared between the window-event handler and the
     /// long-lived trailing-edge flusher task (prexu-bgz.24). The handler calls
     /// `notify_one()` when it wins the `claim_trailing_schedule` race; the
@@ -233,18 +262,81 @@ pub enum MinimizeCorner {
 ///   DPI changes (`WindowEvent::ScaleFactorChanged`) recompute the host rect
 ///   at the new scale without re-firing `player_enter_minimize` from the
 ///   frontend.
-/// - **Linux** (prexu-axj4.5): stored in `PlayerState::linux_minimize` and
-///   converted into `video-margin-ratio-*` fractions against the GtkGLArea's
-///   current logical allocation by `commands::minimize::compute_margin_ratios`.
-///   GTK allocations are already logical units, so no DPI conversion is
-///   needed there; margins are simply recomputed whenever the allocation
-///   changes (see the GLArea `resize` handler in `linux_compositor`).
+/// - **Linux** (prexu-axj4.5): stored in `PlayerState::linux_margin` (wrapped
+///   in `MarginState::Minimize`) and converted into `video-margin-ratio-*`
+///   fractions against the GtkGLArea's current logical allocation by
+///   `commands::minimize::compute_margin_ratios`. GTK allocations are already
+///   logical units, so no DPI conversion is needed there; margins are simply
+///   recomputed whenever the allocation changes (see the GLArea `resize`
+///   handler in `linux_compositor`). This recomputation is correct BECAUSE
+///   the rect it represents has a fixed pixel SIZE — as the window resizes,
+///   the far-side margin has to re-proportion so the rect keeps that size.
 #[derive(Debug, Clone, Copy)]
 pub struct MinimizeState {
     pub width: u32,
     pub height: u32,
     pub padding: u32,
     pub corner: MinimizeCorner,
+}
+
+/// The `video-margin-ratio-*` application `PlayerState::linux_margin`
+/// currently holds (Linux only, prexu-fgrt). Two structurally different
+/// margin sources share the one storage slot:
+///
+/// - `Minimize` — the in-window minimize corner inset: a FIXED-PIXEL rect
+///   (`MinimizeState`). Its ratios must be recomputed against the LIVE
+///   GtkGLArea allocation on every resize (`commands::minimize::
+///   compute_margin_ratios`) because the rect's SIZE is what's fixed — the
+///   far-side margin has to grow/shrink so the rect keeps that size as the
+///   window resizes.
+/// - `PopoutBottomRatio` — the pop-out's subtitle-safe bottom strip
+///   (prexu-v45v): a CONSTANT fraction of the window height. Unlike the
+///   minimize case, this ratio has never depended on the window's actual
+///   size and does not need the live allocation to resolve — `ratios()`
+///   below returns it directly with zero left/right/top margin.
+///
+/// Before this split (see PR #82's `compute_popout_subtitle_margin_state`),
+/// the pop-out case was represented as a fake `MinimizeState` rect frozen to
+/// whatever size the pop-out happened to be resized to at enter time. Every
+/// subsequent GTK allocation during a user edge-resize then recomputed
+/// against that STALE rect via the fixed-pixel formula above, which:
+/// - logged a `compute_margin_ratios` WARN on every allocation once the live
+///   window no longer matched the frozen rect (dozens per drag gesture), and
+/// - on a second pop-out enter, could transiently produce badly wrong ratios
+///   when `apply_margins_now` ran against a not-yet-resized allocation,
+///   self-correcting only once the window caught up.
+///
+/// Storing the ratio-native intent directly (this enum) makes both classes
+/// of bug structurally impossible for the pop-out case: there is no stored
+/// pixel rect to go stale, and no allocation-dependent math to warn about.
+#[derive(Debug, Clone, Copy)]
+#[cfg(target_os = "linux")]
+pub(crate) enum MarginState {
+    Minimize(MinimizeState),
+    PopoutBottomRatio(f64),
+}
+
+#[cfg(target_os = "linux")]
+impl MarginState {
+    /// Resolve to the four `video-margin-ratio-*` fractions (left, right,
+    /// top, bottom) for the given LIVE GtkGLArea logical allocation. Pure —
+    /// the mpv property dispatch happens in
+    /// `linux_compositor::apply_margin_ratios`.
+    ///
+    /// `Minimize` needs the allocation (fixed-rect math, see the enum doc);
+    /// `PopoutBottomRatio` does not — its ratio is already the answer,
+    /// independent of `window_logical_w`/`window_logical_h`, which is the
+    /// whole point of representing it this way.
+    pub(crate) fn ratios(&self, window_logical_w: i32, window_logical_h: i32) -> (f64, f64, f64, f64) {
+        match self {
+            MarginState::Minimize(mini) => crate::player::commands::minimize::compute_margin_ratios(
+                window_logical_w,
+                window_logical_h,
+                *mini,
+            ),
+            MarginState::PopoutBottomRatio(ratio) => (0.0, 0.0, 0.0, *ratio),
+        }
+    }
 }
 
 struct Inner {
@@ -277,11 +369,13 @@ impl PlayerState {
             pre_popout_geometry: Mutex::new(None),
             #[cfg(target_os = "linux")]
             pre_popout_maximized: Mutex::new(None),
+            #[cfg(target_os = "linux")]
+            pre_popout_was_tiled: Mutex::new(None),
             #[cfg(target_os = "windows")]
             pending_focus_reassert: AtomicBool::new(false),
             timeline_ctx: Mutex::new(None),
             #[cfg(target_os = "linux")]
-            linux_minimize: Mutex::new(None),
+            linux_margin: Mutex::new(None),
             #[cfg(target_os = "windows")]
             flusher_notify: Arc::new(Notify::new()),
             #[cfg(target_os = "windows")]
@@ -345,16 +439,17 @@ impl PlayerState {
     }
 
     /// Linux equivalent of the Windows `clear_minimize_snapshot` above: drops
-    /// any leftover in-window mini state (prexu-axj4.5) so a fresh
-    /// `ensure_init` after an exit-while-minimized does not carry stale
+    /// any leftover margin state (in-window minimize inset OR pop-out
+    /// bottom-ratio, prexu-axj4.5 / prexu-fgrt) so a fresh `ensure_init`
+    /// after an exit-while-minimized/popped-out does not carry stale
     /// `video-margin-ratio-*` values into the next playback session.
     #[cfg(target_os = "linux")]
     pub(crate) fn clear_minimize_snapshot(&self) -> bool {
-        match self.linux_minimize.lock() {
+        match self.linux_margin.lock() {
             Ok(mut g) => {
                 let had = g.is_some();
                 if had {
-                    log::info!("[player:linux] clearing leftover minimize snapshot on teardown");
+                    log::info!("[player:linux] clearing leftover margin snapshot on teardown");
                     *g = None;
                 }
                 had
@@ -363,24 +458,63 @@ impl PlayerState {
         }
     }
 
-    /// Write the minimize state (Linux, prexu-axj4.5). Used by the in-window
-    /// mini commands (`commands::minimize`) to store the desired inset;
-    /// consumed by `apply_margins_now` and the GLArea `resize` handler in
-    /// `linux_compositor` to recompute margins whenever the window size
-    /// changes while minimized.
+    /// Write the in-window minimize corner-inset state (Linux, prexu-axj4.5).
+    /// Used by the in-window mini commands (`commands::minimize`) to store
+    /// the desired inset; consumed by `apply_margins_now` and the GLArea
+    /// `resize` handler in `linux_compositor` (via `margin_ratios`) to
+    /// recompute margins whenever the window size changes while minimized.
+    ///
+    /// `Some(state)` wraps it in `MarginState::Minimize`; `None` clears
+    /// `linux_margin` unconditionally regardless of which variant (if any)
+    /// was active — this is also how `commands::popout` clears its OWN
+    /// `PopoutBottomRatio` margin on exit (pop-out and minimize are mutually
+    /// exclusive, see both modules' enter commands).
     #[cfg(target_os = "linux")]
     pub(crate) fn set_minimize(&self, state: Option<MinimizeState>) -> Result<(), String> {
-        self.linux_minimize
+        self.linux_margin
             .lock()
-            .map(|mut g| *g = state)
-            .map_err(|_| "minimize lock poisoned".to_string())
+            .map(|mut g| *g = state.map(MarginState::Minimize))
+            .map_err(|_| "margin lock poisoned".to_string())
     }
 
-    /// Read the current minimize state (Linux, prexu-axj4.5). `None` when
-    /// not minimized.
+    /// Read the current in-window minimize corner-inset state (Linux,
+    /// prexu-axj4.5). Returns `None` both when no margin is active AND when
+    /// the active margin is a pop-out `PopoutBottomRatio` — callers use this
+    /// specifically to detect a REAL leftover minimize inset (e.g.
+    /// `player_enter_popout`'s mutual-exclusion guard). To check "is ANY
+    /// margin active, regardless of variant" instead, use
+    /// `margin_ratios(..).is_some()`.
     #[cfg(target_os = "linux")]
     pub(crate) fn get_minimize(&self) -> Option<MinimizeState> {
-        self.linux_minimize.lock().ok().and_then(|g| *g)
+        self.linux_margin.lock().ok().and_then(|g| match *g {
+            Some(MarginState::Minimize(mini)) => Some(mini),
+            _ => None,
+        })
+    }
+
+    /// Write the pop-out subtitle-safe bottom-ratio margin (Linux,
+    /// prexu-v45v/prexu-fgrt). `Some(ratio)` wraps it in
+    /// `MarginState::PopoutBottomRatio`; `None` clears `linux_margin`
+    /// unconditionally (same "clear wins outright" contract as
+    /// `set_minimize(None)` above).
+    #[cfg(target_os = "linux")]
+    pub(crate) fn set_popout_margin_ratio(&self, ratio: Option<f64>) -> Result<(), String> {
+        self.linux_margin
+            .lock()
+            .map(|mut g| *g = ratio.map(MarginState::PopoutBottomRatio))
+            .map_err(|_| "margin lock poisoned".to_string())
+    }
+
+    /// Resolve the four `video-margin-ratio-*` fractions for the current
+    /// margin state (whichever variant is active) against a LIVE GtkGLArea
+    /// logical allocation. `None` when no margin is active. The single entry
+    /// point `linux_compositor` uses (`apply_margins_now` and the GLArea
+    /// `resize` handler) so it never has to know which kind of margin is in
+    /// effect.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn margin_ratios(&self, window_logical_w: i32, window_logical_h: i32) -> Option<(f64, f64, f64, f64)> {
+        let mini = self.linux_margin.lock().ok().and_then(|g| *g)?;
+        Some(mini.ratios(window_logical_w, window_logical_h))
     }
 
     /// True when `ensure_init` has run and `destroy` has not. Used by
