@@ -28,6 +28,14 @@
 //! - `set_always_on_top` (`gtk_window_set_keep_above`) is ignored by most
 //!   Wayland compositors; users can pin the window compositor-side (e.g.
 //!   GNOME's window menu → Always on Top).
+//! - A maximized main window and the app's 800x600 min-size both silently
+//!   block the Wayland shrink (prexu-6qi5.4): GTK no-ops `gtk_window_resize`
+//!   on a maximized toplevel, and `gtk_window_set_geometry_hints`'
+//!   `GDK_HINT_MIN_SIZE` becomes an `xdg_toplevel.set_min_size` floor that
+//!   clamps both programmatic resizes and edge-drag resizes below it. `enter`
+//!   therefore unmaximizes (recording the prior state) and lowers the
+//!   min-size to a small pop-out floor before resizing; `exit` restores the
+//!   min-size, the pre-popout geometry, and re-maximizes if it was maximized.
 //!
 //! Size + decoration changes work on both backends, so the popout is fully
 //! usable on Wayland — it just floats without OS-level pinning.
@@ -61,6 +69,34 @@ const POPOUT_KEY_MONITOR: &str = "popout.monitor";
 const POPOUT_DEFAULT_CORNER: &str = "bottom-right";
 const POPOUT_DEFAULT_WIDTH: u32 = 480;
 const POPOUT_DEFAULT_HEIGHT: u32 = 270;
+
+/// Floor applied to the main window's min-size constraint while pop-out is
+/// active (Linux only, prexu-6qi5.4). `tauri.conf.json`'s main window
+/// `minWidth`/`minHeight` (800x600) is enforced by GTK via
+/// `gtk_window_set_geometry_hints` + `GDK_HINT_MIN_SIZE` — on Wayland this
+/// becomes an `xdg_toplevel.set_min_size` request, a real compositor-side
+/// floor that clamps BOTH `set_size` calls and interactive edge-drag resizes
+/// (see tao's `platform_impl::linux::util::set_size_constraints`). The
+/// default pop-out size (480x270) is well under 800x600, so without lifting
+/// this floor first the compositor silently clamps the shrink request back
+/// up to the main window's minimum. A small non-zero floor (rather than no
+/// floor at all) keeps the mini player from being drag-resized down to a
+/// degenerate size.
+#[cfg(target_os = "linux")]
+const POPOUT_MIN_WIDTH: u32 = 200;
+#[cfg(target_os = "linux")]
+const POPOUT_MIN_HEIGHT: u32 = 120;
+
+/// Must match `src-tauri/tauri.conf.json`'s main window `minWidth`/
+/// `minHeight`. `tauri::WebviewWindow` exposes `set_min_size` but no
+/// corresponding read accessor, so the floor lifted for pop-out (see
+/// `POPOUT_MIN_WIDTH`/`POPOUT_MIN_HEIGHT` above) is restored to these
+/// hardcoded values on exit rather than a captured live value. Keep these in
+/// sync with tauri.conf.json if that ever changes.
+#[cfg(target_os = "linux")]
+const MAIN_MIN_WIDTH: u32 = 800;
+#[cfg(target_os = "linux")]
+const MAIN_MIN_HEIGHT: u32 = 600;
 
 /// Thin accessor for the pop-out store keys. Wraps the key-string
 /// constants so call sites name what they're reading/writing rather than
@@ -954,13 +990,37 @@ pub async fn player_enter_popout(
         crate::player::linux_compositor::clear_margins_now(&app);
     }
 
+    // Unmaximize BEFORE stashing/resizing (prexu-6qi5.4): a maximized GTK
+    // toplevel ignores `gtk_window_resize` outright, and tao's own edge-drag
+    // hit-test (`platform_impl::linux::event_loop`, `connect_button_press_event`)
+    // explicitly requires `!window.is_maximized()` before it will start an
+    // interactive resize. Without this, a maximized main window (very common
+    // — many WMs/users default to it) stays fullscreen-sized in pop-out and
+    // edge-drag resize is a silent no-op. Recorded so exit_popout can restore
+    // the maximized state after putting the pre-popout geometry back.
+    let was_maximized = main.is_maximized().unwrap_or_else(|e| {
+        log::warn!("[player:popout] is_maximized query failed, assuming false: {e}");
+        false
+    });
+    if was_maximized {
+        log::debug!("[player:popout] main window is maximized, unmaximizing for popout resize");
+        if let Err(e) = main.unmaximize() {
+            log::warn!("[player:popout] unmaximize failed: {e}");
+        }
+    }
+    if let Ok(mut m) = state.pre_popout_maximized.lock() {
+        *m = Some(was_maximized);
+    }
+
     // Stash the current geometry for exit_popout. inner_size (client area)
     // round-trips symmetrically through set_size; outer_size would grow the
     // window by the frame extents on every enter/exit cycle under X11
     // server-side decorations (same bug class as the Win11 ~7px drift the
     // Windows path solves with GetWindowRect). On Wayland the position is
     // meaningless, but the restore's set_position is a no-op there too, so
-    // stashing whatever the backend reports is harmless.
+    // stashing whatever the backend reports is harmless. Captured AFTER the
+    // unmaximize above so a previously-maximized window stashes its restored
+    // (windowed) geometry rather than the full-screen maximized rect.
     let pos = main.outer_position().map(|p| (p.x, p.y)).unwrap_or_else(|e| {
         log::warn!("[player:popout] outer_position for stash failed: {e}");
         (0, 0)
@@ -989,6 +1049,23 @@ pub async fn player_enter_popout(
     }
     main.set_decorations(false)
         .map_err(|e| format!("popout set_decorations(false) failed: {e}"))?;
+
+    // Lift the main window's min-size floor (prexu-6qi5.4) — see
+    // POPOUT_MIN_WIDTH/HEIGHT doc comment. Without this, GTK's geometry
+    // hints (the main window's configured 800x600 minimum) clamp the
+    // resize below to 800x600 regardless of the requested 480x270, and
+    // block edge-drag resize under that floor too.
+    log::debug!(
+        "[player:popout] lifting main window min-size {}x{} -> {}x{}",
+        MAIN_MIN_WIDTH, MAIN_MIN_HEIGHT, POPOUT_MIN_WIDTH, POPOUT_MIN_HEIGHT
+    );
+    if let Err(e) = main.set_min_size(Some(tauri::PhysicalSize::new(
+        POPOUT_MIN_WIDTH,
+        POPOUT_MIN_HEIGHT,
+    ))) {
+        log::warn!("[player:popout] set_min_size (popout floor) failed: {e}");
+    }
+
     main.set_size(tauri::PhysicalSize::new(w, h))
         .map_err(|e| format!("popout resize failed: {e}"))?;
     if let Err(e) = main.set_position(tauri::PhysicalPosition::new(x, y)) {
@@ -1096,6 +1173,18 @@ pub async fn player_exit_popout(
         log::warn!("[player:popout] set_always_on_top(false) failed: {e}");
     }
 
+    // Take the pre-popout maximized flag alongside the geometry stash
+    // (prexu-6qi5.4) so a stray `Some` from an unpaired enter/exit never
+    // leaks into a later session. `unwrap_or(false)` treats "never recorded"
+    // (e.g. exit called without a prior enter) the same as "was not
+    // maximized" — a plain geometry restore with no re-maximize step.
+    let was_maximized = state
+        .pre_popout_maximized
+        .lock()
+        .ok()
+        .and_then(|mut m| m.take())
+        .unwrap_or(false);
+
     let stash = state
         .pre_popout_geometry
         .lock()
@@ -1108,6 +1197,23 @@ pub async fn player_exit_popout(
         return Ok(());
     };
 
+    // Restore the main window's min-size floor (prexu-6qi5.4) before the
+    // geometry restore below, so post-exit drag-resizing below the app's
+    // normal 800x600 minimum is rejected again, matching pre-popout
+    // behaviour. See MAIN_MIN_WIDTH/HEIGHT doc comment — no runtime getter
+    // exists for the previously configured constraint, so this restores to
+    // the hardcoded values that must match tauri.conf.json.
+    log::debug!(
+        "[player:popout] restoring main window min-size to {}x{}",
+        MAIN_MIN_WIDTH, MAIN_MIN_HEIGHT
+    );
+    if let Err(e) = main.set_min_size(Some(tauri::PhysicalSize::new(
+        MAIN_MIN_WIDTH,
+        MAIN_MIN_HEIGHT,
+    ))) {
+        log::warn!("[player:popout] set_min_size (restore) failed: {e}");
+    }
+
     main.set_decorations(true)
         .map_err(|e| format!("popout set_decorations(true) failed: {e}"))?;
     main.set_size(tauri::PhysicalSize::new(w, h))
@@ -1116,6 +1222,17 @@ pub async fn player_exit_popout(
         log::warn!("[player:popout] restore set_position failed: {e}");
     }
     log::debug!("[player:popout] restored main to ({x},{y},{w}x{h})");
+
+    // Re-maximize AFTER restoring the windowed geometry above (prexu-6qi5.4)
+    // — the geometry restore becomes the "normal" size GTK remembers for a
+    // future unmaximize, and maximize() then re-enters the fullscreen state
+    // the user had before entering pop-out.
+    if was_maximized {
+        log::info!("[player:popout] re-maximizing main window (was maximized before popout)");
+        if let Err(e) = main.maximize() {
+            log::warn!("[player:popout] re-maximize failed: {e}");
+        }
+    }
 
     // Transition complete — re-arm the transparent body class (prexu-7d3).
     let _ = app.emit("player://host-window-ready", ());
