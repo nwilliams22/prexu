@@ -30,6 +30,20 @@ const DiscoverDetail = lazy(() => import("./pages/DiscoverDetail"));
 const Downloads = lazy(() => import("./pages/Downloads"));
 
 function LoadingScreen() {
+  // Instrumentation (prexu-xb3h): this is the top-level Suspense fallback
+  // for the entire <Routes> tree — if a lazy route chunk (re-)suspends
+  // (e.g. a stale dynamic import promise after an HMR chunk invalidation
+  // in dev, or an unresolved import()), this replaces AppLayout wholesale,
+  // taking the sidebar/header down with it. Logged on mount so a report of
+  // "the sidebar disappeared too" during a route transition names this as
+  // the culprit instead of the /play/*-scoped overlay in
+  // useRouteTransitionSpinner (which never touches the sidebar).
+  useEffect(() => {
+    logger.debug("router", "suspense fallback mounted: a lazy route chunk is (re-)suspending", {
+      pathname: window.location.pathname,
+    });
+  }, []);
+
   return (
     <div className="loading-screen">
       <div className="loading-spinner" />

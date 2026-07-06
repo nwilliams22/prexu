@@ -2,27 +2,38 @@ import { useEffect, useRef, useState } from "react";
 import { logger } from "../services/logger";
 
 /**
- * Route-transition spinner — covers the gap between a route change and the
- * destination page's first paint.
+ * Route-transition spinner — covers the gap between leaving the PlayBridge
+ * route and the destination page's first paint.
  *
- * Two distinct cases (prexu-0szx.8):
+ * (prexu-xb3h) This used to also cover "every other in-app navigation"
+ * (Dashboard -> Library -> ItemDetail, etc.) via a 150ms pre-show delay +
+ * 300ms display ceiling, on the theory that most of those paint instantly
+ * so the delay would keep it invisible in practice. That branch was
+ * READINESS-BLIND — it is a pair of plain `setTimeout`s with no check for
+ * whether the destination has actually painted, so its "invisible in
+ * practice" premise only holds if the JS main thread stays free enough to
+ * fire those timers close to their nominal delays. It does not: each
+ * timer is scheduled relative to when the PREVIOUS one actually ran, so a
+ * congested main thread (e.g. Dashboard's own staged shelf-mounting work,
+ * see Dashboard.tsx's shelfStage — mounting ~80 PosterCards per shelf) can
+ * push both the 150ms show and the 300ms hide out by seconds. The result:
+ * pressing Back from an item detail page to the dashboard would show the
+ * dashboard, THEN an opaque spinner over it for however long the main
+ * thread stayed busy, THEN the dashboard again — with no route change,
+ * no remount, and no player-route exit involved at all.
  *
- *  1. Leaving the PlayBridge route (`/play/:ratingKey`). PlayBridge renders
- *     nothing and immediately replaces history with wherever playback was
- *     launched from (see PlayBridge.tsx), while the player overlay is still
- *     spinning up with no frame on screen yet. The destination page
- *     underneath needs a reliable, IMMEDIATE cover — shown with no
- *     pre-show delay, held for PLAYER_EXIT_SPINNER_MS. This is the one
- *     case the effect's original 600ms ceiling existed for.
+ * Every in-app destination (Dashboard, LibraryView, ItemDetail,
+ * ActorDetail, DiscoverDetail, ...) already renders its own skeleton/
+ * loading UI, so this overlay was purely redundant for those cases on top
+ * of being actively harmful under load. Fix: this hook now ONLY covers the
+ * PlayBridge exit gap.
  *
- *  2. Every other in-app navigation (Dashboard -> Library -> ItemDetail,
- *     etc.). Most of these paint instantly — the destination's lazy chunk
- *     and data are usually already cached — so unconditionally covering
- *     every navigation with an opaque overlay for hundreds of ms flashed a
- *     spinner over content that was already on screen. These get a short
- *     pre-show delay before the spinner is allowed to appear at all (so a
- *     fast/cached navigation never shows anything) and a shorter display
- *     ceiling once it does.
+ * Leaving `/play/:ratingKey`: PlayBridge renders nothing and immediately
+ * replaces history with wherever playback was launched from (see
+ * PlayBridge.tsx), while the player overlay is still spinning up with no
+ * frame on screen yet. The destination page underneath needs a reliable,
+ * IMMEDIATE cover — shown with no pre-show delay, held for
+ * PLAYER_EXIT_SPINNER_MS.
  *
  * Note: the player overlay itself (Player.tsx via PlayerOverlay) is
  * rendered outside the route tree and does not change `pathname` when it
@@ -31,8 +42,6 @@ import { logger } from "../services/logger";
  * route) does.
  */
 export const PLAYER_EXIT_SPINNER_MS = 600;
-export const REGULAR_NAV_PRE_SHOW_DELAY_MS = 150;
-export const REGULAR_NAV_SPINNER_MS = 300;
 
 const PLAYER_ROUTE_PREFIX = "/play/";
 
@@ -48,29 +57,35 @@ export function useRouteTransitionSpinner(pathname: string): boolean {
       previousPath.startsWith(PLAYER_ROUTE_PREFIX) && previousPath !== pathname;
 
     if (leavingPlayerRoute) {
-      logger.debug("layout", "transition spinner: player-route exit", {
+      logger.debug("layout", "transition spinner: activated (player-route exit)", {
         from: previousPath,
         to: pathname,
+        holdMs: PLAYER_EXIT_SPINNER_MS,
       });
       setVisible(true);
-      const hideId = window.setTimeout(() => setVisible(false), PLAYER_EXIT_SPINNER_MS);
+      const hideId = window.setTimeout(() => {
+        logger.debug("layout", "transition spinner: deactivated (player-exit hold elapsed)", {
+          from: previousPath,
+          to: pathname,
+        });
+        setVisible(false);
+      }, PLAYER_EXIT_SPINNER_MS);
       return () => window.clearTimeout(hideId);
     }
 
-    // Reset to a clean slate for every other transition so a stale
-    // "visible" from a prior transition doesn't bleed into this one.
+    // Every other transition (including detail -> dashboard back-nav) never
+    // activates this overlay — destination pages own their own loading UI.
+    // Reset to a clean slate so a stale "visible" from a still-pending
+    // player-exit hold doesn't bleed into this navigation.
+    if (visible) {
+      logger.debug("layout", "transition spinner: deactivated (non-player nav, not scoped)", {
+        from: previousPath,
+        to: pathname,
+      });
+    }
     setVisible(false);
-
-    let hideId: ReturnType<typeof window.setTimeout> | undefined;
-    const showId = window.setTimeout(() => {
-      setVisible(true);
-      hideId = window.setTimeout(() => setVisible(false), REGULAR_NAV_SPINNER_MS);
-    }, REGULAR_NAV_PRE_SHOW_DELAY_MS);
-
-    return () => {
-      window.clearTimeout(showId);
-      if (hideId !== undefined) window.clearTimeout(hideId);
-    };
+    return undefined;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `visible` is read only to log; including it would re-fire this effect on every visibility flip
   }, [pathname]);
 
   return visible;
