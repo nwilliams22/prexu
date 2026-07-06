@@ -577,5 +577,26 @@ describe("Dashboard", () => {
         expect.objectContaining({ ms: expect.any(Number) }),
       );
     });
+
+    // prexu-xb3h: PR #71's per-section stage counter must never regress to
+    // a bare full-page spinner at any point in the deck -> movies -> shows
+    // sequence — every stage renders either per-section skeleton rows or
+    // real content, never a "loading-screen"/centered-spinner takeover of
+    // the whole component.
+    it("never renders a full-page spinner at any shelf stage, including the very first commit", () => {
+      mockUseDashboard.mockReturnValue(warmCacheData());
+      const { container } = renderDashboard({ advanceStages: false });
+
+      expect(container.querySelector(".loading-screen")).not.toBeInTheDocument();
+
+      act(() => flushRaf()); // deck
+      expect(container.querySelector(".loading-screen")).not.toBeInTheDocument();
+
+      act(() => flushRaf()); // movies
+      expect(container.querySelector(".loading-screen")).not.toBeInTheDocument();
+
+      act(() => flushRaf()); // shows
+      expect(container.querySelector(".loading-screen")).not.toBeInTheDocument();
+    });
   });
 });

@@ -2,8 +2,6 @@ import { act, renderHook } from "@testing-library/react";
 import {
   useRouteTransitionSpinner,
   PLAYER_EXIT_SPINNER_MS,
-  REGULAR_NAV_PRE_SHOW_DELAY_MS,
-  REGULAR_NAV_SPINNER_MS,
 } from "./useRouteTransitionSpinner";
 
 vi.mock("../services/logger", () => ({
@@ -33,44 +31,49 @@ describe("useRouteTransitionSpinner", () => {
     expect(result.current).toBe(false);
 
     rerender({ pathname: "/library/1" });
-    // Still false immediately after the change — no flash for cached/fast loads.
     expect(result.current).toBe(false);
   });
 
-  it("never appears if the destination is already painted before the pre-show delay elapses", () => {
+  // prexu-xb3h: this hook used to activate a readiness-blind, timer-only
+  // overlay for every non-player-route navigation (150ms pre-show delay,
+  // 300ms display ceiling). Those timers are scheduled relative to when the
+  // PREVIOUS timer callback actually ran, so a congested main thread (e.g.
+  // Dashboard's own staged shelf-mounting work) could push both well past
+  // their nominal durations — producing a multi-second full-page overlay on
+  // an ordinary detail -> dashboard back-navigation, which this route never
+  // needs an overlay for (every destination page owns its own skeleton/
+  // loading UI). Fixed by removing that branch entirely: regular navigation
+  // must NEVER activate the overlay, no matter how long it takes.
+  it("never activates for a regular navigation, no matter how much time passes", () => {
+    const { result, rerender } = renderHook(
+      ({ pathname }) => useRouteTransitionSpinner(pathname),
+      { initialProps: { pathname: "/item/123" } },
+    );
+
+    rerender({ pathname: "/" });
+    expect(result.current).toBe(false);
+
+    // Well past the old 150ms + 300ms window — simulates a congested main
+    // thread delaying everything by seconds.
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(result.current).toBe(false);
+  });
+
+  it("never activates across a rapid sequence of regular navigations", () => {
     const { result, rerender } = renderHook(
       ({ pathname }) => useRouteTransitionSpinner(pathname),
       { initialProps: { pathname: "/" } },
     );
 
-    rerender({ pathname: "/library/1" });
-    act(() => {
-      vi.advanceTimersByTime(REGULAR_NAV_PRE_SHOW_DELAY_MS - 1);
-    });
-    expect(result.current).toBe(false);
-  });
-
-  it("shows a regular-nav spinner only after the pre-show delay, then hides after the ceiling", () => {
-    const { result, rerender } = renderHook(
-      ({ pathname }) => useRouteTransitionSpinner(pathname),
-      { initialProps: { pathname: "/" } },
-    );
-
-    rerender({ pathname: "/library/1" });
-    act(() => {
-      vi.advanceTimersByTime(REGULAR_NAV_PRE_SHOW_DELAY_MS);
-    });
-    expect(result.current).toBe(true);
-
-    act(() => {
-      vi.advanceTimersByTime(REGULAR_NAV_SPINNER_MS - 1);
-    });
-    expect(result.current).toBe(true);
-
-    act(() => {
-      vi.advanceTimersByTime(1);
-    });
-    expect(result.current).toBe(false);
+    for (const pathname of ["/library/1", "/item/5", "/search", "/"]) {
+      rerender({ pathname });
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(result.current).toBe(false);
+    }
   });
 
   it("shows immediately (no pre-show delay) when leaving a /play/ route and holds for PLAYER_EXIT_SPINNER_MS", () => {
@@ -104,19 +107,15 @@ describe("useRouteTransitionSpinner", () => {
     );
 
     rerender({ pathname: "/play/999" });
-    // Entering /play/ is a regular navigation — delayed, not immediate.
+    // Entering /play/ is a regular navigation — never activates the overlay.
     expect(result.current).toBe(false);
     act(() => {
-      vi.advanceTimersByTime(REGULAR_NAV_PRE_SHOW_DELAY_MS);
-    });
-    expect(result.current).toBe(true);
-    act(() => {
-      vi.advanceTimersByTime(REGULAR_NAV_SPINNER_MS);
+      vi.advanceTimersByTime(5000);
     });
     expect(result.current).toBe(false);
   });
 
-  it("resets stale visibility when a new navigation starts while the previous spinner is showing", () => {
+  it("resets stale visibility when a regular navigation starts while the player-exit spinner is still showing", () => {
     const { result, rerender } = renderHook(
       ({ pathname }) => useRouteTransitionSpinner(pathname),
       { initialProps: { pathname: "/play/1" } },
@@ -128,7 +127,8 @@ describe("useRouteTransitionSpinner", () => {
     expect(result.current).toBe(true); // player-exit spinner showing
 
     // A second, regular navigation starts before the player-exit spinner
-    // would have hidden itself.
+    // would have hidden itself — it must be cleared immediately, not left
+    // to bleed into the new (non-player) navigation.
     act(() => {
       rerender({ pathname: "/item/2" });
     });
