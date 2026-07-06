@@ -48,6 +48,24 @@ export function cacheGetStale<T>(key: string): { data: T; stale: boolean } | nul
   return { data: entry.data as T, stale: Date.now() - entry.timestamp > entry.ttlMs };
 }
 
+/**
+ * Age in milliseconds of an in-memory cache entry, or `null` if the entry is
+ * missing or past its own TTL. Lets stale-while-revalidate callers (e.g.
+ * useDashboard's mount-time refetch gate) apply their own "fresh enough to
+ * skip a refetch" threshold without needing the raw {@link CacheEntry} shape.
+ *
+ * Memory-only, matching {@link cacheGetStale} — callers that also rely on a
+ * localStorage-persisted entry should call {@link cacheGet} first so a disk
+ * entry gets promoted into memory before checking its age.
+ */
+export function cacheGetAge(key: string): number | null {
+  const entry = store.get(key);
+  if (!entry) return null;
+  const age = Date.now() - entry.timestamp;
+  if (age > entry.ttlMs) return null;
+  return age;
+}
+
 /** Get cached data, or null if missing/expired. Checks localStorage fallback. */
 export function cacheGet<T>(key: string): T | null {
   // Check in-memory first
