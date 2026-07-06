@@ -3,6 +3,29 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import Dashboard from "./Dashboard";
 
+// Lets a single test freeze the component at its very first commit — i.e.
+// before any passive effect runs — to assert on the two-phase mount
+// (prexu-r56j). Real `act()`/render() flushes passive effects synchronously
+// before returning, so there's no way to observe the pre-effect DOM through
+// the normal render() flow; this substitutes React's `useEffect` with a
+// version that's a no-op while the flag is set. Reading/writing a property
+// on `globalThis` (rather than a module-scope variable) sidesteps Vitest's
+// restriction on referencing outer bindings from inside a `vi.mock` factory.
+declare global {
+  // eslint-disable-next-line no-var
+  var __suppressReactEffectsForTest__: boolean | undefined;
+}
+vi.mock("react", async () => {
+  const actual = await vi.importActual<typeof import("react")>("react");
+  return {
+    ...actual,
+    useEffect: (...args: Parameters<typeof actual.useEffect>) => {
+      if (globalThis.__suppressReactEffectsForTest__) return undefined;
+      return actual.useEffect(...args);
+    },
+  };
+});
+
 vi.mock("../hooks/useAuth", () => ({
   useAuth: () => ({
     server: { uri: "https://plex.test", accessToken: "token" },
@@ -324,5 +347,73 @@ describe("Dashboard", () => {
     );
     renderDashboard();
     expect(screen.queryByText("Continue Watching")).not.toBeInTheDocument();
+  });
+
+  describe("two-phase mount (prexu-r56j)", () => {
+    it("shows skeletons on the very first commit even with a fully warm cache", () => {
+      // Warm cache: every section already has data and nothing is "loading" —
+      // pre-fix this rendered real shelves (all PosterCards) on the very
+      // first commit. Suppress useEffect so the render is frozen at that
+      // first commit, before the `shelvesReady` effect can flip it.
+      mockUseDashboard.mockReturnValue(
+        makeDashboardData({
+          onDeck: [
+            { ratingKey: "1", title: "Breaking Bad", thumb: "/t1", type: "episode" },
+          ],
+          recentMovies: [
+            { ratingKey: "10", title: "Inception", thumb: "/t10", type: "movie" },
+          ],
+          recentShows: [
+            {
+              groupKey: "20",
+              title: "Stranger Things",
+              thumb: "/t20",
+              kind: "show-group",
+              episodeCount: 3,
+              episodes: [],
+              seasonIndices: [],
+              representativeItem: {
+                ratingKey: "20",
+                title: "Stranger Things",
+                thumb: "/t20",
+                type: "show",
+              },
+            },
+          ],
+        }),
+      );
+
+      globalThis.__suppressReactEffectsForTest__ = true;
+      try {
+        renderDashboard();
+
+        // First commit must be the cheap skeleton frame, not the real shelves —
+        // this is the commit React Router's startTransition waits on.
+        expect(screen.queryAllByTestId("skeleton-card").length).toBeGreaterThan(0);
+        expect(screen.queryByText("Breaking Bad")).not.toBeInTheDocument();
+        expect(screen.queryByText("Inception")).not.toBeInTheDocument();
+        expect(screen.queryByText("Stranger Things")).not.toBeInTheDocument();
+        expect(screen.queryAllByTestId("poster-card").length).toBe(0);
+      } finally {
+        globalThis.__suppressReactEffectsForTest__ = false;
+      }
+    });
+
+    it("renders the real shelves once effects flush after the first commit", () => {
+      // Same warm-cache data as above, but this time effects run normally
+      // (no spy) — matches PR #54's existing assertions that real content
+      // renders after render()/act() settle.
+      mockUseDashboard.mockReturnValue(
+        makeDashboardData({
+          onDeck: [
+            { ratingKey: "1", title: "Breaking Bad", thumb: "/t1", type: "episode" },
+          ],
+        }),
+      );
+      renderDashboard();
+
+      expect(screen.getByText("Breaking Bad")).toBeInTheDocument();
+      expect(screen.queryAllByTestId("skeleton-card").length).toBe(0);
+    });
   });
 });

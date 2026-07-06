@@ -235,6 +235,54 @@ describe("HeroSlideshow", () => {
     expect(screen.queryByLabelText("Next slide")).not.toBeInTheDocument();
   });
 
+  it("only mounts a backdrop for the first slide on initial render (prexu-r56j)", () => {
+    // Pre-fix, every slide's backdrop (a full 1920x1080 background-image div)
+    // mounted eagerly on first render — expensive when the hero has up to
+    // 10 slides, and that render is what React Router's startTransition
+    // waits on for the whole route change to become visible.
+    const { container } = render(
+      <HeroSlideshow
+        slides={[
+          makeSlide({ ratingKey: "1", title: "First" }),
+          makeSlide({ ratingKey: "2", title: "Second" }),
+          makeSlide({ ratingKey: "3", title: "Third" }),
+          makeSlide({ ratingKey: "4", title: "Fourth" }),
+          makeSlide({ ratingKey: "5", title: "Fifth" }),
+        ]}
+      />,
+    );
+
+    // Note: jsdom expands the pagination dots' `background` shorthand into
+    // longhand properties, including a literal `background-image: none` —
+    // matching on `url(` specifically excludes those false positives.
+    const backdrops = container.querySelectorAll('[style*="background-image: url"]');
+    expect(backdrops.length).toBe(1);
+  });
+
+  it("mounts additional backdrops as slides are actually visited", () => {
+    const { container } = render(
+      <HeroSlideshow
+        slides={[
+          makeSlide({ ratingKey: "1", title: "First" }),
+          makeSlide({ ratingKey: "2", title: "Second" }),
+          makeSlide({ ratingKey: "3", title: "Third" }),
+        ]}
+      />,
+    );
+
+    expect(
+      container.querySelectorAll('[style*="background-image: url"]').length,
+    ).toBe(1);
+
+    fireEvent.click(screen.getByLabelText("Go to slide 2"));
+
+    // Slide 2 has now actually been visited, so its backdrop mounts too —
+    // slide 3 (never visited) still doesn't.
+    expect(
+      container.querySelectorAll('[style*="background-image: url"]').length,
+    ).toBe(2);
+  });
+
   it("changes slide when dot is clicked", () => {
     render(
       <HeroSlideshow

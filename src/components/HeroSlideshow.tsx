@@ -36,6 +36,34 @@ function HeroSlideshow({ slides, onDismiss, onPlay }: HeroSlideshowProps) {
   const [showArrows, setShowArrows] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Backdrops are expensive to paint (each is a full 1920x1080 image), and
+  // this component used to mount a <div> for EVERY slide up front (up to
+  // 10 for the dashboard's hero) just to get an instant opacity-crossfade
+  // between them — all of those images started downloading/decoding on the
+  // very first commit. That first commit is exactly what React Router's
+  // startTransition-wrapped navigation waits on before it can show the new
+  // route at all (see Dashboard.tsx), so paying for 10 backdrops instead of
+  // 1 directly added to the route-transition stall (prexu-r56j).
+  //
+  // Fix: only ever mount backdrop divs for slides the user has actually
+  // reached (`visitedIndices`), which starts as just the first slide. The
+  // "preload next" effect below still warms the upcoming slide's image via
+  // `new Image()` (a plain network+decode fetch, no DOM/paint cost), so by
+  // the time rotation/dot-click actually advances to it, its backdrop div
+  // mounts already-cache-warm and still crossfades smoothly against
+  // whichever slides are already visited. The only visible trade-off: the
+  // very first time a given slide is reached, it appears via a plain
+  // mount (no fade-IN) while the outgoing slide still fades out normally —
+  // once visited, a slide crossfades both ways for the rest of the mount.
+  const [visitedIndices, setVisitedIndices] = useState<Set<number>>(
+    () => new Set([0]),
+  );
+  useEffect(() => {
+    setVisitedIndices((prev) =>
+      prev.has(activeIndex) ? prev : new Set(prev).add(activeIndex),
+    );
+  }, [activeIndex]);
+
   // Preload next image
   useEffect(() => {
     if (slides.length <= 1) return;
@@ -103,18 +131,22 @@ function HeroSlideshow({ slides, onDismiss, onPlay }: HeroSlideshowProps) {
       aria-label="Featured content slideshow"
       aria-roledescription="carousel"
     >
-      {/* Backdrop images — all rendered, only active is visible */}
-      {slides.map((s, i) => (
-        <div
-          key={s.ratingKey}
-          style={{
-            ...styles.backdrop,
-            backgroundImage: `url(${s.backdropUrl})`,
-            opacity: i === activeIndex ? 1 : 0,
-          }}
-          aria-hidden={i !== activeIndex}
-        />
-      ))}
+      {/* Backdrop images — only slides actually visited so far are mounted
+          (prexu-r56j); the active one is visible, the rest are kept
+          around at opacity 0 so crossfades stay smooth on repeat visits. */}
+      {slides.map((s, i) =>
+        visitedIndices.has(i) ? (
+          <div
+            key={s.ratingKey}
+            style={{
+              ...styles.backdrop,
+              backgroundImage: `url(${s.backdropUrl})`,
+              opacity: i === activeIndex ? 1 : 0,
+            }}
+            aria-hidden={i !== activeIndex}
+          />
+        ) : null,
+      )}
 
       {/* Gradient overlay */}
       <div style={styles.gradient} />
