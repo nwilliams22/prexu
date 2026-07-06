@@ -12,6 +12,24 @@
  * Exposes an imperative `scrollToIndex(index)` API via the React 19
  * `ref` prop, so callers (e.g. AlphaJumpBar) can scroll to off-screen
  * items even when virtualization has unmounted them.
+ *
+ * ── Fixed geometry / sparse item support (prexu-6qi5.1) ──
+ *
+ * Row count (and therefore total scrollable height) is derived from
+ * `itemCount` (defaults to `items.length`), NOT from how many entries in
+ * `items` are actually populated. This is what lets a caller (e.g.
+ * LibraryView) jump straight to the bottom of a 2000-item section
+ * instantly — the virtualizer's geometry spans the whole section from the
+ * first paint, independent of what's been fetched.
+ *
+ * `items` may be a sparse-by-index array (`items[i]` is `undefined` for a
+ * not-yet-fetched position) — a fully-populated dense array (the shape
+ * every other consumer already passes) is just a special case of the same
+ * contract, so existing callers are unaffected. Unfetched slots render via
+ * `renderPlaceholder` instead of `renderItem`.
+ *
+ * `onRangeChange` fires whenever the visible (+ overscan) item range
+ * changes, letting a caller wire it to a range-driven fetch hook.
  */
 
 import {
@@ -20,6 +38,7 @@ import {
   useCallback,
   useMemo,
   useLayoutEffect,
+  useEffect,
   useImperativeHandle,
   type ReactNode,
   type Ref,
@@ -27,6 +46,7 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useBreakpoint } from "../hooks/useBreakpoint";
 import type { Breakpoint } from "../hooks/useBreakpoint";
+import { logger } from "../services/logger";
 
 export interface LibraryGridHandle {
   /** Smoothly scroll the grid to the item at the given index. */
@@ -50,10 +70,30 @@ export function findScrollAncestor(el: HTMLElement | null): Element {
 }
 
 interface VirtualizedLibraryGridProps<T> {
-  items: T[];
+  /** Sparse-by-index item store: `items[i]` may be `undefined` for a
+   *  not-yet-fetched position. A fully-populated `T[]` (every existing
+   *  caller) is a valid special case of this same contract. */
+  items: (T | undefined)[];
   renderItem: (item: T, index: number) => ReactNode;
   /** Key extractor for stable row identity */
   getKey: (item: T, index: number) => string;
+  /**
+   * Total number of logical items in the section (defaults to
+   * `items.length`). Row count and total scrollable height are derived from
+   * this, NOT from how much of `items` is actually populated — this is what
+   * lets the grid render fixed, fetch-independent geometry.
+   */
+  itemCount?: number;
+  /** Render function for an unfetched slot (defaults to rendering nothing —
+   *  callers backing a sparse store should pass e.g. a `SkeletonCard`). */
+  renderPlaceholder?: (index: number) => ReactNode;
+  /**
+   * Fires whenever the visible (+ small overscan) item index range changes —
+   * on scroll, resize, or an imperative `scrollToIndex` jump. Wire this to a
+   * range-driven fetch hook so pages are requested for whatever's about to
+   * be seen rather than in strict append order.
+   */
+  onRangeChange?: (startIndex: number, endIndex: number) => void;
   /** Estimated item height in px (default: 340) */
   estimateHeight?: number;
   /** Minimum item count to enable virtualization (default: 100) */
@@ -81,13 +121,16 @@ const GAP_X = 12; // 0.75rem
 const GAP_Y = 20; // 1.25rem
 
 type VirtualRow<T> =
-  | { type: "cards"; items: T[]; startIndex: number }
+  | { type: "cards"; items: (T | undefined)[]; startIndex: number }
   | { type: "expansion"; item: T };
 
 function VirtualizedLibraryGrid<T>({
   items,
   renderItem,
   getKey,
+  itemCount,
+  renderPlaceholder,
+  onRangeChange,
   estimateHeight = 340,
   virtualizeThreshold = 100,
   expandedKey,
@@ -100,7 +143,8 @@ function VirtualizedLibraryGrid<T>({
   const minWidth = GRID_MIN_WIDTH_PX[bp];
   const parentRef = useRef<HTMLDivElement>(null);
   const [cols, setCols] = useState(4);
-  const virtualize = items.length >= virtualizeThreshold;
+  const totalCount = itemCount ?? items.length;
+  const virtualize = totalCount >= virtualizeThreshold;
 
   // Recalculate columns on resize — use useLayoutEffect so the first
   // measurement happens synchronously before paint, avoiding a flash
@@ -124,16 +168,22 @@ function VirtualizedLibraryGrid<T>({
   }, [minWidth]);
 
   // Build the row model for virtualized path; keep call unconditional so
-  // the hook order stays stable when items.length crosses the threshold.
+  // the hook order stays stable when totalCount crosses the threshold.
+  // Bounded by `totalCount` (the SECTION size), not `items.length` — a row
+  // exists for every position in the section even if nothing has been
+  // fetched there yet, so scrollToIndex and the virtualizer's total height
+  // are never blocked on a fetch.
   const rows = useMemo(() => {
     if (!virtualize) return [] as VirtualRow<T>[];
     const result: VirtualRow<T>[] = [];
-    for (let i = 0; i < items.length; i += cols) {
-      const rowItems = items.slice(i, i + cols);
+    for (let i = 0; i < totalCount; i += cols) {
+      const end = Math.min(i + cols, totalCount);
+      const rowItems: (T | undefined)[] = [];
+      for (let idx = i; idx < end; idx++) rowItems.push(items[idx]);
       result.push({ type: "cards", items: rowItems, startIndex: i });
       if (expandedKey && renderExpansion) {
         const expandedItem = rowItems.find(
-          (item, idx) => getKey(item, i + idx) === expandedKey,
+          (item, idx) => item !== undefined && getKey(item, i + idx) === expandedKey,
         );
         if (expandedItem) {
           result.push({ type: "expansion", item: expandedItem });
@@ -165,6 +215,42 @@ function VirtualizedLibraryGrid<T>({
   // identity on each render).
   const virtualizerRef = useRef(virtualizer);
   virtualizerRef.current = virtualizer;
+
+  // Always read the latest onRangeChange without making the range-change
+  // effect below depend on its identity (callers typically pass a fresh
+  // closure each render).
+  const onRangeChangeRef = useRef(onRangeChange);
+  onRangeChangeRef.current = onRangeChange;
+
+  const virtualItemsForRange = virtualize ? virtualizer.getVirtualItems() : [];
+  const firstVisibleRow = virtualItemsForRange[0]?.index;
+  const lastVisibleRow = virtualItemsForRange[virtualItemsForRange.length - 1]?.index;
+
+  // Notify the caller of the visible (+ virtualizer overscan) item range
+  // whenever it changes — this is what drives range-keyed fetching. Reading
+  // primitive row indices (rather than the virtual-items array, which is a
+  // new reference every render) keeps this effect from firing on unrelated
+  // re-renders.
+  useEffect(() => {
+    if (!virtualize || firstVisibleRow === undefined || lastVisibleRow === undefined) return;
+    const firstRow = rows[firstVisibleRow];
+    const lastRow = rows[lastVisibleRow];
+    const startIndex = firstRow?.type === "cards" ? firstRow.startIndex : firstVisibleRow * cols;
+    const endIndex =
+      lastRow?.type === "cards"
+        ? Math.min(lastRow.startIndex + lastRow.items.length, totalCount)
+        : Math.min((lastVisibleRow + 1) * cols, totalCount);
+    logger.trace("library", "grid visible range changed", { startIndex, endIndex });
+    onRangeChangeRef.current?.(startIndex, endIndex);
+  }, [virtualize, firstVisibleRow, lastVisibleRow, rows, cols, totalCount]);
+
+  // Non-virtualized (small collection) path renders everything at once, so
+  // the whole section is "the visible range" — report it once so ensureRange
+  // can fill in any unfetched slots.
+  useEffect(() => {
+    if (virtualize || totalCount === 0) return;
+    onRangeChangeRef.current?.(0, totalCount);
+  }, [virtualize, totalCount]);
 
   useImperativeHandle(
     ref,
@@ -211,7 +297,9 @@ function VirtualizedLibraryGrid<T>({
     [virtualize, cols],
   );
 
-  // For small item counts, use a simple CSS grid (no virtualization overhead)
+  // For small item counts, use a simple CSS grid (no virtualization overhead).
+  // Bounded by totalCount (not items.length) so an unfetched slot still gets
+  // a grid cell — rendered via renderPlaceholder instead of renderItem.
   if (!virtualize) {
     return (
       <div ref={parentRef}>
@@ -223,11 +311,14 @@ function VirtualizedLibraryGrid<T>({
           }}
         >
           {header}
-          {items.map((item, i) => (
-            <div key={getKey(item, i)} data-grid-index={i}>
-              {renderItem(item, i)}
-            </div>
-          ))}
+          {Array.from({ length: totalCount }, (_, i) => {
+            const item = items[i];
+            return (
+              <div key={item ? getKey(item, i) : `placeholder-${i}`} data-grid-index={i}>
+                {item !== undefined ? renderItem(item, i) : renderPlaceholder?.(i) ?? null}
+              </div>
+            );
+          })}
           {footer}
         </div>
       </div>
@@ -242,7 +333,7 @@ function VirtualizedLibraryGrid<T>({
             display: "grid",
             gridTemplateColumns: `repeat(${cols}, 1fr)`,
             gap: `${GAP_Y}px ${GAP_X}px`,
-            marginBottom: items.length > 0 ? `${GAP_Y}px` : 0,
+            marginBottom: totalCount > 0 ? `${GAP_Y}px` : 0,
           }}
         >
           {header}
@@ -297,11 +388,14 @@ function VirtualizedLibraryGrid<T>({
                 paddingBottom: `${GAP_Y}px`,
               }}
             >
-              {row.items.map((item, colIndex) => (
-                <div key={getKey(item, row.startIndex + colIndex)}>
-                  {renderItem(item, row.startIndex + colIndex)}
-                </div>
-              ))}
+              {row.items.map((item, colIndex) => {
+                const index = row.startIndex + colIndex;
+                return (
+                  <div key={item !== undefined ? getKey(item, index) : `placeholder-${index}`}>
+                    {item !== undefined ? renderItem(item, index) : renderPlaceholder?.(index) ?? null}
+                  </div>
+                );
+              })}
             </div>
           );
         })}
@@ -313,7 +407,7 @@ function VirtualizedLibraryGrid<T>({
             display: "grid",
             gridTemplateColumns: `repeat(${cols}, 1fr)`,
             gap: `${GAP_Y}px ${GAP_X}px`,
-            marginTop: items.length > 0 ? 0 : undefined,
+            marginTop: totalCount > 0 ? 0 : undefined,
           }}
         >
           {footer}

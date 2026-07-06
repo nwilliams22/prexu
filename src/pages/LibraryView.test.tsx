@@ -83,13 +83,9 @@ vi.mock("../hooks/usePreferences", () => ({
   }),
 }));
 
+const mockUseParentalControls = vi.fn();
 vi.mock("../hooks/useParentalControls", () => ({
-  useParentalControls: () => ({
-    restrictionsEnabled: false,
-    filterByRating: (items: unknown[]) => items,
-    isItemAllowed: () => true,
-    maxContentRating: "none",
-  }),
+  useParentalControls: () => mockUseParentalControls(),
 }));
 
 vi.mock("../hooks/useScrollRestoration", () => ({
@@ -178,6 +174,12 @@ function renderPage() {
 describe("LibraryView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUseParentalControls.mockReturnValue({
+      restrictionsEnabled: false,
+      filterByRating: (items: unknown[]) => items,
+      isItemAllowed: () => true,
+      maxContentRating: "none",
+    });
     // Mock IntersectionObserver globally as a class
     global.IntersectionObserver = vi.fn().mockImplementation(function (this: unknown) {
       (this as Record<string, unknown>).observe = vi.fn();
@@ -295,6 +297,40 @@ describe("LibraryView", () => {
     // ...and the grid is marked busy for assistive tech / dimming.
     const busyRegion = document.querySelector('[aria-busy="true"]');
     expect(busyRegion).not.toBeNull();
+  });
+
+  it("renders a static restricted placeholder for fetched-but-disallowed items, loading skeleton only for unfetched slots (prexu-6qi5.1)", () => {
+    mockUseParentalControls.mockReturnValue({
+      restrictionsEnabled: true,
+      filterByRating: (items: unknown[]) => items,
+      isItemAllowed: (rating?: string) => rating !== "R",
+      maxContentRating: "PG-13",
+    });
+    mockUsePaginatedLibrary.mockReturnValue({
+      items: [
+        { ratingKey: "100", title: "Allowed Movie", thumb: "/t1", type: "movie", contentRating: "PG" },
+        { ratingKey: "101", title: "Blocked Movie", thumb: "/t2", type: "movie", contentRating: "R" },
+        undefined, // unfetched slot (range not requested yet)
+      ],
+      isLoading: false,
+      isLoadingMore: false,
+      isStale: false,
+      totalSize: 3,
+      error: null,
+      ensureRange: vi.fn(),
+      retry: vi.fn(),
+    });
+    renderPage();
+
+    // Allowed item renders normally.
+    expect(screen.getByText("Allowed Movie")).toBeInTheDocument();
+    // Fetched but disallowed: the item itself is masked...
+    expect(screen.queryByText("Blocked Movie")).not.toBeInTheDocument();
+    // ...and its slot renders the STATIC restricted placeholder — not the
+    // shimmer skeleton, which would look permanently stuck loading.
+    expect(screen.getByLabelText("Restricted content")).toBeInTheDocument();
+    // The genuinely-unfetched slot still renders the loading skeleton.
+    expect(screen.getAllByTestId("skeleton-card")).toHaveLength(1);
   });
 
   it("shows empty state when no items", () => {
