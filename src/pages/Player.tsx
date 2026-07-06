@@ -236,6 +236,19 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   // document root fires synchronously after layout, so bumping a counter here
   // triggers React to re-render the container, which forces the browser to
   // recalculate inset: 0 against the new viewport dimensions (prexu-0p3).
+  //
+  // This alone does NOT reach ControlsBottomBar/SkipButtons — both are
+  // React.memo'd on tick-stable props (by design, so they skip the 4 Hz
+  // time-pos churn — see PlayerControls.tickrender.test.tsx) and neither
+  // depends on renderTick, so a bump here never touches their props and
+  // React bails before reconciling them. Their DOM subtree stays visually
+  // stale (WebKitGTK/Linux popout-exit: the button row keeps its
+  // popout-era width for seconds) until something UNRELATED changes
+  // `player.chrome` identity and finally forces a real commit. Threading
+  // renderTick down as `reflowTick` (below) gives them the same nudge the
+  // outer container gets, without reintroducing the per-tick churn they
+  // were memoized to avoid — renderTick only changes on real resizes
+  // (prexu-trbl).
   const [renderTick, setRenderTick] = useState(0);
   useEffect(() => {
     const el = document.documentElement;
@@ -789,6 +802,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
           }}
           onPanelPinChange={setPanelPinned}
           syncIndicator={syncIndicator}
+          reflowTick={renderTick}
         />
       )}
 

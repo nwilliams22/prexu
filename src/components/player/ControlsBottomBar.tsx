@@ -70,6 +70,18 @@ interface ControlsBottomBarProps {
    *  widgets like the color picker emit no mousemove, and the auto-hide
    *  timer would otherwise unmount the popup mid-interaction. */
   onPanelPinChange?: (pinned: boolean) => void;
+  /** Viewport-resize nudge counter forwarded from Player.tsx (prexu-0p3 /
+   *  prexu-trbl). This component is memoized specifically to skip the 4 Hz
+   *  time-pos re-renders (see docblock above), and none of its other props
+   *  change on a plain window resize — so without this, a popout-exit/
+   *  fullscreen-enter resize never reconciles this subtree and the button
+   *  row visually keeps its old (e.g. popout-era) width for seconds until
+   *  some unrelated prop happens to change. Rendered as a `data-*` attribute
+   *  purely so the tick change is a real DOM mutation, not just an unused
+   *  prop — mirrors how Player.tsx's own `data-render-tick` forces its
+   *  fixed/absolute root to repaint at the new size. Optional/defaulted so
+   *  callers that never resize (most tests) can ignore it. */
+  reflowTick?: number;
 }
 
 function ControlsBottomBar({
@@ -99,6 +111,7 @@ function ControlsBottomBar({
   ratingKey,
   onSubtitleDownloaded,
   onPanelPinChange,
+  reflowTick = 0,
 }: ControlsBottomBarProps) {
   const [volumeOpen, setVolumeOpen] = useState(false);
   const [subtitleMenuOpen, setSubtitleMenuOpen] = useState(false);
@@ -119,7 +132,7 @@ function ControlsBottomBar({
   return (
     <>
       {/* Controls row */}
-      <div style={styles.controlsRow}>
+      <div style={styles.controlsRow} data-reflow-tick={reflowTick}>
           {/* Left controls — transport */}
           <div
             style={{
@@ -141,6 +154,7 @@ function ControlsBottomBar({
               mobile={mobile}
               iconSmall={iconSmall}
               iconLarge={iconLarge}
+              reflowTick={reflowTick}
             />
 
             {/* Volume — hidden on mobile */}

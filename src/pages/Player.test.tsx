@@ -170,8 +170,15 @@ vi.mock("../services/logger", () => ({
   },
 }));
 
+// Renders the received `reflowTick` prop as a data attribute so tests can
+// assert Player.tsx actually forwards its renderTick down (prexu-trbl) —
+// ControlsBottomBar/SkipButtons need this to escape their own memoization
+// on a plain viewport resize; see PlayerControls.tickrender.test.tsx for
+// the deeper memo-defeat behavior with the real component stack.
 vi.mock("../components/PlayerControls", () => ({
-  default: () => <div data-testid="player-controls" />,
+  default: ({ reflowTick }: { reflowTick?: number }) => (
+    <div data-testid="player-controls" data-reflow-tick={reflowTick} />
+  ),
 }));
 
 vi.mock("../components/ParticipantOverlay", () => ({
@@ -385,5 +392,31 @@ describe("Player – chrome reflow nudge on viewport resize", () => {
   it("creates exactly one ResizeObserver per Player mount", () => {
     renderPlayer();
     expect(MockResizeObserver.getAll()).toHaveLength(1);
+  });
+
+  it("forwards renderTick to PlayerControls as reflowTick within the same act() flush (prexu-trbl)", async () => {
+    const { getByTestId } = renderPlayer();
+
+    // Baseline: no resize yet.
+    expect(getByTestId("player-controls").dataset.reflowTick).toBe("0");
+
+    const observer = MockResizeObserver.getLatest();
+
+    // Simulate the popout-exit → full-size resize sequence: an intermediate
+    // size (mid-transition) followed by the final dimensions, exactly as
+    // the hardware-observed bug report describes multiple viewport-resize
+    // log lines during the transition.
+    await act(async () => {
+      observer.simulateResize(900, 600);
+    });
+    expect(getByTestId("player-controls").dataset.reflowTick).toBe("1");
+
+    await act(async () => {
+      observer.simulateResize(1920, 1080);
+    });
+    // Both the outer container's data-render-tick (asserted above) and the
+    // PlayerControls prop must track together, in the same flush — nothing
+    // here is debounced or deferred to a later tick.
+    expect(getByTestId("player-controls").dataset.reflowTick).toBe("2");
   });
 });
