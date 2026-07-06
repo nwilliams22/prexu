@@ -186,7 +186,7 @@ describe("ControlsBottomBar responsive compaction (prexu-52ky)", () => {
   });
 
   it("auto-closes the overflow menu when a resize back to full width removes its trigger", () => {
-    const { } = renderAtWidth(530);
+    renderAtWidth(530);
     fireEvent.click(screen.getByLabelText("More controls"));
     expect(screen.getByRole("menu")).toBeTruthy();
 
