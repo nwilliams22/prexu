@@ -140,13 +140,23 @@ export function cacheInvalidatePrefix(prefix: string): void {
  * Update in-memory cache entries in place, keyed by a predicate over the key
  * (prexu-8nl0). Unlike {@link cacheInvalidateWhere} (which deletes matches),
  * this REPLACES each matching entry's `data` via `updater` while preserving
- * its original `timestamp`/`ttlMs` — a patch is not a fresh fetch, so the
- * entry's freshness clock is left untouched.
+ * its original `timestamp`/`ttlMs` by default — a patch is not a fresh fetch,
+ * so the entry's freshness clock is left untouched.
  *
  * `updater` returning `undefined` (no applicable change, e.g. the entry's
  * data doesn't contain the item being patched) or the SAME reference it was
  * given leaves that entry alone. Returns the number of entries actually
  * replaced.
+ *
+ * Pass `{ refreshTtl: true }` (prexu-5mcz) when the patched value is known to
+ * be MORE current than anything a fetch could return within the entry's
+ * remaining TTL — e.g. the watch-state stop patch writing a just-confirmed
+ * viewOffset into a short-TTL item-detail bundle. Without this, an entry that
+ * happens to be close to its natural expiry at patch time can cross that
+ * expiry moments later, letting an unrelated refetch (a hover-prefetch, a
+ * revalidation) race the patch and re-cache a stale value the patch just
+ * corrected. The entry's `ttlMs` is preserved as-is; only its `timestamp` is
+ * reset to now, giving it a full fresh TTL window from the patch.
  *
  * Memory-only (no localStorage) — matches {@link cacheGetStale}/
  * {@link cacheGetAge}'s in-memory-only convention; today's callers (the
@@ -156,13 +166,18 @@ export function cacheInvalidatePrefix(prefix: string): void {
 export function cacheUpdateWhere<T>(
   predicate: (key: string) => boolean,
   updater: (data: T, key: string) => T | undefined,
+  options?: { refreshTtl?: boolean },
 ): number {
   let updatedCount = 0;
   for (const [key, entry] of store) {
     if (!predicate(key)) continue;
     const next = updater(entry.data as T, key);
     if (next === undefined || next === entry.data) continue;
-    store.set(key, { ...entry, data: next });
+    store.set(key, {
+      ...entry,
+      data: next,
+      timestamp: options?.refreshTtl ? Date.now() : entry.timestamp,
+    });
     updatedCount += 1;
   }
   return updatedCount;

@@ -228,6 +228,68 @@ describe("api-cache", () => {
       expect(() => cacheUpdateWhere(() => false, (d) => d)).not.toThrow();
       expect(cacheGet("key1")).toBe("a");
     });
+
+    // ── refreshTtl option (prexu-5mcz) ──
+    describe("refreshTtl option", () => {
+      it("resets the entry's freshness clock to now when refreshTtl is true", () => {
+        cacheSet("item-detail:s1:501", { item: { ratingKey: "501", viewOffset: 100 } }, 30_000);
+        vi.advanceTimersByTime(29_000);
+
+        cacheUpdateWhere<{ item: { ratingKey: string; viewOffset: number } }>(
+          (key) => key === "item-detail:s1:501",
+          (bundle) => ({ ...bundle, item: { ...bundle.item, viewOffset: 5_000 } }),
+          { refreshTtl: true },
+        );
+
+        // Still within the ORIGINAL 30s window trivially, but prove the
+        // clock actually reset: it must also still be fresh 29s further on
+        // (59s past the original cacheSet, well past the original TTL).
+        expect(cacheGetAge("item-detail:s1:501")).toBe(0);
+        vi.advanceTimersByTime(29_000);
+        expect(cacheGetAge("item-detail:s1:501")).toBe(29_000);
+        expect(cacheGet("item-detail:s1:501")).toEqual({
+          item: { ratingKey: "501", viewOffset: 5_000 },
+        });
+      });
+
+      it("does not refresh the TTL when refreshTtl is omitted (default, unchanged behavior)", () => {
+        cacheSet("dashboard:s1:deck", [{ ratingKey: "1", viewOffset: 100 }], 60_000);
+        vi.advanceTimersByTime(10_000);
+
+        cacheUpdateWhere<{ ratingKey: string; viewOffset: number }[]>(
+          (key) => key.endsWith(":deck"),
+          (items) => items.map((i) => ({ ...i, viewOffset: 5_000 })),
+        );
+
+        expect(cacheGetAge("dashboard:s1:deck")).toBe(10_000);
+      });
+
+      it("does not refresh the TTL when refreshTtl is explicitly false", () => {
+        cacheSet("dashboard:s1:deck", [{ ratingKey: "1", viewOffset: 100 }], 60_000);
+        vi.advanceTimersByTime(10_000);
+
+        cacheUpdateWhere<{ ratingKey: string; viewOffset: number }[]>(
+          (key) => key.endsWith(":deck"),
+          (items) => items.map((i) => ({ ...i, viewOffset: 5_000 })),
+          { refreshTtl: false },
+        );
+
+        expect(cacheGetAge("dashboard:s1:deck")).toBe(10_000);
+      });
+
+      it("does not touch untouched entries' timestamps even when refreshTtl is true (no-op updater still skips)", () => {
+        cacheSet("item-detail:s1:501", { item: { ratingKey: "501" } }, 30_000);
+        vi.advanceTimersByTime(10_000);
+
+        cacheUpdateWhere<{ item: { ratingKey: string } }>(
+          () => true,
+          () => undefined,
+          { refreshTtl: true },
+        );
+
+        expect(cacheGetAge("item-detail:s1:501")).toBe(10_000);
+      });
+    });
   });
 
   // ── Edge cases ──

@@ -228,6 +228,17 @@ interface DetailBundleLike {
  * known-correct `item.viewOffset`, in place, leaving every other field of the
  * bundle (seasons/episodes/parentShow/siblings) untouched. Returns whether a
  * matching entry was found and patched.
+ *
+ * Refreshes the entry's TTL (prexu-5mcz): a hardware repro showed the 30s
+ * item-detail TTL was already close to expiry — from whenever the entry was
+ * originally warmed, well before the stop — at the moment this patch ran, so
+ * it crossed that expiry just ONE SECOND later. That let a hover-triggered
+ * warmItemDetailCache treat the entry as stale and issue a real fetch, which
+ * raced PMS's own async ingestion of the stop write and re-cached the
+ * PRE-stop offset — silently undoing this exact patch. The patched value is
+ * by definition fresher than anything the server can return within the
+ * window, so it should get a full fresh TTL rather than inheriting whatever
+ * was left on the entry's original clock.
  */
 function patchItemDetailCache(ratingKey: string, viewOffsetMs: number): boolean {
   let patched = false;
@@ -238,6 +249,7 @@ function patchItemDetailCache(ratingKey: string, viewOffsetMs: number): boolean 
       patched = true;
       return { ...bundle, item: { ...bundle.item, viewOffset: viewOffsetMs } };
     },
+    { refreshTtl: true },
   );
   return patched;
 }
