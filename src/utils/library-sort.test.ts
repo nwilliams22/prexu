@@ -92,4 +92,53 @@ describe("library-sort", () => {
       expect(findFirstIndexForLetter(items, "b")).toBe(1);
     });
   });
+
+  // prexu-6qi5.2: the fallback scan (used when the firstCharacter index is
+  // unavailable or filters are active) now runs against a sparse-by-index
+  // store and needs >= semantics matching the fast path's cascading
+  // zero-size-bucket behaviour.
+  describe("findFirstIndexForLetter — sparse store & >= semantics (prexu-6qi5.2)", () => {
+    it("skips unfetched (undefined) slots instead of treating them as a mismatch", () => {
+      const sparse = [
+        undefined,
+        { title: "Blade Runner" }, // B
+        undefined,
+        { title: "The Matrix" }, // M
+      ];
+      expect(findFirstIndexForLetter(sparse, "M")).toBe(3);
+    });
+
+    it("lands on the next existing bucket when the exact letter has no items (>= semantics)", () => {
+      // No "C"-bucket item exists; the next bucket present is "M" (Matrix).
+      const items = [{ title: "Alien" }, { title: "Blade Runner" }, { title: "The Matrix" }];
+      expect(findFirstIndexForLetter(items, "C")).toBe(2);
+    });
+
+    it(">= fallback also skips unfetched slots when searching for the next bucket", () => {
+      const sparse = [
+        { title: "Alien" }, // A
+        undefined, // unfetched — must not be mistaken for the "next" match
+        { title: "The Matrix" }, // M
+      ];
+      expect(findFirstIndexForLetter(sparse, "C")).toBe(2);
+    });
+
+    it("returns -1 when every populated slot sorts before the target and none after", () => {
+      const items = [{ title: "Alien" }, { title: "Blade Runner" }];
+      expect(findFirstIndexForLetter(items, "Z")).toBe(-1);
+    });
+
+    it("returns -1 for an entirely unfetched (all-undefined) store", () => {
+      const sparse = [undefined, undefined, undefined];
+      expect(findFirstIndexForLetter(sparse, "M")).toBe(-1);
+    });
+
+    it("prefers an exact match over a >= candidate encountered earlier in scan order", () => {
+      // Index 0 ("The Matrix", bucket M) is a >= candidate for target "B"
+      // (M > B), but index 1 ("Blade Runner") is an EXACT match — the exact
+      // match must win even though the >= candidate was seen first.
+      const items = [{ title: "The Matrix" }, { title: "Blade Runner" }];
+      expect(findFirstIndexForLetter(items, "B")).toBe(1);
+    });
+  });
 });
