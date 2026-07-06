@@ -5,12 +5,19 @@ import { MemoryRouter } from "react-router-dom";
 import LibraryView from "./LibraryView";
 
 const mockUseParams = vi.fn(() => ({ sectionId: "1" }));
+const mockSetSearchParams = vi.fn();
+const mockUseSearchParams = vi.fn(
+  (): [URLSearchParams, typeof mockSetSearchParams] => [
+    new URLSearchParams(),
+    mockSetSearchParams,
+  ]
+);
 vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual("react-router-dom");
   return {
     ...actual,
     useParams: () => mockUseParams(),
-    useSearchParams: () => [new URLSearchParams(), vi.fn()],
+    useSearchParams: () => mockUseSearchParams(),
     useNavigate: () => vi.fn(),
   };
 });
@@ -174,6 +181,8 @@ function renderPage() {
 describe("LibraryView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUseParams.mockReturnValue({ sectionId: "1" });
+    mockUseSearchParams.mockReturnValue([new URLSearchParams(), mockSetSearchParams]);
     mockUseParentalControls.mockReturnValue({
       restrictionsEnabled: false,
       filterByRating: (items: unknown[]) => items,
@@ -362,5 +371,79 @@ describe("LibraryView", () => {
     renderPage();
     expect(screen.getByTestId("error-state")).toBeInTheDocument();
     expect(screen.getByText("Failed to load library")).toBeInTheDocument();
+  });
+
+  // ── Year ranges (prexu-6qi5.8) ──
+
+  it("passes yearMin/yearMax from the URL through to usePaginatedLibrary's filters", () => {
+    mockUseSearchParams.mockReturnValue([
+      new URLSearchParams("yearMin=1980&yearMax=1989"),
+      mockSetSearchParams,
+    ]);
+    mockUsePaginatedLibrary.mockReturnValue({
+      items: [],
+      isLoading: false,
+      isLoadingMore: false,
+      isStale: false,
+      totalSize: 0,
+      error: null,
+      ensureRange: vi.fn(),
+      retry: vi.fn(),
+    });
+
+    renderPage();
+
+    expect(mockUsePaginatedLibrary).toHaveBeenCalled();
+    const filtersArg = mockUsePaginatedLibrary.mock.calls[0][2];
+    expect(filtersArg).toMatchObject({ yearMin: "1980", yearMax: "1989" });
+  });
+
+  it("migrates a legacy single-year URL param to an exact yearMin/yearMax range", () => {
+    mockUseSearchParams.mockReturnValue([
+      new URLSearchParams("year=2005"),
+      mockSetSearchParams,
+    ]);
+    mockUsePaginatedLibrary.mockReturnValue({
+      items: [],
+      isLoading: false,
+      isLoadingMore: false,
+      isStale: false,
+      totalSize: 0,
+      error: null,
+      ensureRange: vi.fn(),
+      retry: vi.fn(),
+    });
+
+    renderPage();
+
+    const filtersArg = mockUsePaginatedLibrary.mock.calls[0][2];
+    expect(filtersArg).toMatchObject({ yearMin: "2005", yearMax: "2005" });
+  });
+
+  it("combines a year range with other active filters when building the fetch params", () => {
+    mockUseSearchParams.mockReturnValue([
+      new URLSearchParams("genre=Documentary&yearMin=1980&yearMax=1989&unwatched=1"),
+      mockSetSearchParams,
+    ]);
+    mockUsePaginatedLibrary.mockReturnValue({
+      items: [],
+      isLoading: false,
+      isLoadingMore: false,
+      isStale: false,
+      totalSize: 0,
+      error: null,
+      ensureRange: vi.fn(),
+      retry: vi.fn(),
+    });
+
+    renderPage();
+
+    const filtersArg = mockUsePaginatedLibrary.mock.calls[0][2];
+    expect(filtersArg).toMatchObject({
+      genre: "Documentary",
+      yearMin: "1980",
+      yearMax: "1989",
+      unwatched: true,
+    });
   });
 });

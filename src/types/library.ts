@@ -371,7 +371,14 @@ export interface SortOption {
 
 export interface LibraryFilters {
   genre?: string;
-  year?: string;
+  /**
+   * Inclusive lower/upper bounds of a year range (e.g. 1980-1989). Either
+   * bound may be set alone for an open-ended range; a single-year filter is
+   * just `yearMin === yearMax`. Sent to Plex as `year>=`/`year<=` query
+   * operators — see `getLibraryItems` in `services/plex-library/filter.ts`.
+   */
+  yearMin?: string;
+  yearMax?: string;
   contentRating?: string;
   resolution?: string;
   unwatched?: boolean;
