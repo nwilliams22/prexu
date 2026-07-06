@@ -8,6 +8,18 @@ import VirtualizedLibraryGrid, {
   type ScrollConvergenceCallbacks,
 } from "./VirtualizedLibraryGrid";
 import type { LibraryGridHandle } from "./VirtualizedLibraryGrid";
+import { logger } from "../services/logger";
+
+vi.mock("../services/logger", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../services/logger")>()),
+  logger: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+    trace: vi.fn(),
+  },
+}));
 
 interface Item {
   id: string;
@@ -361,6 +373,16 @@ describe("runScrollConvergence (prexu-k2mv)", () => {
   // measuring the newly-mounted rows. These tests exercise the extracted
   // convergence controller directly (no DOM/component involved) so the
   // frame-by-frame logic is fully deterministic.
+  //
+  // These legacy tests are only about the delta/estimate-refinement math,
+  // not about the prexu-b2dz population/stability gating (covered by its
+  // own describe block below) -- so every callback set here spreads in
+  // trivial "already populated, geometry never changes" stubs for the two
+  // newer required callbacks.
+  const populatedStableStubs = {
+    getScrollHeight: () => 10_000_000,
+    isTargetPopulated: () => true,
+  };
 
   it("(a) keeps correcting across more than 3 frames as the estimated offset drifts, then stops once it matches actual scroll position", () => {
     const driver = createFrameDriver();
@@ -383,6 +405,7 @@ describe("runScrollConvergence (prexu-k2mv)", () => {
       getMaxScroll: () => 100_000,
       issueScroll,
       scrollTo,
+      ...populatedStableStubs,
     };
 
     runScrollConvergence(callbacks, driver.requestFrame);
@@ -424,6 +447,7 @@ describe("runScrollConvergence (prexu-k2mv)", () => {
       getMaxScroll: () => maxScroll,
       issueScroll,
       scrollTo,
+      ...populatedStableStubs,
     };
 
     runScrollConvergence(callbacks, driver.requestFrame);
@@ -452,6 +476,7 @@ describe("runScrollConvergence (prexu-k2mv)", () => {
       getMaxScroll: () => 1_000_000,
       issueScroll,
       scrollTo,
+      ...populatedStableStubs,
     };
 
     runScrollConvergence(callbacks, driver.requestFrame);
@@ -478,6 +503,7 @@ describe("runScrollConvergence (prexu-k2mv)", () => {
         getMaxScroll: () => 10_000_000,
         issueScroll,
         scrollTo,
+        ...populatedStableStubs,
       },
       driver.requestFrame,
     );
@@ -509,6 +535,7 @@ describe("runScrollConvergence (prexu-k2mv)", () => {
         getMaxScroll: () => 1_000_000,
         issueScroll,
         scrollTo,
+        ...populatedStableStubs,
       },
       driver.requestFrame,
     );
@@ -517,6 +544,123 @@ describe("runScrollConvergence (prexu-k2mv)", () => {
     expect(issueScroll).not.toHaveBeenCalled();
     expect(scrollTo).not.toHaveBeenCalled();
     expect(driver.pendingCount()).toBe(0);
+  });
+
+  // prexu-b2dz: delta==0 is meaningless while the landing rows are still
+  // unfetched -- both the "expected" offset and scrollTop are derived from
+  // the same placeholder/estimated geometry at that point. The hardware
+  // repro: clicking a far-off letter settled instantly (frames:1, delta:0)
+  // while the landing range's fetch had only just started; once it
+  // completed and the rows measured, total height grew and the earlier
+  // "settled" position fell short of the true bottom.
+  it("does not settle on a matching delta while the landing rows are unfetched, and keeps converging once they populate and total height grows", () => {
+    const driver = createFrameDriver();
+    // Phase flags flipped externally between frames, simulating: (1) the
+    // landing range's fetch is still in flight and the container's total
+    // height still reflects placeholder/estimated row sizes, then (2) the
+    // fetch completes, real content measures taller, and total height (and
+    // therefore the true target offset) grows.
+    let populated = false;
+    let scrollHeight = 8800; // placeholder-geometry total height
+    let maxScroll = 8000; // = scrollHeight - clientHeight(800)
+    let rawExpected = 8000; // target offset under placeholder geometry
+    let scrollTop = 8000; // set by the initial synchronous scrollToIndex call
+
+    const issueScroll = vi.fn(() => {
+      scrollTop = Math.min(rawExpected, maxScroll);
+    });
+    const scrollTo = vi.fn();
+
+    runScrollConvergence(
+      {
+        getExpectedStart: () => rawExpected,
+        getScrollTop: () => scrollTop,
+        getScrollHeight: () => scrollHeight,
+        getMaxScroll: () => maxScroll,
+        issueScroll,
+        scrollTo,
+        isTargetPopulated: () => populated,
+      },
+      driver.requestFrame,
+    );
+
+    // Frame 1: delta is already 0 (scrollTop and the estimate agree) and
+    // scrollHeight hasn't changed since the baseline -- but the landing
+    // rows are still unfetched, so this must NOT be treated as settled.
+    driver.flush();
+    expect(issueScroll).toHaveBeenCalledTimes(1);
+    expect(driver.pendingCount()).toBe(1);
+
+    // Fetch completes: real content measures taller than the estimate,
+    // growing total height and the true target offset.
+    populated = true;
+    scrollHeight = 10300;
+    maxScroll = 9500;
+    rawExpected = 9500;
+
+    // Frame 2: total height just changed (not stable yet) -- still must not
+    // settle, even though the landing rows are now populated.
+    driver.flush();
+    expect(issueScroll).toHaveBeenCalledTimes(2);
+    expect(scrollTop).toBe(9500);
+    expect(driver.pendingCount()).toBe(1);
+
+    // Frame 3: height is now stable across two consecutive checks, the
+    // landing rows are populated, and scrollTop matches the (now correct)
+    // target -- converges at the TRUE bottom, not the earlier placeholder
+    // position.
+    driver.flush();
+    expect(issueScroll).toHaveBeenCalledTimes(2); // no further re-issue
+    expect(driver.pendingCount()).toBe(0);
+    expect(scrollTo).not.toHaveBeenCalled(); // converged via verification, not budget expiry
+
+    expect(logger.debug).toHaveBeenCalledWith(
+      "library",
+      "scroll convergence settled",
+      expect.objectContaining({ frames: 3, delta: 0, clampedAtMax: true }),
+    );
+  });
+
+  // prexu-b2dz: `clampedAtMax` must be computed from the live scrollTop at
+  // settle time, never from the pre-clamped `expected` value used for the
+  // delta check -- reusing `expected` conflated "the raw target got clamped
+  // down" with "we actually landed at the bottom", which could report
+  // `clampedAtMax: true` for a landing nowhere near the end of the list.
+  it("computes clampedAtMax from the live scrollTop, not the pre-clamped expected value", () => {
+    const driver = createFrameDriver();
+    const maxScroll = 1000;
+    // `expected` (998) sits within epsilon of `maxScroll` (1000) but is
+    // UNCLAMPED (998 < 1000, so Math.min never engages) -- an old
+    // implementation comparing THIS value to maxScroll would read it as
+    // "clamped at max" (998 >= 1000 - 2). The actually-achieved scrollTop
+    // (996) is within epsilon of `expected` (so the delta check still
+    // converges) but sits on the OTHER side of the maxScroll - epsilon
+    // boundary: this is a landing that has NOT reached the true bottom.
+    const expected = 998;
+    const scrollTop = 996;
+    const issueScroll = vi.fn();
+    const scrollTo = vi.fn();
+
+    runScrollConvergence(
+      {
+        getExpectedStart: () => expected,
+        getScrollTop: () => scrollTop,
+        getScrollHeight: () => maxScroll + 800,
+        getMaxScroll: () => maxScroll,
+        issueScroll,
+        scrollTo,
+        isTargetPopulated: () => true,
+      },
+      driver.requestFrame,
+    );
+    driver.flush();
+
+    expect(issueScroll).not.toHaveBeenCalled();
+    expect(logger.debug).toHaveBeenCalledWith(
+      "library",
+      "scroll convergence settled",
+      expect.objectContaining({ delta: 2, clampedAtMax: false }),
+    );
   });
 });
 
@@ -726,5 +870,194 @@ describe("scrollToIndex convergence wiring (prexu-k2mv)", () => {
     // best-known (clamped) offset rather than leaving the viewport wrong.
     expect(containerScrollTop).toBe(50_000);
     expect(rafQueue.length).toBe(0);
+  });
+
+  // prexu-b2dz hardware repro: clicking a far-off letter (item offset 523,
+  // row 130 at cols=4) logged "scroll convergence settled {frames:1,
+  // delta:0, clampedAtMax:true}" IMMEDIATELY -- at the same instant the
+  // landing range's fetch (offsets 400-500ish) had only just started. Once
+  // those rows populated and measured, total height grew and the viewport
+  // was no longer at the true bottom, requiring a second click to land.
+  it("does not settle while the landing range's items are unfetched, then converges at the true (grown) bottom once they populate", () => {
+    const ref = createRef<LibraryGridHandle>();
+    containerScrollHeight = 8800; // placeholder-geometry total height
+    containerClientHeight = 800; // -> maxScroll = 8000
+    virtualItemsToReturn = [{ index: 130, start: 130 * 360 }]; // row landed by the jump
+
+    let grown = false;
+    fakeGetOffsetForIndex.mockImplementation(
+      () => [grown ? 9500 : 8000, "start"] as const,
+    );
+    fakeScrollToIndex.mockImplementation(() => {
+      containerScrollTop = Math.min(
+        grown ? 9500 : 8000,
+        containerScrollHeight - containerClientHeight,
+      );
+    });
+
+    // Only index 0 is fetched -- row 130 (indices 520-523) is entirely
+    // unfetched at click time.
+    const items: (Item | undefined)[] = [makeItem(0)];
+
+    const { rerender } = render(
+      <VirtualizedLibraryGrid
+        ref={ref}
+        items={items}
+        itemCount={2096}
+        renderItem={renderItem}
+        getKey={getKey}
+        virtualizeThreshold={100}
+      />,
+    );
+
+    act(() => {
+      ref.current?.scrollToIndex(523); // cols defaults to 4 -> row 130
+    });
+    expect(containerScrollTop).toBe(8000);
+
+    // Frame 1: delta is already 0 against the placeholder estimate, and
+    // total height hasn't changed since the baseline -- but row 130's items
+    // are still unfetched, so this must NOT settle.
+    act(() => {
+      flushRaf();
+    });
+    expect(rafQueue.length).toBe(1);
+
+    // The landing range's fetch completes: row 130 populates, real content
+    // measures taller than the placeholder estimate, growing total height
+    // and the true target offset.
+    grown = true;
+    containerScrollHeight = 10300;
+    const populatedItems: (Item | undefined)[] = [makeItem(0)];
+    populatedItems[520] = makeItem(520);
+    populatedItems[521] = makeItem(521);
+    populatedItems[522] = makeItem(522);
+    populatedItems[523] = makeItem(523);
+    act(() => {
+      rerender(
+        <VirtualizedLibraryGrid
+          ref={ref}
+          items={populatedItems}
+          itemCount={2096}
+          renderItem={renderItem}
+          getKey={getKey}
+          virtualizeThreshold={100}
+        />,
+      );
+    });
+
+    // Frame 2: total height just changed (not yet stable) -- still must not
+    // settle, even though row 130 is now populated.
+    act(() => {
+      flushRaf();
+    });
+    expect(containerScrollTop).toBe(9500);
+    expect(rafQueue.length).toBe(1);
+
+    // Frame 3: height is stable across two consecutive checks, row 130 is
+    // populated, and scrollTop matches the corrected target -- converges at
+    // the TRUE bottom, not the earlier placeholder position.
+    act(() => {
+      flushRaf();
+    });
+    expect(rafQueue.length).toBe(0);
+    expect(containerScrollTop).toBe(9500);
+    expect(logger.debug).toHaveBeenCalledWith(
+      "library",
+      "scroll convergence settled",
+      expect.objectContaining({ frames: 3, delta: 0, clampedAtMax: true }),
+    );
+  });
+
+  // prexu-b2dz: an upward jump near the top of the list (the "A"/"#" case)
+  // must never report clampedAtMax:true -- it hasn't landed anywhere near
+  // the container's max scroll.
+  it("reports clampedAtMax:false for a jump landing near the top of the list", () => {
+    const ref = createRef<LibraryGridHandle>();
+    containerScrollHeight = 100_000; // a large, mature section total height
+    containerClientHeight = 800; // -> maxScroll = 99_200
+    virtualItemsToReturn = [{ index: 0, start: 0 }];
+
+    fakeGetOffsetForIndex.mockImplementation(() => [0, "start"] as const);
+    fakeScrollToIndex.mockImplementation(() => {
+      containerScrollTop = 0;
+    });
+
+    // Row 0 (indices 0-3) is already fully fetched, as the top of any
+    // section always is.
+    const items: (Item | undefined)[] = Array.from({ length: 4 }, (_, i) => makeItem(i));
+
+    render(
+      <VirtualizedLibraryGrid
+        ref={ref}
+        items={items}
+        itemCount={2096}
+        renderItem={renderItem}
+        getKey={getKey}
+        virtualizeThreshold={100}
+      />,
+    );
+
+    act(() => {
+      ref.current?.scrollToIndex(0);
+    });
+    expect(containerScrollTop).toBe(0);
+
+    act(() => {
+      flushRaf();
+    });
+
+    expect(rafQueue.length).toBe(0);
+    expect(fakeScrollToIndex).toHaveBeenCalledTimes(1);
+    expect(logger.debug).toHaveBeenCalledWith(
+      "library",
+      "scroll convergence settled",
+      expect.objectContaining({ frames: 1, delta: 0, clampedAtMax: false }),
+    );
+  });
+
+  // prexu-b2dz: the population/stability gating above must not slow down
+  // the common case -- a short hop whose landing row was already rendered
+  // and measured before the jump still settles in a single verification
+  // frame, exactly as before this fix.
+  it("still settles in a single verification frame when the landing row is already populated and measured (fast path unchanged)", () => {
+    const ref = createRef<LibraryGridHandle>();
+    // Fully dense/populated -- every row, including the landing row, is
+    // already fetched.
+    const items: (Item | undefined)[] = Array.from({ length: 300 }, (_, i) => makeItem(i));
+    virtualItemsToReturn = [{ index: 50, start: 50 * 360 }]; // row 50 (indices 200-203)
+
+    fakeGetOffsetForIndex.mockImplementation(() => [18_000, "start"] as const);
+    fakeScrollToIndex.mockImplementation(() => {
+      containerScrollTop = 18_000;
+    });
+
+    render(
+      <VirtualizedLibraryGrid
+        ref={ref}
+        items={items}
+        renderItem={renderItem}
+        getKey={getKey}
+        virtualizeThreshold={100}
+      />,
+    );
+
+    act(() => {
+      ref.current?.scrollToIndex(200); // cols defaults to 4 -> row 50
+    });
+    expect(containerScrollTop).toBe(18_000);
+
+    act(() => {
+      flushRaf();
+    });
+
+    expect(rafQueue.length).toBe(0);
+    // Just the initial synchronous call -- no corrective re-issues needed.
+    expect(fakeScrollToIndex).toHaveBeenCalledTimes(1);
+    expect(logger.debug).toHaveBeenCalledWith(
+      "library",
+      "scroll convergence settled",
+      expect.objectContaining({ frames: 1, delta: 0, clampedAtMax: false }),
+    );
   });
 });

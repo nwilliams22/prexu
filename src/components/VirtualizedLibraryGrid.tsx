@@ -78,6 +78,38 @@ export interface LibraryGridHandle {
  *    `scrollTo` to the best-known (already clamped) offset rather than
  *    leaving the viewport visibly wrong.
  *
+ * ── Don't converge on estimated geometry (prexu-b2dz) ──
+ *
+ * `delta == 0` alone is not sufficient evidence of convergence: right after
+ * the jump, BOTH the "expected" offset and the scroll container's actual
+ * `scrollTop` are derived from the same estimated/placeholder row heights
+ * (nothing real has measured yet), so they trivially agree even though the
+ * landing range's real content hasn't loaded. A hardware repro showed a
+ * single click landing short of the true bottom: the fetch for the landing
+ * rows had merely STARTED when convergence declared victory; once those
+ * rows populated and measured, total height grew and the earlier "settled"
+ * position was no longer correct.
+ *
+ * So convergence now additionally requires:
+ *  - `isTargetPopulated()` is true — the landing row's item slots are all
+ *    fetched, or structurally out of range (beyond the section's item
+ *    count, so no fetch could ever populate them) — AND
+ *  - the container's total scroll height has stopped changing between two
+ *    consecutive checks (`heightStable` below).
+ *
+ * Short hops whose landing row was already populated/measured before the
+ * jump satisfy both immediately, so they still settle in ~1 frame exactly
+ * as before. Long jumps into never-rendered territory now correctly wait
+ * out the fetch instead of settling on placeholder geometry, hence the
+ * larger frame budget (`CONVERGENCE_MAX_FRAMES`) below.
+ *
+ * `clampedAtMax` is computed from the LIVE `scrollTop`/max-scroll at the
+ * moment of settling — never from the pre-clamped `expected` value used for
+ * the delta check. Reusing `expected` conflated "the raw target offset got
+ * clamped down to fit" with "we actually landed at the bottom", which could
+ * report `clampedAtMax: true` even for a landing nowhere near the end of
+ * the list.
+ *
  * Extracted as a free function (rather than inlined in the imperative
  * handle) so it can be unit-tested deterministically with injected frame
  * ticks — real rAF/layout timing on WebKitGTK can't be reproduced in jsdom.
@@ -89,6 +121,10 @@ export interface ScrollConvergenceCallbacks {
   getExpectedStart: () => number | undefined;
   /** Read the scroll container's actual current `scrollTop`. */
   getScrollTop: () => number;
+  /** Read the scroll container's current `scrollHeight` — used only to
+   *  detect whether the container's geometry is still moving (rows
+   *  populating/measuring), not to compute the target offset. */
+  getScrollHeight: () => number;
   /** Read the scroll container's max scrollable offset
    *  (`scrollHeight - clientHeight`). */
   getMaxScroll: () => number;
@@ -97,14 +133,23 @@ export interface ScrollConvergenceCallbacks {
   /** Force the scroll container directly to a computed, already-clamped
    *  offset. Used only when the frame budget expires. */
   scrollTo: (offset: number) => void;
+  /** Whether the landing row's item slots are all populated (fetched) or
+   *  structurally out of range (index >= the section's item count — no
+   *  fetch could ever populate them). While false, a matching delta is
+   *  meaningless: it only reflects agreement between two estimates, not
+   *  real measured geometry. */
+  isTargetPopulated: () => boolean;
 }
 
 /** ~2px — small enough to be visually exact, large enough to tolerate
  *  sub-pixel rounding between the virtualizer's math and the DOM. */
 export const CONVERGENCE_EPSILON_PX = 2;
-/** ~20 frames (~350ms at 60fps) before giving up on verification and
- *  forcing a final corrective scroll. */
-export const CONVERGENCE_MAX_FRAMES = 20;
+/** ~30 frames before giving up on verification and forcing a final
+ *  corrective scroll — large enough to give the landing range's fetch +
+ *  measure round trip a real chance to finish before we give up on it (see
+ *  prexu-b2dz: the previous, shorter budget existed only to bound estimate
+ *  refinement, not to wait out a network fetch). */
+export const CONVERGENCE_MAX_FRAMES = 30;
 
 /**
  * Runs the convergence loop described above. Call once per `scrollToIndex`
@@ -120,24 +165,38 @@ export function runScrollConvergence(
 ): () => void {
   let cancelled = false;
   let frame = 0;
+  // Captured before the first scheduled frame, reflecting the container's
+  // geometry right after the caller's initial synchronous scrollToIndex
+  // call. Comparing frame 1 against this baseline (rather than requiring
+  // two SCHEDULED frames to elapse) is what lets an already-measured short
+  // hop still settle in a single frame.
+  let prevScrollHeight = callbacks.getScrollHeight();
 
   const tick = () => {
     if (cancelled) return;
     frame++;
 
+    const scrollHeight = callbacks.getScrollHeight();
     const maxScroll = Math.max(0, callbacks.getMaxScroll());
     const scrollTop = callbacks.getScrollTop();
     const rawExpected = callbacks.getExpectedStart();
     const expected =
       rawExpected === undefined ? undefined : Math.max(0, Math.min(rawExpected, maxScroll));
 
+    const heightStable = Math.abs(scrollHeight - prevScrollHeight) <= CONVERGENCE_EPSILON_PX;
+    prevScrollHeight = scrollHeight;
+
     if (expected !== undefined) {
       const delta = expected - scrollTop;
-      if (Math.abs(delta) <= CONVERGENCE_EPSILON_PX) {
+      const deltaConverged = Math.abs(delta) <= CONVERGENCE_EPSILON_PX;
+
+      if (deltaConverged && heightStable && callbacks.isTargetPopulated()) {
         logger.debug("library", "scroll convergence settled", {
           frames: frame,
           delta,
-          clampedAtMax: expected >= maxScroll - CONVERGENCE_EPSILON_PX,
+          // Live values, NOT the pre-clamped `expected` above — see the
+          // prexu-b2dz doc comment on this function.
+          clampedAtMax: scrollTop >= maxScroll - CONVERGENCE_EPSILON_PX,
         });
         return;
       }
@@ -327,6 +386,13 @@ function VirtualizedLibraryGrid<T>({
   const virtualizerRef = useRef(virtualizer);
   virtualizerRef.current = virtualizer;
 
+  // Latest row model, read by the convergence loop's `isTargetPopulated`
+  // check (prexu-b2dz) so it always sees the current fetch state of
+  // whatever rows are visible at the landing position, even though the
+  // loop itself lives outside React's render cycle.
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+
   // Always read the latest onRangeChange without making the range-change
   // effect below depend on its identity (callers typically pass a fresh
   // closure each render).
@@ -408,6 +474,7 @@ function VirtualizedLibraryGrid<T>({
               return offsetInfo?.[0];
             },
             getScrollTop: () => scrollElement.scrollTop,
+            getScrollHeight: () => scrollElement.scrollHeight,
             getMaxScroll: () => scrollElement.scrollHeight - scrollElement.clientHeight,
             issueScroll: () => {
               virtualizerRef.current.scrollToIndex(rowIndex, {
@@ -417,6 +484,21 @@ function VirtualizedLibraryGrid<T>({
             },
             scrollTo: (offset) => {
               scrollElement.scrollTop = offset;
+            },
+            // Whether every currently-visible row's item slots (per the
+            // virtualizer's own live range, which tracks the in-flight
+            // scroll position) are fetched or structurally out of range.
+            // Sparse (unfetched) slots inside a "cards" row block
+            // convergence; an empty visible-items list (nothing mounted
+            // yet to check) doesn't block it.
+            isTargetPopulated: () => {
+              const visible = virtualizerRef.current.getVirtualItems();
+              if (visible.length === 0) return true;
+              return visible.every((virtualItem) => {
+                const row = rowsRef.current[virtualItem.index];
+                if (!row || row.type !== "cards") return true;
+                return row.items.every((item) => item !== undefined);
+              });
             },
           });
           return;
