@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
-import { emitWatchStateChanged, onWatchStateChanged } from "./watch-state-events";
+import {
+  emitWatchStateChanged,
+  onWatchStateChanged,
+  onWatchStateChangedDetail,
+} from "./watch-state-events";
 
 describe("watch-state-events", () => {
   it("invokes a subscribed handler on emit", () => {
@@ -75,6 +79,66 @@ describe("watch-state-events", () => {
       expect(b).toHaveBeenCalledWith("111");
       offA();
       offB();
+    });
+  });
+
+  // prexu-8nl0: the event can now also carry the final viewOffset (and, for
+  // an early-stop clear, a `reset` flag) known at stop time, so listeners can
+  // patch caches directly instead of depending on a refetch. onWatchStateChanged
+  // (tested above) intentionally keeps ignoring this payload — only the new
+  // onWatchStateChangedDetail exposes it, to keep every existing subscriber's
+  // contract frozen.
+  describe("offset payload (prexu-8nl0)", () => {
+    it("onWatchStateChanged still only calls handlers with the ratingKey when an offset is present", () => {
+      const handler = vi.fn();
+      const off = onWatchStateChanged(handler);
+      emitWatchStateChanged("66324", { viewOffsetMs: 188_000 });
+      expect(handler).toHaveBeenCalledWith("66324");
+      off();
+    });
+
+    it("onWatchStateChangedDetail delivers ratingKey + viewOffsetMs for a recorded resume offset", () => {
+      const handler = vi.fn();
+      const off = onWatchStateChangedDetail(handler);
+      emitWatchStateChanged("66324", { viewOffsetMs: 188_000 });
+      expect(handler).toHaveBeenCalledWith({
+        ratingKey: "66324",
+        viewOffsetMs: 188_000,
+        reset: undefined,
+      });
+      off();
+    });
+
+    it("onWatchStateChangedDetail delivers reset:true for an early-stop clear", () => {
+      const handler = vi.fn();
+      const off = onWatchStateChangedDetail(handler);
+      emitWatchStateChanged("66324", { viewOffsetMs: 0, reset: true });
+      expect(handler).toHaveBeenCalledWith({
+        ratingKey: "66324",
+        viewOffsetMs: 0,
+        reset: true,
+      });
+      off();
+    });
+
+    it("onWatchStateChangedDetail delivers an empty object when emitted with no arguments", () => {
+      const handler = vi.fn();
+      const off = onWatchStateChangedDetail(handler);
+      emitWatchStateChanged();
+      expect(handler).toHaveBeenCalledWith({});
+      off();
+    });
+
+    it("onWatchStateChangedDetail delivers just the ratingKey when no offset is passed (back-compat call sites)", () => {
+      const handler = vi.fn();
+      const off = onWatchStateChangedDetail(handler);
+      emitWatchStateChanged("66324");
+      expect(handler).toHaveBeenCalledWith({
+        ratingKey: "66324",
+        viewOffsetMs: undefined,
+        reset: undefined,
+      });
+      off();
     });
   });
 });

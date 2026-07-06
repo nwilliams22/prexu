@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { useDashboard, isCacheFresh, isSameData } from "./useDashboard";
+import {
+  registerOffsetFloor,
+  __clearOffsetFloorsForTests,
+} from "../services/cache-invalidators";
 
 const stableServer = { uri: "https://plex.test", accessToken: "token" };
 vi.mock("./useAuth", () => ({
@@ -69,6 +73,7 @@ describe("useDashboard", () => {
     mockGetRecentlyAddedBySection.mockResolvedValue([]);
     mockGetOnDeck.mockResolvedValue([]);
     mockGroupRecentlyAdded.mockImplementation((items: unknown[]) => items);
+    __clearOffsetFloorsForTests();
   });
 
   it("starts with all sections loading on mount", () => {
@@ -412,6 +417,73 @@ describe("useDashboard", () => {
 
       expect(mockGetRecentlyAddedBySection).toHaveBeenCalled();
       expect(result.current.recentMovies).toBe(before);
+    });
+  });
+
+  // prexu-8nl0: fetchDeck runs every getOnDeck() response through
+  // applyOffsetFloors before it reaches state/cache — a stale response for an
+  // item that was just stopped (e.g. because this fetch was triggered by
+  // useDashboard's own immediate watch-state-changed listener, racing PMS's
+  // ingestion of the write) must not regress the value the player itself
+  // already reported.
+  describe("stale-response guard at the deck fetch boundary (prexu-8nl0)", () => {
+    it("overrides a stale (smaller) fetched viewOffset with a registered floor", async () => {
+      registerOffsetFloor("9", 185_000, false);
+      mockGetOnDeck.mockResolvedValue([
+        { ratingKey: "9", title: "Deck Item", type: "movie", viewOffset: 10_000 },
+      ]);
+
+      const { result } = renderHook(() => useDashboard());
+
+      await waitFor(() => {
+        expect(result.current.loading.deck).toBe(false);
+      });
+
+      expect(result.current.onDeck[0]?.viewOffset).toBe(185_000);
+    });
+
+    it("applies a reset floor (0) even over a nonzero fetched offset", async () => {
+      registerOffsetFloor("9", 0, true);
+      mockGetOnDeck.mockResolvedValue([
+        { ratingKey: "9", title: "Deck Item", type: "movie", viewOffset: 185_000 },
+      ]);
+
+      const { result } = renderHook(() => useDashboard());
+
+      await waitFor(() => {
+        expect(result.current.loading.deck).toBe(false);
+      });
+
+      expect(result.current.onDeck[0]?.viewOffset).toBe(0);
+    });
+
+    it("passes fetched items through unmodified when no floor is registered", async () => {
+      mockGetOnDeck.mockResolvedValue([
+        { ratingKey: "9", title: "Deck Item", type: "movie", viewOffset: 42_000 },
+      ]);
+
+      const { result } = renderHook(() => useDashboard());
+
+      await waitFor(() => {
+        expect(result.current.loading.deck).toBe(false);
+      });
+
+      expect(result.current.onDeck[0]?.viewOffset).toBe(42_000);
+    });
+
+    it("trusts a fetched offset that already matches or exceeds the floor", async () => {
+      registerOffsetFloor("9", 185_000, false);
+      mockGetOnDeck.mockResolvedValue([
+        { ratingKey: "9", title: "Deck Item", type: "movie", viewOffset: 200_000 },
+      ]);
+
+      const { result } = renderHook(() => useDashboard());
+
+      await waitFor(() => {
+        expect(result.current.loading.deck).toBe(false);
+      });
+
+      expect(result.current.onDeck[0]?.viewOffset).toBe(200_000);
     });
   });
 });
