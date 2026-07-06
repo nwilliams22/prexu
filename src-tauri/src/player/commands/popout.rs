@@ -36,6 +36,24 @@
 //!   therefore unmaximizes (recording the prior state) and lowers the
 //!   min-size to a small pop-out floor before resizing; `exit` restores the
 //!   min-size, the pre-popout geometry, and re-maximizes if it was maximized.
+//! - A main window SNAPPED to a screen edge (drag-to-tile — GNOME/Mutter and
+//!   most compositors' edge-tiling) is a DIFFERENT state from maximized: the
+//!   compositor reports it via `gdk::WindowState`'s `TILED`/`LEFT_TILED`/
+//!   `RIGHT_TILED`/`TOP_TILED`/`BOTTOM_TILED` bits, not `MAXIMIZED`, so
+//!   `is_maximized()` returns `false` and the unmaximize step above never
+//!   fires; the compositor also rejects programmatic resizes on a tiled
+//!   toplevel the same way it does on a maximized one, so the verify-and-
+//!   retry loop below just keeps re-issuing a `set_size` the compositor keeps
+//!   refusing. `enter` now probes the raw gdk window state (see
+//!   `probe_and_break_tile`) and, when tiled bits are set, attempts
+//!   `unmaximize()` (cheap, a no-op on compositors using the dedicated tiled
+//!   states) followed by an unmap/remap of the toplevel — Wayland has no
+//!   client-side "untile" request, so destroying and recreating the
+//!   `xdg_surface`/`xdg_toplevel` (which drops any compositor-side tiling
+//!   assignment) is the only way to break it. On `exit` there is likewise no
+//!   way to programmatically re-tile the window — it ends up floating at the
+//!   restored geometry rather than re-snapped, and the user re-snaps with one
+//!   drag if they want it back (known/acceptable limitation).
 //!
 //! Size + decoration changes work on both backends, so the popout is fully
 //! usable on Wayland — it just floats without OS-level pinning.
@@ -1253,6 +1271,171 @@ fn schedule_popout_resize_retry(app: &AppHandle, main: &tauri::WebviewWindow, re
     }
 }
 
+/// `gdk::WindowState` bits that indicate the compositor has edge-tiled the
+/// toplevel (dragged to a screen edge and snapped to full-height/half-width
+/// or similar), as opposed to `MAXIMIZED` — a genuinely different state that
+/// `tao`'s `is_maximized()` (and therefore `player_enter_popout`'s existing
+/// `was_maximized` check) never sees. Per-edge bits (`LEFT_TILED` etc.) were
+/// added in GTK 3.22 alongside the plain `TILED` bit; checking all of them
+/// covers both older and newer compositor reporting.
+#[cfg(target_os = "linux")]
+fn tile_state_bits() -> gtk::gdk::WindowState {
+    use gtk::gdk::WindowState;
+    WindowState::TILED
+        | WindowState::LEFT_TILED
+        | WindowState::RIGHT_TILED
+        | WindowState::TOP_TILED
+        | WindowState::BOTTOM_TILED
+}
+
+/// What `player_enter_popout` should do about tiling, decided purely from a
+/// `gdk::WindowState` snapshot — no GTK/main-loop involvement, so this is
+/// fully unit-testable with synthetic bit combinations (see the
+/// `tile_break_strategy` tests below).
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TileBreakStrategy {
+    /// No `tiled_*` bit set — proceed straight to the resize.
+    NoneNeeded,
+    /// One or more `tiled_*` bits are set — attempt `unmaximize()` then the
+    /// hide/show remap before resizing (see `probe_and_break_tile`).
+    BreakTile,
+}
+
+#[cfg(target_os = "linux")]
+fn decide_tile_break_strategy(state: gtk::gdk::WindowState) -> TileBreakStrategy {
+    if state.intersects(tile_state_bits()) {
+        TileBreakStrategy::BreakTile
+    } else {
+        TileBreakStrategy::NoneNeeded
+    }
+}
+
+/// Budget for `probe_and_break_tile`'s main-thread round trip. Generous
+/// relative to the sub-millisecond cost of the GTK/GDK calls involved — this
+/// only protects against a wedged main thread, matching `detach_mpv`'s 2s
+/// budget in `linux_compositor.rs`.
+#[cfg(target_os = "linux")]
+const TILE_BREAK_MAIN_THREAD_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Read the main window's raw `gdk::WindowState` and, if it's edge-tiled,
+/// attempt to break the tile before `player_enter_popout` resizes it (the
+/// "round 5" breakthrough — see the module docs' Wayland caveats). Must run
+/// on the GTK main thread: `gtk_window()` / `gdk::Window` are raw GObject
+/// wrappers, not thread-safe like the `tauri::WebviewWindow` methods used
+/// elsewhere in this file — every other `gtk_window()` call in this codebase
+/// is likewise confined to the main thread (see `linux_compositor.rs`).
+/// Blocks the calling async command (same `mpsc` rendezvous pattern as
+/// `linux_compositor::detach_mpv`) so the resize issued right after this
+/// returns is guaranteed to run after any tile-break remap completed —
+/// racing the remap against the resize would let the remap's decoration/
+/// min-size reset clobber it.
+///
+/// `was_maximized`/`was_fullscreen` are threaded through only so this can log
+/// them alongside the freshly-read gdk state in one line, satisfying "log
+/// the full state bits alongside is_maximized/is_fullscreen" without a
+/// second round trip to fetch them (they're already known to the caller via
+/// the cross-thread-safe `tauri::WebviewWindow` accessors).
+#[cfg(target_os = "linux")]
+fn probe_and_break_tile(
+    app: &AppHandle,
+    main: &tauri::WebviewWindow,
+    was_maximized: bool,
+    was_fullscreen: bool,
+) {
+    let win = main.clone();
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let dispatched = app.run_on_main_thread(move || {
+        let gtk_window = match win.gtk_window() {
+            Ok(w) => w,
+            Err(e) => {
+                log::warn!("[player:popout] gtk_window() unavailable for tile probe: {e:?}");
+                let _ = tx.send(());
+                return;
+            }
+        };
+        // WidgetExt::window() -> Option<gdk::Window>; None if unrealized
+        // (shouldn't happen here — the main window is always realized by
+        // the time pop-out can be entered — but fail soft rather than panic).
+        let gdk_state = gtk::prelude::WidgetExt::window(&gtk_window)
+            .map(|w| w.state())
+            .unwrap_or_else(|| {
+                log::warn!("[player:popout] main window has no gdk::Window (unrealized?) — treating as untiled");
+                gtk::gdk::WindowState::empty()
+            });
+
+        // Logged unconditionally on every enter regardless of whether any
+        // tiled bit is set, so hardware logs always show what the compositor
+        // reported.
+        log::info!(
+            "[player:popout] window state on enter: is_maximized={} is_fullscreen={} gdk_state={:?} (bits=0x{:x})",
+            was_maximized,
+            was_fullscreen,
+            gdk_state,
+            gdk_state.bits()
+        );
+
+        match decide_tile_break_strategy(gdk_state) {
+            TileBreakStrategy::NoneNeeded => {
+                log::debug!("[player:popout] tile-break: no tiled_* bits set, nothing to do");
+            }
+            TileBreakStrategy::BreakTile => {
+                log::info!(
+                    "[player:popout] tile-break: edge-tiling detected ({:?}) — breaking before resize",
+                    gdk_state
+                );
+
+                // (a) gtk_window_unmaximize(): cheap, tried first. Some
+                // compositors fold edge-tiling into the `maximized`
+                // xdg_toplevel state (in which case this genuinely untiles
+                // it); compositors that use the dedicated `tiled_*` states
+                // instead (the reported case — GNOME/Mutter) have nothing to
+                // unset here, so this is a harmless no-op. Called
+                // unconditionally (independent of the `was_maximized`-gated
+                // unmaximize above) because tiled-but-not-maximized is
+                // exactly the case that gate misses.
+                log::debug!("[player:popout] tile-break: (a) unmaximize()");
+                gtk::prelude::GtkWindowExt::unmaximize(&gtk_window);
+
+                // (b) unmap/remap: Wayland's xdg-shell protocol gives a
+                // client no request to un-tile itself — tiling is a
+                // compositor-side placement decision, not client state that
+                // can be toggled off. What DOES reset it is destroying and
+                // recreating the toplevel's surface role: unlike X11 (where
+                // a window ID persists across unmap/map), a Wayland
+                // toplevel's `xdg_surface`/`xdg_toplevel` objects are torn
+                // down when the underlying `wl_surface` is unmapped and a
+                // fresh pair is created on remap. `gtk_widget_hide()` on a
+                // realized toplevel unmaps it; `gtk_widget_show()` remaps it
+                // through that fresh surface pair. A brand-new toplevel has
+                // no tiling assignment for the compositor to remember, so it
+                // places the window as an ordinary floating one. GTK can
+                // drop CSD/decoration state and geometry-hint (min-size)
+                // state across that recreation, which is why
+                // `player_enter_popout` unconditionally re-issues
+                // `set_min_size`, `set_size`, and `set_decorations(false)`
+                // right after this call returns — those existing calls double
+                // as the "re-assert" this needs, no separate step required.
+                log::debug!("[player:popout] tile-break: (b) hide/show remap");
+                gtk::prelude::WidgetExt::hide(&gtk_window);
+                gtk::prelude::WidgetExt::show(&gtk_window);
+            }
+        }
+        let _ = tx.send(());
+    });
+    match dispatched {
+        Ok(()) => {
+            if rx.recv_timeout(TILE_BREAK_MAIN_THREAD_BUDGET).is_err() {
+                log::warn!(
+                    "[player:popout] tile-break: main-thread probe not confirmed within {:?}",
+                    TILE_BREAK_MAIN_THREAD_BUDGET
+                );
+            }
+        }
+        Err(e) => log::warn!("[player:popout] tile-break: run_on_main_thread failed: {e:?}"),
+    }
+}
+
 /// Enter pop-out mode (Linux): same contract as the Windows command above —
 /// `Option` args mean "use the persisted geometry", the pre-pop-out geometry
 /// is stashed in `PlayerState::pre_popout_geometry` for `player_exit_popout`
@@ -1303,6 +1486,12 @@ pub async fn player_enter_popout(
         log::warn!("[player:popout] is_maximized query failed, assuming false: {e}");
         false
     });
+    // Queried alongside was_maximized purely so probe_and_break_tile below
+    // can log both together with the raw gdk tiled state in one line.
+    let was_fullscreen = main.is_fullscreen().unwrap_or_else(|e| {
+        log::warn!("[player:popout] is_fullscreen query failed, assuming false: {e}");
+        false
+    });
     if was_maximized {
         log::debug!("[player:popout] main window is maximized, unmaximizing for popout resize");
         if let Err(e) = main.unmaximize() {
@@ -1339,6 +1528,14 @@ pub async fn player_enter_popout(
             size.height
         );
     }
+
+    // prexu-7xxx: probe the raw gdk window state and break Wayland edge-
+    // tiling (a SNAPPED window, not `is_maximized()`) before resizing — see
+    // `probe_and_break_tile` and the module docs' Wayland caveats. Must run
+    // AFTER the geometry stash above (the hide/show remap it may perform
+    // makes position/size queries momentarily meaningless) and BEFORE the
+    // resize below.
+    probe_and_break_tile(&app, &main, was_maximized, was_fullscreen);
 
     let (wx, wy, ww, wh) = linux_work_area(&main)?;
     let (width, height) = sanitize_popout_size(width, height, ww, wh);
@@ -2072,6 +2269,92 @@ mod tests {
             let actual = (REQUESTED.0, REQUESTED.1 + 1);
             let d = decide_popout_resize_retry(REQUESTED, actual, 1, MAX);
             assert_eq!(d, PopoutResizeRetryDecision::Retry);
+        }
+    }
+
+    // ---- decide_tile_break_strategy (prexu-7xxx) ---------------------------
+    //
+    // Pure tiled-detection -> action decision. `gdk::WindowState` is a plain
+    // bitflags value — constructible in a unit test with no GTK/main-loop
+    // context — so every bit combination the compositor could report is
+    // covered without hardware.
+    #[cfg(target_os = "linux")]
+    mod tile_break_strategy {
+        use super::super::*;
+        use gtk::gdk::WindowState;
+
+        #[test]
+        fn no_bits_set_needs_no_break() {
+            let d = decide_tile_break_strategy(WindowState::empty());
+            assert_eq!(d, TileBreakStrategy::NoneNeeded);
+        }
+
+        #[test]
+        fn maximized_alone_is_not_tiled() {
+            // A genuinely maximized (not snapped) window is handled by the
+            // existing was_maximized/unmaximize path — decide_tile_break_
+            // strategy must not also fire the remap for it.
+            let d = decide_tile_break_strategy(WindowState::MAXIMIZED);
+            assert_eq!(d, TileBreakStrategy::NoneNeeded);
+        }
+
+        #[test]
+        fn focused_and_above_bits_alone_are_not_tiled() {
+            // Sanity: unrelated state bits (present on basically every
+            // window) must not be misread as tiling.
+            let d = decide_tile_break_strategy(WindowState::FOCUSED | WindowState::ABOVE);
+            assert_eq!(d, TileBreakStrategy::NoneNeeded);
+        }
+
+        #[test]
+        fn plain_tiled_bit_triggers_break() {
+            let d = decide_tile_break_strategy(WindowState::TILED);
+            assert_eq!(d, TileBreakStrategy::BreakTile);
+        }
+
+        #[test]
+        fn left_tiled_triggers_break() {
+            // The reported round-5 repro: dragged to the left screen edge,
+            // full height / half width.
+            let d = decide_tile_break_strategy(WindowState::LEFT_TILED);
+            assert_eq!(d, TileBreakStrategy::BreakTile);
+        }
+
+        #[test]
+        fn right_tiled_triggers_break() {
+            let d = decide_tile_break_strategy(WindowState::RIGHT_TILED);
+            assert_eq!(d, TileBreakStrategy::BreakTile);
+        }
+
+        #[test]
+        fn top_tiled_triggers_break() {
+            let d = decide_tile_break_strategy(WindowState::TOP_TILED);
+            assert_eq!(d, TileBreakStrategy::BreakTile);
+        }
+
+        #[test]
+        fn bottom_tiled_triggers_break() {
+            let d = decide_tile_break_strategy(WindowState::BOTTOM_TILED);
+            assert_eq!(d, TileBreakStrategy::BreakTile);
+        }
+
+        #[test]
+        fn tiled_combined_with_unrelated_bits_still_triggers_break() {
+            // Real-world reports include FOCUSED/ABOVE alongside the tiled
+            // bit, not tiled bits in isolation.
+            let d = decide_tile_break_strategy(
+                WindowState::LEFT_TILED | WindowState::FOCUSED | WindowState::ABOVE,
+            );
+            assert_eq!(d, TileBreakStrategy::BreakTile);
+        }
+
+        #[test]
+        fn tiled_and_maximized_together_still_triggers_break() {
+            // A compositor that sets both (folds tiling into maximized AND
+            // reports the edge bit) must still get the break — harmless
+            // no-op unmaximize() plus the remap, not skipped entirely.
+            let d = decide_tile_break_strategy(WindowState::LEFT_TILED | WindowState::MAXIMIZED);
+            assert_eq!(d, TileBreakStrategy::BreakTile);
         }
     }
 }
