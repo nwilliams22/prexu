@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, memo } from "react";
 import { useNavigate } from "react-router-dom";
+import { logger } from "../services/logger";
 import { useBreakpoint, isMobile, isTabletOrBelow } from "../hooks/useBreakpoint";
 
 export interface HeroSlide {
@@ -36,6 +37,34 @@ function HeroSlideshow({ slides, onDismiss, onPlay }: HeroSlideshowProps) {
   const [showArrows, setShowArrows] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Timing instrumentation (prexu-200v): Dashboard's "phase 2" commit (the
+  // one that stages the shelves in) also carries the hero's first backdrop,
+  // since this component mounts unconditionally on Dashboard's very first
+  // commit and previously re-rendered on every one of the shelf-staging
+  // commits too (see the `memo()` wrap below). These two marks separate "was
+  // HeroSlideshow's own commit expensive" from "was the backdrop image slow
+  // to decode" — both tagged "dashboard" so they show up alongside
+  // Dashboard.tsx's per-section marks in the same log.
+  const mountStartRef = useRef<number | null>(null);
+  if (mountStartRef.current === null) {
+    mountStartRef.current = performance.now();
+  }
+  const loggedFirstImageLoadRef = useRef(false);
+
+  useLayoutEffect(() => {
+    logger.debug("dashboard", "hero backdrop committed", {
+      ms: Math.round(performance.now() - (mountStartRef.current ?? performance.now())),
+    });
+  }, []);
+
+  const handleFirstBackdropLoad = useCallback(() => {
+    if (loggedFirstImageLoadRef.current) return;
+    loggedFirstImageLoadRef.current = true;
+    logger.debug("dashboard", "hero backdrop image loaded", {
+      ms: Math.round(performance.now() - (mountStartRef.current ?? performance.now())),
+    });
+  }, []);
+
   // Backdrops are expensive to paint (each is a full 1920x1080 image), and
   // this component used to mount a <div> for EVERY slide up front (up to
   // 10 for the dashboard's hero) just to get an instant opacity-crossfade
@@ -45,11 +74,11 @@ function HeroSlideshow({ slides, onDismiss, onPlay }: HeroSlideshowProps) {
   // route at all (see Dashboard.tsx), so paying for 10 backdrops instead of
   // 1 directly added to the route-transition stall (prexu-r56j).
   //
-  // Fix: only ever mount backdrop divs for slides the user has actually
+  // Fix: only ever mount a backdrop element for slides the user has actually
   // reached (`visitedIndices`), which starts as just the first slide. The
   // "preload next" effect below still warms the upcoming slide's image via
   // `new Image()` (a plain network+decode fetch, no DOM/paint cost), so by
-  // the time rotation/dot-click actually advances to it, its backdrop div
+  // the time rotation/dot-click actually advances to it, its backdrop
   // mounts already-cache-warm and still crossfades smoothly against
   // whichever slides are already visited. The only visible trade-off: the
   // very first time a given slide is reached, it appears via a plain
@@ -133,14 +162,23 @@ function HeroSlideshow({ slides, onDismiss, onPlay }: HeroSlideshowProps) {
     >
       {/* Backdrop images — only slides actually visited so far are mounted
           (prexu-r56j); the active one is visible, the rest are kept
-          around at opacity 0 so crossfades stay smooth on repeat visits. */}
+          around at opacity 0 so crossfades stay smooth on repeat visits.
+          A real <img> (rather than a CSS background-image div) so
+          decoding="async" can hint the browser to never let this image's
+          decode block a commit/paint (prexu-200v) — object-fit:cover +
+          absolute positioning reproduce the same full-bleed backdrop look. */}
       {slides.map((s, i) =>
         visitedIndices.has(i) ? (
-          <div
+          <img
             key={s.ratingKey}
+            src={s.backdropUrl}
+            alt=""
+            decoding="async"
+            loading={i === activeIndex ? "eager" : "lazy"}
+            data-testid="hero-backdrop"
+            onLoad={i === 0 ? handleFirstBackdropLoad : undefined}
             style={{
               ...styles.backdrop,
-              backgroundImage: `url(${s.backdropUrl})`,
               opacity: i === activeIndex ? 1 : 0,
             }}
             aria-hidden={i !== activeIndex}
@@ -345,8 +383,10 @@ const styles: Record<string, React.CSSProperties> = {
   backdrop: {
     position: "absolute",
     inset: 0,
-    backgroundSize: "cover",
-    backgroundPosition: "center top",
+    width: "100%",
+    height: "100%",
+    objectFit: "cover",
+    objectPosition: "center top",
     transition: "opacity 0.8s ease",
   },
   gradient: {
@@ -499,4 +539,11 @@ const styles: Record<string, React.CSSProperties> = {
   },
 };
 
-export default HeroSlideshow;
+// Memoized (prexu-200v): Dashboard's staged shelf reveal now flips
+// `shelfStage` 3 times after mount. HeroSlideshow's props (slides,
+// onDismiss, onPlay) are stable across those transitions (useMemo /
+// useCallback upstream in Dashboard.tsx), so without memo() this component
+// re-rendered — and re-diffed its whole SVG/button tree — on every one of
+// those shelf commits for no visible change. memo() isolates its cost to
+// its own commits (mount, slide changes, dismiss) instead.
+export default memo(HeroSlideshow);
