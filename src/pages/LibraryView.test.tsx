@@ -36,6 +36,35 @@ vi.mock("../hooks/useLibrary", () => ({
   }),
 }));
 
+const mockUseFirstCharacter = vi.fn(() => ({
+  letters: new Set<string>(),
+  buckets: [] as { key: string; size: number }[],
+  isLoading: false,
+  error: null as string | null,
+}));
+vi.mock("../hooks/useFirstCharacter", async () => {
+  const actual = await vi.importActual<typeof import("../hooks/useFirstCharacter")>(
+    "../hooks/useFirstCharacter",
+  );
+  return {
+    // `computeLetterOffsets` is a pure function LibraryView relies on
+    // directly — keep the real implementation so offset math stays honest.
+    computeLetterOffsets: actual.computeLetterOffsets,
+    useFirstCharacter: (...args: unknown[]) => mockUseFirstCharacter(...(args as [])),
+  };
+});
+
+const mockLoggerDebug = vi.fn();
+vi.mock("../services/logger", () => ({
+  logger: {
+    debug: (...args: unknown[]) => mockLoggerDebug(...args),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    trace: vi.fn(),
+  },
+}));
+
 vi.mock("../hooks/useFilterOptions", () => ({
   useFilterOptions: () => ({
     genres: [],
@@ -129,8 +158,75 @@ vi.mock("../components/ShowExpansionPanel", () => ({
   default: () => <div data-testid="show-expansion-panel" />,
 }));
 
+// Renders real, clickable letter buttons (disabled when unavailable, mirroring
+// the production component) so alpha-jump wiring can be exercised end to end.
 vi.mock("../components/AlphaJumpBar", () => ({
-  default: () => <div data-testid="alpha-jump-bar" />,
+  default: ({
+    onJump,
+    availableLetters,
+  }: {
+    onJump: (letter: string) => void;
+    availableLetters?: Set<string>;
+  }) => (
+    <div data-testid="alpha-jump-bar">
+      {"#ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map((letter) => (
+        <button
+          key={letter}
+          onClick={() => onJump(letter)}
+          disabled={!!availableLetters && !availableLetters.has(letter)}
+        >
+          {letter}
+        </button>
+      ))}
+    </div>
+  ),
+}));
+
+// Stand-in for the real virtualized grid (unit-tested separately in
+// VirtualizedLibraryGrid.test.tsx). Exposes the imperative `scrollToIndex`
+// handle and, mirroring the real grid's contract (prexu-6qi5.1), fires
+// `onRangeChange` for the landing viewport whenever `scrollToIndex` is
+// invoked — this is what lets these tests assert the jump actually requests
+// the range it lands on, not just that it "scrolled".
+const mockScrollToIndex = vi.fn();
+vi.mock("../components/VirtualizedLibraryGrid", () => ({
+  default: (props: {
+    ref?: React.Ref<{ scrollToIndex: (index: number) => void }>;
+    items: (unknown | undefined)[];
+    itemCount?: number;
+    renderItem: (item: never, index: number) => React.ReactNode;
+    renderPlaceholder?: (index: number) => React.ReactNode;
+    getKey: (item: never, index: number) => string;
+    onRangeChange?: (start: number, end: number) => void;
+    header?: React.ReactNode;
+    footer?: React.ReactNode;
+  }) => {
+    const totalCount = props.itemCount ?? props.items.length;
+    React.useImperativeHandle(props.ref, () => ({
+      scrollToIndex: (index: number) => {
+        mockScrollToIndex(index);
+        const start = Math.max(0, index - 2);
+        const end = Math.min(totalCount, index + 24);
+        props.onRangeChange?.(start, end);
+      },
+    }));
+    return (
+      <div data-testid="virtualized-grid">
+        {props.header}
+        {Array.from({ length: totalCount }, (_, i) => {
+          const item = props.items[i];
+          return (
+            <div key={item ? props.getKey(item as never, i) : `ph-${i}`} data-grid-index={i}>
+              {item !== undefined
+                ? props.renderItem(item as never, i)
+                : (props.renderPlaceholder?.(i) ?? null)}
+            </div>
+          );
+        })}
+        {props.footer}
+      </div>
+    );
+  },
 }));
 
 vi.mock("../components/SegmentedControl", () => ({
@@ -362,5 +458,208 @@ describe("LibraryView", () => {
     renderPage();
     expect(screen.getByTestId("error-state")).toBeInTheDocument();
     expect(screen.getByText("Failed to load library")).toBeInTheDocument();
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// Alpha-jump scrubber (prexu-6qi5.2)
+//
+// PR #55 gave VirtualizedLibraryGrid fixed, itemCount-driven geometry and a
+// sparse-by-index item store, so an imperative scrollToIndex jump can reach
+// ANY index — fetched or not — and onRangeChange fires for wherever it
+// lands. These tests exercise the wiring end to end: LibraryView's
+// handleAlphaJump computing the right target and the grid contract
+// (mocked here, unit-tested in VirtualizedLibraryGrid.test.tsx) turning a
+// jump into a range request.
+function makeSparseItems(
+  populatedPrefixLength: number,
+  totalSize: number,
+): (PlexTestItem | undefined)[] {
+  return Array.from({ length: totalSize }, (_, i) =>
+    i < populatedPrefixLength
+      ? { ratingKey: String(i), title: `Item ${i}`, thumb: `/t${i}`, type: "movie" }
+      : undefined,
+  );
+}
+
+interface PlexTestItem {
+  ratingKey: string;
+  title: string;
+  thumb: string;
+  type: string;
+  contentRating?: string;
+}
+
+describe("LibraryView — alpha jump scrubber (prexu-6qi5.2)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseParams.mockReturnValue({ sectionId: "1" });
+    mockUseParentalControls.mockReturnValue({
+      restrictionsEnabled: false,
+      filterByRating: (items: unknown[]) => items,
+      isItemAllowed: () => true,
+      maxContentRating: "none",
+    });
+  });
+
+  it("single click on a letter whose offset lies far beyond the fetched range lands the viewport there and requests the landing range (hardware regression: clicking 'N' used to need ~20 clicks)", async () => {
+    const { fireEvent } = await import("@testing-library/react");
+
+    // Buckets chosen so "N" starts exactly at offset 2020 — the same
+    // offset from the hardware repro's log line: alpha jump (firstChar)
+    // {"letter":"N","offset":2020}.
+    mockUseFirstCharacter.mockReturnValue({
+      letters: new Set(["#", "A", "N", "Z"]),
+      buckets: [
+        { key: "#", size: 20 },
+        { key: "A", size: 2000 },
+        { key: "N", size: 50 },
+        { key: "Z", size: 30 },
+      ],
+      isLoading: false,
+      error: null,
+    });
+
+    const ensureRangeMock = vi.fn();
+    mockUsePaginatedLibrary.mockReturnValue({
+      // Only the first 100 items are fetched — index 2020 is well beyond
+      // anything currently loaded, matching the repro's "grid creeping
+      // forward 50 items per click" starting point.
+      items: makeSparseItems(100, 2200),
+      isLoading: false,
+      isLoadingMore: false,
+      isStale: false,
+      totalSize: 2200,
+      error: null,
+      ensureRange: ensureRangeMock,
+      retry: vi.fn(),
+    });
+
+    renderPage();
+
+    const nButton = screen.getByRole("button", { name: "N" });
+    expect(nButton).not.toBeDisabled();
+    fireEvent.click(nButton);
+
+    // A SINGLE click reaches the target directly — no repeated clicking.
+    expect(mockScrollToIndex).toHaveBeenCalledTimes(1);
+    expect(mockScrollToIndex).toHaveBeenCalledWith(2020);
+
+    // The landing viewport gets its range requested (this is what makes the
+    // jump self-healing: whatever becomes visible gets fetched).
+    expect(ensureRangeMock).toHaveBeenCalledTimes(1);
+    const [start, end] = ensureRangeMock.mock.calls[0]!;
+    expect(start).toBeLessThanOrEqual(2020);
+    expect(end).toBeGreaterThan(2020);
+
+    // Log line shape is unchanged (tag, message, and payload).
+    expect(mockLoggerDebug).toHaveBeenCalledWith(
+      "library:scrubber",
+      "alpha jump (firstChar)",
+      { letter: "N", offset: 2020 },
+    );
+  });
+
+  it("jump lands on the correct slot while the target range is still fetching, then fills in place once it resolves", async () => {
+    const { fireEvent } = await import("@testing-library/react");
+
+    mockUseFirstCharacter.mockReturnValue({
+      letters: new Set(["#", "A", "N", "Z"]),
+      buckets: [
+        { key: "#", size: 20 },
+        { key: "A", size: 2000 },
+        { key: "N", size: 50 },
+        { key: "Z", size: 30 },
+      ],
+      isLoading: false,
+      error: null,
+    });
+
+    const ensureRangeMock = vi.fn();
+    const baseReturn = {
+      isLoading: false,
+      isLoadingMore: false,
+      isStale: false,
+      totalSize: 2200,
+      error: null,
+      ensureRange: ensureRangeMock,
+      retry: vi.fn(),
+    };
+    mockUsePaginatedLibrary.mockReturnValue({
+      ...baseReturn,
+      items: makeSparseItems(100, 2200),
+    });
+
+    const { rerender } = renderPage();
+
+    // Before the jump, slot 2020 is unfetched -> renders a loading skeleton.
+    const slotBefore = document.querySelector('[data-grid-index="2020"]');
+    expect(slotBefore?.querySelector('[data-testid="skeleton-card"]')).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "N" }));
+    expect(mockScrollToIndex).toHaveBeenCalledWith(2020);
+    expect(ensureRangeMock).toHaveBeenCalledTimes(1);
+
+    // The range resolves and slot 2020 is now populated — simulate the
+    // hook's state update and re-render the same tree (as React would).
+    const filled = makeSparseItems(100, 2200);
+    filled[2020] = { ratingKey: "2020", title: "Nightcrawler", thumb: "/t2020", type: "movie" };
+    mockUsePaginatedLibrary.mockReturnValue({ ...baseReturn, items: filled });
+    rerender(
+      <MemoryRouter>
+        <LibraryView />
+      </MemoryRouter>,
+    );
+
+    const slotAfter = document.querySelector('[data-grid-index="2020"]');
+    expect(slotAfter?.querySelector('[data-testid="skeleton-card"]')).toBeNull();
+    expect(slotAfter?.textContent).toBe("Nightcrawler");
+  });
+
+  it("fallback path (firstCharacter unavailable) scans only populated slots of the sparse store for the matching bucket", async () => {
+    const { fireEvent } = await import("@testing-library/react");
+
+    // Simulate the firstCharacter endpoint failing -> useFirstCharIndex is
+    // false, so handleAlphaJump takes the linear-scan fallback branch.
+    mockUseFirstCharacter.mockReturnValue({
+      letters: new Set<string>(),
+      buckets: [],
+      isLoading: false,
+      error: "Failed to load first-character index",
+    });
+
+    const ensureRangeMock = vi.fn();
+    mockUsePaginatedLibrary.mockReturnValue({
+      items: [
+        { ratingKey: "1", title: "Alien", thumb: "/t1", type: "movie" },
+        undefined, // unfetched slot — must be skipped, not treated as a miss
+        { ratingKey: "3", title: "The Matrix", thumb: "/t3", type: "movie" },
+      ],
+      isLoading: false,
+      isLoadingMore: false,
+      isStale: false,
+      totalSize: 3,
+      error: null,
+      ensureRange: ensureRangeMock,
+      retry: vi.fn(),
+    });
+
+    renderPage();
+
+    // Only buckets actually present in the loaded (sparse) items are
+    // enabled — "A" (Alien) and "M" (The Matrix).
+    const mButton = screen.getByRole("button", { name: "M" });
+    expect(mButton).not.toBeDisabled();
+
+    fireEvent.click(mButton);
+
+    // Index 2 ("The Matrix") is found, skipping over the unfetched hole
+    // at index 1 rather than misreading it as a bucket mismatch.
+    expect(mockScrollToIndex).toHaveBeenCalledWith(2);
+    expect(mockLoggerDebug).toHaveBeenCalledWith("library:scrubber", "alpha jump", {
+      letter: "M",
+      index: 2,
+      title: "The Matrix",
+    });
   });
 });
