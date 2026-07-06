@@ -65,6 +65,57 @@ function persistFilters(sectionId: string, state: PersistedLibraryState): void {
   }
 }
 
+/**
+ * Static placeholder for a slot that IS fetched but masked by parental
+ * controls. Deliberately NOT a SkeletonCard: the shimmer animation signals
+ * "loading, resolves soon", and a restricted slot never resolves — a
+ * permanently-shimmering card reads as a broken grid. Mirrors SkeletonCard's
+ * geometry (160×240 poster, 8px radius) so masked and loading slots occupy
+ * identical space with zero layout shift, but renders as a muted, motionless
+ * empty poster with a lock glyph.
+ */
+function RestrictedPlaceholder() {
+  return (
+    <div role="img" aria-label="Restricted content" style={restrictedStyles.card}>
+      <div style={restrictedStyles.poster}>
+        <svg
+          width={28}
+          height={28}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={1.5}
+          aria-hidden="true"
+        >
+          <rect x={5} y={11} width={14} height={9} rx={2} />
+          <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+const restrictedStyles: Record<string, React.CSSProperties> = {
+  card: {
+    display: "flex",
+    flexDirection: "column",
+    flexShrink: 0,
+    width: 160,
+    opacity: 0.45,
+  },
+  poster: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "100%",
+    height: 240,
+    borderRadius: "8px",
+    background: "var(--bg-secondary)",
+    border: "1px solid var(--border)",
+    color: "var(--text-secondary)",
+  },
+};
+
 function LibraryView() {
   const { sectionId } = useParams<{ sectionId: string }>();
   const { server } = useAuth();
@@ -464,14 +515,27 @@ function LibraryView() {
 
   const getCollectionCardKey = useCallback((c: PlexCollection) => c.ratingKey, []);
 
-  // Per-index skeleton placeholder for a not-yet-fetched grid slot
+  // Per-index placeholder for a grid slot with no renderable item
   // (prexu-6qi5.1) — replaces the old bottom-of-list "loading more" footer
   // batch. Fetching is now range-driven (see ensureRange/onRangeChange
   // below), so any slot in the section, not just the tail, can be unfetched
   // at a given moment.
+  //
+  // Two distinct cases share the "no item at this index" slot state, told
+  // apart by consulting the RAW store (`items`, pre-parental-masking):
+  //  - unfetched (raw slot is undefined): loading skeleton — resolves soon.
+  //  - fetched but masked by parental controls (raw slot holds an item that
+  //    filteredItems blanked): a STATIC restricted placeholder. Rendering
+  //    the shimmer skeleton here would look like the grid is permanently
+  //    stuck loading, since a restricted slot never resolves.
   const renderLibraryPlaceholder = useCallback(
-    (index: number) => <SkeletonCard index={index} />,
-    [],
+    (index: number) =>
+      items[index] !== undefined ? (
+        <RestrictedPlaceholder />
+      ) : (
+        <SkeletonCard index={index} />
+      ),
+    [items],
   );
 
   if (!server) return null;
