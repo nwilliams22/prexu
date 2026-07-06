@@ -1086,6 +1086,173 @@ fn configured_main_min_size(
     (w, h)
 }
 
+/// Number of times `schedule_popout_resize_retry` checks whether the
+/// requested pop-out size actually applied before giving up.
+#[cfg(target_os = "linux")]
+const POPOUT_RESIZE_RETRY_MAX_ATTEMPTS: u32 = 3;
+
+/// Delay between each verify-and-retry check, run on the GTK main loop.
+/// 3 attempts at 200ms apart spans ~600ms — long enough to cover the
+/// hardware-observed worst case (a resize that only landed once the user
+/// grabbed the drag strip ~3s later would still be caught as "didn't land"
+/// and retried within this window, rather than silently accepted).
+#[cfg(target_os = "linux")]
+const POPOUT_RESIZE_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// Outcome of comparing the pop-out window's actual size against the size
+/// `player_enter_popout` requested, on a given verify attempt. Pure decision
+/// so the retry/give-up boundary is unit-testable without a GTK main loop.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PopoutResizeRetryDecision {
+    /// Actual size matches the request — stop polling.
+    Satisfied,
+    /// Sizes differ and attempts remain — re-issue `set_size` and schedule
+    /// another check.
+    Retry,
+    /// Sizes differ and this was the last allowed attempt — stop polling
+    /// and warn; the Wayland compositor swallowed (or deferred) the resize
+    /// past our retry window.
+    GiveUp,
+}
+
+/// Decide what `schedule_popout_resize_retry`'s GTK-main-loop timer should do
+/// on a given tick. `attempt` is 1-indexed (the first check is attempt 1).
+/// Pure: no GTK/Tauri types, fully unit-testable — see the `popout_resize_retry`
+/// tests below.
+#[cfg(target_os = "linux")]
+fn decide_popout_resize_retry(
+    requested: (u32, u32),
+    actual: (u32, u32),
+    attempt: u32,
+    max_attempts: u32,
+) -> PopoutResizeRetryDecision {
+    if actual == requested {
+        return PopoutResizeRetryDecision::Satisfied;
+    }
+    if attempt < max_attempts {
+        PopoutResizeRetryDecision::Retry
+    } else {
+        PopoutResizeRetryDecision::GiveUp
+    }
+}
+
+/// Verify the pop-out resize issued by `player_enter_popout` actually landed,
+/// and retry it a bounded number of times if not (prexu-rmm7).
+///
+/// # Why this exists
+/// Hardware logs showed two Wayland failure modes for the SAME resize call
+/// that always succeeds on exit (which does `set_decorations(true)` then
+/// `set_size`, the reverse of enter's `set_decorations(false)` then —
+/// pre-fix — `set_size`):
+/// - The window/GLArea stayed at the pre-popout size for ~3 SECONDS until the
+///   user grabbed the drag strip, at which point it snapped to the requested
+///   size.
+/// - The resize never applied at all when the user didn't touch the window;
+///   exit read back the pre-popout size.
+///
+/// Wayland gives the client no synchronous "your resize was accepted"
+/// confirmation — `gtk_window_resize` just queues a request that is only
+/// realized once the compositor round-trips a new `xdg_toplevel::configure`.
+/// The decoration change immediately before it (see the reordering comment in
+/// `player_enter_popout`) appears to trigger a competing relayout that can
+/// win that round-trip. Reordering (resize before decorations) is a
+/// best-effort mitigation; this verify-and-retry loop is the actual
+/// guarantee of convergence — a small number of bounded checks that
+/// re-issue `set_size` if the previous attempt didn't stick.
+///
+/// # Mechanics
+/// Registered via `run_on_main_thread` because `glib::timeout_add_local`
+/// (like the compositor's 60Hz render pump in `linux_compositor::
+/// try_create_render_context`) must be called FROM the GTK main thread — it
+/// attaches to that thread's thread-default `MainContext`, which only exists
+/// there. `player_enter_popout` is an async Tauri command and is not
+/// guaranteed to already be running on that thread, so the registration
+/// itself is marshalled over, exactly like `linux_compositor::attach_mpv`
+/// does for its own main-thread setup work.
+///
+/// # Cancellation
+/// Each tick re-reads `PlayerState::pre_popout_geometry` (via `AppHandle::
+/// state`) and stops immediately if it's `None` — cleared the moment
+/// `player_exit_popout` takes the stash, so a user who pops back out during
+/// the ~600ms verify window cancels the loop naturally instead of fighting
+/// the exit-path resize.
+#[cfg(target_os = "linux")]
+fn schedule_popout_resize_retry(app: &AppHandle, main: &tauri::WebviewWindow, requested: (u32, u32)) {
+    let win = main.clone();
+    let app_handle = app.clone();
+    let scheduled = app.run_on_main_thread(move || {
+        let attempt = std::cell::Cell::new(0u32);
+        glib::timeout_add_local(POPOUT_RESIZE_RETRY_INTERVAL, move || {
+            let still_popped_out = app_handle
+                .state::<PlayerState>()
+                .pre_popout_geometry
+                .lock()
+                .map(|g| g.is_some())
+                .unwrap_or(false);
+            if !still_popped_out {
+                log::debug!(
+                    "[player:popout] resize-retry: popout no longer active, cancelling verify loop"
+                );
+                return glib::ControlFlow::Break;
+            }
+
+            let n = attempt.get() + 1;
+            attempt.set(n);
+
+            let actual = match win.inner_size() {
+                Ok(s) => (s.width, s.height),
+                Err(e) => {
+                    log::warn!("[player:popout] resize-retry: inner_size query failed: {:?}", e);
+                    // Transient query failure — try again next tick rather
+                    // than burning an attempt we can't evaluate.
+                    return glib::ControlFlow::Continue;
+                }
+            };
+
+            match decide_popout_resize_retry(
+                requested,
+                actual,
+                n,
+                POPOUT_RESIZE_RETRY_MAX_ATTEMPTS,
+            ) {
+                PopoutResizeRetryDecision::Satisfied => {
+                    log::debug!(
+                        "[player:popout] resize-retry: confirmed {}x{} applied on attempt {n}",
+                        requested.0, requested.1
+                    );
+                    glib::ControlFlow::Break
+                }
+                PopoutResizeRetryDecision::Retry => {
+                    log::debug!(
+                        "[player:popout] resize-retry attempt {n}/{}: window is {}x{}, expected \
+                         {}x{} — re-issuing set_size",
+                        POPOUT_RESIZE_RETRY_MAX_ATTEMPTS, actual.0, actual.1, requested.0, requested.1
+                    );
+                    if let Err(e) =
+                        win.set_size(tauri::PhysicalSize::new(requested.0, requested.1))
+                    {
+                        log::warn!("[player:popout] resize-retry set_size failed: {:?}", e);
+                    }
+                    glib::ControlFlow::Continue
+                }
+                PopoutResizeRetryDecision::GiveUp => {
+                    log::warn!(
+                        "[player:popout] resize-retry: gave up after {n} attempts — window is \
+                         {}x{}, expected {}x{} (Wayland compositor did not apply the resize within \
+                         the retry window; a subsequent user drag/resize will still correct it)",
+                        actual.0, actual.1, requested.0, requested.1
+                    );
+                    glib::ControlFlow::Break
+                }
+            }
+        });
+    });
+    if let Err(e) = scheduled {
+        log::warn!("[player:popout] resize-retry schedule failed: {:?}", e);
+    }
+}
+
 /// Enter pop-out mode (Linux): same contract as the Windows command above —
 /// `Option` args mean "use the persisted geometry", the pre-pop-out geometry
 /// is stashed in `PlayerState::pre_popout_geometry` for `player_exit_popout`
@@ -1182,8 +1349,6 @@ pub async fn player_enter_popout(
     if let Err(e) = main.set_always_on_top(true) {
         log::warn!("[player:popout] set_always_on_top(true) failed: {e}");
     }
-    main.set_decorations(false)
-        .map_err(|e| format!("popout set_decorations(false) failed: {e}"))?;
 
     // Lift the main window's min-size floor (prexu-6qi5.4) — see
     // POPOUT_MIN_WIDTH/HEIGHT doc comment. Without this, GTK's geometry
@@ -1191,6 +1356,9 @@ pub async fn player_enter_popout(
     // resize below to 800x600 regardless of the requested 480x270, and
     // block edge-drag resize under that floor too. LogicalSize on purpose:
     // min-size constraints are logical throughout (config + GTK hints).
+    // Must happen BEFORE `set_size` below regardless of the decoration
+    // reordering that follows — the floor has to be lifted before the
+    // resize request is even queued or GTK clamps it back up immediately.
     log::debug!(
         "[player:popout] lifting main window min-size to {}x{} logical",
         POPOUT_MIN_WIDTH, POPOUT_MIN_HEIGHT
@@ -1202,8 +1370,33 @@ pub async fn player_enter_popout(
         log::warn!("[player:popout] set_min_size (popout floor) failed: {e}");
     }
 
+    // prexu-rmm7: resize BEFORE flipping decorations off — deliberately the
+    // reverse of the order this shipped with originally. Hardware logs showed
+    // the resize either taking ~3s to land (only after the user grabbed the
+    // drag strip) or never landing at all, while `set_decorations(false)` ran
+    // immediately before it every time.
+    //
+    // Reasoning: `gtk_window_set_decorated(FALSE)` tears down and rebuilds
+    // GTK's CSD/SSD frame, which forces a fresh toplevel relayout. On Wayland
+    // that relayout is resolved through the next `xdg_toplevel::configure`
+    // round-trip with the compositor — an async, compositor-driven event, not
+    // something GTK can resolve synchronously. If a `gtk_window_resize()` is
+    // still in flight (queued but not yet committed) when that round-trip
+    // lands, the decoration-driven relayout appears to win and the resize
+    // gets superseded/dropped. Issuing the resize FIRST means GTK's internal
+    // size request already reflects the popout dimensions by the time the
+    // decoration change forces its relayout, so there's no stale size for
+    // that relayout to fall back to.
+    //
+    // This is a best-effort mitigation, not a guarantee — Wayland gives the
+    // client no synchronous confirmation that a resize applied, so ordering
+    // alone can't be trusted. The verify-and-retry loop scheduled below
+    // (`schedule_popout_resize_retry`) is the actual fix; correct ordering
+    // just reduces how often it has to do anything.
     main.set_size(tauri::PhysicalSize::new(w, h))
         .map_err(|e| format!("popout resize failed: {e}"))?;
+    main.set_decorations(false)
+        .map_err(|e| format!("popout set_decorations(false) failed: {e}"))?;
     if let Err(e) = main.set_position(tauri::PhysicalPosition::new(x, y)) {
         // X11 places the corner; Wayland ignores the request (shrink-in-place).
         log::warn!("[player:popout] set_position failed: {e}");
@@ -1212,6 +1405,12 @@ pub async fn player_enter_popout(
 
     // No host resync (a Windows-only concept): the GLArea render target
     // follows the GTK allocation change from set_size automatically.
+
+    // prexu-rmm7: verify the resize actually landed and retry a bounded
+    // number of times if not — see `schedule_popout_resize_retry` doc for
+    // the full design. Scheduled after the initial apply above so the common
+    // case (resize lands first try) costs nothing beyond the one check.
+    schedule_popout_resize_retry(&app, &main, (w, h));
 
     // Persist the chosen corner + size for next session (same store + keys
     // as Windows). A failure here is not fatal.
@@ -1808,4 +2007,71 @@ mod tests {
         }
     }
 
+    // ---- decide_popout_resize_retry (prexu-rmm7) --------------------------
+    //
+    // Pure retry/give-up decision for the Wayland verify-and-retry loop.
+    // Covers the two hardware-observed failure modes: a resize that lands
+    // late (would be `Retry` on early attempts, `Satisfied` once it catches
+    // up) and one that never lands (`Retry` until the attempt budget is
+    // spent, then `GiveUp`).
+    #[cfg(target_os = "linux")]
+    mod popout_resize_retry {
+        use super::super::*;
+
+        const REQUESTED: (u32, u32) = (480, 270);
+        const MAX: u32 = POPOUT_RESIZE_RETRY_MAX_ATTEMPTS;
+
+        #[test]
+        fn satisfied_when_actual_matches_requested_on_first_attempt() {
+            let d = decide_popout_resize_retry(REQUESTED, REQUESTED, 1, MAX);
+            assert_eq!(d, PopoutResizeRetryDecision::Satisfied);
+        }
+
+        #[test]
+        fn satisfied_takes_priority_even_on_the_final_attempt() {
+            // A match on the very last attempt is still success, not GiveUp.
+            let d = decide_popout_resize_retry(REQUESTED, REQUESTED, MAX, MAX);
+            assert_eq!(d, PopoutResizeRetryDecision::Satisfied);
+        }
+
+        #[test]
+        fn retries_on_mismatch_while_attempts_remain() {
+            // Hardware repro #1: window still at the pre-popout size on the
+            // first couple of checks (the ~3s-late resize case) — every
+            // attempt before the last must retry, not give up early.
+            let stale = (1920, 2160);
+            for attempt in 1..MAX {
+                let d = decide_popout_resize_retry(REQUESTED, stale, attempt, MAX);
+                assert_eq!(d, PopoutResizeRetryDecision::Retry, "attempt {attempt}");
+            }
+        }
+
+        #[test]
+        fn gives_up_on_mismatch_at_the_final_attempt() {
+            // Hardware repro #2: the resize never lands at all — by the last
+            // allowed attempt we must stop retrying rather than loop forever.
+            let stale = (1920, 2160);
+            let d = decide_popout_resize_retry(REQUESTED, stale, MAX, MAX);
+            assert_eq!(d, PopoutResizeRetryDecision::GiveUp);
+        }
+
+        #[test]
+        fn gives_up_rather_than_panics_past_the_final_attempt() {
+            // Defensive: an attempt counter somehow exceeding max_attempts
+            // (shouldn't happen — the loop breaks at MAX) still gives up
+            // cleanly instead of retrying forever.
+            let stale = (1920, 2160);
+            let d = decide_popout_resize_retry(REQUESTED, stale, MAX + 1, MAX);
+            assert_eq!(d, PopoutResizeRetryDecision::GiveUp);
+        }
+
+        #[test]
+        fn height_only_mismatch_still_triggers_retry() {
+            // Width happened to already match; height didn't — must still
+            // be treated as a mismatch, not a partial success.
+            let actual = (REQUESTED.0, REQUESTED.1 + 1);
+            let d = decide_popout_resize_retry(REQUESTED, actual, 1, MAX);
+            assert_eq!(d, PopoutResizeRetryDecision::Retry);
+        }
+    }
 }
