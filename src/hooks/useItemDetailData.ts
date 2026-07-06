@@ -13,6 +13,7 @@ import {
 } from "../services/plex-library";
 import { useLibrary } from "./useLibrary";
 import { cacheGetStale, cacheSet } from "../services/api-cache";
+import { applyOffsetFloors } from "../services/cache-invalidators";
 import { logger } from "../services/logger";
 import type {
   PlexMediaItem,
@@ -78,6 +79,53 @@ function detailCacheKey(serverUri: string, ratingKey: string): string {
 }
 
 /**
+ * Apply any live offset floor (prexu-5mcz) to a freshly fetched detail
+ * bundle, before it's cached or applied to state — the item-detail
+ * counterpart to useDashboard's `applyOffsetFloors(fetched)` call on the deck
+ * fetch path (see cache-invalidators.ts's applyOffsetFloors doc comment for
+ * the full race and merge rule: max-wins for a recorded offset, a `reset`
+ * floor always wins, no-op once the floor's window expires).
+ *
+ * Closes the gap the deck-side floor didn't cover: a hover-intent prefetch
+ * (warmItemDetailCache) or this hook's own background revalidation fetch can
+ * land within the floor's window and re-cache a PRE-stop viewOffset PMS
+ * hadn't finished ingesting yet — the item-detail bundle has no floor guard
+ * of its own before this fix, only the deck fetch (useDashboard) did.
+ *
+ * Only `item` and episode-shaped children (`episodes`, `siblingEpisodes`) are
+ * checked — the floor registry is keyed by the STOPPED item's own ratingKey,
+ * which is always a movie or an episode, never a season/show, so
+ * seasons/siblingSeasons/parentShow can never match a live floor.
+ */
+function applyDetailOffsetFloor(bundle: DetailCachePayload): DetailCachePayload {
+  // applyOffsetFloors maps 1:1 over its input array (never filters), so a
+  // single-element input always yields a single-element output — the
+  // non-null assertion just satisfies noUncheckedIndexedAccess.
+  const flooredItem = applyOffsetFloors([bundle.item])[0]!;
+  const flooredEpisodes = applyOffsetFloors(bundle.episodes);
+  const flooredSiblingEpisodes = applyOffsetFloors(bundle.siblingEpisodes);
+  if (
+    flooredItem === bundle.item &&
+    flooredEpisodes === bundle.episodes &&
+    flooredSiblingEpisodes === bundle.siblingEpisodes
+  ) {
+    return bundle;
+  }
+  logger.debug("detail", "offset floor applied to detail bundle", {
+    ratingKey: bundle.item.ratingKey,
+    itemFloored: flooredItem !== bundle.item,
+    episodesFloored: flooredEpisodes !== bundle.episodes,
+    siblingEpisodesFloored: flooredSiblingEpisodes !== bundle.siblingEpisodes,
+  });
+  return {
+    ...bundle,
+    item: flooredItem,
+    episodes: flooredEpisodes,
+    siblingEpisodes: flooredSiblingEpisodes,
+  };
+}
+
+/**
  * Fetch an item's metadata plus whatever children/parent/siblings its type
  * needs. Pure data fetch — no state, no navigation side effects — so it can
  * be shared between the hook's fetch effect and the standalone prefetch
@@ -128,7 +176,14 @@ async function fetchDetailBundle(
     );
   }
 
-  return { item: metadata, seasons, episodes, parentShow, siblingSeasons, siblingEpisodes };
+  return applyDetailOffsetFloor({
+    item: metadata,
+    seasons,
+    episodes,
+    parentShow,
+    siblingSeasons,
+    siblingEpisodes,
+  });
 }
 
 /** Item types the related/extras/more-with-actor shelf effect fetches for — see {@link isShelfEligible}. */

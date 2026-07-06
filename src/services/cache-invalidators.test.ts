@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach, beforeAll } from "vitest";
-import { cacheSet, cacheGet, cacheInvalidateWhere, cacheClear } from "./api-cache";
+import { cacheSet, cacheGet, cacheGetAge, cacheInvalidateWhere, cacheClear } from "./api-cache";
 import {
   invalidateDeckCaches,
   initializeCacheInvalidators,
@@ -358,6 +358,38 @@ describe("cache-invalidators", () => {
         // timing unchanged).
         vi.advanceTimersByTime(DECK_INVALIDATION_DELAY_MS);
         expect(cacheGet(deckKey)).toBeNull();
+      });
+
+      // prexu-5mcz: the hardware repro that motivated the detail-path floor
+      // showed the item-detail entry crossing its 30s TTL just ONE SECOND
+      // after this patch ran — because the patch (before this fix) preserved
+      // the entry's ORIGINAL timestamp (from whenever it was first warmed,
+      // well before the stop). That let a hover-triggered warmItemDetailCache
+      // treat the entry as stale and refetch, racing PMS's ingestion and
+      // silently overwriting the patch. The patch must refresh the entry's
+      // TTL so a value known to be fresher than any in-window server
+      // response doesn't expire behind one.
+      it("refreshes the item-detail entry's TTL so it stays warm well past its original expiry", () => {
+        const detailKey = "item-detail:http://server:32400:501";
+        cacheSet(detailKey, { item: { ratingKey: "501", viewOffset: 10_000 } }, 30_000);
+        // Entry is already 29s old — 1s from its original 30s expiry — at
+        // the moment the patch runs, matching the hardware repro's timing.
+        vi.advanceTimersByTime(29_000);
+
+        emitWatchStateChanged("501", { viewOffsetMs: 185_000 });
+
+        // Immediately after the patch the age must read as 0 (clock reset),
+        // not 29_000.
+        expect(cacheGetAge(detailKey)).toBe(0);
+
+        // 29s further on (58s past the ORIGINAL cacheSet, well past its
+        // original 30s TTL) the entry must still be warm because the patch
+        // gave it a fresh 30s window of its own.
+        vi.advanceTimersByTime(29_000);
+        expect(cacheGetAge(detailKey)).toBe(29_000);
+        expect(cacheGet(detailKey)).toEqual({
+          item: { ratingKey: "501", viewOffset: 185_000 },
+        });
       });
 
       it("falls back to invalidate-only (old behavior) when the event carries no offset", () => {
