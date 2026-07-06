@@ -40,6 +40,8 @@ import SyncIndicator from "../components/SyncIndicator";
 import NextEpisodePrompt from "../components/NextEpisodePrompt";
 import ErrorOverlay from "../components/player/ErrorOverlay";
 import PopoutDragStrip from "../components/player/PopoutDragStrip";
+import PopoutExitButton from "../components/player/PopoutExitButton";
+import PopoutResizeZones from "../components/player/PopoutResizeZones";
 import SkipSegmentButton from "../components/player/SkipSegmentButton";
 import QueuePanel from "../components/player/QueuePanel";
 import PostPlayScreen from "../components/player/PostPlayScreen";
@@ -647,9 +649,22 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
 
       {/* Pop-out drag strip (prexu-6qz): hover-reveal handle for the
           borderless floating window. Native popout path only; follows the
-          controls auto-hide state. See PopoutDragStrip for the rationale. */}
+          controls auto-hide state. See PopoutDragStrip for the rationale.
+
+          PopoutExitButton (prexu-f4o4) is a sibling of the strip — a
+          small always-reachable exit affordance so the pop-out toggle is
+          never stranded off-screen behind ControlsBottomBar's cropped
+          button row at small popout sizes. PopoutResizeZones (prexu-f4o4)
+          adds cursor-only feedback at the window edges/corners so the
+          already-working edge drag-resize is discoverable — see that
+          component's docblock for why the compositor never shows resize
+          cursors here on its own. */}
       {SUPPORTS_PLAYER_POPOUT && popOut.isPopOut && (
-        <PopoutDragStrip visible={chromeVisible} />
+        <>
+          <PopoutDragStrip visible={chromeVisible} />
+          <PopoutExitButton visible={chromeVisible} onExit={togglePopOut} />
+          <PopoutResizeZones />
+        </>
       )}
 
       {/* Loading overlay */}
