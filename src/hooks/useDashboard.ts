@@ -3,7 +3,7 @@ import { useAuth } from "./useAuth";
 import { useLibrary } from "./useLibrary";
 import { useCompletionCounter } from "./useServerActivity";
 import { getRecentlyAddedBySection, getOnDeck } from "../services/plex-library";
-import { cacheGet, cacheSet, cacheInvalidate } from "../services/api-cache";
+import { cacheGet, cacheGetAge, cacheSet, cacheInvalidate } from "../services/api-cache";
 import { onWatchStateChanged } from "../services/watch-state-events";
 import { groupRecentlyAdded } from "../utils/groupRecentlyAdded";
 import { logger } from "../services/logger";
@@ -24,11 +24,36 @@ export interface UseDashboardResult {
 }
 
 const CACHE_TTL = 60 * 60 * 1000;
+// Also doubles as the mount-time "fresh enough, skip refetch" threshold
+// below (prexu-6qi5.3) — re-entering Dashboard within this window renders
+// straight from cache with no network waterfall, matching the window the
+// existing visibilitychange handler already treats as "still fresh".
 const STALE_THRESHOLD = 2 * 60 * 1000;
 
 function moviesKey(uri: string) { return `dashboard:${uri}:movies`; }
 function showsKey(uri: string) { return `dashboard:${uri}:shows`; }
 function deckKey(uri: string) { return `dashboard:${uri}:deck`; }
+
+/**
+ * Whether a cache entry aged `ageMs` is fresh enough to skip a mount-time
+ * refetch. `null` means the entry is missing, past its own TTL, or was
+ * invalidated (e.g. cache-invalidators.ts clearing `dashboard:*:deck` on a
+ * watch-state change) — always treated as NOT fresh, so those cases refetch
+ * exactly as an empty cache always has.
+ */
+export function isCacheFresh(ageMs: number | null, thresholdMs: number = STALE_THRESHOLD): boolean {
+  return ageMs !== null && ageMs <= thresholdMs;
+}
+
+/**
+ * Structural equality used to skip a redundant setState when a background
+ * revalidation resolves to data identical to what's already rendered
+ * (prexu-6qi5.3). Keeps the render-hygiene work from prexu-0szx.13/.14 intact
+ * when SWR fetches land after a fresh-cache paint.
+ */
+export function isSameData<T>(a: T, b: T): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
 
 export function useDashboard(): UseDashboardResult {
   const { server } = useAuth();
@@ -65,6 +90,21 @@ export function useDashboard(): UseDashboardResult {
     movies: 0, shows: 0, deck: 0,
   });
 
+  // Compare-before-set wrappers (prexu-6qi5.3): a background revalidation
+  // landing on top of an already-fresh cache paint frequently resolves to
+  // data identical to what's rendered. Bail out of the setState in that case
+  // so it doesn't re-render every shelf for a no-op update, preserving the
+  // idle render-hygiene work from prexu-0szx.13/.14.
+  const setRecentMoviesIfChanged = useCallback((next: PlexMediaItem[]) => {
+    setRecentMovies((prev) => (isSameData(prev, next) ? prev : next));
+  }, []);
+  const setRecentShowsIfChanged = useCallback((next: GroupedRecentItem[]) => {
+    setRecentShows((prev) => (isSameData(prev, next) ? prev : next));
+  }, []);
+  const setOnDeckIfChanged = useCallback((next: PlexMediaItem[]) => {
+    setOnDeck((prev) => (isSameData(prev, next) ? prev : next));
+  }, []);
+
   // Derive a value-stable key from sections so effects don't re-fire when the
   // array ref changes but contents are identical.
   const sectionsKey = useMemo(
@@ -82,107 +122,151 @@ export function useDashboard(): UseDashboardResult {
 
   const fetchMovies = useCallback(
     async (cancel: { cancelled: boolean }, movieSections: LibrarySection[], uri: string, token: string) => {
+      const startedAt = performance.now();
       try {
         const items = await getRecentlyAddedBySection(uri, token, movieSections, 30);
         if (cancel.cancelled) return;
         const sorted = items.sort((a, b) => b.addedAt - a.addedAt);
-        setRecentMovies(sorted);
-        setErrors((prev) => ({ ...prev, movies: null }));
+        setRecentMoviesIfChanged(sorted);
+        setErrors((prev) => (prev.movies === null ? prev : { ...prev, movies: null }));
         cacheSet(moviesKey(uri), sorted, CACHE_TTL);
+        logger.trace("api", "dashboard movies fetch complete", {
+          ms: Math.round(performance.now() - startedAt),
+          count: sorted.length,
+        });
       } catch (err) {
         if (cancel.cancelled) return;
         const msg = err instanceof Error ? err.message : "Failed to load movies";
         logger.warn("dashboard", "fetch movies failed", { error: msg });
         setErrors((prev) => ({ ...prev, movies: msg }));
       } finally {
-        if (!cancel.cancelled) setLoading((prev) => ({ ...prev, movies: false }));
+        if (!cancel.cancelled) setLoading((prev) => (prev.movies ? { ...prev, movies: false } : prev));
       }
     },
-    [],
+    [setRecentMoviesIfChanged],
   );
 
   const fetchShows = useCallback(
     async (cancel: { cancelled: boolean }, tvSections: LibrarySection[], uri: string, token: string) => {
+      const startedAt = performance.now();
       try {
         const items = await getRecentlyAddedBySection(uri, token, tvSections, 30);
         if (cancel.cancelled) return;
         const grouped = groupRecentlyAdded(items.sort((a, b) => b.addedAt - a.addedAt));
-        setRecentShows(grouped);
-        setErrors((prev) => ({ ...prev, shows: null }));
+        setRecentShowsIfChanged(grouped);
+        setErrors((prev) => (prev.shows === null ? prev : { ...prev, shows: null }));
         cacheSet(showsKey(uri), grouped, CACHE_TTL);
+        logger.trace("api", "dashboard shows fetch complete", {
+          ms: Math.round(performance.now() - startedAt),
+          count: grouped.length,
+        });
       } catch (err) {
         if (cancel.cancelled) return;
         const msg = err instanceof Error ? err.message : "Failed to load shows";
         logger.warn("dashboard", "fetch shows failed", { error: msg });
         setErrors((prev) => ({ ...prev, shows: msg }));
       } finally {
-        if (!cancel.cancelled) setLoading((prev) => ({ ...prev, shows: false }));
+        if (!cancel.cancelled) setLoading((prev) => (prev.shows ? { ...prev, shows: false } : prev));
       }
     },
-    [],
+    [setRecentShowsIfChanged],
   );
 
   const fetchDeck = useCallback(
     async (cancel: { cancelled: boolean }, uri: string, token: string) => {
+      const startedAt = performance.now();
       try {
         const items = await getOnDeck(uri, token);
         if (cancel.cancelled) return;
-        setOnDeck(items);
-        setErrors((prev) => ({ ...prev, deck: null }));
+        setOnDeckIfChanged(items);
+        setErrors((prev) => (prev.deck === null ? prev : { ...prev, deck: null }));
         cacheSet(deckKey(uri), items, CACHE_TTL);
+        logger.trace("api", "dashboard deck fetch complete", {
+          ms: Math.round(performance.now() - startedAt),
+          count: items.length,
+        });
       } catch (err) {
         if (cancel.cancelled) return;
         const msg = err instanceof Error ? err.message : "Failed to load Continue Watching";
         logger.warn("dashboard", "fetch deck failed", { error: msg });
         setErrors((prev) => ({ ...prev, deck: msg }));
       } finally {
-        if (!cancel.cancelled) setLoading((prev) => ({ ...prev, deck: false }));
+        if (!cancel.cancelled) setLoading((prev) => (prev.deck ? { ...prev, deck: false } : prev));
       }
     },
-    [],
+    [setOnDeckIfChanged],
   );
 
   const serverUri = server?.uri;
   const serverToken = server?.accessToken;
 
-  // Movies effect
+  // Movies effect — stale-while-revalidate (prexu-6qi5.3): a fresh cache
+  // entry (aged <= STALE_THRESHOLD) is rendered and the refetch is skipped
+  // entirely, so re-entering Dashboard shortly after leaving it paints from
+  // cache with no network waterfall. A missing entry (never fetched, past
+  // its 60-minute TTL, or invalidated — e.g. deck on watch-state change)
+  // always refetches, same as before this change.
   useEffect(() => {
     if (!serverUri || !serverToken || sectionsKey === "") return;
     const cancel = { cancelled: false };
-    const cached = cacheGet<PlexMediaItem[]>(moviesKey(serverUri));
+    const key = moviesKey(serverUri);
+    const cached = cacheGet<PlexMediaItem[]>(key);
+    const ageMs = cacheGetAge(key);
     if (cached) {
-      setRecentMovies(cached);
+      setRecentMoviesIfChanged(cached);
       setLoading((prev) => (prev.movies ? { ...prev, movies: false } : prev));
     }
+    if (isCacheFresh(ageMs)) {
+      logger.trace("api", "dashboard movies cache fresh, skipping refetch", { ageMs });
+      return () => { cancel.cancelled = true; };
+    }
+    logger.debug("api", "dashboard movies refetch triggered", { ageMs, hadCache: !!cached });
     fetchMovies(cancel, movieSections, serverUri, serverToken);
     return () => { cancel.cancelled = true; };
-  }, [serverUri, serverToken, sectionsKey, movieSections, refreshTriggers.movies, fetchMovies]);
+  }, [serverUri, serverToken, sectionsKey, movieSections, refreshTriggers.movies, fetchMovies, setRecentMoviesIfChanged]);
 
-  // Shows effect
+  // Shows effect — same fresh-cache-skips-refetch policy as movies above.
   useEffect(() => {
     if (!serverUri || !serverToken || sectionsKey === "") return;
     const cancel = { cancelled: false };
-    const cached = cacheGet<GroupedRecentItem[]>(showsKey(serverUri));
+    const key = showsKey(serverUri);
+    const cached = cacheGet<GroupedRecentItem[]>(key);
+    const ageMs = cacheGetAge(key);
     if (cached) {
-      setRecentShows(cached);
+      setRecentShowsIfChanged(cached);
       setLoading((prev) => (prev.shows ? { ...prev, shows: false } : prev));
     }
+    if (isCacheFresh(ageMs)) {
+      logger.trace("api", "dashboard shows cache fresh, skipping refetch", { ageMs });
+      return () => { cancel.cancelled = true; };
+    }
+    logger.debug("api", "dashboard shows refetch triggered", { ageMs, hadCache: !!cached });
     fetchShows(cancel, tvSections, serverUri, serverToken);
     return () => { cancel.cancelled = true; };
-  }, [serverUri, serverToken, sectionsKey, tvSections, refreshTriggers.shows, fetchShows]);
+  }, [serverUri, serverToken, sectionsKey, tvSections, refreshTriggers.shows, fetchShows, setRecentShowsIfChanged]);
 
-  // Deck effect
+  // Deck effect — same policy. Composes with cache-invalidators.ts (PR #50):
+  // an invalidated deck entry is simply absent, so cacheGetAge returns null,
+  // isCacheFresh is false, and this always refetches — no separate "was
+  // invalidated" flag needed.
   useEffect(() => {
     if (!serverUri || !serverToken || sectionsKey === "") return;
     const cancel = { cancelled: false };
-    const cached = cacheGet<PlexMediaItem[]>(deckKey(serverUri));
+    const key = deckKey(serverUri);
+    const cached = cacheGet<PlexMediaItem[]>(key);
+    const ageMs = cacheGetAge(key);
     if (cached) {
-      setOnDeck(cached);
+      setOnDeckIfChanged(cached);
       setLoading((prev) => (prev.deck ? { ...prev, deck: false } : prev));
     }
+    if (isCacheFresh(ageMs)) {
+      logger.trace("api", "dashboard deck cache fresh, skipping refetch", { ageMs });
+      return () => { cancel.cancelled = true; };
+    }
+    logger.debug("api", "dashboard deck refetch triggered", { ageMs, hadCache: !!cached });
     fetchDeck(cancel, serverUri, serverToken);
     return () => { cancel.cancelled = true; };
-  }, [serverUri, serverToken, sectionsKey, refreshTriggers.deck, fetchDeck]);
+  }, [serverUri, serverToken, sectionsKey, refreshTriggers.deck, fetchDeck, setOnDeckIfChanged]);
 
   const refresh = useCallback(
     (section?: DashboardSection) => {
