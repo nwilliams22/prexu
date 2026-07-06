@@ -70,6 +70,88 @@ const POPOUT_DEFAULT_CORNER: &str = "bottom-right";
 const POPOUT_DEFAULT_WIDTH: u32 = 480;
 const POPOUT_DEFAULT_HEIGHT: u32 = 270;
 
+/// Fraction of the current monitor's work-area dimensions above which a
+/// pop-out size (persisted OR freshly read back at exit) is treated as
+/// corrupted rather than a legitimate mini-player (prexu-r6k8). A pop-out is
+/// meant to float as a small corner window; nothing legitimate needs more
+/// than 60% of either work-area dimension.
+///
+/// Root cause this guards against: on Linux, a maximized main window or the
+/// app's 800x600 min-size used to silently block the popout shrink entirely
+/// (prexu-6qi5.4, fixed by PR #52's unmaximize + min-size lift). Every
+/// `enter`/`exit` cycle that ran BEFORE that fix landed persisted the
+/// still-fullscreen-ish size on exit, and every cycle since faithfully
+/// replayed (and re-persisted) that oversized value — `corner_origin`'s own
+/// clamp only guarantees a request "fits within the work area"
+/// (`w.min(ww)`), not that it looks like an actual pop-out. Confirmed from
+/// hardware logs: a persisted 1920x2160 size replayed verbatim onto a
+/// 3840x2160 work area, forever.
+const POPOUT_SANE_SIZE_RATIO: f64 = 0.6;
+
+/// Absolute floor (PHYSICAL pixels) a pop-out size is clamped to after
+/// passing the sane-ceiling check above. Distinct from the Linux-only
+/// `POPOUT_MIN_WIDTH`/`POPOUT_MIN_HEIGHT` GTK min-size hint (LOGICAL pixels,
+/// only used by `set_min_size` to lift the GTK-level shrink floor) — this
+/// constant guards the persisted/requested size value itself, in the same
+/// physical-pixel unit `corner_origin` and the store already use, against a
+/// degenerate near-zero size slipping through.
+const POPOUT_SIZE_FLOOR_PHYSICAL: u32 = 100;
+
+/// The `[floor, ceiling]` a pop-out size must fall within for a given
+/// work-area, both in PHYSICAL pixels (see `POPOUT_SANE_SIZE_RATIO` /
+/// `POPOUT_SIZE_FLOOR_PHYSICAL`). `.max(floor)` on the ceiling keeps the
+/// range valid (non-empty) even on a work area small enough that 60% of it
+/// would otherwise fall below the floor.
+fn popout_size_ceiling(work_area_w: i32, work_area_h: i32) -> (u32, u32) {
+    let ceiling_w = (work_area_w.max(1) as f64 * POPOUT_SANE_SIZE_RATIO) as u32;
+    let ceiling_h = (work_area_h.max(1) as f64 * POPOUT_SANE_SIZE_RATIO) as u32;
+    (
+        ceiling_w.max(POPOUT_SIZE_FLOOR_PHYSICAL),
+        ceiling_h.max(POPOUT_SIZE_FLOOR_PHYSICAL),
+    )
+}
+
+/// Whether a pop-out size (PHYSICAL pixels) looks like a legitimate
+/// mini-player rather than a corrupted, fullscreen-ish value, given the
+/// current monitor's work area (also PHYSICAL pixels — see
+/// `POPOUT_SANE_SIZE_RATIO`). Shared by `sanitize_popout_size` (enter-time)
+/// and the exit-time persist guard so corruption can neither enter NOR
+/// re-enter the store (prexu-r6k8).
+fn is_sane_popout_size(width: u32, height: u32, work_area_w: i32, work_area_h: i32) -> bool {
+    let (ceiling_w, ceiling_h) = popout_size_ceiling(work_area_w, work_area_h);
+    width <= ceiling_w && height <= ceiling_h
+}
+
+/// Validate a (possibly persisted) pop-out size against the current
+/// monitor's work area before it's fed into `corner_origin`. Returns the
+/// size clamped into `[POPOUT_SIZE_FLOOR_PHYSICAL, ceiling]` when it looks
+/// sane, or resets to the project default (480x270) when it exceeds
+/// `POPOUT_SANE_SIZE_RATIO` of the work area — seen on hardware as a
+/// persisted 1920x2160 replaying onto a 3840x2160 monitor forever
+/// (prexu-r6k8). Pure + unit-tested: the exact hardware repro has a
+/// regression test below.
+fn sanitize_popout_size(width: u32, height: u32, work_area_w: i32, work_area_h: i32) -> (u32, u32) {
+    let (ceiling_w, ceiling_h) = popout_size_ceiling(work_area_w, work_area_h);
+    if !is_sane_popout_size(width, height, work_area_w, work_area_h) {
+        log::warn!(
+            "[player:popout] persisted/requested size {}x{} exceeds {:.0}% of work area {}x{} \
+             (physical px) — treating as corrupted (prexu-r6k8), resetting to default {}x{}",
+            width,
+            height,
+            POPOUT_SANE_SIZE_RATIO * 100.0,
+            work_area_w,
+            work_area_h,
+            POPOUT_DEFAULT_WIDTH,
+            POPOUT_DEFAULT_HEIGHT
+        );
+        return (POPOUT_DEFAULT_WIDTH, POPOUT_DEFAULT_HEIGHT);
+    }
+    (
+        width.clamp(POPOUT_SIZE_FLOOR_PHYSICAL, ceiling_w),
+        height.clamp(POPOUT_SIZE_FLOOR_PHYSICAL, ceiling_h),
+    )
+}
+
 /// Floor applied to the main window's min-size constraint while pop-out is
 /// active (Linux only, prexu-6qi5.4). `tauri.conf.json`'s main window
 /// `minWidth`/`minHeight` (800x600) is enforced by GTK via
@@ -665,6 +747,7 @@ pub async fn player_enter_popout(
     // monitor 2 before exiting. We now persist the monitor at exit and look
     // it up by device name here, so re-entry opens on monitor 2.
     let (wx, wy, ww, wh) = resolve_enter_work_area(&main, &app)?;
+    let (width, height) = sanitize_popout_size(width, height, ww, wh);
     let (x, y, w, h) = corner_origin(corner, width, height, wx, wy, ww, wh);
 
     // Stash the current OUTER rect via Win32 GetWindowRect. Captured +
@@ -826,6 +909,17 @@ pub async fn player_exit_popout(
                 }
             };
 
+            // prexu-r6k8: guard the persist path with the SAME sanity check
+            // used on enter, so a size that's still fullscreen-ish at exit
+            // (e.g. a future resize regression, or a Linux popout that never
+            // actually shrank) can't re-entrench itself in the store for
+            // every subsequent cycle to replay. Fail OPEN (treat as sane)
+            // when the work area couldn't be determined — we'd rather persist
+            // an unverified size than silently stop persisting resizes.
+            let size_is_sane = match &current_wa {
+                Ok((_, _, ww, wh)) => is_sane_popout_size(rw as u32, rh as u32, *ww, *wh),
+                Err(_) => true,
+            };
             match app.store(PopoutStore::path()) {
                 Ok(store) => {
                     if let Some(corner) = detected_corner {
@@ -834,10 +928,19 @@ pub async fn player_exit_popout(
                         });
                         store.set(PopoutStore::key_corner(), corner_str);
                     }
-                    store.set(
-                        PopoutStore::key_size(),
-                        serde_json::json!({ "width": rw, "height": rh }),
-                    );
+                    if size_is_sane {
+                        store.set(
+                            PopoutStore::key_size(),
+                            serde_json::json!({ "width": rw, "height": rh }),
+                        );
+                    } else {
+                        log::warn!(
+                            "[player:popout] exit: current size {}x{} looks corrupted (fullscreen-ish \
+                             relative to work area {:?}, prexu-r6k8) — skipping size persistence so it \
+                             can't re-enter the store",
+                            rw, rh, current_wa
+                        );
+                    }
                     // prexu-ajn: persist the monitor record so re-entry can
                     // target the correct monitor even after main has been
                     // restored to a different one.
@@ -855,10 +958,9 @@ pub async fn player_exit_popout(
                         log::warn!("[player:popout] resize-on-exit save failed: {:?}", e);
                     } else {
                         log::info!(
-                            "[player:popout] persisted exit geometry corner={:?} size={}x{} monitor={:?}",
+                            "[player:popout] persisted exit geometry corner={:?} size={:?} monitor={:?}",
                             detected_corner,
-                            rw,
-                            rh,
+                            size_is_sane.then_some((rw, rh)),
                             monitor_record.as_ref().map(|r| r.device_name.as_str())
                         );
                     }
@@ -1072,6 +1174,7 @@ pub async fn player_enter_popout(
     }
 
     let (wx, wy, ww, wh) = linux_work_area(&main)?;
+    let (width, height) = sanitize_popout_size(width, height, ww, wh);
     let (x, y, w, h) = corner_origin(corner, width, height, wx, wy, ww, wh);
 
     // keep-above is best-effort: real on X11, ignored by most Wayland
@@ -1155,25 +1258,40 @@ pub async fn player_exit_popout(
     // the position is meaningless: persist only the size and keep the
     // previously persisted corner.
     if let Ok(size) = main.inner_size() {
+        // Computed unconditionally (not just for X11 corner detection) —
+        // prexu-r6k8's size-sanity check below needs the work area on
+        // Wayland too, even though position/corner persistence stays
+        // skipped there.
+        let work_area = linux_work_area(&main);
         let detected_corner = if linux_is_wayland() {
             None
         } else {
-            match (main.outer_position(), linux_work_area(&main)) {
+            match (main.outer_position(), &work_area) {
                 (Ok(pos), Ok((wx, wy, ww, wh))) => Some(nearest_corner(
                     pos.x,
                     pos.y,
                     size.width as i32,
                     size.height as i32,
-                    wx,
-                    wy,
-                    ww,
-                    wh,
+                    *wx,
+                    *wy,
+                    *ww,
+                    *wh,
                 )),
                 _ => {
                     log::warn!("[player:popout] exit: position/work-area unavailable, corner persistence skipped");
                     None
                 }
             }
+        };
+        // prexu-r6k8: guard the persist path with the SAME sanity check used
+        // on enter (`sanitize_popout_size`), so a size that's still
+        // fullscreen-ish at exit — e.g. the popout never actually shrank —
+        // can't re-entrench itself in the store for every subsequent cycle
+        // to replay. Fail OPEN when the work area is unavailable; we'd
+        // rather persist an unverified size than silently stop persisting.
+        let size_is_sane = match &work_area {
+            Ok((_, _, ww, wh)) => is_sane_popout_size(size.width, size.height, *ww, *wh),
+            Err(_) => true,
         };
         match app.store(PopoutStore::path()) {
             Ok(store) => {
@@ -1183,18 +1301,26 @@ pub async fn player_exit_popout(
                     });
                     store.set(PopoutStore::key_corner(), corner_str);
                 }
-                store.set(
-                    PopoutStore::key_size(),
-                    serde_json::json!({ "width": size.width, "height": size.height }),
-                );
+                if size_is_sane {
+                    store.set(
+                        PopoutStore::key_size(),
+                        serde_json::json!({ "width": size.width, "height": size.height }),
+                    );
+                } else {
+                    log::warn!(
+                        "[player:popout] exit: current size {}x{} looks corrupted (fullscreen-ish \
+                         relative to work area {:?}, prexu-r6k8) — skipping size persistence so it \
+                         can't re-enter the store",
+                        size.width, size.height, work_area
+                    );
+                }
                 if let Err(e) = store.save() {
                     log::warn!("[player:popout] resize-on-exit save failed: {:?}", e);
                 } else {
                     log::info!(
-                        "[player:popout] persisted exit geometry corner={:?} size={}x{}",
+                        "[player:popout] persisted exit geometry corner={:?} size={:?}",
                         detected_corner,
-                        size.width,
-                        size.height
+                        size_is_sane.then_some((size.width, size.height))
                     );
                 }
             }
@@ -1476,6 +1602,74 @@ mod tests {
             0, 0, 640, 480,
         );
         assert_eq!((w, h), (640, 480));
+    }
+
+    // ---- sanitize_popout_size / is_sane_popout_size (prexu-r6k8) -----------
+    //
+    // Regression coverage for a hardware-confirmed self-perpetuating bug: a
+    // Linux popout that silently failed to shrink (pre PR #52) persisted its
+    // still-fullscreen size on exit; every subsequent enter/exit replayed
+    // (and re-persisted) that oversized value forever, because
+    // `corner_origin`'s own clamp only guarantees a request fits the work
+    // area, not that it looks like an actual pop-out.
+
+    #[test]
+    fn sanitize_popout_size_resets_hardware_repro_to_default() {
+        // Exact hardware repro: persisted 1920x2160 replayed onto a
+        // 3840x2160 work area (both well within `corner_origin`'s
+        // fits-the-monitor clamp, so that clamp alone never catches it).
+        let (w, h) = sanitize_popout_size(1920, 2160, 3840, 2160);
+        assert_eq!((w, h), (POPOUT_DEFAULT_WIDTH, POPOUT_DEFAULT_HEIGHT));
+    }
+
+    #[test]
+    fn sanitize_popout_size_passes_through_legitimate_size() {
+        // 480x270 on a normal 1920x1080 monitor is well under 60% of either
+        // dimension -- passes through unchanged.
+        let (w, h) = sanitize_popout_size(480, 270, 1920, 1080);
+        assert_eq!((w, h), (480, 270));
+    }
+
+    #[test]
+    fn sanitize_popout_size_clamps_degenerate_size_to_floor() {
+        // A near-zero persisted size (e.g. from a corrupted store write)
+        // clamps up to the absolute floor rather than passing through.
+        let (w, h) = sanitize_popout_size(10, 10, 1920, 1080);
+        assert_eq!((w, h), (POPOUT_SIZE_FLOOR_PHYSICAL, POPOUT_SIZE_FLOOR_PHYSICAL));
+    }
+
+    #[test]
+    fn sanitize_popout_size_boundary_at_exact_ratio_is_accepted() {
+        // Exactly at the 60% ceiling is accepted (not treated as corrupted);
+        // one physical pixel over is reset to default.
+        let (w, h) = sanitize_popout_size(1152, 648, 1920, 1080);
+        assert_eq!((w, h), (1152, 648));
+
+        let (w, h) = sanitize_popout_size(1153, 648, 1920, 1080);
+        assert_eq!((w, h), (POPOUT_DEFAULT_WIDTH, POPOUT_DEFAULT_HEIGHT));
+    }
+
+    #[test]
+    fn sanitize_popout_size_height_alone_over_ceiling_resets() {
+        // Width passes but height alone exceeds the ceiling -- still reset
+        // (mirrors the hardware repro, where width also happened to pass).
+        let (w, h) = sanitize_popout_size(200, 2160, 3840, 2160);
+        assert_eq!((w, h), (POPOUT_DEFAULT_WIDTH, POPOUT_DEFAULT_HEIGHT));
+    }
+
+    #[test]
+    fn sanitize_popout_size_tiny_work_area_keeps_valid_range() {
+        // A work area so small that 60% of it would fall below the floor
+        // must not panic (clamp requires min <= max) and still returns a
+        // usable size.
+        let (w, h) = sanitize_popout_size(50, 50, 120, 120);
+        assert_eq!((w, h), (POPOUT_SIZE_FLOOR_PHYSICAL, POPOUT_SIZE_FLOOR_PHYSICAL));
+    }
+
+    #[test]
+    fn is_sane_popout_size_matches_sanitize_accept_reject() {
+        assert!(is_sane_popout_size(480, 270, 1920, 1080));
+        assert!(!is_sane_popout_size(1920, 2160, 3840, 2160));
     }
 
     // ---- nearest_corner coordinate-space consistency (mhn DPI review) ---
