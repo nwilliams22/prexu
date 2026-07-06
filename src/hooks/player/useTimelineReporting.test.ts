@@ -114,7 +114,7 @@ describe("useTimelineReporting.reportStopped", () => {
     expect(reportTimelineBeacon).not.toHaveBeenCalled();
   });
 
-  it("emits a watch-state-changed event after an early-stop clear", async () => {
+  it("emits a watch-state-changed event carrying the ratingKey after an early-stop clear (prexu-lz4t)", async () => {
     const handler = vi.fn();
     const off = onWatchStateChanged(handler);
     const result = setup();
@@ -125,10 +125,14 @@ describe("useTimelineReporting.reportStopped", () => {
       result.current.reportStopped();
     });
     await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    // The ratingKey is included so listeners (item-detail cache
+    // invalidation) can target just this item instead of sweeping every
+    // cached entry.
+    expect(handler).toHaveBeenCalledWith("66324");
     off();
   });
 
-  it("emits a watch-state-changed event after a resume-offset beacon", async () => {
+  it("emits a watch-state-changed event carrying the ratingKey after a resume-offset beacon (prexu-lz4t)", async () => {
     const handler = vi.fn();
     const off = onWatchStateChanged(handler);
     const result = setup();
@@ -139,6 +143,7 @@ describe("useTimelineReporting.reportStopped", () => {
       result.current.reportStopped();
     });
     await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    expect(handler).toHaveBeenCalledWith("66324");
     off();
   });
 

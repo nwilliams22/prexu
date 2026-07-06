@@ -1,6 +1,8 @@
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { useItemDetailData, warmItemDetailCache } from "./useItemDetailData";
 import { cacheClear } from "../services/api-cache";
+import { initializeCacheInvalidators } from "../services/cache-invalidators";
+import { emitWatchStateChanged } from "../services/watch-state-events";
 
 const stableServer = { uri: "https://plex.test", accessToken: "token" };
 
@@ -449,5 +451,95 @@ describe("useItemDetailData", () => {
 
     expect(mockNavigate).not.toHaveBeenCalled();
     expect(result.current.item?.title).toBe("Show A");
+  });
+
+  // prexu-lz4t: hovering the same item right after a stop-write used to log
+  // "already warm, skipping" forever (up to the 30s TTL) because nothing
+  // invalidated the item-detail cache on watch-state change — only the
+  // dashboard's onDeck ("deck") cache was. initializeCacheInvalidators wires
+  // the persistent, never-unsubscribed listener that now also invalidates
+  // item-detail entries; it's set up once here (same reasoning as
+  // cache-invalidators.test.ts's own describe block: calling it per-test
+  // would stack duplicate listeners on `window`).
+  describe("watch-state invalidation of the item-detail cache (prexu-lz4t)", () => {
+    beforeAll(() => {
+      initializeCacheInvalidators();
+    });
+
+    it("hover after a watch-state change refetches instead of serving the stale warm cache", async () => {
+      const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+
+      mockGetItemMetadata.mockResolvedValueOnce({
+        ...makeMovie("1", "Movie 1"),
+        viewOffset: 1000,
+      });
+      await warmItemDetailCache(stableServer, "1");
+
+      // Baseline: re-warming immediately (no watch-state change in between)
+      // is a no-op — this is the "already warm, skipping" bug's precondition.
+      debugSpy.mockClear();
+      await warmItemDetailCache(stableServer, "1");
+      expect(
+        debugSpy.mock.calls.some(
+          ([msg]) => typeof msg === "string" && msg.includes("already warm, skipping"),
+        ),
+      ).toBe(true);
+
+      // Playback stops; the server records a new offset and the app emits
+      // the watch-state-changed event carrying this item's ratingKey.
+      debugSpy.mockClear();
+      emitWatchStateChanged("1");
+
+      mockGetItemMetadata.mockResolvedValueOnce({
+        ...makeMovie("1", "Movie 1"),
+        viewOffset: 45_000,
+      });
+      await warmItemDetailCache(stableServer, "1");
+
+      expect(
+        debugSpy.mock.calls.some(
+          ([msg]) => typeof msg === "string" && msg.includes("warmItemDetailCache: prefetched"),
+        ),
+      ).toBe(true);
+      expect(
+        debugSpy.mock.calls.some(
+          ([msg]) => typeof msg === "string" && msg.includes("already warm, skipping"),
+        ),
+      ).toBe(false);
+
+      debugSpy.mockRestore();
+    });
+
+    it("leaves an unrelated item's warm cache entry untouched", async () => {
+      mockGetItemMetadata.mockResolvedValueOnce(makeMovie("1", "Movie 1"));
+      await warmItemDetailCache(stableServer, "1");
+      mockGetItemMetadata.mockResolvedValueOnce(makeMovie("2", "Movie 2"));
+      await warmItemDetailCache(stableServer, "2");
+      mockGetItemMetadata.mockClear();
+
+      // Only item "1"'s watch state changed.
+      emitWatchStateChanged("1");
+
+      // Item "2" should still be warm — no refetch triggered.
+      await warmItemDetailCache(stableServer, "2");
+      expect(mockGetItemMetadata).not.toHaveBeenCalled();
+    });
+
+    it("invalidates every item-detail entry when the event carries no ratingKey", async () => {
+      mockGetItemMetadata.mockResolvedValueOnce(makeMovie("1", "Movie 1"));
+      await warmItemDetailCache(stableServer, "1");
+      mockGetItemMetadata.mockResolvedValueOnce(makeMovie("2", "Movie 2"));
+      await warmItemDetailCache(stableServer, "2");
+      mockGetItemMetadata.mockClear();
+      mockGetItemMetadata.mockResolvedValue(makeMovie("1", "Movie 1 refetched"));
+
+      // Documented fallback: no ratingKey on the event means we can't target
+      // precisely, so every item-detail entry is treated as stale.
+      emitWatchStateChanged();
+
+      await warmItemDetailCache(stableServer, "1");
+      await warmItemDetailCache(stableServer, "2");
+      expect(mockGetItemMetadata).toHaveBeenCalledTimes(2);
+    });
   });
 });

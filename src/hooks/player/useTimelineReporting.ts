@@ -117,8 +117,10 @@ export function useTimelineReporting(
           });
           // Server state is now updated — refresh the dashboard's Continue
           // Watching shelf (it's an overlay sibling that never remounts, so it
-          // won't refetch on its own).
-          emitWatchStateChanged();
+          // won't refetch on its own) and this item's cached detail bundle
+          // (prexu-lz4t) so a stale "Resume from" label isn't served from
+          // the item-detail cache the next time this item is hovered/opened.
+          emitWatchStateChanged(ratingKey);
         })
         .catch((err) =>
           logger.warn("playback", "unscrobble failed", {
@@ -144,8 +146,10 @@ export function useTimelineReporting(
           timeMs: Math.round(timeMs),
         });
         // New resume offset recorded — refresh Continue Watching so the shelf
-        // reflects the updated progress.
-        emitWatchStateChanged();
+        // reflects the updated progress, and invalidate this item's cached
+        // detail bundle (prexu-lz4t) so the detail page / hover-prefetch
+        // don't keep serving the pre-playback viewOffset.
+        emitWatchStateChanged(ratingKey);
       })
       .catch((err) =>
         logger.warn("playback", "stopped beacon failed", {
