@@ -379,6 +379,62 @@ function PosterCard({
   );
 }
 
+/**
+ * Explicit memo comparator (prexu-tqnq).
+ *
+ * PosterCard used to rely on React.memo's implicit default (bare
+ * `memo(PosterCard)`, no second argument), which shallow-compares every
+ * key React finds on the props object. That happens to be correct today,
+ * but it's an easy thing to regress: the very next perf pass that adds a
+ * hand-rolled comparator (as PR #47 did for other memoized components in
+ * this codebase — see CollectionDetail's `ItemRow`) can trivially forget a
+ * watch-state field like `progress`/`watched`/`unwatchedCount` and silently
+ * stop repainting the card when a deck item's viewOffset updates in place
+ * (same ratingKey, fresh cache data) — the dashboard state would be
+ * correct while the card never re-renders to reflect it.
+ *
+ * Making the comparator explicit and exhaustively typed closes that hole:
+ * `COMPARED_PROP_KEYS` is a `Record<keyof PosterCardProps, true>`, so
+ * adding a new prop to `PosterCardProps` without adding it here is a
+ * TypeScript compile error, not a silent runtime gap. The comparison
+ * itself is intentionally equivalent to React's own default (Object.is
+ * per key) — this is a documentation + compile-time-safety change, not a
+ * behavior change.
+ */
+const COMPARED_PROP_KEYS: Record<keyof PosterCardProps, true> = {
+  imageUrl: true,
+  placeholderUrl: true,
+  srcSet: true,
+  title: true,
+  subtitle: true,
+  badge: true,
+  onClick: true,
+  width: true,
+  aspectRatio: true,
+  progress: true,
+  onContextMenu: true,
+  showMoreButton: true,
+  onMoreClick: true,
+  watched: true,
+  unwatchedCount: true,
+  onExpand: true,
+  isExpanded: true,
+  onPlay: true,
+  scanning: true,
+  ratingKey: true,
+  mediaBadges: true,
+  index: true,
+  onHoverIntent: true,
+};
+const COMPARED_KEYS = Object.keys(COMPARED_PROP_KEYS) as (keyof PosterCardProps)[];
+
+function arePropsEqual(prev: PosterCardProps, next: PosterCardProps): boolean {
+  for (const key of COMPARED_KEYS) {
+    if (!Object.is(prev[key], next[key])) return false;
+  }
+  return true;
+}
+
 const styles: Record<string, React.CSSProperties> = {
   card: {
     display: "flex",
@@ -576,4 +632,4 @@ const styles: Record<string, React.CSSProperties> = {
   },
 };
 
-export default memo(PosterCard);
+export default memo(PosterCard, arePropsEqual);
