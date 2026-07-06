@@ -72,7 +72,6 @@ function LibraryView() {
   const navigate = useNavigate();
   const prefetchDetail = useDetailPrefetch();
   const [searchParams, setSearchParams] = useSearchParams();
-  const sentinelRef = useRef<HTMLDivElement>(null);
   const section = sections.find((s) => s.key === sectionId);
 
   // Restore persisted filters into URL when entering a section (when URL has no filter params)
@@ -160,14 +159,14 @@ function LibraryView() {
   const shouldLoadAll =
     isAlphaSortable && hasActiveFilters;
 
-  const { items, isLoading, isLoadingMore, isStale, hasMore, totalSize, error, loadMore, retry } =
+  const { items, isLoading, isStale, totalSize, error, ensureRange, retry } =
     usePaginatedLibrary(sectionId, sort, filters, {
       loadAll: shouldLoadAll,
       type: section?.type === "show" ? 2 : section?.type === "movie" ? 1 : undefined,
     });
   const { genres, years, contentRatings, resolutions, isLoading: filtersLoading } =
     useFilterOptions(sectionId);
-  const { restrictionsEnabled, filterByRating } = useParentalControls();
+  const { restrictionsEnabled, isItemAllowed } = useParentalControls();
   const { openContextMenu, overlays: menuOverlays } = useMediaContextMenu();
   const { getPlayHandler, playOverlay } = usePlayAction();
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
@@ -178,11 +177,17 @@ function LibraryView() {
     setExpandedKey(null);
   }, [sectionId]);
 
-  // Apply parental controls client-side filtering
-  const filteredItems = useMemo(
-    () => filterByRating(items as (PlexMediaItem & { contentRating?: string })[]),
-    [items, filterByRating],
-  );
+  // Apply parental controls client-side filtering. `items` is a sparse-by-
+  // index store spanning the whole section (prexu-6qi5.1) — masking a
+  // disallowed item to `undefined` (instead of the shared `filterByRating`'s
+  // `.filter()`, which REMOVES entries) preserves index alignment with the
+  // grid's fixed geometry. A masked item renders as a placeholder card
+  // rather than disappearing, which also avoids the section's displayed
+  // totalSize (server-derived) drifting from what's actually shown.
+  const filteredItems = useMemo(() => {
+    if (!restrictionsEnabled) return items;
+    return items.map((item) => (item && isItemAllowed(item.contentRating) ? item : undefined));
+  }, [items, restrictionsEnabled, isItemAllowed]);
 
   // --- Collections view state ---
   const bp = useBreakpoint();
@@ -247,9 +252,15 @@ function LibraryView() {
     if (useFirstCharIndex && firstCharLetters.size > 0) {
       return firstCharLetters;
     }
-    // Fallback: derive from whatever items are currently loaded
+    // Fallback: derive from whatever items are currently loaded. `filteredItems`
+    // is a sparse-by-index store (prexu-6qi5.1) — this best-effort scan (used
+    // only when filters are active or the firstCharacter endpoint failed,
+    // tracked for a proper fix in prexu-6qi5.2) already only ever "saw"
+    // whatever had loaded so far; it just needs to skip unfetched slots now
+    // instead of assuming every index holds an item.
     const letters = new Set<string>();
     for (const item of filteredItems) {
+      if (!item) continue;
       letters.add(getLibrarySortBucket(item));
     }
     return letters;
@@ -453,23 +464,15 @@ function LibraryView() {
 
   const getCollectionCardKey = useCallback((c: PlexCollection) => c.ratingKey, []);
 
-  // Infinite scroll via IntersectionObserver
-  useEffect(() => {
-    const sentinel = sentinelRef.current;
-    if (!sentinel) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting && hasMore && !isLoadingMore) {
-          loadMore();
-        }
-      },
-      { rootMargin: "400px" }
-    );
-
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [hasMore, isLoadingMore, loadMore]);
+  // Per-index skeleton placeholder for a not-yet-fetched grid slot
+  // (prexu-6qi5.1) — replaces the old bottom-of-list "loading more" footer
+  // batch. Fetching is now range-driven (see ensureRange/onRangeChange
+  // below), so any slot in the section, not just the tail, can be unfetched
+  // at a given moment.
+  const renderLibraryPlaceholder = useCallback(
+    (index: number) => <SkeletonCard index={index} />,
+    [],
+  );
 
   if (!server) return null;
 
@@ -538,20 +541,16 @@ function LibraryView() {
             <VirtualizedLibraryGrid
               ref={gridApiRef}
               items={filteredItems}
+              itemCount={totalSize}
               renderItem={renderLibraryItem}
+              renderPlaceholder={renderLibraryPlaceholder}
+              onRangeChange={ensureRange}
               getKey={getItemKey}
               expandedKey={expandedKey}
               renderExpansion={renderExpansion}
               header={
-                isLoading && items.length === 0
+                isLoading && totalSize === 0
                   ? Array.from({ length: 24 }).map((_, i) => <SkeletonCard key={i} />)
-                  : undefined
-              }
-              footer={
-                isLoadingMore
-                  ? Array.from({ length: 12 }).map((_, i) => (
-                      <SkeletonCard key={`more-${i}`} />
-                    ))
                   : undefined
               }
             />
@@ -584,12 +583,6 @@ function LibraryView() {
               }
             />
           )}
-
-          {isLoadingMore && (
-            <p style={styles.loadingMore}>Loading more...</p>
-          )}
-
-          <div ref={sentinelRef} style={styles.sentinel} />
         </>
       )}
 
@@ -699,19 +692,10 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
     marginBottom: "1rem",
   },
-  loadingMore: {
-    textAlign: "center",
-    color: "var(--text-secondary)",
-    fontSize: "0.85rem",
-    padding: "0.5rem 0",
-  },
   /** Dims the grid while it's showing the previous filter/sort's items during a refetch. */
   staleGrid: {
     opacity: 0.5,
     transition: "opacity 0.15s ease",
-  },
-  sentinel: {
-    height: "1px",
   },
   /* --- Collections toolbar --- */
   collectionsToolbar: {
