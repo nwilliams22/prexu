@@ -116,5 +116,30 @@ describe("cache-invalidators", () => {
       // Movies should still exist
       expect(cacheGet("dashboard:server:movies")).toEqual(data);
     });
+
+    it("should not remove non-cache localStorage keys even if the sliced name matches", () => {
+      // A localStorage key WITHOUT the cache prefix (e.g. an app preference)
+      // whose name — after being blindly sliced by STORAGE_PREFIX.length —
+      // would match the predicate. Must NOT be removed.
+      // STORAGE_PREFIX is "prexu_cache:" (12 chars); this key is longer than
+      // that and its sliced remainder ends with ":deck".
+      const preferenceKey = "user_pref_settings:layout:deck";
+      localStorage.setItem(preferenceKey, JSON.stringify({ layout: "grid" }));
+
+      // Also a persisted cache entry that DOES match, to prove the sweep runs
+      const data = [{ test: "data" }];
+      cacheSet("dashboard:server:deck", data, 60 * 60 * 1000, true);
+
+      cacheInvalidateWhere((key) => key.endsWith(":deck"));
+
+      // The cache entry is gone...
+      expect(cacheGet("dashboard:server:deck")).toBeNull();
+      // ...but the unrelated preference key survives untouched
+      expect(localStorage.getItem(preferenceKey)).toEqual(
+        JSON.stringify({ layout: "grid" }),
+      );
+
+      localStorage.removeItem(preferenceKey);
+    });
   });
 });

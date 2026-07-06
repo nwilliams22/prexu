@@ -132,7 +132,10 @@ export function cacheInvalidateWhere(predicate: (key: string) => boolean): void 
   try {
     for (let i = localStorage.length - 1; i >= 0; i--) {
       const storageKey = localStorage.key(i);
-      if (storageKey && predicate(storageKey.slice(STORAGE_PREFIX.length))) {
+      if (
+        storageKey?.startsWith(STORAGE_PREFIX) &&
+        predicate(storageKey.slice(STORAGE_PREFIX.length))
+      ) {
         localStorage.removeItem(storageKey);
       }
     }
