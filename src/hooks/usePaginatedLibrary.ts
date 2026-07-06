@@ -3,10 +3,18 @@ import { useAuth } from "./useAuth";
 import { getLibraryItems } from "../services/plex-library";
 import { cacheGet, cacheSet, cacheInvalidate } from "../services/api-cache";
 import { logger } from "../services/logger";
+import {
+  expandRange,
+  chunkOffsetsForRange,
+  isChunkLoaded,
+  mergeChunk,
+  RANGE_CHUNK_SIZE,
+  RANGE_OVERSCAN,
+} from "./library-range";
 import type { PlexMediaItem, LibraryFilters } from "../types/library";
 
 const PAGE_SIZE = 50;
-/** Batch size used during progressive background loading */
+/** Batch size used during progressive background loading (loadAll mode) */
 const BG_BATCH_SIZE = 200;
 /** Cache TTL for library data (5 minutes) */
 const CACHE_TTL = 5 * 60 * 1000;
@@ -14,14 +22,24 @@ const CACHE_TTL = 5 * 60 * 1000;
 const LOAD_ALL_CONCURRENCY = 4;
 
 interface CachedLibrary {
-  items: PlexMediaItem[];
+  /** Sparse-by-index store: `undefined` slots mean "not fetched yet". A
+   *  fully-populated (loadAll) result is a dense store — a valid special
+   *  case of the same shape. */
+  store: (PlexMediaItem | undefined)[];
   totalSize: number;
-  hasMore: boolean;
 }
 
 export interface UsePaginatedLibraryResult {
-  items: PlexMediaItem[];
+  /**
+   * Sparse-by-index item store spanning the section: `items[i]` is the item
+   * at position `i`, or `undefined` if that position hasn't been fetched
+   * yet. Always dense up to `totalSize` (explicit `undefined`, never a real
+   * JS array hole) so `.map`/`.filter`/`for...of` visit every index.
+   */
+  items: (PlexMediaItem | undefined)[];
   isLoading: boolean;
+  /** True while any background range fetch (or the loadAll background
+   *  batch fill) is in flight. */
   isLoadingMore: boolean;
   /**
    * True while a section/sort/filter change is refetching but the currently
@@ -29,10 +47,17 @@ export interface UsePaginatedLibraryResult {
    * instead of blanking to `[]`). Consumers can dim/aria-busy the grid.
    */
   isStale: boolean;
-  hasMore: boolean;
   totalSize: number;
   error: string | null;
-  loadMore: () => void;
+  /**
+   * Request that the item range `[startIndex, endIndex)` be present in
+   * `items`, expanding it by a small overscan margin. Safe to call on every
+   * scroll/virtualizer-range tick — in-flight fetches for chunks already
+   * covered or already in flight are skipped, and fetches for chunks that
+   * fall outside the (expanded) requested range are aborted. No-op in
+   * loadAll mode, where the whole section is already being fetched.
+   */
+  ensureRange: (startIndex: number, endIndex: number) => void;
   retry: () => void;
 }
 
@@ -129,16 +154,35 @@ export function usePaginatedLibrary(
 ): UsePaginatedLibraryResult {
   const { server } = useAuth();
   const filtersKey = useMemo(() => JSON.stringify(filters), [filters]);
-  const [items, setItems] = useState<PlexMediaItem[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(false);
-  const [totalSize, setTotalSize] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const loadingRef = useRef(false);
+  const [items, setItems] = useState<(PlexMediaItem | undefined)[]>([]);
   const itemsRef = useRef(items);
   itemsRef.current = items;
+  const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [totalSize, setTotalSize] = useState(0);
+  const [error, setError] = useState<string | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  const totalSizeRef = useRef(0);
+  totalSizeRef.current = totalSize;
+
+  // Ranges keyed to the current "generation" (bumped on every section/sort/
+  // filter/loadAll change and on unmount). Fetch callbacks compare their
+  // captured generation against this ref before touching state, so a rapid
+  // filter/sort switch always settles on the LAST selection — stale
+  // in-flight responses from an earlier generation are silently dropped.
+  const generationRef = useRef(0);
+  // Which generation the current `items` state was built for — the first
+  // chunk merged for a NEW generation replaces (rather than merges into)
+  // whatever the previous generation left behind, so a section switch never
+  // splices new-section items into the old section's sparse store.
+  const storeGenerationRef = useRef(0);
+
+  // offset -> AbortController for in-flight range fetches (ranged mode only).
+  const inFlightRef = useRef<Map<number, AbortController>>(new Map());
+  // offsets whose chunk is fully present in `items` — lets ensureRange skip
+  // re-requesting a range that's already loaded without re-scanning the array.
+  const loadedChunksRef = useRef<Set<number>>(new Set());
 
   const loadAll = options.loadAll ?? false;
   const plexType = options.type;
@@ -155,34 +199,161 @@ export function usePaginatedLibrary(
     setRefreshTrigger((n) => n + 1);
   }, [cacheKey]);
 
-  // Reset when section or sort changes
+  /** Fetch one RANGE_CHUNK_SIZE-aligned chunk and merge it into `items`. */
+  const fetchChunk = useCallback(
+    (offset: number, generation: number) => {
+      if (!server || !sectionId) return;
+
+      const controller = new AbortController();
+      inFlightRef.current.set(offset, controller);
+      setIsLoadingMore(true);
+      logger.debug("library", "range chunk fetch start", {
+        sectionId,
+        offset,
+        size: RANGE_CHUNK_SIZE,
+        generation,
+      });
+
+      (async () => {
+        try {
+          const result = await getLibraryItems(server.uri, server.accessToken, sectionId, {
+            start: offset,
+            size: RANGE_CHUNK_SIZE,
+            sort,
+            filters,
+            type: plexType,
+            signal: controller.signal,
+          });
+
+          if (controller.signal.aborted || generation !== generationRef.current) return;
+
+          inFlightRef.current.delete(offset);
+          loadedChunksRef.current.add(offset);
+          totalSizeRef.current = result.totalSize;
+          setTotalSize(result.totalSize);
+
+          setItems((prev) => {
+            // A new generation's first successful chunk replaces the
+            // previous generation's (stale, now-irrelevant) store rather
+            // than merging into it.
+            const base = storeGenerationRef.current === generation ? prev : [];
+            storeGenerationRef.current = generation;
+            const merged = mergeChunk(base, offset, result.items, result.totalSize);
+            cacheSet(cacheKey, { store: merged, totalSize: result.totalSize }, CACHE_TTL);
+            return merged;
+          });
+          setIsLoading(false);
+        } catch (err) {
+          if (controller.signal.aborted) {
+            logger.trace("library", "range chunk fetch aborted", { sectionId, offset });
+            return;
+          }
+          inFlightRef.current.delete(offset);
+          logger.warn("api", "usePaginatedLibrary: range chunk fetch failed", {
+            sectionId,
+            offset,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          if (generation === generationRef.current) {
+            setError(err instanceof Error ? err.message : "Failed to load library range");
+            setIsLoading(false);
+          }
+        } finally {
+          if (generation === generationRef.current && inFlightRef.current.size === 0) {
+            setIsLoadingMore(false);
+          }
+        }
+      })();
+    },
+    [server, sectionId, sort, filters, plexType, cacheKey],
+  );
+
+  /**
+   * Range-driven fetch entry point. Called by the grid whenever the visible
+   * (+ overscan) item range changes — including instant jumps to the very
+   * bottom of the section, which is the whole point: geometry is never
+   * blocked on a fetch, only the cards within the newly-visible range are.
+   */
+  const ensureRange = useCallback(
+    (startIndex: number, endIndex: number) => {
+      if (!server || !sectionId || loadAll) return;
+      const total = totalSizeRef.current;
+      if (total <= 0) return; // totalSize not known yet — the initial chunk fetch will discover it
+
+      const generation = generationRef.current;
+      const { start, end } = expandRange(startIndex, endIndex, total, RANGE_OVERSCAN);
+      const needed = new Set(chunkOffsetsForRange(start, end, total, RANGE_CHUNK_SIZE));
+
+      // Abort in-flight fetches for chunks the user has scrolled past —
+      // they're no longer worth the round trip.
+      for (const [offset, controller] of inFlightRef.current) {
+        if (!needed.has(offset)) {
+          controller.abort();
+          inFlightRef.current.delete(offset);
+          logger.trace("library", "range fetch deprioritized (scrolled past)", {
+            sectionId,
+            offset,
+          });
+        }
+      }
+
+      for (const offset of needed) {
+        if (loadedChunksRef.current.has(offset)) continue;
+        if (inFlightRef.current.has(offset)) continue; // de-dup in-flight request
+        if (isChunkLoaded(itemsRef.current, offset, RANGE_CHUNK_SIZE, total)) {
+          loadedChunksRef.current.add(offset);
+          continue;
+        }
+        fetchChunk(offset, generation);
+      }
+    },
+    [server, sectionId, loadAll, fetchChunk],
+  );
+
+  // Reset when section, sort, filters, loadAll mode, or type changes.
   useEffect(() => {
     if (!server || !sectionId) return;
 
-    // Check cache first for instant display
+    generationRef.current += 1;
+    const generation = generationRef.current;
+
+    // A new combination invalidates every outstanding range fetch from the
+    // previous one — their offsets no longer mean anything for this section.
+    for (const controller of inFlightRef.current.values()) controller.abort();
+    inFlightRef.current.clear();
+    loadedChunksRef.current.clear();
+
+    setError(null);
+
     const cached = cacheGet<CachedLibrary>(cacheKey);
     if (cached) {
-      setItems(cached.items);
+      storeGenerationRef.current = generation;
+      setItems(cached.store);
       setTotalSize(cached.totalSize);
-      setHasMore(cached.hasMore);
+      totalSizeRef.current = cached.totalSize;
       setIsLoading(false);
-      loadingRef.current = false;
+      // Re-derive which chunks are already fully loaded so ensureRange
+      // doesn't immediately re-request everything the cache already has.
+      for (let o = 0; o < cached.totalSize; o += RANGE_CHUNK_SIZE) {
+        if (isChunkLoaded(cached.store, o, RANGE_CHUNK_SIZE, cached.totalSize)) {
+          loadedChunksRef.current.add(o);
+        }
+      }
       return;
     }
 
-    const controller = new AbortController();
-    loadingRef.current = true;
+    // Keep whatever items are currently rendered (previous section/filter/
+    // sort) instead of blanking to [] — isStale (derived below) lets the
+    // UI dim the stale grid instead of flashing empty + skeleton.
+    setIsLoading(true);
 
-    (async () => {
-      setIsLoading(true);
-      setError(null);
-      // Keep whatever items are currently rendered (previous section/filter/
-      // sort) instead of blanking to [] — isStale (derived below) lets the
-      // UI dim the stale grid instead of flashing empty + skeleton.
-      try {
-        if (loadAll) {
-          // ── Progressive loading: first batch fast, then background fill ──
-          // Fetch the first page immediately so the grid renders fast
+    if (loadAll) {
+      // ── Progressive loading: first batch fast, then background fill ──
+      const controller = new AbortController();
+      inFlightRef.current.set(-1, controller);
+
+      (async () => {
+        try {
           const firstPage = await getLibraryItems(
             server.uri,
             server.accessToken,
@@ -190,18 +361,17 @@ export function usePaginatedLibrary(
             { start: 0, size: PAGE_SIZE, sort, filters, type: plexType, signal: controller.signal }
           );
 
-          if (controller.signal.aborted) return;
+          if (controller.signal.aborted || generation !== generationRef.current) return;
 
-          setItems(firstPage.items);
+          storeGenerationRef.current = generation;
+          const firstStore = mergeChunk<PlexMediaItem>([], 0, firstPage.items, firstPage.totalSize);
+          setItems(firstStore);
           setTotalSize(firstPage.totalSize);
-          setHasMore(false); // disable manual loadMore during progressive load
+          totalSizeRef.current = firstPage.totalSize;
           setIsLoading(false);
-          loadingRef.current = false;
 
-          // Cache the first page immediately for fast re-visit
-          cacheSet(cacheKey, { items: firstPage.items, totalSize: firstPage.totalSize, hasMore: false }, CACHE_TTL);
+          cacheSet(cacheKey, { store: firstStore, totalSize: firstPage.totalSize }, CACHE_TTL);
 
-          // If there are more items, fetch them in background batches
           if (firstPage.hasMore) {
             setIsLoadingMore(true);
 
@@ -215,84 +385,47 @@ export function usePaginatedLibrary(
               total: firstPage.totalSize,
               signal: controller.signal,
               onFlush: (flushedSoFar) => {
-                setItems([...firstPage.items, ...flushedSoFar]);
+                if (generation !== generationRef.current) return;
+                setItems(mergeChunk<PlexMediaItem>(firstStore, firstPage.items.length, flushedSoFar, firstPage.totalSize));
               },
             });
 
-            if (!controller.signal.aborted) {
+            if (!controller.signal.aborted && generation === generationRef.current) {
+              inFlightRef.current.delete(-1);
               setIsLoadingMore(false);
-              const allItems = [...firstPage.items, ...restItems];
-              cacheSet(cacheKey, { items: allItems, totalSize: firstPage.totalSize, hasMore: false }, CACHE_TTL);
+              const allItems = mergeChunk<PlexMediaItem>(firstStore, firstPage.items.length, restItems, firstPage.totalSize);
+              setItems(allItems);
+              cacheSet(cacheKey, { store: allItems, totalSize: firstPage.totalSize }, CACHE_TTL);
             }
+          } else {
+            inFlightRef.current.delete(-1);
           }
-        } else {
-          // ── Standard pagination: single page ──
-          const result = await getLibraryItems(
-            server.uri,
-            server.accessToken,
-            sectionId,
-            { start: 0, size: PAGE_SIZE, sort, filters, type: plexType, signal: controller.signal }
-          );
-          if (!controller.signal.aborted) {
-            setItems(result.items);
-            setTotalSize(result.totalSize);
-            setHasMore(result.hasMore);
-            cacheSet(cacheKey, { items: result.items, totalSize: result.totalSize, hasMore: result.hasMore }, CACHE_TTL);
+        } catch (err) {
+          if (!controller.signal.aborted && generation === generationRef.current) {
+            setError(err instanceof Error ? err.message : "Failed to load library");
+          }
+        } finally {
+          if (!controller.signal.aborted && generation === generationRef.current) {
+            setIsLoading(false);
+            setIsLoadingMore(false);
           }
         }
-      } catch (err) {
-        if (!controller.signal.aborted) {
-          setError(
-            err instanceof Error ? err.message : "Failed to load library"
-          );
-        }
-      } finally {
-        if (!controller.signal.aborted) {
-          setIsLoading(false);
-          loadingRef.current = false;
-        }
-      }
-    })();
+      })();
+    } else {
+      // ── Range-driven: seed the first chunk for a fast paint; the grid's
+      //    onRangeChange (via ensureRange) drives everything after that. ──
+      fetchChunk(0, generation);
+    }
 
     return () => {
-      controller.abort();
+      generationRef.current += 1;
+      for (const controller of inFlightRef.current.values()) controller.abort();
+      inFlightRef.current.clear();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [server, sectionId, sort, filtersKey, refreshTrigger, loadAll, plexType, cacheKey]);
 
-  const loadMore = useCallback(() => {
-    if (!server || !sectionId || loadingRef.current || !hasMore) return;
+  const isStale = isLoading && items.some((item) => item !== undefined);
 
-    loadingRef.current = true;
-    setIsLoadingMore(true);
-
-    const offset = itemsRef.current.length;
-
-    (async () => {
-      try {
-        const result = await getLibraryItems(
-          server.uri,
-          server.accessToken,
-          sectionId,
-          { start: offset, size: PAGE_SIZE, sort, filters, type: plexType }
-        );
-        setItems((prev) => {
-          const updated = [...prev, ...result.items];
-          cacheSet(cacheKey, { items: updated, totalSize, hasMore: result.hasMore }, CACHE_TTL);
-          return updated;
-        });
-        setHasMore(result.hasMore);
-      } catch (err) {
-        setError(
-          err instanceof Error ? err.message : "Failed to load more items"
-        );
-      } finally {
-        setIsLoadingMore(false);
-        loadingRef.current = false;
-      }
-    })();
-  }, [server, sectionId, sort, filtersKey, hasMore, plexType, cacheKey, totalSize]);
-
-  const isStale = isLoading && items.length > 0;
-
-  return { items, isLoading, isLoadingMore, isStale, hasMore, totalSize, error, loadMore, retry };
+  return { items, isLoading, isLoadingMore, isStale, totalSize, error, ensureRange, retry };
 }

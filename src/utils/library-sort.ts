@@ -19,7 +19,7 @@ export function getLibrarySortBucket(item: SortableItem): string {
 }
 
 export function findFirstIndexForLetter(
-  items: readonly SortableItem[],
+  items: readonly (SortableItem | undefined)[],
   letter: string,
 ): number {
   const target = letter.toUpperCase();
