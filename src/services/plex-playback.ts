@@ -271,6 +271,10 @@ export async function reportTimelineBeacon(
   });
 
   const url = `${serverUri}/:/timeline?${params.toString()}`;
+  logger.debug("playback", "final offset sent at stop", {
+    ratingKey,
+    timeMs: Math.round(timeMs),
+  });
   logger.info("playback", "reportTimelineBeacon stopped", {
     ratingKey,
     timeMs: Math.round(timeMs),
@@ -281,7 +285,20 @@ export async function reportTimelineBeacon(
   // Player exit is an SPA route change (the webview survives), so an awaited
   // fetch with keepalive is reliable here.
   const headers = await getServerHeaders(serverToken);
-  await timedFetch(url, { headers, keepalive: true });
+  const response = await timedFetch(url, { headers, keepalive: true });
+
+  // timedFetch resolves for ANY HTTP status — it only rejects on a
+  // network-level failure (timeout/abort/DNS/etc). Without this check, a
+  // non-2xx from PMS (auth hiccup, 5xx, ...) would still resolve here, the
+  // caller's `.then()` would fire emitWatchStateChanged() as if the resume
+  // offset was recorded, and the next Resume click would silently fall back
+  // to whatever (stale) marker PMS already had — indistinguishable from the
+  // PMS-ingestion race, but actually a client-side false positive (prexu-ix52).
+  if (!response.ok) {
+    throw new Error(
+      `reportTimelineBeacon failed: ${response.status} ${response.statusText}`,
+    );
+  }
 }
 
 // ── Volume Persistence ──
@@ -402,6 +419,15 @@ export async function prepareSource(args: PrepareSourceArgs): Promise<PreparedSo
   }
 
   const viewOffset = offsetOverride != null ? offsetOverride : (playable.viewOffset ?? 0);
+  // Diagnostic for prexu-ix52: confirms the play path always reads the
+  // FRESH metadata fetched above (getItemMetadata), never a cached deck
+  // entry — the resume offset a hardware run actually seeks to.
+  logger.debug("playback", "offset used at play start", {
+    ratingKey,
+    viewOffset,
+    source: offsetOverride != null ? "override" : "fresh-metadata",
+    serverViewOffset: playable.viewOffset ?? 0,
+  });
 
   // Check for a locally downloaded file first.
   if (localPath) {

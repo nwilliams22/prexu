@@ -600,6 +600,43 @@ describe("plex-playback — async functions", () => {
         ),
       ).rejects.toThrow("network gone");
     });
+
+    // prexu-ix52: timedFetch resolves for ANY HTTP status (it only rejects on
+    // a network-level failure) — reportTimelineBeacon must check response.ok
+    // itself, or a non-2xx from PMS would look identical to a successful
+    // write to the caller's `.then()`, which then broadcasts
+    // emitWatchStateChanged() as if the resume offset had actually landed.
+    it("throws when PMS responds with a non-2xx status (write not verified)", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        statusText: "Internal Server Error",
+      } as Response);
+
+      await expect(
+        reportTimelineBeacon(
+          "https://server:32400",
+          "my-token",
+          "12345",
+          188_000,
+          1_244_000,
+        ),
+      ).rejects.toThrow(/500/);
+    });
+
+    it("resolves when PMS responds ok", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, status: 200 } as Response);
+
+      await expect(
+        reportTimelineBeacon(
+          "https://server:32400",
+          "my-token",
+          "12345",
+          188_000,
+          1_244_000,
+        ),
+      ).resolves.toBeUndefined();
+    });
   });
 });
 

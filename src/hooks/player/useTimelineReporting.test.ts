@@ -142,6 +142,34 @@ describe("useTimelineReporting.reportStopped", () => {
     off();
   });
 
+  // prexu-ix52: reportTimelineBeacon now rejects on a non-2xx PMS response
+  // (see plex-playback.ts). The stopped-beacon branch here must let that
+  // rejection reach its `.catch()` — NOT fire emitWatchStateChanged() — so a
+  // failed write never gets treated as "the dashboard can trust the new
+  // offset now."
+  it("does NOT emit watch-state-changed when the stopped beacon rejects", async () => {
+    const handler = vi.fn();
+    const off = onWatchStateChanged(handler);
+    vi.mocked(reportTimelineBeacon).mockRejectedValueOnce(
+      new Error("reportTimelineBeacon failed: 500 Internal Server Error"),
+    );
+    const result = setup();
+    act(() => {
+      result.current.ratingKeyRef.current = "66324";
+      result.current.durationRef.current = 1244;
+      result.current.currentTimeRef.current = 90; // > 60s threshold
+      result.current.reportStopped();
+    });
+    await vi.waitFor(() =>
+      expect(vi.mocked(reportTimelineBeacon)).toHaveBeenCalledTimes(1),
+    );
+    // Give the rejected promise's .catch() a tick to run.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(handler).not.toHaveBeenCalled();
+    off();
+  });
+
   it("does nothing when there is no server", () => {
     const result = setup(null);
     act(() => {
