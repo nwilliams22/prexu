@@ -131,10 +131,10 @@ function AppLayout() {
   useRouteAnnouncer();
 
   // Route-transition spinner — see useRouteTransitionSpinner for the full
-  // rationale (prexu-0szx.8). Scoped to the PlayBridge (/play/:ratingKey)
-  // exit gap; regular in-app navigations get a short pre-show delay so
-  // cached/instant page loads never flash an opaque overlay over content
-  // that's already painted.
+  // rationale (prexu-0szx.8, tightened in prexu-xb3h). Scoped ONLY to the
+  // PlayBridge (/play/:ratingKey) exit gap — every other in-app navigation
+  // (including detail -> dashboard back-nav) never activates this overlay;
+  // destination pages render their own skeleton/loading UI instead.
   const location = useLocation();
   const showTransitionSpinner = useRouteTransitionSpinner(location.pathname);
 
@@ -256,7 +256,11 @@ function AppLayout() {
             </ErrorBoundary>
           </div>
           {showTransitionSpinner && (
-            <div style={styles.transitionSpinner} aria-hidden>
+            <div
+              style={styles.transitionSpinner}
+              aria-hidden
+              data-testid="route-transition-spinner"
+            >
               <div className="loading-spinner" />
             </div>
           )}
