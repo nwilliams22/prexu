@@ -7,9 +7,19 @@
  * 4 Hz time-pos re-renders. The seek bar (which does display time) lives
  * in PlayerControls above. Interaction-time position reads (chapter
  * skip, hold-to-skip) go through `currentTimeRef`.
+ *
+ * Responsive compaction (prexu-52ky): a ResizeObserver on the row measures
+ * its own width and drives `computeControlsCompaction` (controlsCompaction.ts)
+ * to shrink icons, then collapse the right cluster's secondary buttons into
+ * an overflow "more" menu, then finally collapse subtitles too — pop-out and
+ * fullscreen are NEVER collapsed so pop-out stays reachable in the row at any
+ * width. This measurement is independent of the `reflowTick` prop below (a
+ * real ResizeObserver fires on actual DOM size changes regardless of parent
+ * re-renders), so it does not reintroduce the 4 Hz time-pos re-renders this
+ * component is memoized to avoid.
  */
 
-import { memo, useState, useEffect } from "react";
+import { memo, useState, useEffect, useRef, useCallback } from "react";
 import type { PlayerChrome } from "../../hooks/usePlayer";
 import type { AudioEnhancementsResult } from "../../hooks/useAudioEnhancements";
 import type { NormalizationPreset } from "../../types/preferences";
@@ -18,6 +28,9 @@ import SkipButtons from "./SkipButtons";
 import TrackMenu from "../TrackMenu";
 import AudioEnhancementsPanel from "../AudioEnhancementsPanel";
 import SubtitleSearchPanel from "./SubtitleSearchPanel";
+import ControlsOverflowMenu, { type ControlsOverflowItem } from "./ControlsOverflowMenu";
+import { computeControlsCompaction } from "./controlsCompaction";
+import { logger } from "../../services/logger";
 
 interface ControlsBottomBarProps {
   player: PlayerChrome;
@@ -118,6 +131,7 @@ function ControlsBottomBar({
   const [audioMenuOpen, setAudioMenuOpen] = useState(false);
   const [enhancementsOpen, setEnhancementsOpen] = useState(false);
   const [subtitleSearchOpen, setSubtitleSearchOpen] = useState(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
 
   const anyPanelOpen =
     subtitleMenuOpen || audioMenuOpen || enhancementsOpen || subtitleSearchOpen;
@@ -126,13 +140,190 @@ function ControlsBottomBar({
     return () => onPanelPinChange?.(false);
   }, [anyPanelOpen, onPanelPinChange]);
 
-  const iconSmall = mobile ? 26 : 22;
-  const iconLarge = mobile ? 32 : 28;
+  // Responsive compaction (prexu-52ky) — measure the row's own width with a
+  // ResizeObserver rather than threading pixel values down from Player.tsx,
+  // so this stays self-contained and fires on real layout changes even when
+  // nothing re-renders this (memoized) subtree from above. `0` means
+  // "not measured yet" and is treated as full width (see
+  // computeControlsCompaction) so the bar never flashes a compacted layout
+  // before the observer reports back.
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [rowWidth, setRowWidth] = useState(0);
+
+  useEffect(() => {
+    const el = rowRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const width = entry.contentRect.width;
+      setRowWidth((prev) => {
+        if (Math.round(prev) === Math.round(width)) return prev;
+        logger.debug("player", "controls bar width changed", { width });
+        return width;
+      });
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  const compaction = computeControlsCompaction(rowWidth);
+
+  useEffect(() => {
+    logger.debug("player", "controls compaction level", {
+      rowWidth,
+      ...compaction,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    compaction.iconCompact,
+    compaction.rightOverflow,
+    compaction.hideSubtitlesInline,
+    compaction.hideTransportExtras,
+  ]);
+
+  const baseIconSmall = mobile ? 26 : 22;
+  const baseIconLarge = mobile ? 32 : 28;
+  const iconSmall = compaction.iconCompact ? Math.max(16, baseIconSmall - 6) : baseIconSmall;
+  const iconLarge = compaction.iconCompact ? Math.max(20, baseIconLarge - 6) : baseIconLarge;
+
+  // Auto-close the overflow menu if a resize back to full width removes its
+  // trigger button, rather than leaving an orphaned popup only closable via
+  // Escape/backdrop-click.
+  useEffect(() => {
+    if (!compaction.rightOverflow) setMoreMenuOpen(false);
+  }, [compaction.rightOverflow]);
+
+  const openSubtitles = useCallback(() => {
+    if (serverUri && serverToken && ratingKey) {
+      setSubtitleSearchOpen((o) => !o);
+    } else {
+      setSubtitleMenuOpen((o) => !o);
+    }
+    setAudioMenuOpen(false);
+    setEnhancementsOpen(false);
+  }, [serverUri, serverToken, ratingKey]);
+
+  const openAudio = useCallback(() => {
+    setAudioMenuOpen((o) => !o);
+    setSubtitleMenuOpen(false);
+    setEnhancementsOpen(false);
+  }, []);
+
+  const openEnhancements = useCallback(() => {
+    setEnhancementsOpen((o) => !o);
+    setSubtitleMenuOpen(false);
+    setAudioMenuOpen(false);
+  }, []);
+
+  const activateQueue = useCallback(() => {
+    onToggleQueue?.();
+    setSubtitleMenuOpen(false);
+    setAudioMenuOpen(false);
+    setEnhancementsOpen(false);
+  }, [onToggleQueue]);
+
+  // Items collapsed into the overflow "more" menu (prexu-52ky). Built every
+  // render (cheap — a handful of plain objects) rather than memoized, since
+  // this component only re-renders on real state/prop changes, never on the
+  // 4 Hz time-pos ticks it's memoized against.
+  const overflowItems: ControlsOverflowItem[] = [];
+
+  if (compaction.hideSubtitlesInline) {
+    overflowItems.push({
+      key: "subtitles",
+      label: "Subtitles",
+      icon: (
+        <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+          <rect x={2} y={4} width={20} height={16} rx={2} />
+          <line x1={6} y1={12} x2={10} y2={12} />
+          <line x1={14} y1={12} x2={18} y2={12} />
+          <line x1={6} y1={16} x2={18} y2={16} />
+        </svg>
+      ),
+      onClick: openSubtitles,
+      active: player.selectedSubtitleId !== null,
+    });
+  }
+
+  if (compaction.rightOverflow) {
+    overflowItems.push({
+      key: "audio",
+      label: "Audio",
+      icon: (
+        <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+          <path d="M9 18V5l12-2v13" />
+          <circle cx={6} cy={18} r={3} />
+          <circle cx={18} cy={16} r={3} />
+        </svg>
+      ),
+      onClick: openAudio,
+    });
+
+    if (audioEnhancements && !mobile) {
+      overflowItems.push({
+        key: "enhancements",
+        label: "Audio enhancements",
+        icon: (
+          <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
+            <line x1={5} y1={3} x2={5} y2={21} />
+            <circle cx={5} cy={14} r={2.5} fill="currentColor" />
+            <line x1={12} y1={3} x2={12} y2={21} />
+            <circle cx={12} cy={8} r={2.5} fill="currentColor" />
+            <line x1={19} y1={3} x2={19} y2={21} />
+            <circle cx={19} cy={16} r={2.5} fill="currentColor" />
+          </svg>
+        ),
+        onClick: openEnhancements,
+        active:
+          audioEnhancements.volumeBoost > 1 ||
+          audioEnhancements.normalizationPreset !== "off",
+      });
+    }
+
+    if (onToggleQueue) {
+      overflowItems.push({
+        key: "queue",
+        label: "Playback queue",
+        icon: (
+          <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
+            <line x1={4} y1={6} x2={16} y2={6} />
+            <line x1={4} y1={10} x2={16} y2={10} />
+            <line x1={4} y1={14} x2={12} y2={14} />
+            <line x1={4} y1={18} x2={10} y2={18} />
+            <polygon points="16,14 22,17 16,20" fill="currentColor" stroke="none" />
+          </svg>
+        ),
+        onClick: activateQueue,
+        badge: queueCount,
+      });
+    }
+
+    if (isMinimizeSupported && onMinimize) {
+      overflowItems.push({
+        key: "minimize",
+        label: isMinimizeActive ? "Restore from minimize" : "Minimize player to corner",
+        icon: (
+          <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+            <rect x={3} y={3} width={14} height={14} rx={2} />
+            <rect x={11} y={11} width={10} height={10} rx={2} fill="currentColor" opacity={0.35} />
+          </svg>
+        ),
+        onClick: onMinimize,
+        active: isMinimizeActive,
+      });
+    }
+  }
 
   return (
     <>
       {/* Controls row */}
-      <div style={styles.controlsRow} data-reflow-tick={reflowTick}>
+      <div
+        ref={rowRef}
+        style={styles.controlsRow}
+        data-reflow-tick={reflowTick}
+        data-compact={compaction.iconCompact || undefined}
+      >
           {/* Left controls — transport */}
           <div
             style={{
@@ -155,6 +346,8 @@ function ControlsBottomBar({
               iconSmall={iconSmall}
               iconLarge={iconLarge}
               reflowTick={reflowTick}
+              hideEpisodeNav={compaction.hideTransportExtras}
+              hideChapterNav={compaction.hideTransportExtras}
             />
 
             {/* Volume — hidden on mobile */}
@@ -213,153 +406,167 @@ function ControlsBottomBar({
             {/* Subtitle button — opens the full tabbed panel (tracks /
                 search / style) directly. The compact TrackMenu is only the
                 fallback when no server connection is available (local
-                playback) since search needs the server. */}
-            <button
-              onClick={() => {
-                if (serverUri && serverToken && ratingKey) {
-                  setSubtitleSearchOpen((o) => !o);
-                } else {
-                  setSubtitleMenuOpen((o) => !o);
-                }
-                setAudioMenuOpen(false);
-                setEnhancementsOpen(false);
-              }}
-              style={{
-                ...styles.controlButton,
-                ...(player.selectedSubtitleId !== null ? { color: "var(--accent)" } : {}),
-              }}
-              aria-label="Subtitles"
-            >
-              <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                <rect x={2} y={4} width={20} height={16} rx={2} />
-                <line x1={6} y1={12} x2={10} y2={12} />
-                <line x1={14} y1={12} x2={18} y2={12} />
-                <line x1={6} y1={16} x2={18} y2={16} />
-              </svg>
-            </button>
-
-            {/* Audio button */}
-            <button
-              onClick={() => {
-                setAudioMenuOpen((o) => !o);
-                setSubtitleMenuOpen(false);
-                setEnhancementsOpen(false);
-              }}
-              style={{
-                ...styles.controlButton,
-                ...(mobile ? { padding: "0.5rem" } : {}),
-              }}
-              aria-label="Audio"
-            >
-              <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                <path d="M9 18V5l12-2v13" />
-                <circle cx={6} cy={18} r={3} />
-                <circle cx={18} cy={16} r={3} />
-              </svg>
-            </button>
-
-            {/* Audio Enhancements */}
-            {audioEnhancements && !mobile && (
+                playback) since search needs the server.
+                Priority tier 2 (prexu-52ky): collapses into the overflow
+                menu only at the deepest compaction tier — pop-out and
+                fullscreen (below) never do. */}
+            {!compaction.hideSubtitlesInline && (
               <button
-                onClick={() => {
-                  setEnhancementsOpen((o) => !o);
-                  setSubtitleMenuOpen(false);
-                  setAudioMenuOpen(false);
-                }}
+                onClick={openSubtitles}
                 style={{
                   ...styles.controlButton,
-                  ...(audioEnhancements.volumeBoost > 1 ||
-                  audioEnhancements.normalizationPreset !== "off"
-                    ? { color: "var(--accent)" }
-                    : {}),
+                  ...(player.selectedSubtitleId !== null ? { color: "var(--accent)" } : {}),
                 }}
-                aria-label="Audio enhancements"
+                aria-label="Subtitles"
               >
-                <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" aria-hidden="true">
-                  <line x1={5} y1={3} x2={5} y2={21} />
-                  <circle cx={5} cy={14} r={2.5} fill="currentColor" />
-                  <line x1={12} y1={3} x2={12} y2={21} />
-                  <circle cx={12} cy={8} r={2.5} fill="currentColor" />
-                  <line x1={19} y1={3} x2={19} y2={21} />
-                  <circle cx={19} cy={16} r={2.5} fill="currentColor" />
+                <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <rect x={2} y={4} width={20} height={16} rx={2} />
+                  <line x1={6} y1={12} x2={10} y2={12} />
+                  <line x1={14} y1={12} x2={18} y2={12} />
+                  <line x1={6} y1={16} x2={18} y2={16} />
                 </svg>
               </button>
             )}
 
-            {/* Queue */}
-            {onToggleQueue && (
-              <button
-                onClick={() => {
-                  onToggleQueue();
-                  setSubtitleMenuOpen(false);
-                  setAudioMenuOpen(false);
-                  setEnhancementsOpen(false);
-                }}
-                style={{
-                  ...styles.controlButton,
-                  position: "relative",
-                }}
-                aria-label="Playback queue"
-              >
-                <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
-                  <line x1={4} y1={6} x2={16} y2={6} />
-                  <line x1={4} y1={10} x2={16} y2={10} />
-                  <line x1={4} y1={14} x2={12} y2={14} />
-                  <line x1={4} y1={18} x2={10} y2={18} />
-                  <polygon points="16,14 22,17 16,20" fill="currentColor" stroke="none" />
-                </svg>
-                {queueCount !== undefined && queueCount > 0 && (
-                  <span style={styles.queueBadge}>{queueCount}</span>
-                )}
-              </button>
-            )}
-
-            {/* Minimize to corner (Windows-only, prexu-7il.4) */}
-            {isMinimizeSupported && onMinimize && (
-              <button
-                onClick={onMinimize}
-                style={{
-                  ...styles.controlButton,
-                  ...(isMinimizeActive ? { color: "var(--accent)" } : {}),
-                  ...(mobile ? { padding: "0.5rem" } : {}),
-                }}
-                aria-label={
-                  isMinimizeActive
-                    ? "Restore from minimize"
-                    : "Minimize player to corner"
-                }
-                title={
-                  isMinimizeActive
-                    ? "Restore player"
-                    : "Minimize player to corner"
-                }
-              >
-                {/* "Window-restore-down" style: small box inside large box */}
-                <svg
-                  width={iconSmall}
-                  height={iconSmall}
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
+            {/* Audio / enhancements / queue / minimize — priority tier 3
+                (prexu-52ky): the first group to collapse into the overflow
+                "more" menu as the row narrows. */}
+            {!compaction.rightOverflow && (
+              <>
+                <button
+                  onClick={openAudio}
+                  style={{
+                    ...styles.controlButton,
+                    ...(mobile ? { padding: "0.5rem" } : {}),
+                  }}
+                  aria-label="Audio"
                 >
-                  <rect x={3} y={3} width={14} height={14} rx={2} />
-                  <rect
-                    x={11}
-                    y={11}
-                    width={10}
-                    height={10}
-                    rx={2}
-                    fill="currentColor"
-                    opacity={0.35}
-                  />
+                  <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                    <path d="M9 18V5l12-2v13" />
+                    <circle cx={6} cy={18} r={3} />
+                    <circle cx={18} cy={16} r={3} />
+                  </svg>
+                </button>
+
+                {audioEnhancements && !mobile && (
+                  <button
+                    onClick={openEnhancements}
+                    style={{
+                      ...styles.controlButton,
+                      ...(audioEnhancements.volumeBoost > 1 ||
+                      audioEnhancements.normalizationPreset !== "off"
+                        ? { color: "var(--accent)" }
+                        : {}),
+                    }}
+                    aria-label="Audio enhancements"
+                  >
+                    <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" aria-hidden="true">
+                      <line x1={5} y1={3} x2={5} y2={21} />
+                      <circle cx={5} cy={14} r={2.5} fill="currentColor" />
+                      <line x1={12} y1={3} x2={12} y2={21} />
+                      <circle cx={12} cy={8} r={2.5} fill="currentColor" />
+                      <line x1={19} y1={3} x2={19} y2={21} />
+                      <circle cx={19} cy={16} r={2.5} fill="currentColor" />
+                    </svg>
+                  </button>
+                )}
+
+                {onToggleQueue && (
+                  <button
+                    onClick={activateQueue}
+                    style={{
+                      ...styles.controlButton,
+                      position: "relative",
+                    }}
+                    aria-label="Playback queue"
+                  >
+                    <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
+                      <line x1={4} y1={6} x2={16} y2={6} />
+                      <line x1={4} y1={10} x2={16} y2={10} />
+                      <line x1={4} y1={14} x2={12} y2={14} />
+                      <line x1={4} y1={18} x2={10} y2={18} />
+                      <polygon points="16,14 22,17 16,20" fill="currentColor" stroke="none" />
+                    </svg>
+                    {queueCount !== undefined && queueCount > 0 && (
+                      <span style={styles.queueBadge}>{queueCount}</span>
+                    )}
+                  </button>
+                )}
+
+                {isMinimizeSupported && onMinimize && (
+                  <button
+                    onClick={onMinimize}
+                    style={{
+                      ...styles.controlButton,
+                      ...(isMinimizeActive ? { color: "var(--accent)" } : {}),
+                      ...(mobile ? { padding: "0.5rem" } : {}),
+                    }}
+                    aria-label={
+                      isMinimizeActive
+                        ? "Restore from minimize"
+                        : "Minimize player to corner"
+                    }
+                    title={
+                      isMinimizeActive
+                        ? "Restore player"
+                        : "Minimize player to corner"
+                    }
+                  >
+                    {/* "Window-restore-down" style: small box inside large box */}
+                    <svg
+                      width={iconSmall}
+                      height={iconSmall}
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <rect x={3} y={3} width={14} height={14} rx={2} />
+                      <rect
+                        x={11}
+                        y={11}
+                        width={10}
+                        height={10}
+                        rx={2}
+                        fill="currentColor"
+                        opacity={0.35}
+                      />
+                    </svg>
+                  </button>
+                )}
+              </>
+            )}
+
+            {/* Overflow "more" menu trigger (prexu-52ky) — only rendered once
+                the row is narrow enough that something has actually been
+                collapsed into it. */}
+            {compaction.rightOverflow && (
+              <button
+                onClick={() => setMoreMenuOpen((o) => !o)}
+                style={{
+                  ...styles.controlButton,
+                  ...(moreMenuOpen ? { color: "var(--accent)" } : {}),
+                }}
+                aria-label="More controls"
+                title="More controls"
+                aria-haspopup="menu"
+                aria-expanded={moreMenuOpen}
+              >
+                <svg width={iconSmall} height={iconSmall} viewBox="0 0 24 24" fill="currentColor">
+                  <circle cx={5} cy={12} r={2} />
+                  <circle cx={12} cy={12} r={2} />
+                  <circle cx={19} cy={12} r={2} />
                 </svg>
               </button>
             )}
 
-            {/* Pop-out (native) / Picture-in-Picture (HTML5) */}
+            {/* Pop-out (native) / Picture-in-Picture (HTML5) — priority
+                tier 1 (prexu-52ky): NEVER collapses. In pop-out mode this
+                is the primary action (the only way back to windowed mode
+                short of PopoutExitButton's top-overlay affordance), so it
+                must always be reachable directly in the row. */}
             {isPiPSupported && onTogglePiP && (
               <button
                 onClick={onTogglePiP}
@@ -403,7 +610,8 @@ function ControlsBottomBar({
               </button>
             )}
 
-            {/* Fullscreen */}
+            {/* Fullscreen — priority tier 1 (prexu-52ky), same as pop-out:
+                NEVER collapses. */}
             <button
               onClick={player.toggleFullscreen}
               style={{
@@ -430,6 +638,15 @@ function ControlsBottomBar({
             </button>
           </div>
       </div>
+
+      {/* Overflow "more" menu (prexu-52ky) — holds whatever the priority
+          rules collapsed out of the row at the current width. */}
+      {moreMenuOpen && compaction.rightOverflow && (
+        <ControlsOverflowMenu
+          items={overflowItems}
+          onClose={() => setMoreMenuOpen(false)}
+        />
+      )}
 
       {/* Track selection menus */}
       {subtitleMenuOpen && (
