@@ -82,21 +82,26 @@ const POPOUT_DEFAULT_HEIGHT: u32 = 270;
 /// up to the main window's minimum. A small non-zero floor (rather than no
 /// floor at all) keeps the mini player from being drag-resized down to a
 /// degenerate size.
+///
+/// LOGICAL pixels, deliberately: min-size constraints in tauri.conf.json are
+/// logical, and a logical floor scales sensibly on HiDPI (200x120 logical is
+/// 400x240 physical at scale 2 — still a usable mini player, whereas a
+/// physical floor would shrink relative to the UI as scale grows).
 #[cfg(target_os = "linux")]
-const POPOUT_MIN_WIDTH: u32 = 200;
+const POPOUT_MIN_WIDTH: f64 = 200.0;
 #[cfg(target_os = "linux")]
-const POPOUT_MIN_HEIGHT: u32 = 120;
+const POPOUT_MIN_HEIGHT: f64 = 120.0;
 
-/// Must match `src-tauri/tauri.conf.json`'s main window `minWidth`/
-/// `minHeight`. `tauri::WebviewWindow` exposes `set_min_size` but no
-/// corresponding read accessor, so the floor lifted for pop-out (see
-/// `POPOUT_MIN_WIDTH`/`POPOUT_MIN_HEIGHT` above) is restored to these
-/// hardcoded values on exit rather than a captured live value. Keep these in
-/// sync with tauri.conf.json if that ever changes.
+/// Fallback min-size (LOGICAL pixels) restored on pop-out exit when the main
+/// window's `WindowConfig` has no `minWidth`/`minHeight` set. The primary
+/// source is `app.config().app.windows` looked up by window label (see
+/// `configured_main_min_size`), which tracks `tauri.conf.json` automatically;
+/// these constants only matter if that config entry is missing or has no
+/// min-size — they mirror the current tauri.conf.json values (800x600).
 #[cfg(target_os = "linux")]
-const MAIN_MIN_WIDTH: u32 = 800;
+const MAIN_MIN_WIDTH_FALLBACK: f64 = 800.0;
 #[cfg(target_os = "linux")]
-const MAIN_MIN_HEIGHT: u32 = 600;
+const MAIN_MIN_HEIGHT_FALLBACK: f64 = 600.0;
 
 /// Thin accessor for the pop-out store keys. Wraps the key-string
 /// constants so call sites name what they're reading/writing rather than
@@ -952,6 +957,33 @@ fn linux_work_area(main: &tauri::WebviewWindow) -> Result<(i32, i32, i32, i32), 
     Ok((x, y, w, h))
 }
 
+/// Resolve the min-size (LOGICAL pixels) to restore on pop-out exit from the
+/// static window config, looked up by window label. Pure so it's unit-testable
+/// without a Tauri runtime; the caller passes `app.config().app.windows` and
+/// `main.label()`. Missing config entry or unset `minWidth`/`minHeight` fall
+/// back to `MAIN_MIN_*_FALLBACK` per-axis (config min-sizes are `Option<f64>`
+/// logical pixels — see tauri-utils `WindowConfig`).
+#[cfg(target_os = "linux")]
+fn configured_main_min_size(
+    windows: &[tauri::utils::config::WindowConfig],
+    label: &str,
+) -> (f64, f64) {
+    let cfg = windows.iter().find(|w| w.label == label);
+    if cfg.is_none() {
+        log::warn!(
+            "[player:popout] no window config with label {:?}, using fallback min-size {}x{}",
+            label, MAIN_MIN_WIDTH_FALLBACK, MAIN_MIN_HEIGHT_FALLBACK
+        );
+    }
+    let w = cfg
+        .and_then(|c| c.min_width)
+        .unwrap_or(MAIN_MIN_WIDTH_FALLBACK);
+    let h = cfg
+        .and_then(|c| c.min_height)
+        .unwrap_or(MAIN_MIN_HEIGHT_FALLBACK);
+    (w, h)
+}
+
 /// Enter pop-out mode (Linux): same contract as the Windows command above —
 /// `Option` args mean "use the persisted geometry", the pre-pop-out geometry
 /// is stashed in `PlayerState::pre_popout_geometry` for `player_exit_popout`
@@ -1054,12 +1086,13 @@ pub async fn player_enter_popout(
     // POPOUT_MIN_WIDTH/HEIGHT doc comment. Without this, GTK's geometry
     // hints (the main window's configured 800x600 minimum) clamp the
     // resize below to 800x600 regardless of the requested 480x270, and
-    // block edge-drag resize under that floor too.
+    // block edge-drag resize under that floor too. LogicalSize on purpose:
+    // min-size constraints are logical throughout (config + GTK hints).
     log::debug!(
-        "[player:popout] lifting main window min-size {}x{} -> {}x{}",
-        MAIN_MIN_WIDTH, MAIN_MIN_HEIGHT, POPOUT_MIN_WIDTH, POPOUT_MIN_HEIGHT
+        "[player:popout] lifting main window min-size to {}x{} logical",
+        POPOUT_MIN_WIDTH, POPOUT_MIN_HEIGHT
     );
-    if let Err(e) = main.set_min_size(Some(tauri::PhysicalSize::new(
+    if let Err(e) = main.set_min_size(Some(tauri::LogicalSize::new(
         POPOUT_MIN_WIDTH,
         POPOUT_MIN_HEIGHT,
     ))) {
@@ -1199,18 +1232,19 @@ pub async fn player_exit_popout(
 
     // Restore the main window's min-size floor (prexu-6qi5.4) before the
     // geometry restore below, so post-exit drag-resizing below the app's
-    // normal 800x600 minimum is rejected again, matching pre-popout
-    // behaviour. See MAIN_MIN_WIDTH/HEIGHT doc comment — no runtime getter
-    // exists for the previously configured constraint, so this restores to
-    // the hardcoded values that must match tauri.conf.json.
+    // normal minimum is rejected again, matching pre-popout behaviour.
+    // `set_min_size` has no read accessor, but the STATIC config the window
+    // was built from is available at runtime via `app.config().app.windows`
+    // — restore from there (logical pixels, same units the config declares)
+    // so this never drifts from tauri.conf.json. LogicalSize is load-bearing:
+    // restoring the same numbers as PhysicalSize would halve the effective
+    // floor on a scale-2 HiDPI display.
+    let (min_w, min_h) = configured_main_min_size(&app.config().app.windows, main.label());
     log::debug!(
-        "[player:popout] restoring main window min-size to {}x{}",
-        MAIN_MIN_WIDTH, MAIN_MIN_HEIGHT
+        "[player:popout] restoring main window min-size to {}x{} logical (from window config)",
+        min_w, min_h
     );
-    if let Err(e) = main.set_min_size(Some(tauri::PhysicalSize::new(
-        MAIN_MIN_WIDTH,
-        MAIN_MIN_HEIGHT,
-    ))) {
+    if let Err(e) = main.set_min_size(Some(tauri::LogicalSize::new(min_w, min_h))) {
         log::warn!("[player:popout] set_min_size (restore) failed: {e}");
     }
 
@@ -1506,6 +1540,78 @@ mod tests {
         // Guard against accidental aliasing with the monitor key (Windows-only).
         assert_ne!(PopoutStore::key_corner(), PopoutStore::key_monitor());
         assert_ne!(PopoutStore::key_size(), PopoutStore::key_monitor());
+    }
+
+    // ---- configured_main_min_size (prexu-6qi5.4 review fix) --------------
+    //
+    // Pure lookup over the static window config — testable without a Tauri
+    // runtime via WindowConfig::default(). Values are LOGICAL pixels.
+
+    #[cfg(target_os = "linux")]
+    mod configured_min_size {
+        use super::super::*;
+        use tauri::utils::config::WindowConfig;
+
+        fn window(label: &str, min_w: Option<f64>, min_h: Option<f64>) -> WindowConfig {
+            WindowConfig {
+                label: label.to_string(),
+                min_width: min_w,
+                min_height: min_h,
+                ..Default::default()
+            }
+        }
+
+        #[test]
+        fn reads_configured_values_for_matching_label() {
+            let windows = [window("main", Some(800.0), Some(600.0))];
+            assert_eq!(configured_main_min_size(&windows, "main"), (800.0, 600.0));
+        }
+
+        #[test]
+        fn picks_the_window_matching_the_label_not_the_first() {
+            let windows = [
+                window("splash", Some(100.0), Some(50.0)),
+                window("main", Some(800.0), Some(600.0)),
+            ];
+            assert_eq!(configured_main_min_size(&windows, "main"), (800.0, 600.0));
+        }
+
+        #[test]
+        fn falls_back_when_label_not_found() {
+            let windows = [window("other", Some(320.0), Some(240.0))];
+            assert_eq!(
+                configured_main_min_size(&windows, "main"),
+                (MAIN_MIN_WIDTH_FALLBACK, MAIN_MIN_HEIGHT_FALLBACK)
+            );
+        }
+
+        #[test]
+        fn falls_back_when_config_list_is_empty() {
+            assert_eq!(
+                configured_main_min_size(&[], "main"),
+                (MAIN_MIN_WIDTH_FALLBACK, MAIN_MIN_HEIGHT_FALLBACK)
+            );
+        }
+
+        #[test]
+        fn falls_back_per_axis_when_min_size_unset() {
+            // minWidth set but minHeight absent — each axis falls back
+            // independently.
+            let windows = [window("main", Some(1024.0), None)];
+            assert_eq!(
+                configured_main_min_size(&windows, "main"),
+                (1024.0, MAIN_MIN_HEIGHT_FALLBACK)
+            );
+        }
+
+        #[test]
+        fn fallback_constants_mirror_tauri_conf_json() {
+            // tauri.conf.json declares minWidth 800 / minHeight 600 for the
+            // main window; the fallbacks must mirror it so behaviour is the
+            // same whether or not the config lookup succeeds.
+            assert_eq!(MAIN_MIN_WIDTH_FALLBACK, 800.0);
+            assert_eq!(MAIN_MIN_HEIGHT_FALLBACK, 600.0);
+        }
     }
 
 }
