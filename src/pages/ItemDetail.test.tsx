@@ -63,8 +63,10 @@ vi.mock("../components/HorizontalRow", () => ({
 }));
 
 vi.mock("../components/PosterCard", () => ({
-  default: ({ title }: { title: string }) => (
-    <div data-testid="poster-card">{title}</div>
+  default: ({ title, onContextMenu }: { title: string; onContextMenu?: (e: React.MouseEvent) => void }) => (
+    <div data-testid="poster-card" onContextMenu={onContextMenu}>
+      {title}
+    </div>
   ),
 }));
 
@@ -103,6 +105,14 @@ vi.mock("../components/detail/AdminActionsBar", () => ({
 
 vi.mock("../components/detail/RatingsSection", () => ({
   default: () => <div data-testid="ratings-section" />,
+}));
+
+const mockOpenContextMenu = vi.fn();
+vi.mock("../hooks/useMediaContextMenu", () => ({
+  useMediaContextMenu: () => ({
+    openContextMenu: mockOpenContextMenu,
+    overlays: <div data-testid="context-menu-overlays" />,
+  }),
 }));
 
 const testServer = {
@@ -237,5 +247,61 @@ describe("ItemDetail", () => {
       "This content is restricted on your profile",
       "error"
     );
+  });
+
+  it("wires context menu to season poster cards on show detail", () => {
+    const showItem = {
+      ratingKey: "200",
+      title: "Breaking Bad",
+      type: "show",
+      year: 2008,
+      thumb: "/thumb",
+      art: "/art",
+    };
+    const season = {
+      ratingKey: "201",
+      title: "Season 1",
+      type: "season",
+      leafCount: 7,
+      viewedLeafCount: 0,
+      thumb: "/thumb",
+    };
+    mockUseItemDetailData.mockReturnValue(
+      makeDetailData({ item: showItem, seasons: [season] })
+    );
+    renderItemDetail();
+
+    const posterCards = screen.getAllByTestId("poster-card");
+    expect(posterCards.length).toBeGreaterThan(0);
+
+    // Simulate right-click on season card
+    const event = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+    });
+    posterCards[0].dispatchEvent(event);
+
+    expect(mockOpenContextMenu).toHaveBeenCalled();
+    const callArgs = mockOpenContextMenu.mock.calls[0];
+    expect(callArgs[1]).toEqual(expect.objectContaining({
+      ratingKey: season.ratingKey,
+    }));
+  });
+
+  it("renders context menu overlays on show detail page", () => {
+    const showItem = {
+      ratingKey: "200",
+      title: "Breaking Bad",
+      type: "show",
+      year: 2008,
+      thumb: "/thumb",
+      art: "/art",
+    };
+    mockUseItemDetailData.mockReturnValue(
+      makeDetailData({ item: showItem })
+    );
+    renderItemDetail();
+
+    expect(screen.getByTestId("context-menu-overlays")).toBeInTheDocument();
   });
 });

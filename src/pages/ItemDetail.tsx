@@ -7,6 +7,7 @@ import { useToast } from "../hooks/useToast";
 import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
 import { useItemDetailData } from "../hooks/useItemDetailData";
 import { useSeasonSwitch } from "../hooks/useSeasonSwitch";
+import { useMediaContextMenu } from "../hooks/useMediaContextMenu";
 import { getImageUrl, getPlaceholderUrl, getImageSrcSet, getAllShowEpisodes } from "../services/plex-library";
 import BulkDownloadButton from "../components/detail/BulkDownloadButton";
 import HorizontalRow from "../components/HorizontalRow";
@@ -38,6 +39,7 @@ function ItemDetail() {
   const isAdmin = activeUser?.isAdmin ?? false;
   const { isItemAllowed, restrictionsEnabled } = useParentalControls();
   const { toast } = useToast();
+  const { openContextMenu, overlays } = useMediaContextMenu();
 
   const {
     item,
@@ -140,6 +142,7 @@ function ItemDetail() {
                 watched={isWatched(m)}
                 width={230}
                 onClick={() => navigate(`/item/${m.ratingKey}`)}
+                onContextMenu={(e) => openContextMenu(e, m)}
               />
             );
           })}
@@ -185,6 +188,7 @@ function ItemDetail() {
               width={360}
               aspectRatio={0.56}
               onClick={() => play(extra.ratingKey)}
+              onContextMenu={(e) => openContextMenu(e, extra)}
             />
           ))}
         </HorizontalRow>
@@ -219,6 +223,7 @@ function ItemDetail() {
                 watched={isWatched(r)}
                 width={230}
                 onClick={() => navigate(`/item/${r.ratingKey}`)}
+                onContextMenu={(e) => openContextMenu(e, r)}
               />
             );
           })}
@@ -289,6 +294,7 @@ function ItemDetail() {
                     watched={isWatched(ci)}
                     width={230}
                     onClick={() => navigate(`/item/${ci.ratingKey}`)}
+                    onContextMenu={(e) => openContextMenu(e, ci)}
                   />
                 );
               })}
@@ -309,6 +315,7 @@ function ItemDetail() {
             setIsLoading(true);
           }}
         />
+        {overlays}
       </div>
     );
   }
@@ -374,6 +381,7 @@ function ItemDetail() {
                     watched={fullyWatched}
                     unwatchedCount={!fullyWatched && unwatched > 0 ? unwatched : undefined}
                     onClick={() => navigate(`/item/${season.ratingKey}`)}
+                    onContextMenu={(e) => openContextMenu(e, season)}
                   />
                 );
               })}
@@ -401,6 +409,7 @@ function ItemDetail() {
             setIsLoading(true);
           }}
         />
+        {overlays}
       </div>
     );
   }
@@ -446,6 +455,7 @@ function ItemDetail() {
                     aspectRatio={0.56}
                     watched={sib.viewCount != null && sib.viewCount > 0}
                     onClick={() => navigate(`/item/${sib.ratingKey}`)}
+                    onContextMenu={(e) => openContextMenu(e, sib)}
                   />
                 ))}
             </HorizontalRow>
@@ -453,6 +463,7 @@ function ItemDetail() {
         )}
 
         {renderExtras()}
+        {overlays}
       </div>
     );
   }
@@ -539,6 +550,7 @@ function ItemDetail() {
             actorThumbUrl={actorThumbUrl}
           />
         )}
+        {overlays}
       </div>
     );
   }
