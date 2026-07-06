@@ -54,6 +54,117 @@ export interface LibraryGridHandle {
 }
 
 /**
+ * Convergence controller for `scrollToIndex` long jumps (prexu-k2mv).
+ *
+ * A single `scrollToIndex` call isn't enough for a long jump: the
+ * virtualizer computes the target offset from ESTIMATED heights for every
+ * row between the current scroll position and the target that hasn't been
+ * measured yet. On real WebKitGTK layout, rows mounted by the jump measure
+ * via `measureElement` well after a fixed handful of animation frames — a
+ * ~74-row jump can accumulate enough per-row estimate error that a
+ * fixed-count re-issue (the old 3-pass approach) stops while the geometry is
+ * still wrong, landing several rows above/below the intended spot in either
+ * scroll direction.
+ *
+ * Instead of counting frames, this loop VERIFIES convergence: after each
+ * (re-)issued `scrollToIndex`, it recomputes the target row's expected start
+ * offset from the virtualizer's live measurements and compares it with the
+ * scroll container's actual `scrollTop`. It keeps re-issuing until:
+ *  - they match within `CONVERGENCE_EPSILON_PX` (converged), OR
+ *  - the expected offset is clamped by the container's max scroll (the
+ *    target is within the last viewport — clamping there is success, not
+ *    failure; this is the "Y near the end of a 530-item section" case), OR
+ *  - a frame budget expires, in which case it forces a final direct
+ *    `scrollTo` to the best-known (already clamped) offset rather than
+ *    leaving the viewport visibly wrong.
+ *
+ * Extracted as a free function (rather than inlined in the imperative
+ * handle) so it can be unit-tested deterministically with injected frame
+ * ticks — real rAF/layout timing on WebKitGTK can't be reproduced in jsdom.
+ */
+export interface ScrollConvergenceCallbacks {
+  /** Recompute the target row's current expected start offset from the
+   *  virtualizer's live measurements. Returns `undefined` if the
+   *  virtualizer can't answer yet. */
+  getExpectedStart: () => number | undefined;
+  /** Read the scroll container's actual current `scrollTop`. */
+  getScrollTop: () => number;
+  /** Read the scroll container's max scrollable offset
+   *  (`scrollHeight - clientHeight`). */
+  getMaxScroll: () => number;
+  /** Re-issue the virtualizer's `scrollToIndex` for the target row. */
+  issueScroll: () => void;
+  /** Force the scroll container directly to a computed, already-clamped
+   *  offset. Used only when the frame budget expires. */
+  scrollTo: (offset: number) => void;
+}
+
+/** ~2px — small enough to be visually exact, large enough to tolerate
+ *  sub-pixel rounding between the virtualizer's math and the DOM. */
+export const CONVERGENCE_EPSILON_PX = 2;
+/** ~20 frames (~350ms at 60fps) before giving up on verification and
+ *  forcing a final corrective scroll. */
+export const CONVERGENCE_MAX_FRAMES = 20;
+
+/**
+ * Runs the convergence loop described above. Call once per `scrollToIndex`
+ * jump, immediately after issuing the initial (synchronous) scroll. Returns
+ * a `cancel` function — call it when a new jump arrives or the component
+ * unmounts so competing loops never fight over scroll position.
+ */
+export function runScrollConvergence(
+  callbacks: ScrollConvergenceCallbacks,
+  requestFrame: (tick: () => void) => void = (cb) => {
+    requestAnimationFrame(cb);
+  },
+): () => void {
+  let cancelled = false;
+  let frame = 0;
+
+  const tick = () => {
+    if (cancelled) return;
+    frame++;
+
+    const maxScroll = Math.max(0, callbacks.getMaxScroll());
+    const scrollTop = callbacks.getScrollTop();
+    const rawExpected = callbacks.getExpectedStart();
+    const expected =
+      rawExpected === undefined ? undefined : Math.max(0, Math.min(rawExpected, maxScroll));
+
+    if (expected !== undefined) {
+      const delta = expected - scrollTop;
+      if (Math.abs(delta) <= CONVERGENCE_EPSILON_PX) {
+        logger.debug("library", "scroll convergence settled", {
+          frames: frame,
+          delta,
+          clampedAtMax: expected >= maxScroll - CONVERGENCE_EPSILON_PX,
+        });
+        return;
+      }
+    }
+
+    if (frame >= CONVERGENCE_MAX_FRAMES) {
+      const finalTarget = expected ?? scrollTop;
+      logger.debug("library", "scroll convergence budget expired, forcing final offset", {
+        frames: frame,
+        finalTarget,
+      });
+      callbacks.scrollTo(finalTarget);
+      return;
+    }
+
+    callbacks.issueScroll();
+    requestFrame(tick);
+  };
+
+  requestFrame(tick);
+
+  return () => {
+    cancelled = true;
+  };
+}
+
+/**
  * Walk up from `el` to find the nearest scrollable ancestor (overflow-y
  * auto/scroll), falling back to `document.documentElement` for whole-page
  * scrolling. Shared by every virtualizer in the app (grid or row/list mode)
@@ -222,6 +333,17 @@ function VirtualizedLibraryGrid<T>({
   const onRangeChangeRef = useRef(onRangeChange);
   onRangeChangeRef.current = onRangeChange;
 
+  // Cancel function for any in-flight scrollToIndex convergence loop (see
+  // runScrollConvergence above). A new jump must supersede the previous
+  // one's loop, and unmount must not leave a loop running against a
+  // detached scroll container.
+  const convergenceCancelRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    return () => {
+      convergenceCancelRef.current?.();
+    };
+  }, []);
+
   const virtualItemsForRange = virtualize ? virtualizer.getVirtualItems() : [];
   const firstVisibleRow = virtualItemsForRange[0]?.index;
   const lastVisibleRow = virtualItemsForRange[virtualItemsForRange.length - 1]?.index;
@@ -257,34 +379,45 @@ function VirtualizedLibraryGrid<T>({
     (): LibraryGridHandle => ({
       scrollToIndex: (index: number) => {
         if (index < 0) return;
+        // A new jump (e.g. rapid alphabet-bar clicks) must supersede any
+        // in-flight convergence loop from a previous jump — otherwise the
+        // two would keep re-issuing scrollToIndex against each other's
+        // targets and neither would ever land.
+        convergenceCancelRef.current?.();
+        convergenceCancelRef.current = null;
+
         if (virtualize) {
           const rowIndex = Math.floor(index / Math.max(1, cols));
-          // First pass uses estimated row heights for any unmeasured rows
-          // between the current scroll position and the target. For an
-          // alphabet jump that may cover hundreds of unmeasured rows, even a
-          // small per-row estimate error compounds (e.g. 10 px × 200 rows =
-          // 2000 px short). Once the target window renders, those rows get
-          // measured by the virtualizer's measureElement callback; we
-          // re-issue the scroll on the next frame so the corrected offset
-          // is applied. A second RAF tick guards against multi-row libraries
-          // where the second pass still has unmeasured neighbours.
-          // `align: "start"` puts the target row at the TOP of the viewport
-          // (behaviour the user expects for an alphabet jump). `behavior:
-          // "auto"` (instant) avoids smooth-scroll animation latency that
-          // would otherwise mask the second-pass correction.
           const v = virtualizerRef.current;
+          // Initial pass uses estimated row heights for any unmeasured rows
+          // between the current scroll position and the target — for an
+          // alphabet jump that may cover hundreds of unmeasured rows, even a
+          // small per-row estimate error compounds (e.g. 10px × 200 rows =
+          // 2000px short). `align: "start"` puts the target row at the TOP
+          // of the viewport (behaviour the user expects for an alphabet
+          // jump). `behavior: "auto"` (instant) avoids smooth-scroll
+          // animation latency that would otherwise mask the convergence
+          // loop's per-frame correction.
           v.scrollToIndex(rowIndex, { align: "start", behavior: "auto" });
-          requestAnimationFrame(() => {
-            virtualizerRef.current.scrollToIndex(rowIndex, {
-              align: "start",
-              behavior: "auto",
-            });
-            requestAnimationFrame(() => {
+          logger.debug("library", "scrollToIndex jump issued", { index, rowIndex, cols });
+
+          const scrollElement = getScrollElement();
+          convergenceCancelRef.current = runScrollConvergence({
+            getExpectedStart: () => {
+              const offsetInfo = virtualizerRef.current.getOffsetForIndex(rowIndex, "start");
+              return offsetInfo?.[0];
+            },
+            getScrollTop: () => scrollElement.scrollTop,
+            getMaxScroll: () => scrollElement.scrollHeight - scrollElement.clientHeight,
+            issueScroll: () => {
               virtualizerRef.current.scrollToIndex(rowIndex, {
                 align: "start",
                 behavior: "auto",
               });
-            });
+            },
+            scrollTo: (offset) => {
+              scrollElement.scrollTop = offset;
+            },
           });
           return;
         }
@@ -294,7 +427,7 @@ function VirtualizedLibraryGrid<T>({
         target?.scrollIntoView({ behavior: "auto", block: "start" });
       },
     }),
-    [virtualize, cols],
+    [virtualize, cols, getScrollElement],
   );
 
   // For small item counts, use a simple CSS grid (no virtualization overhead).
