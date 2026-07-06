@@ -134,6 +134,12 @@ const makeDetailData = (
     isLoading: boolean;
     error: string | null;
     refreshItem: () => void;
+    related: Record<string, unknown>[];
+    extras: Record<string, unknown>[];
+    moreWithActors: { name: string; items: Record<string, unknown>[] }[];
+    collectionItems: { collection: Record<string, unknown>; items: Record<string, unknown>[] } | null;
+    shelvesLoading: boolean;
+    collectionLoading: boolean;
   }> = {}
 ) => ({
   item: null,
@@ -148,6 +154,11 @@ const makeDetailData = (
   extras: [],
   moreWithActors: [],
   collectionItems: null,
+  // Loaded by default so the many existing tests that don't care about the
+  // shelf-skeleton reservation (prexu-ct5k) keep seeing the same
+  // real-content-or-nothing behavior they asserted before it was added.
+  shelvesLoading: false,
+  collectionLoading: false,
   showFixMatch: false,
   setShowFixMatch: vi.fn(),
   refreshItem: vi.fn(),
@@ -303,5 +314,79 @@ describe("ItemDetail", () => {
     renderItemDetail();
 
     expect(screen.getByTestId("context-menu-overlays")).toBeInTheDocument();
+  });
+
+  // prexu-ct5k: a warm-cache entry paints core content (hero/cast) instantly,
+  // but the related/extras/actors/collection shelves land later. Without
+  // reserved space, ItemDetail renders nothing for those shelves until they
+  // arrive, and their arrival pushes the already-painted page around — the
+  // "entry flash" this issue fixes.
+  describe("shelf-skeleton reservation while shelves are loading (prexu-ct5k)", () => {
+    it("renders shelf skeletons alongside already-painted core content in the same commit", () => {
+      mockUseItemDetailData.mockReturnValue(
+        makeDetailData({ item: movieItem, shelvesLoading: true, collectionLoading: true })
+      );
+      renderItemDetail();
+
+      // Core content is already painted...
+      expect(screen.getByTestId("hero-section")).toHaveTextContent("Inception");
+      expect(screen.getByTestId("cast-section")).toBeInTheDocument();
+      // ...and every shelf that would otherwise pop in later has reserved,
+      // same-height placeholder space instead of rendering nothing.
+      expect(screen.getByTestId("shelf-skeleton-extras")).toBeInTheDocument();
+      expect(screen.getByTestId("shelf-skeleton-collection")).toBeInTheDocument();
+      expect(screen.getByTestId("shelf-skeleton-related")).toBeInTheDocument();
+      expect(screen.getByTestId("shelf-skeleton-actors")).toBeInTheDocument();
+      // No real shelf content has rendered yet.
+      expect(screen.queryByTestId("row-Extras")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("row-Related")).not.toBeInTheDocument();
+    });
+
+    it("replaces shelf skeletons with real content once shelves arrive, without disturbing core content", () => {
+      mockUseItemDetailData.mockReturnValue(
+        makeDetailData({ item: movieItem, shelvesLoading: true, collectionLoading: true })
+      );
+      const { rerender } = renderItemDetail();
+
+      expect(screen.getByTestId("shelf-skeleton-related")).toBeInTheDocument();
+
+      const related = [{ ratingKey: "300", title: "Related Movie", thumb: "/thumb" }];
+      const extras = [{ ratingKey: "301", title: "Trailer", thumb: "/thumb" }];
+      mockUseItemDetailData.mockReturnValue(
+        makeDetailData({
+          item: movieItem,
+          shelvesLoading: false,
+          collectionLoading: false,
+          related,
+          extras,
+        })
+      );
+      rerender(
+        <MemoryRouter>
+          <ItemDetail />
+        </MemoryRouter>
+      );
+
+      // Skeletons are gone, replaced by the real rows.
+      expect(screen.queryByTestId("shelf-skeleton-extras")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("shelf-skeleton-related")).not.toBeInTheDocument();
+      expect(screen.getByTestId("row-Extras")).toBeInTheDocument();
+      expect(screen.getByTestId("row-Related")).toBeInTheDocument();
+      // Core content (hero/cast) never changed identity or content.
+      expect(screen.getByTestId("hero-section")).toHaveTextContent("Inception");
+      expect(screen.getByTestId("cast-section")).toBeInTheDocument();
+    });
+
+    it("renders no shelf content (skeleton or real) once shelves resolve to empty, matching prior no-shelf behavior", () => {
+      mockUseItemDetailData.mockReturnValue(
+        makeDetailData({ item: movieItem, shelvesLoading: false, collectionLoading: false })
+      );
+      renderItemDetail();
+
+      expect(screen.queryByTestId("shelf-skeleton-extras")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("shelf-skeleton-related")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("row-Extras")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("row-Related")).not.toBeInTheDocument();
+    });
   });
 });

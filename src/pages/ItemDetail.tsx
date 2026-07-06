@@ -19,6 +19,7 @@ import CastSection from "../components/detail/CastSection";
 import AdminActionsBar from "../components/detail/AdminActionsBar";
 import RatingsSection from "../components/detail/RatingsSection";
 import DetailSkeleton from "../components/detail/DetailSkeleton";
+import ShelfSkeleton from "../components/detail/ShelfSkeleton";
 import type {
   PlexMovie,
   PlexShow,
@@ -54,6 +55,8 @@ function ItemDetail() {
     extras,
     moreWithActors,
     collectionItems,
+    shelvesLoading,
+    collectionLoading,
     showFixMatch,
     setShowFixMatch,
     refreshItem,
@@ -119,6 +122,11 @@ function ItemDetail() {
 
   /** Render "More with [Actor]" rows */
   const renderMoreWithActors = () => {
+    // Reserve the same space a real "More with Actor" row would take while
+    // the shelf fetch is still in flight (prexu-ct5k) — without this, a
+    // warm-cache entry paints core content first and this row pops in below
+    // it once the fetch lands, reading as a page refresh.
+    if (shelvesLoading) return <ShelfSkeleton shelf="actors" />;
     if (moreWithActors.length === 0) return null;
     return moreWithActors.map((actor) => (
       <div key={actor.name} style={styles.section}>
@@ -174,6 +182,10 @@ function ItemDetail() {
 
   /** Render extras row */
   const renderExtras = () => {
+    // Same reservation as renderMoreWithActors above — extras cards are
+    // wider/shorter than posters (aspectRatio 0.56), so size the skeleton to
+    // match rather than reusing the default poster shape.
+    if (shelvesLoading) return <ShelfSkeleton shelf="extras" cardWidth={360} aspectRatio={0.56} />;
     if (extras.length === 0) return null;
     return (
       <div style={styles.section}>
@@ -196,8 +208,36 @@ function ItemDetail() {
     );
   };
 
+  /** Render "In This Collection" row (movies only) */
+  const renderCollection = () => {
+    if (collectionLoading) return <ShelfSkeleton shelf="collection" />;
+    if (!collectionItems) return null;
+    return (
+      <div style={styles.section}>
+        <HorizontalRow title={`In This Collection — ${collectionItems.items.length + 1} items`}>
+          {collectionItems.items.map((ci) => (
+            <PosterCard
+              key={ci.ratingKey}
+              ratingKey={ci.ratingKey}
+              imageUrl={posterUrl(ci.thumb)}
+              placeholderUrl={posterPlaceholder(ci.thumb)}
+              srcSet={posterSrcSet(ci.thumb)}
+              title={ci.title}
+              subtitle={ci.year ? String(ci.year) : ""}
+              watched={isWatched(ci)}
+              width={230}
+              onClick={() => navigate(`/item/${ci.ratingKey}`)}
+              onContextMenu={(e) => openContextMenu(e, ci)}
+            />
+          ))}
+        </HorizontalRow>
+      </div>
+    );
+  };
+
   /** Render related items row */
   const renderRelated = (title = "Related") => {
+    if (shelvesLoading) return <ShelfSkeleton shelf="related" />;
     if (related.length === 0) return null;
     return (
       <div style={styles.section}>
@@ -278,29 +318,7 @@ function ItemDetail() {
           actorThumbUrl={actorThumbUrl}
         />
         {renderExtras()}
-        {collectionItems && (
-          <div style={styles.section}>
-            <HorizontalRow title={`In This Collection — ${collectionItems.items.length + 1} items`}>
-              {collectionItems.items.map((ci) => {
-                return (
-                  <PosterCard
-                    key={ci.ratingKey}
-                    ratingKey={ci.ratingKey}
-                    imageUrl={posterUrl(ci.thumb)}
-                    placeholderUrl={posterPlaceholder(ci.thumb)}
-                    srcSet={posterSrcSet(ci.thumb)}
-                    title={ci.title}
-                    subtitle={ci.year ? String(ci.year) : ""}
-                    watched={isWatched(ci)}
-                    width={230}
-                    onClick={() => navigate(`/item/${ci.ratingKey}`)}
-                    onContextMenu={(e) => openContextMenu(e, ci)}
-                  />
-                );
-              })}
-            </HorizontalRow>
-          </div>
-        )}
+        {renderCollection()}
         {renderRelated()}
         {renderMoreWithActors()}
         <AdminActionsBar
