@@ -808,4 +808,270 @@ describe("useItemDetailData", () => {
       expect(e2?.viewOffset).toBe(300_000); // floored up from the stale 50_000
     });
   });
+
+  // prexu-kwqe: the fifth and final layer of this bug. Every prior fix
+  // (#66/#72/#79/#81, exercised above) repaired the CACHE — none of them
+  // touch this hook's own mounted `item`/`episodes`/`siblingEpisodes` React
+  // state, which is set once from cache on page entry and (before this fix)
+  // never revisited. Because the player is an overlay, the detail page stays
+  // mounted across a play/stop cycle, so the hero's "Resume from" label (which
+  // reads this hook's `item` state directly — see ItemHeroSection) went stale
+  // on every in-page replay no matter how correct the cache underneath it was.
+  describe("watch-state event keeps mounted state in sync (prexu-kwqe)", () => {
+    // Isolate from the module-level offset-floor registry (prexu-8nl0/5mcz):
+    // emitting an event with a payload through this file's persistent
+    // cache-invalidators listener (registered once in the describe above)
+    // also registers a floor for that ratingKey, which would otherwise leak
+    // into a later test's cold-load fetch in this describe and float its
+    // viewOffset up via applyOffsetFloors.
+    beforeEach(() => {
+      __clearOffsetFloorsForTests();
+    });
+    afterEach(() => {
+      __clearOffsetFloorsForTests();
+    });
+
+    it("updates the mounted item's viewOffset in place for a matching ratingKey event, without touching shelves/scroll/loading", async () => {
+      const main = document.createElement("main");
+      document.body.appendChild(main);
+      const scrollToSpy = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+      const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+
+      // Warm the cache first (like the PR #63/#73 scroll-invariant test
+      // above) so the hook takes the CACHE-HIT path on mount, not a true
+      // cold load — a cold load unconditionally resets scroll to 0, which
+      // would be indistinguishable from a regression this test is meant to
+      // catch.
+      const cachedMovie = { ...makeMovie("1", "Movie 1"), viewOffset: 1_000 };
+      mockGetItemMetadata.mockResolvedValueOnce(cachedMovie);
+      await warmItemDetailCache(stableServer, "1");
+      mockGetItemMetadata.mockClear();
+
+      mockGetRelatedItems.mockResolvedValueOnce([makeMovie("99", "Related Movie")]);
+      mockGetExtras.mockResolvedValueOnce([makeMovie("98", "Trailer")]);
+
+      const { result } = renderHook(() => useItemDetailData());
+
+      // Rendered synchronously from cache — no cold-load scroll reset.
+      expect(result.current.item?.viewOffset).toBe(1_000);
+      expect(result.current.isLoading).toBe(false);
+
+      main.scrollTop = 300; // simulate the user having scrolled down the page
+
+      await waitFor(() => expect(result.current.shelvesLoading).toBe(false));
+      expect(result.current.collectionLoading).toBe(false);
+
+      const seasonsBefore = result.current.seasons;
+      const episodesBefore = result.current.episodes;
+      const siblingEpisodesBefore = result.current.siblingEpisodes;
+      const siblingSeasonsBefore = result.current.siblingSeasons;
+      const relatedBefore = result.current.related;
+      const extrasBefore = result.current.extras;
+
+      debugSpy.mockClear();
+      act(() => {
+        emitWatchStateChanged("1", { viewOffsetMs: 45_000 });
+      });
+
+      expect(result.current.item?.viewOffset).toBe(45_000);
+      // Invariant (PR #63/#73): a same-item state update must not clear
+      // shelves, re-fire the shelf/collection effects (keyed on
+      // item?.ratingKey — unchanged here), flip a loading flag, or reset
+      // scroll.
+      expect(result.current.isLoading).toBe(false);
+      expect(result.current.shelvesLoading).toBe(false);
+      expect(result.current.collectionLoading).toBe(false);
+      expect(result.current.seasons).toBe(seasonsBefore);
+      expect(result.current.episodes).toBe(episodesBefore);
+      expect(result.current.siblingEpisodes).toBe(siblingEpisodesBefore);
+      expect(result.current.siblingSeasons).toBe(siblingSeasonsBefore);
+      expect(result.current.related).toBe(relatedBefore);
+      expect(result.current.extras).toBe(extrasBefore);
+      expect(main.scrollTop).toBe(300);
+      expect(scrollToSpy).not.toHaveBeenCalled();
+
+      expect(
+        debugSpy.mock.calls.some(
+          ([msg]) =>
+            typeof msg === "string" &&
+            msg.includes("mounted item state updated from watch-state event"),
+        ),
+      ).toBe(true);
+
+      scrollToSpy.mockRestore();
+      debugSpy.mockRestore();
+      document.body.removeChild(main);
+    });
+
+    it("ignores an event for a non-matching ratingKey", async () => {
+      mockGetItemMetadata.mockResolvedValueOnce({
+        ...makeMovie("1", "Movie 1"),
+        viewOffset: 1_000,
+      });
+      mockGetRelatedItems.mockResolvedValueOnce([]);
+      mockGetExtras.mockResolvedValueOnce([]);
+
+      const { result } = renderHook(() => useItemDetailData());
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      const itemBefore = result.current.item;
+
+      act(() => {
+        emitWatchStateChanged("999", { viewOffsetMs: 45_000 });
+      });
+
+      // Untouched — same object reference, not just the same value.
+      expect(result.current.item).toBe(itemBefore);
+      expect(result.current.item?.viewOffset).toBe(1_000);
+    });
+
+    it("a reset event forces the mounted item's viewOffset to 0", async () => {
+      mockGetItemMetadata.mockResolvedValueOnce({
+        ...makeMovie("1", "Movie 1"),
+        viewOffset: 45_000,
+      });
+      mockGetRelatedItems.mockResolvedValueOnce([]);
+      mockGetExtras.mockResolvedValueOnce([]);
+
+      const { result } = renderHook(() => useItemDetailData());
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      expect(result.current.item?.viewOffset).toBe(45_000);
+
+      act(() => {
+        emitWatchStateChanged("1", { viewOffsetMs: 0, reset: true });
+      });
+
+      expect(result.current.item?.viewOffset).toBe(0);
+    });
+
+    it("updates a matching episode child's viewOffset on a season page, leaving unrelated episodes and the season item itself untouched", async () => {
+      currentRatingKey = "s1";
+
+      mockGetItemMetadata.mockResolvedValueOnce({
+        ratingKey: "s1",
+        type: "season",
+        title: "Season 1",
+        parentRatingKey: "show1",
+      });
+      mockGetItemMetadata.mockResolvedValueOnce({
+        ratingKey: "show1",
+        type: "show",
+        title: "Show A",
+      });
+      mockGetItemChildren.mockResolvedValueOnce([
+        { ratingKey: "e1", type: "episode", title: "Episode 1", viewOffset: 1_000 },
+        { ratingKey: "e2", type: "episode", title: "Episode 2", viewOffset: 50_000 },
+      ]);
+      mockGetItemChildren.mockResolvedValueOnce([
+        { ratingKey: "s1", type: "season", title: "Season 1" },
+      ]);
+
+      const { result } = renderHook(() => useItemDetailData());
+      await waitFor(() => expect(result.current.episodes.length).toBe(2));
+
+      const seasonItemBefore = result.current.item;
+      const e1Before = result.current.episodes.find((e) => e.ratingKey === "e1");
+
+      act(() => {
+        emitWatchStateChanged("e2", { viewOffsetMs: 710_561 });
+      });
+
+      const e1After = result.current.episodes.find((e) => e.ratingKey === "e1");
+      const e2After = result.current.episodes.find((e) => e.ratingKey === "e2");
+      expect(e2After?.viewOffset).toBe(710_561);
+      expect(e1After).toBe(e1Before); // unrelated sibling untouched — same reference
+      // The season's own ratingKey ("s1") never matches an episode event —
+      // the mounted season item itself is left alone.
+      expect(result.current.item).toBe(seasonItemBefore);
+    });
+
+    it("updates a matching sibling episode's viewOffset on an episode detail page", async () => {
+      mockGetItemMetadata.mockResolvedValueOnce({
+        ratingKey: "1",
+        type: "episode",
+        title: "Episode 1",
+        parentRatingKey: "season1",
+      });
+      mockGetItemChildren.mockResolvedValueOnce([
+        { ratingKey: "1", type: "episode", title: "Episode 1", viewOffset: 1_000 },
+        { ratingKey: "e2", type: "episode", title: "Episode 2", viewOffset: 50_000 },
+      ]);
+
+      const { result } = renderHook(() => useItemDetailData());
+      await waitFor(() => expect(result.current.siblingEpisodes.length).toBe(2));
+
+      act(() => {
+        emitWatchStateChanged("e2", { viewOffsetMs: 999_000 });
+      });
+
+      const e2After = result.current.siblingEpisodes.find((e) => e.ratingKey === "e2");
+      expect(e2After?.viewOffset).toBe(999_000);
+    });
+
+    it("unsubscribes the watch-state listener on unmount — no update fires afterward", async () => {
+      const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+
+      mockGetItemMetadata.mockResolvedValueOnce({
+        ...makeMovie("1", "Movie 1"),
+        viewOffset: 1_000,
+      });
+      mockGetRelatedItems.mockResolvedValueOnce([]);
+      mockGetExtras.mockResolvedValueOnce([]);
+
+      const { result, unmount } = renderHook(() => useItemDetailData());
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      unmount();
+      debugSpy.mockClear();
+
+      emitWatchStateChanged("1", { viewOffsetMs: 45_000 });
+
+      // If the listener were still attached, this update would still log —
+      // its absence proves the effect's cleanup unsubscribed it.
+      expect(
+        debugSpy.mock.calls.some(
+          ([msg]) =>
+            typeof msg === "string" &&
+            msg.includes("mounted item state updated from watch-state event"),
+        ),
+      ).toBe(false);
+
+      debugSpy.mockRestore();
+    });
+
+    it("ignores payload-less legacy watch-state events gracefully", async () => {
+      const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+
+      mockGetItemMetadata.mockResolvedValueOnce({
+        ...makeMovie("1", "Movie 1"),
+        viewOffset: 1_000,
+      });
+      mockGetRelatedItems.mockResolvedValueOnce([]);
+      mockGetExtras.mockResolvedValueOnce([]);
+
+      const { result } = renderHook(() => useItemDetailData());
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      debugSpy.mockClear();
+
+      act(() => {
+        emitWatchStateChanged(); // bare legacy event — no ratingKey, no offset
+      });
+      expect(result.current.item?.viewOffset).toBe(1_000);
+
+      act(() => {
+        emitWatchStateChanged("1"); // PR #66-style event — ratingKey but no offset
+      });
+      expect(result.current.item?.viewOffset).toBe(1_000);
+
+      expect(
+        debugSpy.mock.calls.some(
+          ([msg]) =>
+            typeof msg === "string" &&
+            msg.includes("mounted item state updated from watch-state event"),
+        ),
+      ).toBe(false);
+
+      debugSpy.mockRestore();
+    });
+  });
 });

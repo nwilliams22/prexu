@@ -14,6 +14,7 @@ import {
 import { useLibrary } from "./useLibrary";
 import { cacheGetStale, cacheSet } from "../services/api-cache";
 import { applyOffsetFloors } from "../services/cache-invalidators";
+import { onWatchStateChangedDetail } from "../services/watch-state-events";
 import { logger } from "../services/logger";
 import type {
   PlexMediaItem,
@@ -371,6 +372,18 @@ export function useItemDetailData(): ItemDetailData {
   // its ms delta from this so a hardware log can correlate a visible flash
   // with exactly which commit produced it (prexu-ct5k).
   const entryTsRef = useRef<number>(performance.now());
+  // Live mirrors of item/episodes/siblingEpisodes, refreshed every render
+  // (same ref-sync pattern as usePlayAction.tsx's playRef/serverRef) so the
+  // watch-state-changed listener below can check "does this event target
+  // something currently mounted" without depending on these values in its
+  // effect's dependency array (which would tear down and resubscribe the
+  // listener on every fetch/revalidation instead of just on navigation).
+  const itemRef = useRef(item);
+  itemRef.current = item;
+  const episodesRef = useRef(episodes);
+  episodesRef.current = episodes;
+  const siblingEpisodesRef = useRef(siblingEpisodes);
+  siblingEpisodesRef.current = siblingEpisodes;
 
   // Fetch item metadata + children — cached (stale-while-revalidate) and abortable.
   useEffect(() => {
@@ -552,6 +565,84 @@ export function useItemDetailData(): ItemDetailData {
   useEffect(() => {
     if (item) document.title = `${item.title} - Prexu`;
   }, [item]);
+
+  // Keep the MOUNTED item/episode-child state in sync with watch-state
+  // changes that happen while this page stays mounted (prexu-kwqe) — the
+  // fifth and final layer of this bug. PRs #66/#72/#79/#81 each repaired a
+  // different CACHE-side staleness source (item-detail invalidation, the
+  // optimistic patch + offset floor, the deck refetch race, the detail
+  // fetch's own floor) and a hardware repro confirmed every one of those
+  // layers now serves the correct offset. Yet the hero's "Resume from"
+  // label still showed the pre-session offset, because it reads `item`
+  // (this hook's own React state — see ItemHeroSection) directly, not the
+  // cache. That state is set ONCE from the cache when the page is entered
+  // and this effect (unlike useDashboard's onWatchStateChanged listener) was
+  // the missing subscription that would otherwise ever revisit it. The
+  // player is an overlay, so a same-item play/stop/replay cycle never
+  // unmounts/remounts this hook — without this listener, the mounted state
+  // goes stale for every in-page replay regardless of how correct the cache
+  // underneath it now is.
+  useEffect(() => {
+    if (!ratingKey) return;
+
+    const unsubscribe = onWatchStateChangedDetail((detail) => {
+      // Legacy/payload-less events (bare emitWatchStateChanged() or
+      // emitWatchStateChanged(ratingKey) with no offset) carry nothing this
+      // listener can apply — ignored gracefully, same as before this fix.
+      if (!detail.ratingKey) return;
+      const hasOffset = detail.viewOffsetMs !== undefined;
+      if (!hasOffset && !detail.reset) return;
+
+      const resolvedOffset = detail.reset ? 0 : detail.viewOffsetMs!;
+      const targetRatingKey = detail.ratingKey;
+
+      const matchesItem = itemRef.current?.ratingKey === targetRatingKey;
+      const matchesEpisodeList = (list: PlexEpisode[]) =>
+        list.some((ep) => ep.ratingKey === targetRatingKey);
+      const matchesEpisodes = matchesEpisodeList(episodesRef.current);
+      const matchesSiblingEpisodes = matchesEpisodeList(siblingEpisodesRef.current);
+
+      if (!matchesItem && !matchesEpisodes && !matchesSiblingEpisodes) {
+        return; // nothing currently mounted matches this ratingKey
+      }
+
+      logger.debug("detail", "mounted item state updated from watch-state event", {
+        ratingKey: targetRatingKey,
+        viewOffset: resolvedOffset,
+      });
+
+      // Functional updates throughout: this listener's closure is only
+      // recreated when `ratingKey` changes (see the effect's dependency
+      // array below), so `prev` — not the possibly-stale itemRef/episodesRef
+      // snapshot used only for the match check above — is the source of
+      // truth for what actually gets written. A same-item update only ever
+      // replaces `item`/the matched episode's IDENTITY (new object, same
+      // ratingKey) — it does not touch seasons/parentShow/siblingSeasons and
+      // is never a navigation, so it cannot clear shelves, flip a loading
+      // flag, or reset scroll (all three are gated on ratingKey/isDifferentItem
+      // in the primary fetch effect and item?.ratingKey in the shelf/collection
+      // effects, none of which this update changes — see PR #63/#73).
+      if (matchesItem) {
+        setItem((prev) =>
+          prev && prev.ratingKey === targetRatingKey && prev.viewOffset !== resolvedOffset
+            ? { ...prev, viewOffset: resolvedOffset }
+            : prev,
+        );
+      }
+
+      const patchEpisodeList = (list: PlexEpisode[]): PlexEpisode[] => {
+        const idx = list.findIndex((ep) => ep.ratingKey === targetRatingKey);
+        if (idx === -1 || list[idx]!.viewOffset === resolvedOffset) return list;
+        const next = list.slice();
+        next[idx] = { ...next[idx]!, viewOffset: resolvedOffset };
+        return next;
+      };
+      if (matchesEpisodes) setEpisodes((prev) => patchEpisodeList(prev));
+      if (matchesSiblingEpisodes) setSiblingEpisodes((prev) => patchEpisodeList(prev));
+    });
+
+    return unsubscribe;
+  }, [ratingKey]);
 
   // Fetch related + extras + "more with actor" (non-critical)
   useEffect(() => {
