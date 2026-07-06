@@ -37,6 +37,10 @@ export interface ItemDetailData {
   extras: PlexMediaItem[];
   moreWithActors: { name: string; items: PlexMediaItem[] }[];
   collectionItems: { collection: PlexCollection; items: PlexMediaItem[] } | null;
+  /** True while the related/extras/more-with-actor shelves are still being fetched for the current item. */
+  shelvesLoading: boolean;
+  /** True while the collection shelf is still being resolved for the current item. */
+  collectionLoading: boolean;
   showFixMatch: boolean;
   setShowFixMatch: (v: boolean) => void;
   refreshItem: () => void;
@@ -125,6 +129,30 @@ async function fetchDetailBundle(
   }
 
   return { item: metadata, seasons, episodes, parentShow, siblingSeasons, siblingEpisodes };
+}
+
+/** Item types the related/extras/more-with-actor shelf effect fetches for — see {@link isShelfEligible}. */
+const SHELF_ELIGIBLE_TYPES = new Set(["movie", "show", "episode"]);
+
+/**
+ * Whether `item` can ever show the related/extras/more-with-actor shelves —
+ * mirrors the type gate in the related/extras/actors fetch effect exactly,
+ * so shelvesLoading only reserves space for items that will genuinely fetch
+ * something (prexu-ct5k). Computed by the primary effect from the bundle it
+ * just served/fetched, rather than left to the shelf effect itself, because
+ * the shelf effect's own closure can still hold the PREVIOUS item at the
+ * moment it's asked to bail out (effects for a render all close over that
+ * render's values — a same-batch setShelvesLoading(true) from the primary
+ * effect would otherwise race with a stale-item setShelvesLoading(false)
+ * from the shelf effect finishing its own pass over the outgoing item).
+ */
+function isShelfEligible(itemType: string): boolean {
+  return SHELF_ELIGIBLE_TYPES.has(itemType);
+}
+
+/** Whether `item` can ever show the "In This Collection" shelf — see {@link isShelfEligible}. */
+function isCollectionEligible(item: PlexMediaItem): boolean {
+  return item.type === "movie" && ((item as PlexMovie).Collection?.length ?? 0) > 0;
 }
 
 /** Top-level fields of a detail bundle, diffed independently — see {@link diffBundleKeys}. */
@@ -257,6 +285,16 @@ export function useItemDetailData(): ItemDetailData {
     collection: PlexCollection;
     items: PlexMediaItem[];
   } | null>(null);
+  // Reserve-space flags (prexu-ct5k) — true whenever the corresponding shelf
+  // fetch is in flight for the CURRENT item, so ItemDetail can render a
+  // same-height skeleton instead of nothing while the shelf loads. Default
+  // true so a true cold load (isLoading skeleton already covers the page)
+  // never briefly reports "no shelves loading" before the first fetch kicks
+  // off; both flip to true again the instant navigation to a different item
+  // is detected (see isDifferentItem below) so the skeleton reservation
+  // lands in the SAME commit as the newly-painted core content.
+  const [shelvesLoading, setShelvesLoading] = useState(true);
+  const [collectionLoading, setCollectionLoading] = useState(true);
   const [showFixMatch, setShowFixMatch] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   // Set by refreshItem() so the next effect run treats a fresh (non-stale)
@@ -273,6 +311,11 @@ export function useItemDetailData(): ItemDetailData {
   // apart from an actual navigation to a different item — only the latter
   // should clear the shelves.
   const previousRatingKeyRef = useRef<string | undefined>(undefined);
+  // Timestamp of the current item's "entry" (navigation detected) — every
+  // "core content commit" / "shelf state arrival" debug log below reports
+  // its ms delta from this so a hardware log can correlate a visible flash
+  // with exactly which commit produced it (prexu-ct5k).
+  const entryTsRef = useRef<number>(performance.now());
 
   // Fetch item metadata + children — cached (stale-while-revalidate) and abortable.
   useEffect(() => {
@@ -293,6 +336,7 @@ export function useItemDetailData(): ItemDetailData {
     // the page doesn't visibly blank-then-reload while showing the same
     // item. The effects below repopulate them, keyed on ratingKey.
     if (isDifferentItem) {
+      entryTsRef.current = performance.now();
       logger.debug("detail", "useItemDetailData: navigated to a different item, clearing shelves", {
         ratingKey,
       });
@@ -300,6 +344,10 @@ export function useItemDetailData(): ItemDetailData {
       setExtras([]);
       setMoreWithActors([]);
       setCollectionItems(null);
+      // Reserve shelf space from the same commit that paints core content —
+      // see the shelvesLoading/collectionLoading state declarations above.
+      setShelvesLoading(true);
+      setCollectionLoading(true);
     }
 
     // `onlyKeys`, when passed, restricts the apply to the bundle fields that
@@ -347,6 +395,16 @@ export function useItemDetailData(): ItemDetailData {
       }
       setError(null);
       setIsLoading(false);
+      // Correct the reserved-space flags from the ACTUAL served item (not
+      // left to the shelf/collection effects' own bail-out, which can race
+      // against this — see isShelfEligible's doc comment). A same-item
+      // revalidation re-derives the same values here, which is a no-op.
+      setShelvesLoading(isShelfEligible(cached.data.item.type));
+      setCollectionLoading(isCollectionEligible(cached.data.item));
+      logger.debug("detail", "useItemDetailData: core content commit (cache hit)", {
+        ratingKey,
+        deltaMs: Math.round(performance.now() - entryTsRef.current),
+      });
       if (!cached.stale && !forceRevalidate) {
         // Fresh enough — skip the network entirely.
         return () => controller.abort();
@@ -404,6 +462,14 @@ export function useItemDetailData(): ItemDetailData {
           return;
         }
         applyBundle(bundle);
+        // Same correction as the cache-hit path above — derive the
+        // reserved-space flags from the bundle that was actually applied.
+        setShelvesLoading(isShelfEligible(bundle.item.type));
+        setCollectionLoading(isCollectionEligible(bundle.item));
+        logger.debug("detail", "useItemDetailData: core content commit (cold load)", {
+          ratingKey,
+          deltaMs: Math.round(performance.now() - entryTsRef.current),
+        });
       })
       .catch((err) => {
         if (controller.signal.aborted) return;
@@ -435,6 +501,9 @@ export function useItemDetailData(): ItemDetailData {
   // Fetch related + extras + "more with actor" (non-critical)
   useEffect(() => {
     if (!server || !ratingKey || !item) return;
+    // shelvesLoading is already correct for this item — set by the primary
+    // effect from the same bundle this closure's `item` comes from (see
+    // isShelfEligible's doc comment for why it isn't decided here).
     if (item.type !== "movie" && item.type !== "show" && item.type !== "episode") return;
     const controller = new AbortController();
 
@@ -467,11 +536,24 @@ export function useItemDetailData(): ItemDetailData {
       if (controller.signal.aborted) return;
       if (relResult.status === "fulfilled") setRelated(relResult.value);
       if (extResult.status === "fulfilled") setExtras(extResult.value);
+      const actorShelves = actorResult.status === "fulfilled"
+        ? actorResult.value.filter((a) => a.items.length > 0)
+        : [];
       if (actorResult.status === "fulfilled") {
-        setMoreWithActors(
-          actorResult.value.filter((a) => a.items.length > 0)
-        );
+        setMoreWithActors(actorShelves);
       }
+      setShelvesLoading(false);
+      logger.debug(
+        "detail",
+        "useItemDetailData: shelf state arrival (related/extras/actors) commit",
+        {
+          ratingKey,
+          deltaMs: Math.round(performance.now() - entryTsRef.current),
+          relatedCount: relResult.status === "fulfilled" ? relResult.value.length : 0,
+          extrasCount: extResult.status === "fulfilled" ? extResult.value.length : 0,
+          actorShelfCount: actorShelves.length,
+        },
+      );
     });
 
     return () => {
@@ -486,6 +568,9 @@ export function useItemDetailData(): ItemDetailData {
 
   // Fetch collection items if this movie belongs to a collection
   useEffect(() => {
+    // collectionLoading is already correct for this item — set by the
+    // primary effect from the same bundle this closure's `item` comes from
+    // (see isShelfEligible's doc comment for why it isn't decided here).
     if (!server || !item || item.type !== "movie") return;
     const movie = item as PlexMovie;
     const collectionTags = movie.Collection;
@@ -496,6 +581,15 @@ export function useItemDetailData(): ItemDetailData {
 
     // Search all movie sections for the matching collection
     const movieSections = sections.filter((s) => s.type === "movie");
+
+    const logArrival = (found: boolean, count: number) => {
+      logger.debug("detail", "useItemDetailData: shelf state arrival (collection) commit", {
+        ratingKey,
+        deltaMs: Math.round(performance.now() - entryTsRef.current),
+        found,
+        count,
+      });
+    };
 
     (async () => {
       for (const section of movieSections) {
@@ -522,12 +616,19 @@ export function useItemDetailData(): ItemDetailData {
               if (otherItems.length > 0) {
                 setCollectionItems({ collection: match, items: otherItems });
               }
+              setCollectionLoading(false);
+              logArrival(true, otherItems.length);
             }
             return;
           }
         } catch {
           // Continue searching other sections
         }
+      }
+      // No matching collection found in any section.
+      if (!controller.signal.aborted) {
+        setCollectionLoading(false);
+        logArrival(false, 0);
       }
     })();
 
@@ -553,6 +654,8 @@ export function useItemDetailData(): ItemDetailData {
     extras,
     moreWithActors,
     collectionItems,
+    shelvesLoading,
+    collectionLoading,
     showFixMatch,
     setShowFixMatch,
     refreshItem,
