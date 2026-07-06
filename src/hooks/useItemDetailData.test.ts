@@ -207,6 +207,110 @@ describe("useItemDetailData", () => {
     });
   });
 
+  it("cached render followed by an identical background revalidation does not clear or re-fetch already-loaded shelves", async () => {
+    const cachedMovie = makeMovie("1", "Old Title");
+    mockGetItemMetadata.mockResolvedValueOnce(cachedMovie);
+    await warmItemDetailCache(stableServer, "1");
+    mockGetItemMetadata.mockClear();
+
+    mockGetRelatedItems.mockResolvedValueOnce([makeMovie("99", "Related Movie")]);
+    mockGetExtras.mockResolvedValueOnce([makeMovie("98", "Trailer")]);
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 31_000); // past the 30s TTL
+    // Revalidation returns data equivalent to what's cached (new object
+    // identity, identical content) — the common case on every page open.
+    mockGetItemMetadata.mockResolvedValueOnce({ ...cachedMovie });
+
+    const { result } = renderHook(() => useItemDetailData());
+
+    // Rendered instantly from cache.
+    expect(result.current.item?.title).toBe("Old Title");
+    expect(result.current.isLoading).toBe(false);
+
+    vi.useRealTimers();
+
+    await waitFor(() => {
+      expect(result.current.related.length).toBe(1);
+    });
+    expect(result.current.extras.length).toBe(1);
+
+    // Let the background revalidation (and anything it might re-trigger) settle.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Shelves survive the no-op revalidation instead of blanking and
+    // re-fetching — the visible "refresh flash" this issue fixes.
+    expect(result.current.related.length).toBe(1);
+    expect(result.current.extras.length).toBe(1);
+    expect(mockGetRelatedItems).toHaveBeenCalledTimes(1);
+    expect(mockGetExtras).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshItem() (forced same-item revalidation) does not clear already-loaded shelves", async () => {
+    mockGetItemMetadata.mockResolvedValueOnce(makeMovie("1", "Original"));
+    await warmItemDetailCache(stableServer, "1");
+    mockGetItemMetadata.mockClear();
+
+    mockGetRelatedItems.mockResolvedValueOnce([makeMovie("99", "Related Movie")]);
+    mockGetExtras.mockResolvedValueOnce([makeMovie("98", "Trailer")]);
+
+    const { result } = renderHook(() => useItemDetailData());
+    expect(result.current.item?.title).toBe("Original");
+
+    await waitFor(() => expect(result.current.related.length).toBe(1));
+    expect(result.current.extras.length).toBe(1);
+
+    let resolveFetch!: (v: unknown) => void;
+    mockGetItemMetadata.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveFetch = resolve; })
+    );
+
+    act(() => {
+      result.current.refreshItem();
+    });
+
+    // The forced revalidation is in flight but the shelves must stay put —
+    // this used to blank to [] synchronously here (top-of-effect clear).
+    expect(result.current.related.length).toBe(1);
+    expect(result.current.extras.length).toBe(1);
+
+    await act(async () => {
+      resolveFetch(makeMovie("1", "Original"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.related.length).toBe(1);
+    expect(result.current.extras.length).toBe(1);
+  });
+
+  it("navigating to a different ratingKey clears prior shelves", async () => {
+    mockGetItemMetadata.mockResolvedValueOnce(makeMovie("1", "Movie 1"));
+    mockGetRelatedItems.mockResolvedValueOnce([makeMovie("99", "Related Movie")]);
+
+    const { result, rerender } = renderHook(() => useItemDetailData());
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    await waitFor(() => expect(result.current.related.length).toBe(1));
+
+    // Navigate to a different item.
+    currentRatingKey = "2";
+    mockGetItemMetadata.mockResolvedValueOnce(makeMovie("2", "Movie 2"));
+    mockGetRelatedItems.mockResolvedValueOnce([]);
+
+    rerender();
+
+    // Shelves clear immediately on navigating to a different item, instead
+    // of showing the previous item's related shelf while the new item loads.
+    expect(result.current.related).toEqual([]);
+
+    await waitFor(() => expect(result.current.item?.title).toBe("Movie 2"));
+  });
+
   it("aborts the in-flight fetch on unmount", async () => {
     let capturedSignal: AbortSignal | undefined;
     mockGetItemMetadata.mockImplementation((..._args: unknown[]) => {
