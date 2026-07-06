@@ -140,13 +140,14 @@ function Dashboard() {
   // transition simply never committed during that time, so the previous
   // LibraryView sat frozen on screen instead of anything "loading".
   //
-  // Fix: gate real shelf content behind `shelvesReady`, which starts false
-  // and flips true from a plain `useEffect` (a local setState — NOT wrapped
-  // in the router's startTransition). The first commit therefore always
-  // renders only the page frame + skeleton rows, which is cheap regardless
-  // of cache warmth, so it's what the transition commits — quickly. The
-  // effect fires once that skeleton frame has painted and triggers a
-  // second, ordinary-priority render that mounts the real shelves.
+  // Fix: gate real shelf content behind a staged counter (see below), which
+  // starts at 0 and advances via `requestAnimationFrame` — all local
+  // setState, NOT wrapped in the router's startTransition. The first commit
+  // therefore always renders only the page frame + skeleton rows, which is
+  // cheap regardless of cache warmth, so it's what the transition commits —
+  // quickly. Subsequent frames then mount the real shelves one at a time
+  // (prexu-200v — see "Staged shelf reveal" below for why one boolean
+  // wasn't enough).
   //
   // useDeferredValue was considered and rejected: the shelf arrays are
   // already fully populated by useDashboard's cache-seeded useState
@@ -161,24 +162,76 @@ function Dashboard() {
     mountStartRef.current = performance.now();
     logger.debug("dashboard", "first render start");
   }
-  const [shelvesReady, setShelvesReady] = useState(false);
+  const elapsedMs = () =>
+    Math.round(performance.now() - (mountStartRef.current ?? performance.now()));
 
   useLayoutEffect(() => {
-    logger.debug("dashboard", "first commit", {
-      ms: Math.round(performance.now() - (mountStartRef.current ?? performance.now())),
-    });
+    logger.debug("dashboard", "first commit", { ms: elapsedMs() });
   }, []);
 
-  useEffect(() => {
-    setShelvesReady(true);
-  }, []);
+  // Staged shelf reveal (prexu-200v): PR #62's single `shelvesReady` boolean
+  // fixed the route-transition stall (the FIRST commit is now always the
+  // cheap skeleton frame), but flipping all three shelves + hero on together
+  // just moved the expensive work to a SECOND commit that mounts up to ~80
+  // PosterCards in one shot — hardware timing showed 1.8-2.9s for that single
+  // commit, well past the point where it reads as instant. Users act on the
+  // "Continue Watching" shelf specifically after back-navigating from a
+  // detail page, so it should win the render budget first.
+  //
+  // Fix: replace the boolean with a small ordered stage counter (deck ->
+  // movies -> shows), advanced one step per `requestAnimationFrame` tick
+  // instead of a single passive effect. Each `setShelfStage` call is its own
+  // React commit; chaining the next step's rAF from *inside* the previous
+  // step's callback (rather than scheduling all three up front) guarantees
+  // the browser gets a chance to actually paint the previous stage before the
+  // next stage's JS runs — a plain effect-per-stage doesn't guarantee that,
+  // since React can flush several passive effects back-to-back within the
+  // same frame with no paint in between.
+  //
+  // Hero is deliberately NOT added as a 4th gated stage here: PR #62 made it
+  // render unconditionally on the very first commit ("render as soon as we
+  // have any slides", below) specifically so the primary visual shows up
+  // immediately rather than waiting on shelf data — gating it further would
+  // undo that. What HeroSlideshow.tsx does instead to keep its cost isolated
+  // from these three stage transitions: it's wrapped in `memo()` so it no
+  // longer re-renders on every `shelfStage` bump (its props are stable
+  // across these transitions), and its first backdrop's `<img>` uses
+  // `decoding="async"` so decode is never on the critical path of any commit.
+  type ShelfStage = 0 | 1 | 2 | 3;
+  const [shelfStage, setShelfStage] = useState<ShelfStage>(0);
+  const deckReady = shelfStage >= 1;
+  const moviesReady = shelfStage >= 2;
+  const showsReady = shelfStage >= 3;
 
   useEffect(() => {
-    if (!shelvesReady) return;
-    logger.debug("dashboard", "shelves committed", {
-      ms: Math.round(performance.now() - (mountStartRef.current ?? performance.now())),
-    });
-  }, [shelvesReady]);
+    let rafId: number | null = null;
+    const advance = (next: ShelfStage) => {
+      rafId = requestAnimationFrame(() => {
+        setShelfStage(next);
+        if (next < 3) advance((next + 1) as ShelfStage);
+      });
+    };
+    advance(1);
+    return () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!deckReady) return;
+    logger.debug("dashboard", "deck shelf committed", { ms: elapsedMs() });
+  }, [deckReady]);
+
+  useLayoutEffect(() => {
+    if (!moviesReady) return;
+    logger.debug("dashboard", "movies shelf committed", { ms: elapsedMs() });
+  }, [moviesReady]);
+
+  useLayoutEffect(() => {
+    if (!showsReady) return;
+    logger.debug("dashboard", "shows shelf committed", { ms: elapsedMs() });
+    logger.debug("dashboard", "all shelves committed", { ms: elapsedMs() });
+  }, [showsReady]);
 
   const { server } = useAuth();
   const { preferences } = usePreferences();
@@ -483,7 +536,7 @@ function Dashboard() {
 
       {/* Continue Watching */}
       {sections.continueWatching && (
-        !shelvesReady || (loading.deck && onDeck.length === 0) ? (
+        !deckReady || (loading.deck && onDeck.length === 0) ? (
           <section style={styles.section}>
             <h3 style={styles.sectionTitle}>Continue Watching</h3>
             <div style={styles.skeletonRow}>
@@ -545,7 +598,7 @@ function Dashboard() {
 
       {/* Recently Added in Movies */}
       {sections.recentMovies && (
-        !shelvesReady || (loading.movies && recentMovies.length === 0) ? (
+        !moviesReady || (loading.movies && recentMovies.length === 0) ? (
           <section style={styles.section}>
             <h3 style={styles.sectionTitle}>Recently Added in Movies</h3>
             <div style={styles.skeletonRow}>
@@ -597,7 +650,7 @@ function Dashboard() {
 
       {/* Recently Added in TV Shows */}
       {sections.recentShows && (
-        !shelvesReady || (loading.shows && recentShows.length === 0) ? (
+        !showsReady || (loading.shows && recentShows.length === 0) ? (
           <section style={styles.section}>
             <h3 style={styles.sectionTitle}>Recently Added in TV Shows</h3>
             <div style={styles.skeletonRow}>

@@ -1,7 +1,39 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, act } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import Dashboard from "./Dashboard";
+
+const mockLoggerDebug = vi.fn();
+vi.mock("../services/logger", () => ({
+  logger: {
+    debug: (...args: unknown[]) => mockLoggerDebug(...args),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    trace: vi.fn(),
+  },
+}));
+
+// Dashboard's staged shelf reveal (prexu-200v) advances one stage per
+// `requestAnimationFrame` tick, chaining the next stage's rAF from inside
+// the previous one's callback (see Dashboard.tsx). jsdom's real rAF is
+// timer-backed and won't fire synchronously within `render()`'s act() flush,
+// so tests need a manual, synchronously-flushable queue — same pattern as
+// VirtualizedLibraryGrid.test.tsx's `flushRaf` (prexu-k2mv: a shared real
+// rAF queue across tests leaks pending callbacks between them).
+let rafQueue: FrameRequestCallback[] = [];
+function flushRaf() {
+  const queue = rafQueue;
+  rafQueue = [];
+  for (const cb of queue) cb(0);
+}
+/** Drains the full deck -> movies -> shows chain (each flush only advances
+ *  one stage and re-queues the next; looping past 3 is a harmless no-op). */
+function advanceAllShelfStages() {
+  act(() => {
+    for (let i = 0; i < 4; i++) flushRaf();
+  });
+}
 
 // Lets a single test freeze the component at its very first commit — i.e.
 // before any passive effect runs — to assert on the two-phase mount
@@ -166,12 +198,23 @@ vi.mock("../components/ErrorState", () => ({
   ),
 }));
 
-function renderDashboard() {
-  return render(
+/**
+ * Renders Dashboard. By default fully drains the staged shelf reveal so
+ * existing assertions (written against PR #62's single `shelvesReady` flip)
+ * keep observing "everything settled" behavior without each needing its own
+ * flush call. Tests that specifically assert on the staged, in-between
+ * states pass `advanceStages: false` and flush manually with `flushRaf()`.
+ */
+function renderDashboard({ advanceStages = true }: { advanceStages?: boolean } = {}) {
+  const result = render(
     <MemoryRouter>
       <Dashboard />
     </MemoryRouter>
   );
+  if (advanceStages) {
+    advanceAllShelfStages();
+  }
+  return result;
 }
 
 type LoadingMap = { movies: boolean; shows: boolean; deck: boolean };
@@ -219,6 +262,19 @@ describe("Dashboard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUsePreferences.mockReturnValue(defaultPrefs());
+    // Re-primed every test (not just reset by clearAllMocks, which strips
+    // call history but not a previously-installed mockImplementation) so
+    // each test gets its own empty, test-scoped rAF queue — see the
+    // `flushRaf` comment above for why a shared real rAF queue is unsafe.
+    rafQueue = [];
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((cb: FrameRequestCallback) => {
+        rafQueue.push(cb);
+        return rafQueue.length;
+      }),
+    );
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
   });
 
   it("renders loading skeletons when all sections are loading", () => {
@@ -414,6 +470,112 @@ describe("Dashboard", () => {
 
       expect(screen.getByText("Breaking Bad")).toBeInTheDocument();
       expect(screen.queryAllByTestId("skeleton-card").length).toBe(0);
+    });
+  });
+
+  describe("staged shelf reveal (prexu-200v)", () => {
+    // Same fully warm-cache dataset for all three tests below — every
+    // section already has data and nothing is "loading", so any remaining
+    // skeleton is purely due to that section's stage not having arrived yet,
+    // not the loading flags.
+    const warmCacheData = () =>
+      makeDashboardData({
+        onDeck: [
+          { ratingKey: "1", title: "Breaking Bad", thumb: "/t1", type: "episode" },
+        ],
+        recentMovies: [
+          { ratingKey: "10", title: "Inception", thumb: "/t10", type: "movie" },
+        ],
+        recentShows: [
+          {
+            groupKey: "20",
+            title: "Stranger Things",
+            thumb: "/t20",
+            kind: "show-group",
+            episodeCount: 3,
+            episodes: [],
+            seasonIndices: [],
+            representativeItem: {
+              ratingKey: "20",
+              title: "Stranger Things",
+              thumb: "/t20",
+              type: "show",
+            },
+          },
+        ],
+      });
+
+    it("commits the deck shelf first, while movies and shows are still skeletons", () => {
+      mockUseDashboard.mockReturnValue(warmCacheData());
+      renderDashboard({ advanceStages: false });
+
+      // Before any stage advances, all three sections are skeletons.
+      expect(screen.queryAllByTestId("skeleton-card").length).toBe(24);
+
+      act(() => flushRaf()); // deck stage only
+
+      expect(screen.getByText("Breaking Bad")).toBeInTheDocument();
+      expect(screen.queryByText("Inception")).not.toBeInTheDocument();
+      expect(screen.queryByText("Stranger Things")).not.toBeInTheDocument();
+      // Deck's 8 skeletons are gone; movies' and shows' 8 each remain.
+      expect(screen.queryAllByTestId("skeleton-card").length).toBe(16);
+    });
+
+    it("commits the movies shelf next, after deck and before shows", () => {
+      mockUseDashboard.mockReturnValue(warmCacheData());
+      renderDashboard({ advanceStages: false });
+
+      act(() => flushRaf()); // deck
+      act(() => flushRaf()); // movies
+
+      expect(screen.getByText("Breaking Bad")).toBeInTheDocument();
+      expect(screen.getByText("Inception")).toBeInTheDocument();
+      expect(screen.queryByText("Stranger Things")).not.toBeInTheDocument();
+      expect(screen.queryAllByTestId("skeleton-card").length).toBe(8);
+    });
+
+    it("commits the shows shelf last, settling all three sections", () => {
+      mockUseDashboard.mockReturnValue(warmCacheData());
+      renderDashboard({ advanceStages: false });
+
+      act(() => flushRaf()); // deck
+      act(() => flushRaf()); // movies
+      act(() => flushRaf()); // shows
+
+      expect(screen.getByText("Breaking Bad")).toBeInTheDocument();
+      expect(screen.getByText("Inception")).toBeInTheDocument();
+      expect(screen.getByText("Stranger Things")).toBeInTheDocument();
+      expect(screen.queryAllByTestId("skeleton-card").length).toBe(0);
+    });
+
+    it("emits a per-section commit timing log, tagged dashboard, for each stage", () => {
+      mockUseDashboard.mockReturnValue(warmCacheData());
+      renderDashboard(); // default: fully advances all stages
+
+      for (const message of [
+        "deck shelf committed",
+        "movies shelf committed",
+        "shows shelf committed",
+        "all shelves committed",
+      ]) {
+        expect(mockLoggerDebug).toHaveBeenCalledWith(
+          "dashboard",
+          message,
+          expect.objectContaining({ ms: expect.any(Number) }),
+        );
+      }
+    });
+
+    it("still emits the pre-existing first-commit timing log", () => {
+      mockUseDashboard.mockReturnValue(warmCacheData());
+      renderDashboard();
+
+      expect(mockLoggerDebug).toHaveBeenCalledWith("dashboard", "first render start");
+      expect(mockLoggerDebug).toHaveBeenCalledWith(
+        "dashboard",
+        "first commit",
+        expect.objectContaining({ ms: expect.any(Number) }),
+      );
     });
   });
 });

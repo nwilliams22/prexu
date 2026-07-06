@@ -13,6 +13,17 @@ vi.mock("react-router-dom", async () => {
   };
 });
 
+const mockLoggerDebug = vi.fn();
+vi.mock("../services/logger", () => ({
+  logger: {
+    debug: (...args: unknown[]) => mockLoggerDebug(...args),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    trace: vi.fn(),
+  },
+}));
+
 function makeSlide(overrides: Partial<HeroSlide> = {}): HeroSlide {
   return {
     ratingKey: "1",
@@ -236,11 +247,11 @@ describe("HeroSlideshow", () => {
   });
 
   it("only mounts a backdrop for the first slide on initial render (prexu-r56j)", () => {
-    // Pre-fix, every slide's backdrop (a full 1920x1080 background-image div)
+    // Pre-fix, every slide's backdrop (a full 1920x1080 background image)
     // mounted eagerly on first render — expensive when the hero has up to
     // 10 slides, and that render is what React Router's startTransition
     // waits on for the whole route change to become visible.
-    const { container } = render(
+    render(
       <HeroSlideshow
         slides={[
           makeSlide({ ratingKey: "1", title: "First" }),
@@ -252,15 +263,14 @@ describe("HeroSlideshow", () => {
       />,
     );
 
-    // Note: jsdom expands the pagination dots' `background` shorthand into
-    // longhand properties, including a literal `background-image: none` —
-    // matching on `url(` specifically excludes those false positives.
-    const backdrops = container.querySelectorAll('[style*="background-image: url"]');
+    // Backdrops are real <img> elements (prexu-200v — decoding="async"
+    // needs an <img>, a CSS background-image div has no decode hint to set).
+    const backdrops = screen.getAllByTestId("hero-backdrop");
     expect(backdrops.length).toBe(1);
   });
 
   it("mounts additional backdrops as slides are actually visited", () => {
-    const { container } = render(
+    render(
       <HeroSlideshow
         slides={[
           makeSlide({ ratingKey: "1", title: "First" }),
@@ -270,17 +280,20 @@ describe("HeroSlideshow", () => {
       />,
     );
 
-    expect(
-      container.querySelectorAll('[style*="background-image: url"]').length,
-    ).toBe(1);
+    expect(screen.getAllByTestId("hero-backdrop").length).toBe(1);
 
     fireEvent.click(screen.getByLabelText("Go to slide 2"));
 
     // Slide 2 has now actually been visited, so its backdrop mounts too —
     // slide 3 (never visited) still doesn't.
-    expect(
-      container.querySelectorAll('[style*="background-image: url"]').length,
-    ).toBe(2);
+    expect(screen.getAllByTestId("hero-backdrop").length).toBe(2);
+  });
+
+  it("gives the mounted backdrop <img> a decoding=\"async\" hint so decode never blocks a commit (prexu-200v)", () => {
+    render(<HeroSlideshow slides={[makeSlide({ ratingKey: "1", title: "First" })]} />);
+    const backdrop = screen.getByTestId("hero-backdrop");
+    expect(backdrop.tagName).toBe("IMG");
+    expect(backdrop.getAttribute("decoding")).toBe("async");
   });
 
   it("changes slide when dot is clicked", () => {
@@ -298,5 +311,47 @@ describe("HeroSlideshow", () => {
 
     fireEvent.click(screen.getByLabelText("Go to slide 2"));
     expect(screen.getByText("Second")).toBeInTheDocument();
+  });
+
+  describe("commit timing instrumentation (prexu-200v)", () => {
+    it("logs a commit-timing mark for HeroSlideshow's own first commit", () => {
+      render(<HeroSlideshow slides={[makeSlide()]} />);
+      expect(mockLoggerDebug).toHaveBeenCalledWith(
+        "dashboard",
+        "hero backdrop committed",
+        expect.objectContaining({ ms: expect.any(Number) }),
+      );
+    });
+
+    it("logs a decode-timing mark once the first backdrop image loads", () => {
+      render(<HeroSlideshow slides={[makeSlide()]} />);
+      fireEvent.load(screen.getByTestId("hero-backdrop"));
+      expect(mockLoggerDebug).toHaveBeenCalledWith(
+        "dashboard",
+        "hero backdrop image loaded",
+        expect.objectContaining({ ms: expect.any(Number) }),
+      );
+    });
+
+    it("only logs the decode mark once even if the image fires load again", () => {
+      render(<HeroSlideshow slides={[makeSlide()]} />);
+      const backdrop = screen.getByTestId("hero-backdrop");
+      fireEvent.load(backdrop);
+      fireEvent.load(backdrop);
+      const decodeCalls = mockLoggerDebug.mock.calls.filter(
+        (call) => call[1] === "hero backdrop image loaded",
+      );
+      expect(decodeCalls.length).toBe(1);
+    });
+  });
+
+  it("is wrapped in memo so Dashboard's staged shelf re-renders don't force a re-render (prexu-200v)", () => {
+    // Dashboard's shelf-staging state changes 3 times after mount, but
+    // HeroSlideshow's own props (slides/onDismiss/onPlay) are stable across
+    // those transitions — memo() is what turns that stability into a
+    // skipped re-render instead of a wasted diff of the whole hero subtree.
+    expect(
+      (HeroSlideshow as unknown as { $$typeof?: symbol }).$$typeof,
+    ).toBe(Symbol.for("react.memo"));
   });
 });
