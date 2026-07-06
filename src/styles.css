@@ -9,6 +9,12 @@
   --success: #4caf50;
   --error: #ef5350;
   --border: #2a3a5c;
+  /* Tell the engine which native chrome variant (form-control popups,
+     scrollbars) matches the app theme. Without this, WebKitGTK renders
+     <select> dropdown popups with the platform's LIGHT default theme on the
+     dark UI (prexu-1ua0). Flipped to `light` alongside the token overrides
+     in the light-theme blocks below. */
+  color-scheme: dark;
 }
 
 * {
@@ -352,6 +358,15 @@ input[type="range"]::-webkit-slider-thumb {
   cursor: pointer;
 }
 
+/* Native <select> popup entries — WebKit honors basic background/color on
+   <option>, so keep the dropdown list on-theme (root color-scheme handles
+   the popup chrome itself; this handles the rows). Applies to every select
+   in the app so filter, sort, and settings dropdowns all match (prexu-1ua0). */
+select option {
+  background-color: var(--bg-card);
+  color: var(--text-primary);
+}
+
 /* Season tabs — remove focus ring on click (active tab styling is sufficient) */
 .season-tab:focus,
 .season-tab:focus-visible,
@@ -409,6 +424,7 @@ input[type="range"]::-webkit-slider-thumb {
   --success: #2e8b57;
   --error: #d32f2f;
   --border: #d0d4dc;
+  color-scheme: light;
 }
 
 :root[data-theme="light"] body {
@@ -436,6 +452,7 @@ input[type="range"]::-webkit-slider-thumb {
     --success: #2e8b57;
     --error: #d32f2f;
     --border: #d0d4dc;
+    color-scheme: light;
   }
 
   :root:not([data-theme="dark"]) body {

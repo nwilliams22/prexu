@@ -72,14 +72,15 @@ vi.mock("../services/logger", () => ({
   },
 }));
 
+const mockUseFilterOptions = vi.fn(() => ({
+  genres: [] as { key: string; title: string }[],
+  years: [] as { key: string; title: string }[],
+  contentRatings: [] as { key: string; title: string }[],
+  resolutions: [] as { key: string; title: string }[],
+  isLoading: false,
+}));
 vi.mock("../hooks/useFilterOptions", () => ({
-  useFilterOptions: () => ({
-    genres: [],
-    years: [],
-    contentRatings: [],
-    resolutions: [],
-    isLoading: false,
-  }),
+  useFilterOptions: (...args: unknown[]) => mockUseFilterOptions(...(args as [])),
 }));
 
 vi.mock("../hooks/useMediaContextMenu", () => ({
@@ -147,8 +148,30 @@ vi.mock("../components/LibraryGrid", () => ({
 }));
 
 
+// Renders the option keys it actually received so cross-filtered facet
+// narrowing (prexu-hb1p) can be asserted end to end without pulling in the
+// real FilterBar's DOM/styling.
 vi.mock("../components/FilterBar", () => ({
-  default: () => <div data-testid="filter-bar" />,
+  default: ({
+    genres,
+    years,
+    contentRatings,
+    resolutions,
+  }: {
+    genres: { key: string; title: string }[];
+    years: { key: string; title: string }[];
+    contentRatings: { key: string; title: string }[];
+    resolutions: { key: string; title: string }[];
+  }) => (
+    <div data-testid="filter-bar">
+      <div data-testid="filter-bar-genres">{genres.map((g) => g.key).join(",")}</div>
+      <div data-testid="filter-bar-years">{years.map((y) => y.key).join(",")}</div>
+      <div data-testid="filter-bar-content-ratings">
+        {contentRatings.map((c) => c.key).join(",")}
+      </div>
+      <div data-testid="filter-bar-resolutions">{resolutions.map((r) => r.key).join(",")}</div>
+    </div>
+  ),
 }));
 
 vi.mock("../components/PosterCard", () => ({
@@ -284,6 +307,16 @@ describe("LibraryView", () => {
       filterByRating: (items: unknown[]) => items,
       isItemAllowed: () => true,
       maxContentRating: "none",
+    });
+    // vi.clearAllMocks() clears call history but NOT mockReturnValue stubs —
+    // re-prime so a persistent stub set by another suite (e.g. the
+    // cross-filtered-facets suite below) never leaks in here.
+    mockUseFilterOptions.mockReturnValue({
+      genres: [],
+      years: [],
+      contentRatings: [],
+      resolutions: [],
+      isLoading: false,
     });
     // Mock IntersectionObserver globally as a class
     global.IntersectionObserver = vi.fn().mockImplementation(function (this: unknown) {
@@ -589,6 +622,16 @@ describe("LibraryView — alpha jump scrubber (prexu-6qi5.2)", () => {
       isItemAllowed: () => true,
       maxContentRating: "none",
     });
+    // Re-prime for the same reason as the suite above — a leaked stub here
+    // would flip hasActiveFilters via a filters-arg side effect and disable
+    // the firstCharacter fast path these tests exercise.
+    mockUseFilterOptions.mockReturnValue({
+      genres: [],
+      years: [],
+      contentRatings: [],
+      resolutions: [],
+      isLoading: false,
+    });
   });
 
   it("single click on a letter whose offset lies far beyond the fetched range lands the viewport there and requests the landing range (hardware regression: clicking 'N' used to need ~20 clicks)", async () => {
@@ -750,5 +793,151 @@ describe("LibraryView — alpha jump scrubber (prexu-6qi5.2)", () => {
       index: 2,
       title: "The Matrix",
     });
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// Client-side cross-filtered filter options (prexu-hb1p)
+//
+// PR #55's loadAll background fill means a filtered view eventually holds
+// the ENTIRE filtered result set in memory. These tests exercise the wiring
+// end to end: LibraryView composing usePaginatedLibrary's isFillComplete +
+// useFilterOptions' server option lists through useConstrainedFilterOptions
+// and down into FilterBar's props (the mocked FilterBar above renders the
+// option keys it received so they can be asserted on directly).
+const serverGenres = [
+  { key: "documentary", title: "Documentary" },
+  { key: "comedy", title: "Comedy" },
+];
+const serverYears = [
+  { key: "2020", title: "2020" },
+  { key: "1999", title: "1999" },
+  { key: "1985", title: "1985" },
+];
+const serverContentRatings = [
+  { key: "PG-13", title: "PG-13" },
+  { key: "R", title: "R" },
+];
+const serverResolutions = [
+  { key: "1080", title: "1080p" },
+  { key: "4k", title: "4K" },
+];
+
+// Simulates a genre=Documentary filtered result set: only years 1999/2020,
+// only PG-13, only 1080p actually occur in it.
+const documentaryItems = [
+  {
+    ratingKey: "1",
+    title: "Doc One",
+    thumb: "/t1",
+    type: "movie",
+    year: 1999,
+    contentRating: "PG-13",
+    Media: [{ videoResolution: "1080" }],
+    Genre: [{ tag: "Documentary" }],
+  },
+  {
+    ratingKey: "2",
+    title: "Doc Two",
+    thumb: "/t2",
+    type: "movie",
+    year: 2020,
+    contentRating: "PG-13",
+    Media: [{ videoResolution: "1080" }],
+    Genre: [{ tag: "Documentary" }],
+  },
+];
+
+describe("LibraryView — cross-filtered facets (prexu-hb1p)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseParams.mockReturnValue({ sectionId: "1" });
+    mockUseParentalControls.mockReturnValue({
+      restrictionsEnabled: false,
+      filterByRating: (items: unknown[]) => items,
+      isItemAllowed: () => true,
+      maxContentRating: "none",
+    });
+    mockUseFilterOptions.mockReturnValue({
+      genres: serverGenres,
+      years: serverYears,
+      contentRatings: serverContentRatings,
+      resolutions: serverResolutions,
+      isLoading: false,
+    });
+  });
+
+  it("narrows dropdowns without an active selection once the fill completes, but keeps the full list for the dropdown that IS set", () => {
+    mockUseSearchParams.mockReturnValue([
+      new URLSearchParams("genre=documentary"),
+      mockSetSearchParams,
+    ]);
+    mockUsePaginatedLibrary.mockReturnValue({
+      items: documentaryItems,
+      isLoading: false,
+      isLoadingMore: false,
+      isStale: false,
+      totalSize: documentaryItems.length,
+      isFillComplete: true,
+      error: null,
+      ensureRange: vi.fn(),
+      retry: vi.fn(),
+    });
+
+    renderPage();
+
+    // Genre has an active selection ("documentary") -> full server list kept.
+    expect(screen.getByTestId("filter-bar-genres").textContent).toBe("documentary,comedy");
+    // Year/contentRating/resolution have no active selection -> narrowed to
+    // only the values present in the Documentary-filtered result set. Server
+    // list order is preserved (2020, 1999, 1985 -> 2020, 1999).
+    expect(screen.getByTestId("filter-bar-years").textContent).toBe("2020,1999");
+    expect(screen.getByTestId("filter-bar-content-ratings").textContent).toBe("PG-13");
+    expect(screen.getByTestId("filter-bar-resolutions").textContent).toBe("1080");
+  });
+
+  it("does not narrow options while the background fill is still in progress", () => {
+    mockUseSearchParams.mockReturnValue([
+      new URLSearchParams("genre=documentary"),
+      mockSetSearchParams,
+    ]);
+    mockUsePaginatedLibrary.mockReturnValue({
+      items: documentaryItems, // only a partial prefix loaded so far
+      isLoading: false,
+      isLoadingMore: true,
+      isStale: false,
+      totalSize: 50, // full filtered result set is bigger than what's loaded
+      isFillComplete: false,
+      error: null,
+      ensureRange: vi.fn(),
+      retry: vi.fn(),
+    });
+
+    renderPage();
+
+    // No narrowing yet — full server lists shown for every dropdown.
+    expect(screen.getByTestId("filter-bar-years").textContent).toBe("2020,1999,1985");
+    expect(screen.getByTestId("filter-bar-content-ratings").textContent).toBe("PG-13,R");
+    expect(screen.getByTestId("filter-bar-resolutions").textContent).toBe("1080,4k");
+  });
+
+  it("leaves options unchanged when no filter is active, regardless of fill state", () => {
+    mockUseSearchParams.mockReturnValue([new URLSearchParams(), mockSetSearchParams]);
+    mockUsePaginatedLibrary.mockReturnValue({
+      items: documentaryItems,
+      isLoading: false,
+      isLoadingMore: false,
+      isStale: false,
+      totalSize: documentaryItems.length,
+      isFillComplete: true,
+      error: null,
+      ensureRange: vi.fn(),
+      retry: vi.fn(),
+    });
+
+    renderPage();
+
+    expect(screen.getByTestId("filter-bar-years").textContent).toBe("2020,1999,1985");
+    expect(screen.getByTestId("filter-bar-genres").textContent).toBe("documentary,comedy");
   });
 });
