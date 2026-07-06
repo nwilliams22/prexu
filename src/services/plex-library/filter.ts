@@ -119,12 +119,37 @@ export interface FirstCharacterBucket {
 }
 
 /**
+ * Normalize a bucket key by decoding URL-encoded characters and mapping
+ * non-A–Z characters to "#".
+ *
+ * Plex may return URL-encoded keys (e.g. "%23" for "#"). Decode them and
+ * normalize non-alphabetic characters to match getLibrarySortBucket's semantics.
+ * If decoding fails, return the raw key as a fallback.
+ */
+function normalizeBucketKey(rawKey: string): string {
+  try {
+    const decoded = decodeURIComponent(rawKey);
+    const first = decoded.charAt(0).toUpperCase();
+    return /[A-Z]/.test(first) ? first : "#";
+  } catch {
+    // Malformed key (e.g. incomplete percent sequence "%" alone) — fall back
+    const first = rawKey.charAt(0).toUpperCase();
+    return /[A-Z]/.test(first) ? first : "#";
+  }
+}
+
+/**
  * Fetches the per-letter item count index for a library section.
  *
  * Calls `/library/sections/{id}/firstCharacter` which Plex returns as a
  * Directory array of `{ key, size }` entries — one per distinct first
  * character of the items' sort titles. This lets the AlphaJumpBar be
  * populated without loading any actual media items.
+ *
+ * Normalizes bucket keys by decoding URL-encoded characters (e.g. "%23" → "#")
+ * and mapping non-A–Z characters to "#", matching getLibrarySortBucket's
+ * semantics. If multiple buckets normalize to the same character, their sizes
+ * are merged while preserving order and offsets.
  *
  * Returns an empty array when the server returns a non-2xx status or an
  * unexpected shape (callers should treat that as "unavailable" and fall
@@ -148,8 +173,27 @@ export async function getSectionFirstCharacter(
   );
   const dirs = data.MediaContainer.Directory;
   if (!Array.isArray(dirs)) return [];
-  return dirs.map((d) => ({
-    key: d.key,
-    size: typeof d.size === "number" ? d.size : parseInt(String(d.size ?? ""), 10) || 0,
-  }));
+
+  // Normalize keys and parse sizes
+  const normalized: FirstCharacterBucket[] = [];
+  const seen = new Set<string>();
+
+  for (const d of dirs) {
+    const normalizedKey = normalizeBucketKey(d.key);
+    const size = typeof d.size === "number" ? d.size : parseInt(String(d.size ?? ""), 10) || 0;
+
+    if (seen.has(normalizedKey)) {
+      // Merge with existing bucket: find and update it
+      const existing = normalized.find((b) => b.key === normalizedKey);
+      if (existing) {
+        existing.size += size;
+      }
+    } else {
+      // New bucket
+      seen.add(normalizedKey);
+      normalized.push({ key: normalizedKey, size });
+    }
+  }
+
+  return normalized;
 }

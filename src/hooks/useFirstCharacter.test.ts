@@ -134,7 +134,7 @@ describe("useFirstCharacter", () => {
     });
 
     expect(mockCacheSet).toHaveBeenCalledWith(
-      expect.stringContaining(`firstCharacter:https://plex.test:${SECTION_ID}`),
+      expect.stringContaining(`firstCharacter.v2:https://plex.test:${SECTION_ID}`),
       makeBuckets(),
       expect.any(Number)
     );
@@ -154,6 +154,24 @@ describe("useFirstCharacter", () => {
     expect(result.current.error).toBe("API error");
     expect(result.current.buckets).toEqual([]);
     expect(result.current.letters.size).toBe(0);
+  });
+
+  it("includes # in letters set when service returns normalized # buckets", async () => {
+    mockGetSectionFirstCharacter.mockResolvedValue([
+      { key: "#", size: 5 },
+      { key: "A", size: 10 },
+    ]);
+
+    const { result } = renderHook(() =>
+      useFirstCharacter(SECTION_ID, true)
+    );
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(result.current.letters.has("#")).toBe(true);
+    expect(result.current.letters.has("A")).toBe(true);
   });
 });
 
