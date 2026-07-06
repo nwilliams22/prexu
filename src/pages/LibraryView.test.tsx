@@ -577,6 +577,12 @@ describe("LibraryView — alpha jump scrubber (prexu-6qi5.2)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseParams.mockReturnValue({ sectionId: "1" });
+    // vi.clearAllMocks() clears call history but NOT mockReturnValue stubs —
+    // without this re-prime, the year-range URL tests in the suite above
+    // leak their search params (genre/yearMin/yearMax/unwatched) into this
+    // suite, which flips hasActiveFilters and disables the firstCharacter
+    // fast path these tests exercise.
+    mockUseSearchParams.mockReturnValue([new URLSearchParams(), mockSetSearchParams]);
     mockUseParentalControls.mockReturnValue({
       restrictionsEnabled: false,
       filterByRating: (items: unknown[]) => items,
