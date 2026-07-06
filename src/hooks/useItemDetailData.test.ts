@@ -1,7 +1,12 @@
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { useItemDetailData, warmItemDetailCache } from "./useItemDetailData";
-import { cacheClear } from "../services/api-cache";
-import { initializeCacheInvalidators } from "../services/cache-invalidators";
+import { cacheClear, cacheGet } from "../services/api-cache";
+import {
+  initializeCacheInvalidators,
+  registerOffsetFloor,
+  __clearOffsetFloorsForTests,
+  OFFSET_FLOOR_WINDOW_MS,
+} from "../services/cache-invalidators";
 import { emitWatchStateChanged } from "../services/watch-state-events";
 
 const stableServer = { uri: "https://plex.test", accessToken: "token" };
@@ -646,6 +651,161 @@ describe("useItemDetailData", () => {
       await warmItemDetailCache(stableServer, "1");
       await warmItemDetailCache(stableServer, "2");
       expect(mockGetItemMetadata).toHaveBeenCalledTimes(2);
+    });
+
+    // prexu-5mcz: hardware log chain proved the item-detail entry crossed its
+    // 30s TTL just ONE SECOND after the watch-state patch ran, because the
+    // patch (before this fix) preserved the entry's ORIGINAL timestamp — from
+    // whenever it was first warmed, well before the stop — rather than
+    // resetting it. That let a hover-triggered warmItemDetailCache treat the
+    // entry as stale and issue a real fetch, which raced PMS's own async
+    // ingestion of the stop write and re-cached the PRE-stop offset, silently
+    // undoing the patch. The patch must refresh the TTL so the patched value
+    // (known-fresher than anything the server can return in-window) doesn't
+    // expire behind a stale response moments later.
+    it("keeps the item-detail entry warm well past its original TTL once a watch-state patch refreshes it", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+
+      mockGetItemMetadata.mockResolvedValueOnce({
+        ...makeMovie("1", "Movie 1"),
+        viewOffset: 1000,
+      });
+      await warmItemDetailCache(stableServer, "1"); // T0, 30s TTL starts
+
+      // T0+25s — close to (but still within) the original 30s TTL, matching
+      // the hardware repro's timing.
+      vi.setSystemTime(Date.now() + 25_000);
+      emitWatchStateChanged("1", { viewOffsetMs: 710561 }); // patch at T
+
+      mockGetItemMetadata.mockClear();
+      debugSpy.mockClear();
+
+      // T+29s (= T0+54s) — 24s PAST the entry's ORIGINAL expiry (T0+30s),
+      // but still within the patch's own fresh 30s window (T+30s = T0+55s).
+      vi.setSystemTime(Date.now() + 29_000);
+
+      await warmItemDetailCache(stableServer, "1");
+
+      // Still warm — no refetch, because the patch reset the freshness clock.
+      expect(mockGetItemMetadata).not.toHaveBeenCalled();
+      expect(
+        debugSpy.mock.calls.some(
+          ([msg]) => typeof msg === "string" && msg.includes("already warm, skipping"),
+        ),
+      ).toBe(true);
+
+      vi.useRealTimers();
+      debugSpy.mockRestore();
+    });
+  });
+
+  // prexu-5mcz: the final gap in this bug — the deck fetch path
+  // (useDashboard's applyOffsetFloors call) was the only thing consulting the
+  // offset-floor registry. A hover-intent prefetch of the item-detail bundle
+  // had no floor guard at all, so it could land within the floor's window and
+  // re-cache a PRE-stop viewOffset PMS hadn't finished ingesting yet — exactly
+  // what the hardware log chain showed happening one second after a stop.
+  // fetchDetailBundle (the choke point both the hook's own fetch effect and
+  // warmItemDetailCache go through) now runs every fetched bundle through the
+  // same applyOffsetFloors merge rule the deck path already trusted.
+  describe("offset floor on the detail fetch path (prexu-5mcz)", () => {
+    beforeEach(() => {
+      __clearOffsetFloorsForTests();
+    });
+
+    afterEach(() => {
+      __clearOffsetFloorsForTests();
+    });
+
+    it("floors a fetched viewOffset that is older (stale) than a registered floor before caching it", async () => {
+      registerOffsetFloor("1", 710561, false);
+      mockGetItemMetadata.mockResolvedValueOnce({
+        ...makeMovie("1", "Movie 1"),
+        viewOffset: 642142, // PMS's PRE-stop offset — ingestion lag
+      });
+
+      await warmItemDetailCache(stableServer, "1");
+
+      expect(cacheGet<{ item: { viewOffset?: number } }>("item-detail:https://plex.test:1")?.item.viewOffset).toBe(
+        710561,
+      );
+    });
+
+    it("passes through a fetched viewOffset that is newer/larger than the floor unmodified", async () => {
+      registerOffsetFloor("1", 100_000, false);
+      mockGetItemMetadata.mockResolvedValueOnce({
+        ...makeMovie("1", "Movie 1"),
+        viewOffset: 200_000,
+      });
+
+      await warmItemDetailCache(stableServer, "1");
+
+      expect(cacheGet<{ item: { viewOffset?: number } }>("item-detail:https://plex.test:1")?.item.viewOffset).toBe(
+        200_000,
+      );
+    });
+
+    it("forces a fetched viewOffset to 0 when a reset floor is registered, even if the server hasn't caught up", async () => {
+      registerOffsetFloor("1", 0, true);
+      mockGetItemMetadata.mockResolvedValueOnce({
+        ...makeMovie("1", "Movie 1"),
+        viewOffset: 500_000,
+      });
+
+      await warmItemDetailCache(stableServer, "1");
+
+      expect(cacheGet<{ item: { viewOffset?: number } }>("item-detail:https://plex.test:1")?.item.viewOffset).toBe(0);
+    });
+
+    it("no longer floors a fetched viewOffset once the floor's window has expired", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      registerOffsetFloor("1", 710561, false);
+      vi.setSystemTime(Date.now() + OFFSET_FLOOR_WINDOW_MS + 1);
+      mockGetItemMetadata.mockResolvedValueOnce({
+        ...makeMovie("1", "Movie 1"),
+        viewOffset: 642142,
+      });
+
+      await warmItemDetailCache(stableServer, "1");
+      vi.useRealTimers();
+
+      expect(cacheGet<{ item: { viewOffset?: number } }>("item-detail:https://plex.test:1")?.item.viewOffset).toBe(
+        642142,
+      );
+    });
+
+    it("floors a matching episode child's viewOffset inside a season bundle, leaving other episodes untouched", async () => {
+      currentRatingKey = "s1";
+      registerOffsetFloor("e2", 300_000, false);
+
+      mockGetItemMetadata.mockResolvedValueOnce({
+        ratingKey: "s1",
+        type: "season",
+        title: "Season 1",
+        parentRatingKey: "show1",
+      });
+      mockGetItemMetadata.mockResolvedValueOnce({
+        ratingKey: "show1",
+        type: "show",
+        title: "Show A",
+      });
+      mockGetItemChildren.mockResolvedValueOnce([
+        { ratingKey: "e1", type: "episode", title: "Episode 1", viewOffset: 1_000 },
+        { ratingKey: "e2", type: "episode", title: "Episode 2", viewOffset: 50_000 },
+      ]);
+      mockGetItemChildren.mockResolvedValueOnce([
+        { ratingKey: "s1", type: "season", title: "Season 1" },
+      ]);
+
+      const { result } = renderHook(() => useItemDetailData());
+
+      await waitFor(() => expect(result.current.episodes.length).toBe(2));
+
+      const e1 = result.current.episodes.find((e) => e.ratingKey === "e1");
+      const e2 = result.current.episodes.find((e) => e.ratingKey === "e2");
+      expect(e1?.viewOffset).toBe(1_000); // untouched — no floor for e1
+      expect(e2?.viewOffset).toBe(300_000); // floored up from the stale 50_000
     });
   });
 });
