@@ -1,0 +1,4 @@
+target/
+samples/
+*.log
+!evidence/run.log
