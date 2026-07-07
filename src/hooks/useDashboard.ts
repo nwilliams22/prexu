@@ -4,7 +4,7 @@ import { useLibrary } from "./useLibrary";
 import { useCompletionCounter } from "./useServerActivity";
 import { getRecentlyAddedBySection, getOnDeck } from "../services/plex-library";
 import { cacheGet, cacheGetAge, cacheSet, cacheInvalidate } from "../services/api-cache";
-import { onWatchStateChanged } from "../services/watch-state-events";
+import { onWatchStateChangedDetail } from "../services/watch-state-events";
 import { applyOffsetFloors, DECK_INVALIDATION_DELAY_MS } from "../services/cache-invalidators";
 import { groupRecentlyAdded } from "../utils/groupRecentlyAdded";
 import { logger } from "../services/logger";
@@ -104,6 +104,26 @@ export function useDashboard(): UseDashboardResult {
   }, []);
   const setOnDeckIfChanged = useCallback((next: PlexMediaItem[]) => {
     setOnDeck((prev) => (isSameData(prev, next) ? prev : next));
+  }, []);
+
+  // In-place viewOffset patch of the MOUNTED deck state (prexu-0fwh). The deck
+  // card's ResumePopover ("Resume from X:XX") and the hero's progress/Continue
+  // affordance both read viewOffset straight off these onDeck items — so a stop
+  // that only patched the CACHE (cache-invalidators.ts) left the rendered label
+  // frozen at the pre-session offset until the delayed revalidation refetch
+  // landed. Mirrors PR #83's detail-page fix (useItemDetailData): reflect the
+  // player-reported offset the instant the event fires. Targets one ratingKey,
+  // leaves other items (and their references) untouched, and only allocates a
+  // new array when the value actually changes.
+  const patchDeckOffset = useCallback((ratingKey: string, viewOffset: number) => {
+    setOnDeck((prev) => {
+      const idx = prev.findIndex((item) => item.ratingKey === ratingKey);
+      if (idx === -1) return prev;
+      if ((prev[idx] as { viewOffset?: number }).viewOffset === viewOffset) return prev;
+      const next = prev.slice();
+      next[idx] = { ...next[idx]!, viewOffset };
+      return next;
+    });
   }, []);
 
   // Derive a value-stable key from sections so effects don't re-fire when the
@@ -313,7 +333,27 @@ export function useDashboard(): UseDashboardResult {
   // line of defense against a same-tick race.
   const deckRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    const unsubscribe = onWatchStateChanged(() => {
+    const unsubscribe = onWatchStateChangedDetail(({ ratingKey, viewOffsetMs, reset }) => {
+      // prexu-0fwh: patch the mounted deck state in place FIRST, so the
+      // rendered "Resume from X:XX" popover / hero progress reflect the
+      // player-reported offset immediately — before (and independent of) the
+      // delayed revalidation refetch below. The cache is already patched by
+      // cache-invalidators.ts's own listener; this covers the mounted STATE
+      // the render actually reads, which that cache patch never touched. A
+      // reset (early-stop resume-marker clear) is an authoritative 0.
+      if (ratingKey !== undefined && viewOffsetMs !== undefined) {
+        const resolved = reset ? 0 : viewOffsetMs;
+        logger.debug("playback", "deck mounted state patched from watch-state event", {
+          ratingKey,
+          viewOffset: resolved,
+        });
+        patchDeckOffset(ratingKey, resolved);
+      }
+
+      // Revalidation backstop (prexu-dqfc, unchanged timing): refetch after the
+      // PMS ingestion buffer to resync anything the offset-only patch can't
+      // reach (e.g. an item entering/leaving the deck). Payload-less legacy
+      // events fall through to here with no in-place patch, exactly as before.
       if (deckRefreshTimerRef.current) clearTimeout(deckRefreshTimerRef.current);
       logger.debug("playback", "deck refresh scheduled after watch-state change", {
         delayMs: DECK_INVALIDATION_DELAY_MS,
@@ -330,7 +370,7 @@ export function useDashboard(): UseDashboardResult {
         deckRefreshTimerRef.current = null;
       }
     };
-  }, [refresh]);
+  }, [refresh, patchDeckOffset]);
 
   // Auto-refresh on server activity completion
   const prevCompletion = useRef(completionCounter);
