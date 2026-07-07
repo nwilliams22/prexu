@@ -172,14 +172,26 @@ describe("useDashboard <-> cache-invalidators real integration (prexu-dqfc)", ()
       emitWatchStateChanged(RATING_KEY, { viewOffsetMs: POST_STOP_OFFSET });
     });
 
+    // prexu-0fwh: the in-place patch now shows the correct offset in the
+    // interim — before the (deliberately slow) revalidation refetch lands.
+    expect(result.current.onDeck[0]?.viewOffset).toBe(POST_STOP_OFFSET);
+
+    // Advance in two steps (mirroring the ~6s-latency test above) so the
+    // refetch's own nested resolution timer is armed by the first step before
+    // the second advances past it — otherwise the stale response never
+    // actually lands and the residual race under test is never exercised.
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(DECK_INVALIDATION_DELAY_MS + OFFSET_FLOOR_WINDOW_MS + 100);
+      await vi.advanceTimersByTimeAsync(DECK_INVALIDATION_DELAY_MS);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(OFFSET_FLOOR_WINDOW_MS + 100);
     });
 
     // Documented residual limitation (matches PR #72's own "narrows, can't
-    // close" framing) — an extreme PMS delay beyond the widened window can
-    // still show stale momentarily. Not the bug this PR fixes; recorded so
-    // a future change to the constants can see exactly what's covered.
+    // close" framing) — an extreme PMS delay beyond the widened window still
+    // lets the stale refetch overwrite even the in-place-patched value once
+    // the floor has expired. Not the bug this PR fixes; recorded so a future
+    // change to the constants can see exactly what's covered.
     expect(result.current.onDeck[0]?.viewOffset).toBe(PRE_STOP_OFFSET);
   });
 
@@ -227,5 +239,152 @@ describe("useDashboard <-> cache-invalidators real integration (prexu-dqfc)", ()
     });
 
     expect(mockGetOnDeck).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * prexu-0fwh — the sixth round. Every CACHE-side layer above is provably
+ * correct (cache-invalidators.patchDeckCaches writes the fresh offset into the
+ * deck cache synchronously, and useDashboard reseeds onDeck from that cache on
+ * mount), yet a hardware repro still read the PRE-session offset on the
+ * dashboard immediately after a stop. Root cause: the *mounted* onDeck STATE —
+ * the exact value usePlayAction.getPlayHandler reads into the ResumePopover's
+ * "Resume from X:XX" label (src/hooks/usePlayAction.tsx:91,99) and the value
+ * HeroSlideshow's progress bar / Continue affordance derive from
+ * (src/pages/Dashboard.tsx:437-475, heroItemMap 296-318) — was frozen at
+ * whatever offset was present when the shelf last rendered, and was only
+ * corrected by the T+DECK_INVALIDATION_DELAY_MS revalidation refetch. This is
+ * the exact gap PR #83 closed for the DETAIL page (useItemDetailData), which
+ * useDashboard never had. The fix subscribes useDashboard to
+ * onWatchStateChangedDetail and patches onDeck in place the instant the event
+ * fires (mirroring PR #83), keeping the delayed refetch purely as revalidation.
+ */
+describe("useDashboard in-place mounted deck-state patch (prexu-0fwh)", () => {
+  beforeEach(() => {
+    cacheClear();
+    __clearOffsetFloorsForTests();
+    mockGetOnDeck.mockReset();
+    initializeCacheInvalidators();
+    vi.useFakeTimers();
+  });
+
+  afterEach(async () => {
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+    vi.useRealTimers();
+  });
+
+  it("SMOKING GUN: reflects the just-reported offset in mounted deck state IMMEDIATELY on the stop event, before (and independent of) the delayed refetch", async () => {
+    cacheSet(DECK_KEY, [{ ratingKey: RATING_KEY, title: "Nosferatu", type: "movie", viewOffset: PRE_STOP_OFFSET }], 60 * 60 * 1000);
+    // Deliberately STALE refetch response: proves the immediate correctness
+    // comes from the in-place patch, NOT from the (delayed) revalidation.
+    mockGetOnDeck.mockResolvedValue([{ ratingKey: RATING_KEY, title: "Nosferatu", type: "movie", viewOffset: PRE_STOP_OFFSET }]);
+
+    const { result } = await mountAndSettle();
+    expect(result.current.onDeck[0]?.viewOffset).toBe(PRE_STOP_OFFSET);
+
+    act(() => {
+      emitWatchStateChanged(RATING_KEY, { viewOffsetMs: POST_STOP_OFFSET });
+    });
+
+    // No timer advance, no refetch — the mounted state the ResumePopover reads
+    // (usePlayAction.getPlayHandler -> itemsRef -> prompt.viewOffset) must
+    // already carry the new offset. FAILS on pre-fix main: onDeck stays frozen
+    // at PRE_STOP_OFFSET until the T+1800 refetch (which here is itself stale).
+    expect(mockGetOnDeck).not.toHaveBeenCalled();
+    expect(result.current.onDeck[0]?.viewOffset).toBe(POST_STOP_OFFSET);
+  });
+
+  it("patches state at T+0 yet still defers the revalidation refetch to T+DECK_INVALIDATION_DELAY_MS", async () => {
+    cacheSet(DECK_KEY, [{ ratingKey: RATING_KEY, title: "Nosferatu", type: "movie", viewOffset: PRE_STOP_OFFSET }], 60 * 60 * 1000);
+    mockGetOnDeck.mockResolvedValue([{ ratingKey: RATING_KEY, title: "Nosferatu", type: "movie", viewOffset: POST_STOP_OFFSET }]);
+
+    const { result } = await mountAndSettle();
+
+    act(() => {
+      emitWatchStateChanged(RATING_KEY, { viewOffsetMs: POST_STOP_OFFSET });
+    });
+
+    // Immediate in-place patch, refetch not yet fired.
+    expect(result.current.onDeck[0]?.viewOffset).toBe(POST_STOP_OFFSET);
+    expect(mockGetOnDeck).not.toHaveBeenCalled();
+
+    // Revalidation still fires exactly once at the ingestion-buffer boundary.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DECK_INVALIDATION_DELAY_MS);
+    });
+    expect(mockGetOnDeck).toHaveBeenCalledTimes(1);
+    expect(result.current.onDeck[0]?.viewOffset).toBe(POST_STOP_OFFSET);
+  });
+
+  it("reset payload (early-stop resume-marker clear) patches the mounted deck offset to 0 immediately", async () => {
+    cacheSet(DECK_KEY, [{ ratingKey: RATING_KEY, title: "Nosferatu", type: "movie", viewOffset: PRE_STOP_OFFSET }], 60 * 60 * 1000);
+    mockGetOnDeck.mockResolvedValue([{ ratingKey: RATING_KEY, title: "Nosferatu", type: "movie", viewOffset: PRE_STOP_OFFSET }]);
+
+    const { result } = await mountAndSettle();
+
+    act(() => {
+      emitWatchStateChanged(RATING_KEY, { viewOffsetMs: 0, reset: true });
+    });
+
+    expect(result.current.onDeck[0]?.viewOffset).toBe(0);
+  });
+
+  it("leaves unrelated deck items untouched when patching one item's offset", async () => {
+    const OTHER_KEY = "999";
+    cacheSet(DECK_KEY, [
+      { ratingKey: RATING_KEY, title: "Nosferatu", type: "movie", viewOffset: PRE_STOP_OFFSET },
+      { ratingKey: OTHER_KEY, title: "Other", type: "movie", viewOffset: 123_000 },
+    ], 60 * 60 * 1000);
+    mockGetOnDeck.mockResolvedValue([]);
+
+    const { result } = await mountAndSettle();
+
+    act(() => {
+      emitWatchStateChanged(RATING_KEY, { viewOffsetMs: POST_STOP_OFFSET });
+    });
+
+    expect(result.current.onDeck.find((i) => i.ratingKey === RATING_KEY)?.viewOffset).toBe(POST_STOP_OFFSET);
+    expect(result.current.onDeck.find((i) => i.ratingKey === OTHER_KEY)?.viewOffset).toBe(123_000);
+  });
+
+  it("ignores a payload-less legacy event (no ratingKey/offset) — nothing to patch, refetch still scheduled", async () => {
+    cacheSet(DECK_KEY, [{ ratingKey: RATING_KEY, title: "Nosferatu", type: "movie", viewOffset: PRE_STOP_OFFSET }], 60 * 60 * 1000);
+    mockGetOnDeck.mockResolvedValue([{ ratingKey: RATING_KEY, title: "Nosferatu", type: "movie", viewOffset: POST_STOP_OFFSET }]);
+
+    const { result } = await mountAndSettle();
+
+    act(() => {
+      emitWatchStateChanged();
+    });
+
+    // No payload -> no in-place patch; state unchanged until the refetch lands.
+    expect(result.current.onDeck[0]?.viewOffset).toBe(PRE_STOP_OFFSET);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DECK_INVALIDATION_DELAY_MS);
+    });
+    expect(result.current.onDeck[0]?.viewOffset).toBe(POST_STOP_OFFSET);
+  });
+
+  it("remount seeds fresh deck state straight from the patched cache (cache path was already correct)", async () => {
+    cacheSet(DECK_KEY, [{ ratingKey: RATING_KEY, title: "Nosferatu", type: "movie", viewOffset: PRE_STOP_OFFSET }], 60 * 60 * 1000);
+    mockGetOnDeck.mockResolvedValue([{ ratingKey: RATING_KEY, title: "Nosferatu", type: "movie", viewOffset: PRE_STOP_OFFSET }]);
+
+    const first = await mountAndSettle();
+
+    act(() => {
+      emitWatchStateChanged(RATING_KEY, { viewOffsetMs: POST_STOP_OFFSET });
+    });
+
+    // cache-invalidators.patchDeckCaches wrote the fresh offset into the real
+    // deck cache synchronously — so a remount reads it back, no refetch needed.
+    expect((cacheGet(DECK_KEY) as { viewOffset: number }[] | null)?.[0]?.viewOffset).toBe(POST_STOP_OFFSET);
+
+    first.unmount();
+
+    const remounted = await mountAndSettle();
+    expect(remounted.result.current.onDeck[0]?.viewOffset).toBe(POST_STOP_OFFSET);
   });
 });
