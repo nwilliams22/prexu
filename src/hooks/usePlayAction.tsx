@@ -18,6 +18,7 @@ import { useAuth } from "./useAuth";
 import { usePlayerSession } from "../contexts/PlayerContext";
 import { getItemMetadata } from "../services/plex-library";
 import ResumePopover from "../components/ResumePopover";
+import { logger } from "../services/logger";
 import type { PlexMediaItem } from "../types/library";
 
 type PromptState =
@@ -93,6 +94,14 @@ export function usePlayAction(): UsePlayActionResult {
         // Fast path: dashboard/onDeck items already carry viewOffset, so
         // we can render the popover instantly with no network round trip.
         if (cachedOffset > 0) {
+          // prexu-0fwh: numeric provenance of the label the user reads, so a
+          // future hardware round can pin which layer is stale by value. The
+          // offset comes straight off the (live) item prop the caller passed.
+          logger.debug("playback", "resume popover opened", {
+            ratingKey: current.ratingKey,
+            viewOffset: cachedOffset,
+            source: "cached-item",
+          });
           setPrompt({
             kind: "resume",
             ratingKey: current.ratingKey,
@@ -123,6 +132,13 @@ export function usePlayAction(): UsePlayActionResult {
             setPrompt((prev) => {
               if (prev?.ratingKey !== current.ratingKey) return prev;
               if (viewOffset > 0) {
+                // prexu-0fwh: same provenance log as the fast path, but the
+                // offset here came from a fresh metadata fetch, not the prop.
+                logger.debug("playback", "resume popover opened", {
+                  ratingKey: current.ratingKey,
+                  viewOffset,
+                  source: "metadata-fetch",
+                });
                 return {
                   kind: "resume",
                   ratingKey: current.ratingKey,
