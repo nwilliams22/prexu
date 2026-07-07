@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, memo } from "react";
+import { useState, useRef, useEffect, useCallback, memo } from "react";
 import { useIsScanning } from "../hooks/useServerActivity";
 import { useLazyImage } from "../hooks/useLazyImage";
 import type { MediaBadge } from "../utils/media-badges";
@@ -108,6 +108,42 @@ function PosterCard({
     onPlaceholderLoad,
   } = useLazyImage();
   const loaded = isLoaded || imgError;
+
+  // Ref callbacks for the cache-complete race (prexu-kijk): a browser-cached
+  // image can finish loading synchronously while its <img> node is still
+  // being created/inserted — before React's event delegation is wired up
+  // for that node — so the native 'load' event fires and is never observed,
+  // and the `onLoad` prop never runs. That leaves `loaded`/`placeholderLoaded`
+  // stuck false forever, so the blurred placeholder (or skeleton) never
+  // clears even though the image is already fully available. Ref callbacks
+  // fire during React's commit phase as soon as each node exists — earlier
+  // than a passive `useEffect` — so checking `complete`/`naturalWidth` there
+  // catches an already-resolved image immediately instead of waiting on an
+  // event that already happened. The onLoad/onError props below are kept
+  // unchanged for the normal (not-yet-cached) path.
+  const setFullResImgNode = useCallback(
+    (node: HTMLImageElement | null) => {
+      imgRef.current = node;
+      if (node && node.complete) {
+        if (node.naturalWidth > 0) {
+          onLazyLoad();
+        } else {
+          onLazyError();
+        }
+      }
+    },
+    [imgRef, onLazyLoad, onLazyError],
+  );
+
+  const setPlaceholderImgNode = useCallback(
+    (node: HTMLImageElement | null) => {
+      if (node && node.complete && node.naturalWidth > 0) {
+        onPlaceholderLoad();
+      }
+    },
+    [onPlaceholderLoad],
+  );
+
   const [hovered, setHovered] = useState(false);
   const [active, setActive] = useState(false);
   const [playHovered, setPlayHovered] = useState(false);
@@ -211,6 +247,7 @@ function PosterCard({
           <img
             src={placeholderUrl}
             alt=""
+            ref={setPlaceholderImgNode}
             onLoad={onPlaceholderLoad}
             style={{
               ...styles.image,
@@ -222,7 +259,7 @@ function PosterCard({
 
         {shouldLoad && (
           <img
-            ref={imgRef}
+            ref={setFullResImgNode}
             src={imageUrl}
             srcSet={srcSet || undefined}
             sizes={srcSet ? `${width}px` : undefined}

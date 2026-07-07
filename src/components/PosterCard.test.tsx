@@ -254,4 +254,146 @@ describe("PosterCard", () => {
       expect(card.style.animationDelay).toBe("");
     });
   });
+
+  // ── Cache-complete image detection (prexu-kijk) ──
+  //
+  // jsdom never actually fetches/decodes images, so `HTMLImageElement`'s
+  // `complete`/`naturalWidth` default to `false`/`0` and are never updated by
+  // firing a synthetic 'load' event — the real browser race this guards
+  // against (a cached image resolving before React's onLoad listener is
+  // wired up) has to be simulated by shadowing those getters on the
+  // prototype for the duration of each test, keyed by the node's `src` so
+  // the placeholder and full-res layers can be driven independently.
+  describe("cache-complete image detection", () => {
+    const originalComplete = Object.getOwnPropertyDescriptor(
+      HTMLImageElement.prototype,
+      "complete",
+    );
+    const originalNaturalWidth = Object.getOwnPropertyDescriptor(
+      HTMLImageElement.prototype,
+      "naturalWidth",
+    );
+
+    afterEach(() => {
+      if (originalComplete) {
+        Object.defineProperty(HTMLImageElement.prototype, "complete", originalComplete);
+      }
+      if (originalNaturalWidth) {
+        Object.defineProperty(HTMLImageElement.prototype, "naturalWidth", originalNaturalWidth);
+      }
+    });
+
+    /** Shadows `complete`/`naturalWidth` per-`src` so each <img> layer in the
+     *  card can be driven independently (real browsers cache per-URL). */
+    function mockImgStateBySrc(
+      states: Record<string, { complete: boolean; naturalWidth: number }>,
+    ) {
+      Object.defineProperty(HTMLImageElement.prototype, "complete", {
+        configurable: true,
+        get(this: HTMLImageElement) {
+          return states[this.getAttribute("src") ?? ""]?.complete ?? false;
+        },
+      });
+      Object.defineProperty(HTMLImageElement.prototype, "naturalWidth", {
+        configurable: true,
+        get(this: HTMLImageElement) {
+          return states[this.getAttribute("src") ?? ""]?.naturalWidth ?? 0;
+        },
+      });
+    }
+
+    it("shows the full-res image immediately when already complete in cache at mount, without onLoad firing", () => {
+      mockImgStateBySrc({
+        [defaultProps.imageUrl]: { complete: true, naturalWidth: 200 },
+      });
+
+      const { container } = render(<PosterCard {...defaultProps} />);
+
+      const img = container.querySelector(
+        `img[src="${defaultProps.imageUrl}"]`,
+      ) as HTMLImageElement;
+      expect(img).toBeInTheDocument();
+      expect(img.style.opacity).toBe("1");
+      // `loaded` being true clears the skeleton too.
+      expect(container.querySelector(".shimmer")).not.toBeInTheDocument();
+    });
+
+    it("keeps the normal full-res path working when not yet complete at mount (onLoad still needed)", () => {
+      mockImgStateBySrc({
+        [defaultProps.imageUrl]: { complete: false, naturalWidth: 0 },
+      });
+
+      const { container } = render(<PosterCard {...defaultProps} />);
+
+      const img = container.querySelector(
+        `img[src="${defaultProps.imageUrl}"]`,
+      ) as HTMLImageElement;
+      expect(img.style.opacity).toBe("0");
+
+      fireEvent.load(img);
+      expect(img.style.opacity).toBe("1");
+    });
+
+    it("shows the blur placeholder's full opacity immediately when already complete in cache at mount", () => {
+      mockImgStateBySrc({
+        "/tiny.jpg": { complete: true, naturalWidth: 20 },
+        [defaultProps.imageUrl]: { complete: false, naturalWidth: 0 },
+      });
+
+      const { container } = render(
+        <PosterCard {...defaultProps} placeholderUrl="/tiny.jpg" />,
+      );
+
+      const placeholder = container.querySelector(
+        'img[src="/tiny.jpg"]',
+      ) as HTMLImageElement;
+      expect(placeholder).toBeInTheDocument();
+      expect(placeholder.style.opacity).toBe("1");
+    });
+
+    it("keeps the placeholder's normal onLoad path working when not yet complete at mount", () => {
+      mockImgStateBySrc({
+        "/tiny.jpg": { complete: false, naturalWidth: 0 },
+        [defaultProps.imageUrl]: { complete: false, naturalWidth: 0 },
+      });
+
+      const { container } = render(
+        <PosterCard {...defaultProps} placeholderUrl="/tiny.jpg" />,
+      );
+
+      const placeholder = container.querySelector(
+        'img[src="/tiny.jpg"]',
+      ) as HTMLImageElement;
+      expect(placeholder.style.opacity).toBe("0");
+
+      fireEvent.load(placeholder);
+      expect(placeholder.style.opacity).toBe("1");
+    });
+
+    it("treats a cache-complete full-res image with naturalWidth=0 as an error, same as onError", () => {
+      mockImgStateBySrc({
+        [defaultProps.imageUrl]: { complete: true, naturalWidth: 0 },
+      });
+
+      const { container } = render(<PosterCard {...defaultProps} />);
+
+      // hasError folds into `loaded`, clearing the skeleton — same as the
+      // existing onError path.
+      expect(container.querySelector(".shimmer")).not.toBeInTheDocument();
+    });
+
+    it("existing onError path (real error event) is unchanged", () => {
+      mockImgStateBySrc({
+        [defaultProps.imageUrl]: { complete: false, naturalWidth: 0 },
+      });
+
+      const { container } = render(<PosterCard {...defaultProps} />);
+      const img = container.querySelector(
+        `img[src="${defaultProps.imageUrl}"]`,
+      ) as HTMLImageElement;
+
+      fireEvent.error(img);
+      expect(container.querySelector(".shimmer")).not.toBeInTheDocument();
+    });
+  });
 });
