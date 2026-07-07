@@ -1,0 +1,21 @@
+[2026-07-07T02:49:24Z INFO  macos_render_compositing] [spike] mpv created + initialized (hwdec=auto-safe, vo=libmpv)
+[mpv] libmpv_render v: GL_VERSION='4.1 Metal - 90.5'
+[mpv] libmpv_render v: GL_RENDERER='Apple M3 Pro'
+[2026-07-07T02:49:24Z INFO  macos_render_compositing] [mpv/HWDEC] libmpv_render v: Loading hwdec driver 'videotoolbox'
+[2026-07-07T02:49:24Z INFO  macos_render_compositing] [mpv/HWDEC] libmpv_render v: Loading hwdec driver 'vulkan'
+[2026-07-07T02:49:24Z INFO  macos_render_compositing] [spike] GL_VERSION='4.1 Metal - 90.5' GL_RENDERER='Apple M3 Pro'
+[2026-07-07T02:49:24Z INFO  macos_render_compositing] [mpv/HWDEC] vd v: Looking at hwdec hevc-videotoolbox...
+[2026-07-07T02:49:24Z INFO  macos_render_compositing] [mpv/HWDEC] vd v: Trying hardware decoding via hevc-videotoolbox.
+[mpv] vd v: Selected decoder: hevc - HEVC (High Efficiency Video Coding)
+[2026-07-07T02:49:24Z INFO  macos_render_compositing] [mpv/HWDEC] vd v: Pixel formats supported by decoder: videotoolbox_vld yuv420p10le
+[2026-07-07T02:49:24Z INFO  macos_render_compositing] [mpv/HWDEC] vd v: Requesting pixfmt 'videotoolbox_vld' from decoder.
+[2026-07-07T02:49:24Z INFO  macos_render_compositing] [mpv/HWDEC] vd info: Using hardware decoding (videotoolbox).
+[2026-07-07T02:49:24Z INFO  macos_render_compositing] [mpv/HWDEC] vd v: Decoder format: 1920x1080 videotoolbox[p010] auto/auto/auto/limited/auto CL=mpeg2/4/h264 crop=1920x1080+0+0 A=none
+[2026-07-07T02:49:24Z INFO  macos_render_compositing] [mpv/HWDEC] vf v: [in] 1920x1080 videotoolbox[p010] bt.709/bt.709/bt.1886/limited/display CL=mpeg2/4/h264 crop=1920x1080+0+0 A=none
+[2026-07-07T02:49:24Z INFO  macos_render_compositing] [mpv/HWDEC] vf v: [userdeint] 1920x1080 videotoolbox[p010] bt.709/bt.709/bt.1886/limited/display CL=mpeg2/4/h264 crop=1920x1080+0+0 A=none
+[2026-07-07T02:49:24Z INFO  macos_render_compositing] [mpv/HWDEC] vf v: [autovflip] 1920x1080 videotoolbox[p010] bt.709/bt.709/bt.1886/limited/display CL=mpeg2/4/h264 crop=1920x1080+0+0 A=none
+[2026-07-07T02:49:24Z INFO  macos_render_compositing] [mpv/HWDEC] vf v: [autorotate] 1920x1080 videotoolbox[p010] bt.709/bt.709/bt.1886/limited/display CL=mpeg2/4/h264 crop=1920x1080+0+0 A=none
+[2026-07-07T02:49:24Z INFO  macos_render_compositing] [mpv/HWDEC] vf v: [convert] 1920x1080 videotoolbox[p010] bt.709/bt.709/bt.1886/limited/display CL=mpeg2/4/h264 crop=1920x1080+0+0 A=none
+[2026-07-07T02:49:24Z INFO  macos_render_compositing] [mpv/HWDEC] vf v: [out] 1920x1080 videotoolbox[p010] bt.709/bt.709/bt.1886/limited/display CL=mpeg2/4/h264 crop=1920x1080+0+0 A=none
+[2026-07-07T02:49:24Z INFO  macos_render_compositing] [mpv/HWDEC] cplayer info: VO: [libmpv] 1920x1080 videotoolbox[p010]
+[2026-07-07T02:49:24Z INFO  macos_render_compositing] [mpv/HWDEC] vo/libmpv v: reconfig to 1920x1080 videotoolbox[p010] bt.709/bt.709/bt.1886/limited/display CL=mpeg2/4/h264 crop=1920x1080+0+0 A=none
