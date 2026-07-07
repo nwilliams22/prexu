@@ -1,0 +1,454 @@
+{
+  "env": {
+    "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)",
+    "platform": "MacIntel",
+    "hasMediaSource": true,
+    "hasManagedMediaSource": true,
+    "hasWebKitMediaSource": false,
+    "hasMediaCapabilities": true,
+    "location": "http://127.0.0.1:8743/harness.html"
+  },
+  "codecs": {
+    "h264-baseline": {
+      "mime": "video/mp4; codecs=\"avc1.42E01E\"",
+      "kind": "video",
+      "note": null,
+      "canPlayType": "probably",
+      "mse": {
+        "MediaSource": true,
+        "ManagedMediaSource": true
+      },
+      "mediaCapabilities": {
+        "file": {
+          "supported": true,
+          "smooth": true,
+          "powerEfficient": true
+        },
+        "mediaSource": {
+          "supported": true,
+          "smooth": true,
+          "powerEfficient": true
+        }
+      }
+    },
+    "h264-high": {
+      "mime": "video/mp4; codecs=\"avc1.640028\"",
+      "kind": "video",
+      "note": null,
+      "canPlayType": "probably",
+      "mse": {
+        "MediaSource": true,
+        "ManagedMediaSource": true
+      },
+      "mediaCapabilities": {
+        "file": {
+          "supported": true,
+          "smooth": true,
+          "powerEfficient": true
+        },
+        "mediaSource": {
+          "supported": true,
+          "smooth": true,
+          "powerEfficient": true
+        }
+      }
+    },
+    "hevc-main-8bit": {
+      "mime": "video/mp4; codecs=\"hvc1.1.6.L93.B0\"",
+      "kind": "video",
+      "note": null,
+      "canPlayType": "probably",
+      "mse": {
+        "MediaSource": true,
+        "ManagedMediaSource": true
+      },
+      "mediaCapabilities": {
+        "file": {
+          "supported": true,
+          "smooth": true,
+          "powerEfficient": true
+        },
+        "mediaSource": {
+          "supported": true,
+          "smooth": true,
+          "powerEfficient": true
+        }
+      }
+    },
+    "hevc-main10-10bit": {
+      "mime": "video/mp4; codecs=\"hvc1.2.4.L93.B0\"",
+      "kind": "video",
+      "note": null,
+      "canPlayType": "probably",
+      "mse": {
+        "MediaSource": true,
+        "ManagedMediaSource": true
+      },
+      "mediaCapabilities": {
+        "file": {
+          "supported": true,
+          "smooth": true,
+          "powerEfficient": true
+        },
+        "mediaSource": {
+          "supported": true,
+          "smooth": true,
+          "powerEfficient": true
+        }
+      }
+    },
+    "av1-main-8bit": {
+      "mime": "video/mp4; codecs=\"av01.0.04M.08\"",
+      "kind": "video",
+      "note": null,
+      "canPlayType": "probably",
+      "mse": {
+        "MediaSource": true,
+        "ManagedMediaSource": true
+      },
+      "mediaCapabilities": {
+        "file": {
+          "supported": true,
+          "smooth": true,
+          "powerEfficient": true
+        },
+        "mediaSource": {
+          "supported": true,
+          "smooth": true,
+          "powerEfficient": true
+        }
+      }
+    },
+    "aac-lc": {
+      "mime": "audio/mp4; codecs=\"mp4a.40.2\"",
+      "kind": "audio",
+      "note": null,
+      "canPlayType": "probably",
+      "mse": {
+        "MediaSource": true,
+        "ManagedMediaSource": true
+      },
+      "mediaCapabilities": {
+        "file": {
+          "supported": true,
+          "smooth": false,
+          "powerEfficient": false
+        },
+        "mediaSource": {
+          "supported": true,
+          "smooth": false,
+          "powerEfficient": false
+        }
+      }
+    },
+    "ac3": {
+      "mime": "audio/mp4; codecs=\"ac-3\"",
+      "kind": "audio",
+      "note": null,
+      "canPlayType": "probably",
+      "mse": {
+        "MediaSource": true,
+        "ManagedMediaSource": true
+      },
+      "mediaCapabilities": {
+        "file": {
+          "supported": true,
+          "smooth": false,
+          "powerEfficient": false
+        },
+        "mediaSource": {
+          "supported": true,
+          "smooth": false,
+          "powerEfficient": false
+        }
+      }
+    },
+    "eac3": {
+      "mime": "audio/mp4; codecs=\"ec-3\"",
+      "kind": "audio",
+      "note": null,
+      "canPlayType": "probably",
+      "mse": {
+        "MediaSource": true,
+        "ManagedMediaSource": true
+      },
+      "mediaCapabilities": {
+        "file": {
+          "supported": true,
+          "smooth": false,
+          "powerEfficient": false
+        },
+        "mediaSource": {
+          "supported": true,
+          "smooth": false,
+          "powerEfficient": false
+        }
+      }
+    },
+    "truehd-mp4": {
+      "mime": "audio/mp4; codecs=\"mlpa\"",
+      "kind": "audio",
+      "note": null,
+      "canPlayType": "(empty string = no)",
+      "mse": {
+        "MediaSource": false,
+        "ManagedMediaSource": false
+      },
+      "mediaCapabilities": {
+        "file": {
+          "supported": false,
+          "smooth": false,
+          "powerEfficient": false
+        },
+        "mediaSource": {
+          "supported": false,
+          "smooth": false,
+          "powerEfficient": false
+        }
+      }
+    },
+    "truehd-mkv": {
+      "mime": null,
+      "kind": "audio",
+      "note": "mkv container has no registered web MIME/codec string; probe skipped, playback-only",
+      "canPlayType": "n/a",
+      "mse": "n/a",
+      "mediaCapabilities": {
+        "file": "n/a",
+        "mediaSource": "n/a"
+      }
+    },
+    "dts-mp4": {
+      "mime": "audio/mp4; codecs=\"dtsc\"",
+      "kind": "audio",
+      "note": null,
+      "canPlayType": "(empty string = no)",
+      "mse": {
+        "MediaSource": false,
+        "ManagedMediaSource": false
+      },
+      "mediaCapabilities": {
+        "file": {
+          "supported": false,
+          "smooth": false,
+          "powerEfficient": false
+        },
+        "mediaSource": {
+          "supported": false,
+          "smooth": false,
+          "powerEfficient": false
+        }
+      }
+    },
+    "dts-mkv": {
+      "mime": null,
+      "kind": "audio",
+      "note": "mkv container has no registered web MIME/codec string; probe skipped, playback-only",
+      "canPlayType": "n/a",
+      "mse": "n/a",
+      "mediaCapabilities": {
+        "file": "n/a",
+        "mediaSource": "n/a"
+      }
+    },
+    "dts-mov": {
+      "mime": "audio/quicktime; codecs=\"dtsc\"",
+      "kind": "audio",
+      "note": null,
+      "canPlayType": "(empty string = no)",
+      "mse": {
+        "MediaSource": false,
+        "ManagedMediaSource": false
+      },
+      "mediaCapabilities": {
+        "file": "throw: TypeError: Type error",
+        "mediaSource": "throw: TypeError: Type error"
+      }
+    }
+  },
+  "muxed": {
+    "muxed-h264-aac": {
+      "mime": "video/mp4; codecs=\"avc1.640028,mp4a.40.2\"",
+      "canPlayType": "probably",
+      "mse": {
+        "MediaSource": true,
+        "ManagedMediaSource": true
+      }
+    },
+    "muxed-h264-ac3": {
+      "mime": "video/mp4; codecs=\"avc1.640028,ac-3\"",
+      "canPlayType": "probably",
+      "mse": {
+        "MediaSource": true,
+        "ManagedMediaSource": true
+      }
+    },
+    "muxed-h264-eac3": {
+      "mime": "video/mp4; codecs=\"avc1.640028,ec-3\"",
+      "canPlayType": "probably",
+      "mse": {
+        "MediaSource": true,
+        "ManagedMediaSource": true
+      }
+    },
+    "muxed-hevc8-aac": {
+      "mime": "video/mp4; codecs=\"hvc1.1.6.L93.B0,mp4a.40.2\"",
+      "canPlayType": "probably",
+      "mse": {
+        "MediaSource": true,
+        "ManagedMediaSource": true
+      }
+    },
+    "muxed-hevc10-aac": {
+      "mime": "video/mp4; codecs=\"hvc1.2.4.L93.B0,mp4a.40.2\"",
+      "canPlayType": "probably",
+      "mse": {
+        "MediaSource": true,
+        "ManagedMediaSource": true
+      }
+    },
+    "muxed-av1-aac": {
+      "mime": "video/mp4; codecs=\"av01.0.04M.08,mp4a.40.2\"",
+      "canPlayType": "probably",
+      "mse": {
+        "MediaSource": true,
+        "ManagedMediaSource": true
+      }
+    },
+    "muxed-h264-truehd": {
+      "mime": "video/mp4; codecs=\"avc1.640028,mlpa\"",
+      "canPlayType": "(empty string = no)",
+      "mse": {
+        "MediaSource": false,
+        "ManagedMediaSource": false
+      }
+    },
+    "muxed-h264-dts": {
+      "mime": "video/mp4; codecs=\"avc1.640028,dtsc\"",
+      "canPlayType": "(empty string = no)",
+      "mse": {
+        "MediaSource": false,
+        "ManagedMediaSource": false
+      }
+    }
+  },
+  "videoPlayback": {
+    "h264_aac.mp4": {
+      "url": "samples/h264_aac.mp4",
+      "error": null,
+      "frameCallbackFired": 10,
+      "playbackQuality": {
+        "totalVideoFrames": 2,
+        "droppedVideoFrames": 0,
+        "corruptedVideoFrames": 0
+      },
+      "readyState": 4,
+      "duration": 5,
+      "playError": null,
+      "currentTime": 2.5991909333336842
+    },
+    "hevc8_aac.mp4": {
+      "url": "samples/hevc8_aac.mp4",
+      "error": null,
+      "frameCallbackFired": 10,
+      "playbackQuality": {
+        "totalVideoFrames": 2,
+        "droppedVideoFrames": 0,
+        "corruptedVideoFrames": 0
+      },
+      "readyState": 4,
+      "duration": 5,
+      "playError": null,
+      "currentTime": 2.7000749163325457
+    },
+    "hevc10_aac.mp4": {
+      "url": "samples/hevc10_aac.mp4",
+      "error": null,
+      "frameCallbackFired": 10,
+      "playbackQuality": {
+        "totalVideoFrames": 4,
+        "droppedVideoFrames": 0,
+        "corruptedVideoFrames": 0
+      },
+      "readyState": 4,
+      "duration": 5,
+      "playError": null,
+      "currentTime": 2.6295623516665483
+    },
+    "av1_aac.mp4": {
+      "url": "samples/av1_aac.mp4",
+      "error": null,
+      "frameCallbackFired": 10,
+      "playbackQuality": {
+        "totalVideoFrames": 1,
+        "droppedVideoFrames": 0,
+        "corruptedVideoFrames": 0
+      },
+      "readyState": 4,
+      "duration": 5,
+      "playError": null,
+      "currentTime": 2.64519575233251
+    }
+  },
+  "audioDecode": {
+    "h264_aac.mp4": {
+      "url": "samples/h264_aac.mp4",
+      "error": null,
+      "decodedSeconds": 5,
+      "nonSilent": true,
+      "numberOfChannels": 1,
+      "maxAbsSample": 0.14425046741962433
+    },
+    "h264_ac3.mp4": {
+      "url": "samples/h264_ac3.mp4",
+      "error": null,
+      "decodedSeconds": 5.008979166666666,
+      "nonSilent": true,
+      "numberOfChannels": 1,
+      "maxAbsSample": 0.12502232193946838
+    },
+    "h264_eac3.mp4": {
+      "url": "samples/h264_eac3.mp4",
+      "error": null,
+      "decodedSeconds": 5.008979166666666,
+      "nonSilent": true,
+      "numberOfChannels": 1,
+      "maxAbsSample": 0.12503814697265625
+    },
+    "h264_truehd.mkv": {
+      "url": "samples/h264_truehd.mkv",
+      "error": "null",
+      "decodedSeconds": null,
+      "nonSilent": null,
+      "numberOfChannels": null
+    },
+    "h264_truehd.mp4": {
+      "url": "samples/h264_truehd.mp4",
+      "error": "null",
+      "decodedSeconds": null,
+      "nonSilent": null,
+      "numberOfChannels": null
+    },
+    "h264_dts.mkv": {
+      "url": "samples/h264_dts.mkv",
+      "error": "null",
+      "decodedSeconds": null,
+      "nonSilent": null,
+      "numberOfChannels": null
+    },
+    "h264_dts.mp4": {
+      "url": "samples/h264_dts.mp4",
+      "error": "null",
+      "decodedSeconds": null,
+      "nonSilent": null,
+      "numberOfChannels": null
+    },
+    "h264_dts.mov": {
+      "url": "samples/h264_dts.mov",
+      "error": "null",
+      "decodedSeconds": null,
+      "nonSilent": null,
+      "numberOfChannels": null
+    }
+  }
+}

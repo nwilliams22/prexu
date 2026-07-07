@@ -1,0 +1,362 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>codec-probe-pending</title>
+<style>
+  body { font-family: -apple-system, monospace; font-size: 13px; padding: 16px; background: #111; color: #ddd; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 24px; }
+  td, th { border: 1px solid #444; padding: 4px 8px; text-align: left; vertical-align: top; }
+  th { background: #222; }
+  .ok { color: #6f6; }
+  .no { color: #f66; }
+  .warn { color: #fc6; }
+  pre { white-space: pre-wrap; word-break: break-all; background: #000; padding: 8px; }
+</style>
+</head>
+<body>
+<h1>prexu macOS WKWebView codec probe (prexu-ia6w.1)</h1>
+<div id="status">running…</div>
+<div id="tables"></div>
+<h2>Raw JSON</h2>
+<pre id="raw"></pre>
+
+<script>
+"use strict";
+
+// ── Environment ──────────────────────────────────────────────────────────
+const env = {
+  userAgent: navigator.userAgent,
+  platform: navigator.platform,
+  hasMediaSource: typeof window.MediaSource !== "undefined",
+  hasManagedMediaSource: typeof window.ManagedMediaSource !== "undefined",
+  hasWebKitMediaSource: typeof window.WebKitMediaSource !== "undefined",
+  hasMediaCapabilities: !!(navigator.mediaCapabilities && navigator.mediaCapabilities.decodingInfo),
+  location: location.href,
+};
+
+// ── Codec string catalogue ───────────────────────────────────────────────
+// One entry per codec-under-test. `mime` is the *video-only or audio-only*
+// contentType string used for canPlayType/MediaCapabilities. `sample` (if
+// present) points at a real file in samples/ used for the real-playback
+// truth test. `kind` = "video" | "audio".
+const CODECS = [
+  { id: "h264-baseline", kind: "video", mime: 'video/mp4; codecs="avc1.42E01E"' },
+  { id: "h264-high",     kind: "video", mime: 'video/mp4; codecs="avc1.640028"', sample: "h264_aac.mp4", sampleKind: "video" },
+  { id: "hevc-main-8bit",  kind: "video", mime: 'video/mp4; codecs="hvc1.1.6.L93.B0"', sample: "hevc8_aac.mp4", sampleKind: "video" },
+  { id: "hevc-main10-10bit", kind: "video", mime: 'video/mp4; codecs="hvc1.2.4.L93.B0"', sample: "hevc10_aac.mp4", sampleKind: "video" },
+  { id: "av1-main-8bit", kind: "video", mime: 'video/mp4; codecs="av01.0.04M.08"', sample: "av1_aac.mp4", sampleKind: "video" },
+
+  { id: "aac-lc",  kind: "audio", mime: 'audio/mp4; codecs="mp4a.40.2"', sample: "h264_aac.mp4", sampleKind: "audio" },
+  { id: "ac3",     kind: "audio", mime: 'audio/mp4; codecs="ac-3"', sample: "h264_ac3.mp4", sampleKind: "audio" },
+  { id: "eac3",    kind: "audio", mime: 'audio/mp4; codecs="ec-3"', sample: "h264_eac3.mp4", sampleKind: "audio" },
+  { id: "truehd-mp4", kind: "audio", mime: 'audio/mp4; codecs="mlpa"', sample: "h264_truehd.mp4", sampleKind: "audio" },
+  { id: "truehd-mkv", kind: "audio", mime: null, sample: "h264_truehd.mkv", sampleKind: "audio", note: "mkv container has no registered web MIME/codec string; probe skipped, playback-only" },
+  { id: "dts-mp4", kind: "audio", mime: 'audio/mp4; codecs="dtsc"', sample: "h264_dts.mp4", sampleKind: "audio" },
+  { id: "dts-mkv", kind: "audio", mime: null, sample: "h264_dts.mkv", sampleKind: "audio", note: "mkv container has no registered web MIME/codec string; probe skipped, playback-only" },
+  { id: "dts-mov", kind: "audio", mime: 'audio/quicktime; codecs="dtsc"', sample: "h264_dts.mov", sampleKind: "audio" },
+];
+
+// The muxed video+audio combos actually shipped in Plex libraries — used for
+// the combined canPlayType() check on a full <video src> file (this is what
+// canDirectPlay()-style logic in the app effectively asks the browser).
+const MUXED = [
+  { id: "muxed-h264-aac",  mime: 'video/mp4; codecs="avc1.640028,mp4a.40.2"', sample: "h264_aac.mp4" },
+  { id: "muxed-h264-ac3",  mime: 'video/mp4; codecs="avc1.640028,ac-3"', sample: "h264_ac3.mp4" },
+  { id: "muxed-h264-eac3", mime: 'video/mp4; codecs="avc1.640028,ec-3"', sample: "h264_eac3.mp4" },
+  { id: "muxed-hevc8-aac",  mime: 'video/mp4; codecs="hvc1.1.6.L93.B0,mp4a.40.2"', sample: "hevc8_aac.mp4" },
+  { id: "muxed-hevc10-aac", mime: 'video/mp4; codecs="hvc1.2.4.L93.B0,mp4a.40.2"', sample: "hevc10_aac.mp4" },
+  { id: "muxed-av1-aac",    mime: 'video/mp4; codecs="av01.0.04M.08,mp4a.40.2"', sample: "av1_aac.mp4" },
+  { id: "muxed-h264-truehd", mime: 'video/mp4; codecs="avc1.640028,mlpa"', sample: "h264_truehd.mp4" },
+  { id: "muxed-h264-dts",    mime: 'video/mp4; codecs="avc1.640028,dtsc"', sample: "h264_dts.mp4" },
+];
+
+function el(tag, attrs, children) {
+  const e = document.createElement(tag);
+  if (attrs) for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (children) for (const c of [].concat(children)) {
+    e.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+  }
+  return e;
+}
+
+// ── canPlayType probe (native <video>/<audio> element, 'file' semantics) ──
+function probeCanPlayType(mime, kind) {
+  if (!mime) return "n/a";
+  const element = document.createElement(kind === "audio" ? "audio" : "video");
+  try {
+    return element.canPlayType(mime) || "(empty string = no)";
+  } catch (e) {
+    return "throw: " + String(e);
+  }
+}
+
+// ── MediaSource.isTypeSupported probe ('media-source' semantics) ─────────
+function probeMSE(mime) {
+  if (!mime) return "n/a";
+  const out = {};
+  try {
+    out.MediaSource = window.MediaSource ? window.MediaSource.isTypeSupported(mime) : "MediaSource undefined";
+  } catch (e) {
+    out.MediaSource = "throw: " + String(e);
+  }
+  try {
+    out.ManagedMediaSource = window.ManagedMediaSource ? window.ManagedMediaSource.isTypeSupported(mime) : "ManagedMediaSource undefined";
+  } catch (e) {
+    out.ManagedMediaSource = "throw: " + String(e);
+  }
+  return out;
+}
+
+// ── MediaCapabilities.decodingInfo probe ──────────────────────────────────
+async function probeMediaCapabilities(codec) {
+  if (!codec.mime || !navigator.mediaCapabilities) return { file: "n/a", mediaSource: "n/a" };
+  const result = { file: null, mediaSource: null };
+  const baseVideo = { contentType: codec.mime, width: 640, height: 360, bitrate: 100000, framerate: 30 };
+  const baseAudio = { contentType: codec.mime, channels: 1, bitrate: 128000, samplerate: 48000 };
+  for (const type of ["file", "media-source"]) {
+    const config = codec.kind === "video"
+      ? { type, video: baseVideo }
+      : { type, audio: baseAudio };
+    try {
+      const info = await navigator.mediaCapabilities.decodingInfo(config);
+      const val = { supported: info.supported, smooth: info.smooth, powerEfficient: info.powerEfficient };
+      if (type === "file") result.file = val; else result.mediaSource = val;
+    } catch (e) {
+      const val = "throw: " + String(e);
+      if (type === "file") result.file = val; else result.mediaSource = val;
+    }
+  }
+  return result;
+}
+
+// ── Real playback truth-test: video frames actually decoded ──────────────
+function testVideoPlayback(url) {
+  return new Promise((resolve) => {
+    const v = document.createElement("video");
+    v.muted = true;
+    v.playsInline = true;
+    v.src = url;
+    document.body.appendChild(v);
+    v.style.width = "1px";
+    v.style.height = "1px";
+    v.style.opacity = "0";
+
+    const result = { url, error: null, frameCallbackFired: 0, playbackQuality: null, readyState: null, duration: null, playError: null };
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      try { v.pause(); } catch {}
+      try { v.remove(); } catch {}
+      resolve(result);
+    };
+
+    v.addEventListener("error", () => {
+      result.error = v.error ? { code: v.error.code, message: v.error.message } : "unknown media error";
+      finish();
+    });
+
+    v.addEventListener("loadedmetadata", () => {
+      result.duration = v.duration;
+    });
+
+    if (typeof v.requestVideoFrameCallback === "function") {
+      const onFrame = () => {
+        result.frameCallbackFired++;
+        if (result.frameCallbackFired < 10 && !done) v.requestVideoFrameCallback(onFrame);
+      };
+      v.requestVideoFrameCallback(onFrame);
+    } else {
+      result.frameCallbackFired = "requestVideoFrameCallback unsupported";
+    }
+
+    v.addEventListener("canplay", () => {
+      v.play().catch((e) => { result.playError = String(e); });
+    });
+
+    setTimeout(() => {
+      result.readyState = v.readyState;
+      if (typeof v.getVideoPlaybackQuality === "function") {
+        const q = v.getVideoPlaybackQuality();
+        result.playbackQuality = { totalVideoFrames: q.totalVideoFrames, droppedVideoFrames: q.droppedVideoFrames, corruptedVideoFrames: q.corruptedVideoFrames };
+      }
+      result.currentTime = v.currentTime;
+      finish();
+    }, 3000);
+  });
+}
+
+// ── Real decode truth-test: audio actually decodes to non-silent PCM ─────
+// decodeAudioData exercises WebKit's real demux+decode pipeline independent
+// of autoplay-gesture policy, so it is used as the audio truth test (frame
+// counting via <video> muted playback proves nothing about the audio track —
+// WebKit is known to silently drop unsupported audio while video keeps
+// playing, which is exactly the failure mode duna.3 needs distinguished).
+async function testAudioDecode(url) {
+  const result = { url, error: null, decodedSeconds: null, nonSilent: null, numberOfChannels: null };
+  try {
+    const resp = await fetch(url);
+    const buf = await resp.arrayBuffer();
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new Ctx();
+    const audioBuffer = await new Promise((res, rej) => {
+      // Safari/WebKit still supports the legacy callback form; promise form
+      // used first, callback as fallback inside catch below.
+      ctx.decodeAudioData(buf.slice(0), res, rej);
+    });
+    result.decodedSeconds = audioBuffer.duration;
+    result.numberOfChannels = audioBuffer.numberOfChannels;
+    const data = audioBuffer.getChannelData(0);
+    let maxAbs = 0;
+    for (let i = 0; i < data.length; i += 37) { // stride-sample, file may be long
+      const a = Math.abs(data[i]);
+      if (a > maxAbs) maxAbs = a;
+    }
+    result.nonSilent = maxAbs > 0.001;
+    result.maxAbsSample = maxAbs;
+    await ctx.close();
+  } catch (e) {
+    result.error = String(e && e.message ? e.message : e);
+  }
+  return result;
+}
+
+function nativeLog(msg) {
+  try {
+    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.log) {
+      window.webkit.messageHandlers.log.postMessage(String(msg));
+    }
+  } catch (e) {}
+}
+
+// ── Run everything ─────────────────────────────────────────────────────
+async function main() {
+  nativeLog("main() starting");
+  const results = { env, codecs: {}, muxed: {}, videoPlayback: {}, audioDecode: {} };
+
+  for (const c of CODECS) {
+    results.codecs[c.id] = {
+      mime: c.mime,
+      kind: c.kind,
+      note: c.note || null,
+      canPlayType: probeCanPlayType(c.mime, c.kind),
+      mse: probeMSE(c.mime),
+      mediaCapabilities: await probeMediaCapabilities(c),
+    };
+  }
+
+  nativeLog("codec probes done");
+
+  for (const m of MUXED) {
+    results.muxed[m.id] = {
+      mime: m.mime,
+      canPlayType: probeCanPlayType(m.mime, "video"),
+      mse: probeMSE(m.mime),
+    };
+  }
+  nativeLog("muxed probes done");
+
+  // Real video-frame playback truth test — one representative sample per
+  // video codec (audio fixed to AAC where possible so only video decode is
+  // under test).
+  const videoSamples = ["h264_aac.mp4", "hevc8_aac.mp4", "hevc10_aac.mp4", "av1_aac.mp4"];
+  for (const s of videoSamples) {
+    nativeLog("video playback start: " + s);
+    results.videoPlayback[s] = await testVideoPlayback("samples/" + s);
+    nativeLog("video playback done: " + s);
+  }
+
+  // Real audio-decode truth test — every sample file (video codec fixed to
+  // H.264 where possible so only audio decode is under test).
+  const audioSamples = [
+    "h264_aac.mp4", "h264_ac3.mp4", "h264_eac3.mp4",
+    "h264_truehd.mkv", "h264_truehd.mp4",
+    "h264_dts.mkv", "h264_dts.mp4", "h264_dts.mov",
+  ];
+  for (const s of audioSamples) {
+    nativeLog("audio decode start: " + s);
+    results.audioDecode[s] = await testAudioDecode("samples/" + s);
+    nativeLog("audio decode done: " + s);
+  }
+
+  nativeLog("rendering results");
+  renderResults(results);
+  document.title = "codec-probe-done:" + JSON.stringify(results).length;
+  document.getElementById("raw").textContent = JSON.stringify(results, null, 2);
+  document.getElementById("status").textContent = "done — see JSON below / window.__RESULTS__";
+  window.__RESULTS__ = results;
+  // Also stash on document title in short form for headless capture and
+  // ping the native message handler if present (Swift runner).
+  try {
+    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.probeDone) {
+      window.webkit.messageHandlers.probeDone.postMessage(JSON.stringify(results));
+    }
+  } catch (e) {}
+}
+
+function renderResults(results) {
+  const tables = document.getElementById("tables");
+
+  const t1 = el("table");
+  t1.appendChild(el("tr", null, [el("th", null, "codec id"), el("th", null, "mime"), el("th", null, "canPlayType"), el("th", null, "MSE"), el("th", null, "MediaCapabilities (file/media-source)")]));
+  for (const id in results.codecs) {
+    const r = results.codecs[id];
+    t1.appendChild(el("tr", null, [
+      el("td", null, id + (r.note ? " (" + r.note + ")" : "")),
+      el("td", null, String(r.mime)),
+      el("td", null, String(r.canPlayType)),
+      el("td", null, JSON.stringify(r.mse)),
+      el("td", null, JSON.stringify(r.mediaCapabilities)),
+    ]));
+  }
+  tables.appendChild(el("h2", null, "Codec-string probes"));
+  tables.appendChild(t1);
+
+  const t2 = el("table");
+  t2.appendChild(el("tr", null, [el("th", null, "muxed id"), el("th", null, "mime"), el("th", null, "canPlayType"), el("th", null, "MSE")]));
+  for (const id in results.muxed) {
+    const r = results.muxed[id];
+    t2.appendChild(el("tr", null, [el("td", null, id), el("td", null, r.mime), el("td", null, String(r.canPlayType)), el("td", null, JSON.stringify(r.mse))]));
+  }
+  tables.appendChild(el("h2", null, "Muxed file (video+audio) canPlayType"));
+  tables.appendChild(t2);
+
+  const t3 = el("table");
+  t3.appendChild(el("tr", null, [el("th", null, "sample"), el("th", null, "error"), el("th", null, "frameCallbackFired"), el("th", null, "playbackQuality"), el("th", null, "readyState/currentTime")]));
+  for (const id in results.videoPlayback) {
+    const r = results.videoPlayback[id];
+    t3.appendChild(el("tr", null, [
+      el("td", null, id),
+      el("td", null, JSON.stringify(r.error)),
+      el("td", null, String(r.frameCallbackFired)),
+      el("td", null, JSON.stringify(r.playbackQuality)),
+      el("td", null, r.readyState + " / " + r.currentTime),
+    ]));
+  }
+  tables.appendChild(el("h2", null, "Real video playback (file src, truth test)"));
+  tables.appendChild(t3);
+
+  const t4 = el("table");
+  t4.appendChild(el("tr", null, [el("th", null, "sample"), el("th", null, "error"), el("th", null, "decodedSeconds"), el("th", null, "nonSilent"), el("th", null, "maxAbsSample")]));
+  for (const id in results.audioDecode) {
+    const r = results.audioDecode[id];
+    t4.appendChild(el("tr", null, [
+      el("td", null, id),
+      el("td", null, JSON.stringify(r.error)),
+      el("td", null, String(r.decodedSeconds)),
+      el("td", null, String(r.nonSilent)),
+      el("td", null, String(r.maxAbsSample)),
+    ]));
+  }
+  tables.appendChild(el("h2", null, "Real audio decode (decodeAudioData, truth test)"));
+  tables.appendChild(t4);
+}
+
+main().catch((e) => {
+  document.getElementById("status").textContent = "FATAL: " + String(e);
+  document.title = "codec-probe-fatal";
+});
+</script>
+</body>
+</html>
