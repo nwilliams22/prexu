@@ -3,6 +3,17 @@ import { useLocation } from "react-router-dom";
 
 const STORAGE_PREFIX = "prexu_scroll_";
 
+export interface UseScrollRestorationOptions {
+  /**
+   * Called synchronously the moment a saved scroll position is actually
+   * applied to `main.scrollTop` — lets a page log how long restoration took
+   * to land (e.g. LibraryView tagging it against the navigation action,
+   * prexu-5f12). Optional; existing callers that don't pass it see no
+   * change in behavior.
+   */
+  onRestore?: (info: { restoredTo: number }) => void;
+}
+
 /**
  * Saves and restores scroll position of the <main> scroll container
  * when navigating between routes. Uses sessionStorage keyed by pathname.
@@ -17,11 +28,15 @@ const STORAGE_PREFIX = "prexu_scroll_";
  *   render (API data loads after mount, so the page isn't tall enough
  *   for scroll restoration on the first frame).
  */
-export function useScrollRestoration() {
+export function useScrollRestoration(options?: UseScrollRestorationOptions) {
   const { pathname } = useLocation();
   const storageKey = STORAGE_PREFIX + pathname;
   const scrollRef = useRef(0);
   const restoredRef = useRef(false);
+  // Ref so tryRestore (recreated inside the mount effect below) always calls
+  // the latest callback without needing to be an effect dependency itself.
+  const onRestoreRef = useRef(options?.onRestore);
+  onRestoreRef.current = options?.onRestore;
 
   // Save scroll position to sessionStorage BEFORE DOM changes on unmount.
   // useLayoutEffect cleanup fires synchronously before React removes the
@@ -50,6 +65,7 @@ export function useScrollRestoration() {
         main!.scrollTop = targetScroll;
         scrollRef.current = targetScroll;
         restoredRef.current = true;
+        onRestoreRef.current?.({ restoredTo: targetScroll });
       }
     }
 

@@ -57,6 +57,21 @@ function deferredByOffset(total: number) {
   };
 }
 
+/**
+ * A cache hit is applied one `requestAnimationFrame` later (prexu-5f12) so
+ * the mount's first commit is always cheap regardless of cache warmth — see
+ * the doc comment on the cache-hit branch in usePaginatedLibrary.ts. Real
+ * rAF in jsdom is timer-backed and won't fire synchronously within a test,
+ * so tests use a manual, synchronously-flushable queue — same pattern as
+ * Dashboard.test.tsx / VirtualizedLibraryGrid.test.tsx.
+ */
+let rafQueue: FrameRequestCallback[] = [];
+function flushRaf() {
+  const queue = rafQueue;
+  rafQueue = [];
+  for (const cb of queue) cb(0);
+}
+
 describe("usePaginatedLibrary", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -66,9 +81,21 @@ describe("usePaginatedLibrary", () => {
       totalSize: 200,
       hasMore: true,
     });
+    rafQueue = [];
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((cb: FrameRequestCallback) => {
+        rafQueue.push(cb);
+        return rafQueue.length;
+      }),
+    );
+    // Not modeled as a real dequeue — the effect's own generation guard
+    // (checked inside the deferred callback) is what actually protects
+    // against a stale apply, so a no-op stub is sufficient here.
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
   });
 
-  it("returns cached items instantly when cache hit", async () => {
+  it("does not apply a cache hit synchronously — the mount's first commit stays cheap", () => {
     const cachedData = {
       store: makeItems(10),
       totalSize: 10,
@@ -77,10 +104,53 @@ describe("usePaginatedLibrary", () => {
 
     const { result } = renderHook(() => usePaginatedLibrary("1"));
 
+    // Before the deferred frame fires, the hook still reports the cheap
+    // mount state — this is what lets the transition's first commit paint
+    // instantly regardless of how large the cached store is.
+    expect(result.current.items).toEqual([]);
+    expect(result.current.totalSize).toBe(0);
+    expect(result.current.isLoading).toBe(true);
+    expect(mockGetLibraryItems).not.toHaveBeenCalled();
+  });
+
+  it("applies a cache hit on the next animation frame", () => {
+    const cachedData = {
+      store: makeItems(10),
+      totalSize: 10,
+    };
+    mockCacheGet.mockReturnValue(cachedData);
+
+    const { result } = renderHook(() => usePaginatedLibrary("1"));
+
+    act(() => flushRaf());
+
     expect(result.current.items).toEqual(cachedData.store);
     expect(result.current.totalSize).toBe(10);
     expect(result.current.isLoading).toBe(false);
     expect(mockGetLibraryItems).not.toHaveBeenCalled();
+  });
+
+  it("does not apply a stale cache hit once superseded by a new generation before its frame lands", () => {
+    const cachedData = { store: makeItems(10), totalSize: 10 };
+    mockCacheGet.mockReturnValue(cachedData);
+    mockGetLibraryItems.mockReturnValue(new Promise(() => {})); // next generation's fetch never resolves in this window
+
+    const { result, rerender } = renderHook(
+      ({ sort }: { sort: string }) => usePaginatedLibrary("1", sort),
+      { initialProps: { sort: "titleSort:asc" } },
+    );
+
+    // A new generation starts (sort change) before the first generation's
+    // deferred rAF ever fires — cache misses this time, so the fetch path
+    // (mocked to hang) is taken instead.
+    mockCacheGet.mockReturnValue(null);
+    rerender({ sort: "addedAt:desc" });
+
+    act(() => flushRaf());
+
+    // The superseded generation's cached store must never land.
+    expect(result.current.items).not.toEqual(cachedData.store);
+    expect(result.current.totalSize).toBe(0);
   });
 
   it("fetches the first chunk on cache miss", async () => {

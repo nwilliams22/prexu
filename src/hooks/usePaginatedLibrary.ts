@@ -337,19 +337,50 @@ export function usePaginatedLibrary(
 
     const cached = cacheGet<CachedLibrary>(cacheKey);
     if (cached) {
-      storeGenerationRef.current = generation;
-      setItems(cached.store);
-      setTotalSize(cached.totalSize);
-      totalSizeRef.current = cached.totalSize;
-      setIsLoading(false);
-      // Re-derive which chunks are already fully loaded so ensureRange
-      // doesn't immediately re-request everything the cache already has.
-      for (let o = 0; o < cached.totalSize; o += RANGE_CHUNK_SIZE) {
-        if (isChunkLoaded(cached.store, o, RANGE_CHUNK_SIZE, cached.totalSize)) {
-          loadedChunksRef.current.add(o);
+      // Defer applying a cache hit to the next animation frame (prexu-5f12).
+      //
+      // The cache check above is a synchronous in-memory Map lookup, so
+      // without this deferral the FULL cached store (up to the whole
+      // section — thousands of items) would land in the SAME task as this
+      // mount's reset effect, with no browser paint in between. That's the
+      // POP-vs-PUSH asymmetry behind the reported freeze: a POP
+      // back-navigation restores the exact previous URL (same sort/filters),
+      // so this cache-hit branch fires on the very first pass; a PUSH (e.g.
+      // clicking the library link in the sidebar) starts without the URL's
+      // sort/filter params and only matches the cache after the persisted-
+      // filters-restore effect settles, so its first pass takes the (async,
+      // real-network) miss branch below — which already gives the browser a
+      // paint opportunity for free. Forcing the same one-frame gap here
+      // makes the mount's first commit unconditionally cheap regardless of
+      // cache warmth or navigation type, mirroring the fix applied to
+      // Dashboard's equivalent freeze (PRs #62/#71).
+      logger.debug("library", "cache hit, deferring apply to next frame", {
+        sectionId,
+        totalSize: cached.totalSize,
+        generation,
+      });
+      const rafId = requestAnimationFrame(() => {
+        if (generation !== generationRef.current) {
+          logger.trace("library", "cache hit apply skipped (generation superseded)", {
+            sectionId,
+            generation,
+          });
+          return;
         }
-      }
-      return;
+        storeGenerationRef.current = generation;
+        setItems(cached.store);
+        setTotalSize(cached.totalSize);
+        totalSizeRef.current = cached.totalSize;
+        setIsLoading(false);
+        // Re-derive which chunks are already fully loaded so ensureRange
+        // doesn't immediately re-request everything the cache already has.
+        for (let o = 0; o < cached.totalSize; o += RANGE_CHUNK_SIZE) {
+          if (isChunkLoaded(cached.store, o, RANGE_CHUNK_SIZE, cached.totalSize)) {
+            loadedChunksRef.current.add(o);
+          }
+        }
+      });
+      return () => cancelAnimationFrame(rafId);
     }
 
     // Keep whatever items are currently rendered (previous section/filter/
