@@ -38,3 +38,4 @@ blob-report/
 .dolt/
 *.db
 .beads-credential-key
+.sbom/

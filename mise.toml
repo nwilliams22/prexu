@@ -30,6 +30,32 @@ version = "latest"
 linux-x64 = { asset_pattern = "dolt-linux-amd64.tar.gz" }
 macos-arm64 = { asset_pattern = "dolt-darwin-amd64.tar.gz" }
 
+# SBOM generation + vulnerability scanning (prexu-39io). syft produces SBOMs
+# per ecosystem (npm, cargo x2); grype scans them against its CVE DB. See the
+# sbom/scan tasks below; scan artifacts are gitignored (point-in-time data).
+[tools."ubi:anchore/syft"]
+version = "latest"
+[tools."ubi:anchore/grype"]
+version = "latest"
+
+[tasks.sbom]
+description = "Generate SBOMs for all three ecosystems (npm, tauri, relay)"
+run = """
+mkdir -p .sbom
+syft package-lock.json -o syft-json=.sbom/npm.json -q
+syft src-tauri/Cargo.lock -o syft-json=.sbom/tauri.json -q
+syft relay-server/Cargo.lock -o syft-json=.sbom/relay.json -q
+"""
+
+[tasks.scan]
+description = "Scan SBOMs with grype; fails on High/Critical vulnerabilities"
+depends = ["sbom"]
+run = """
+grype sbom:.sbom/npm.json --fail-on high
+grype sbom:.sbom/tauri.json --fail-on high
+grype sbom:.sbom/relay.json --fail-on high
+"""
+
 [tasks.lint]
 description = "Run oxlint over the frontend source"
 run = "npm run lint"
