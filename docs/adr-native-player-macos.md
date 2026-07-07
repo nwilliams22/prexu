@@ -2,8 +2,8 @@
 
 ## Status
 
-**Proposed** (recommendation only — the maintainer makes the final call; flip
-to Accepted once ratified). Supersedes the **macOS DEFER** in
+**Accepted (macOS)** — ratified by the maintainer 2026-07-07 (default engine:
+HTML5 with native opt-in; sequencing: prexu-ttz9 lands first). Supersedes the **macOS DEFER** in
 `docs/adr-native-player-cross-platform.md`: all three of its blockers are
 resolved — (a) Apple-Silicon hardware is available and both spikes ran on it;
 (b) CI cost is contained by gating distribution (prexu-ia6w.9, aarch64-only);
