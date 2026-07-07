@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { useParams, useNavigate, useSearchParams } from "react-router-dom";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
+import { useParams, useNavigate, useSearchParams, useNavigationType } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { useDetailPrefetch } from "../hooks/useDetailPrefetch";
 import { usePaginatedLibrary } from "../hooks/usePaginatedLibrary";
@@ -122,6 +122,34 @@ const restrictedStyles: Record<string, React.CSSProperties> = {
 
 function LibraryView() {
   const { sectionId } = useParams<{ sectionId: string }>();
+
+  // Route-transition timing instrumentation (prexu-5f12). React Router v7
+  // wraps every navigation's state update in React.startTransition (verified
+  // for Dashboard's equivalent freeze, PRs #62/#71/#75), so the OLD route
+  // stays visible/interactive until THIS route's first render commits. The
+  // reported bug is specific to POP (browser back button) from a detail
+  // page: the destination URL restores the exact previous sort/filters, so
+  // usePaginatedLibrary's cache-hit branch fires on the very first pass,
+  // whereas a PUSH (e.g. the sidebar library link) starts without those URL
+  // params and only matches the cache after a real fetch — which
+  // incidentally forces a paint in between. These markers are tagged with
+  // the navigation action so a hardware run can show which path is slow and
+  // by how much; left in shipped code since that's how the fix gets
+  // verified against real timing rather than just this diagnosis.
+  const navigationType = useNavigationType();
+  const mountStartRef = useRef<number | null>(null);
+  if (mountStartRef.current === null) {
+    mountStartRef.current = performance.now();
+    logger.debug("library", "route entry start", { action: navigationType, sectionId });
+  }
+  const elapsedMs = () =>
+    Math.round(performance.now() - (mountStartRef.current ?? performance.now()));
+
+  useLayoutEffect(() => {
+    logger.debug("library", "first commit", { action: navigationType, ms: elapsedMs() });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const { server } = useAuth();
   const { sections } = useLibrary();
   const navigate = useNavigate();
@@ -235,6 +263,25 @@ function LibraryView() {
       loadAll: shouldLoadAll,
       type: section?.type === "show" ? 2 : section?.type === "movie" ? 1 : undefined,
     });
+
+  // Logged once, the first time the sparse item store actually gets
+  // populated (from usePaginatedLibrary's deferred cache-hit apply, or the
+  // first chunk fetch resolving) — the moment the grid has real geometry
+  // (totalSize) to work with, ahead of scroll restoration's own jump and any
+  // range-driven fill for the landing rows (prexu-5f12).
+  const sparseStoreLoggedRef = useRef(false);
+  useEffect(() => {
+    if (sparseStoreLoggedRef.current || totalSize <= 0) return;
+    sparseStoreLoggedRef.current = true;
+    logger.debug("library", "sparse store ready", {
+      action: navigationType,
+      ms: elapsedMs(),
+      totalSize,
+      populated: items.filter((item) => item !== undefined).length,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [totalSize, items, navigationType]);
+
   const {
     genres: serverGenres,
     years: serverYears,
@@ -296,7 +343,20 @@ function LibraryView() {
   const mobile = isMobile(bp);
   const { preferences } = usePreferences();
   const minCollectionSize = preferences.appearance.minCollectionSize;
-  useScrollRestoration();
+  // onRestore fires the moment the remembered scroll offset is actually
+  // applied — the last leg of the POP-path timeline (prexu-5f12): route
+  // entry -> first commit -> sparse store ready -> scroll restoration
+  // applied -> (if the alpha jump bar is subsequently used) scroll
+  // convergence settled, logged separately in VirtualizedLibraryGrid.
+  useScrollRestoration({
+    onRestore: ({ restoredTo }) => {
+      logger.debug("library", "scroll restoration applied", {
+        action: navigationType,
+        ms: elapsedMs(),
+        restoredTo,
+      });
+    },
+  });
   const showViewToggle = section?.type === "movie";
   const viewMode = searchParams.get("view") === "collections" ? "collections" : "library";
   const {

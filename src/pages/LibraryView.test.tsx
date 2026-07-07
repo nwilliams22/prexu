@@ -12,6 +12,9 @@ const mockUseSearchParams = vi.fn(
     mockSetSearchParams,
   ]
 );
+// Defaults to "POP" (React Router's action for a MemoryRouter's initial
+// entry) — tests that care about PUSH override this explicitly (prexu-5f12).
+const mockUseNavigationType = vi.fn((): "POP" | "PUSH" | "REPLACE" => "POP");
 vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual("react-router-dom");
   return {
@@ -19,6 +22,7 @@ vi.mock("react-router-dom", async () => {
     useParams: () => mockUseParams(),
     useSearchParams: () => mockUseSearchParams(),
     useNavigate: () => vi.fn(),
+    useNavigationType: () => mockUseNavigationType(),
   };
 });
 
@@ -125,8 +129,14 @@ vi.mock("../hooks/useParentalControls", () => ({
   useParentalControls: () => mockUseParentalControls(),
 }));
 
+// Stored externally (rather than a bare `vi.fn()` inside the factory) so
+// tests can inspect the options LibraryView passes it and invoke the
+// `onRestore` callback directly to assert the resulting timing log
+// (prexu-5f12) — matching the outer-variable pattern already used for
+// mockUsePaginatedLibrary/mockUseFilterOptions above.
+const mockUseScrollRestoration = vi.fn();
 vi.mock("../hooks/useScrollRestoration", () => ({
-  useScrollRestoration: vi.fn(),
+  useScrollRestoration: (...args: unknown[]) => mockUseScrollRestoration(...args),
 }));
 
 vi.mock("../services/plex-library", () => ({
@@ -302,6 +312,9 @@ describe("LibraryView", () => {
     vi.clearAllMocks();
     mockUseParams.mockReturnValue({ sectionId: "1" });
     mockUseSearchParams.mockReturnValue([new URLSearchParams(), mockSetSearchParams]);
+    // Re-prime — a PUSH override set by the timing-instrumentation suite
+    // below must never leak into another suite's tests (prexu-5f12).
+    mockUseNavigationType.mockReturnValue("POP");
     mockUseParentalControls.mockReturnValue({
       restrictionsEnabled: false,
       filterByRating: (items: unknown[]) => items,
@@ -616,6 +629,8 @@ describe("LibraryView — alpha jump scrubber (prexu-6qi5.2)", () => {
     // suite, which flips hasActiveFilters and disables the firstCharacter
     // fast path these tests exercise.
     mockUseSearchParams.mockReturnValue([new URLSearchParams(), mockSetSearchParams]);
+    // Same leak concern as above (prexu-5f12).
+    mockUseNavigationType.mockReturnValue("POP");
     mockUseParentalControls.mockReturnValue({
       restrictionsEnabled: false,
       filterByRating: (items: unknown[]) => items,
@@ -852,6 +867,8 @@ describe("LibraryView — cross-filtered facets (prexu-hb1p)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseParams.mockReturnValue({ sectionId: "1" });
+    // Same leak concern noted in the suites above (prexu-5f12).
+    mockUseNavigationType.mockReturnValue("POP");
     mockUseParentalControls.mockReturnValue({
       restrictionsEnabled: false,
       filterByRating: (items: unknown[]) => items,
@@ -939,5 +956,183 @@ describe("LibraryView — cross-filtered facets (prexu-hb1p)", () => {
 
     expect(screen.getByTestId("filter-bar-years").textContent).toBe("2020,1999,1985");
     expect(screen.getByTestId("filter-bar-genres").textContent).toBe("documentary,comedy");
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// Route-transition timing / cheap first commit (prexu-5f12)
+//
+// React Router v7 wraps every navigation's state update in
+// React.startTransition, so the OLD route stays visible until LibraryView's
+// first render commits. The hardware bug report was POP-specific (browser
+// back button from a detail page): the destination URL restores the exact
+// previous sort/filters, so usePaginatedLibrary's cache-hit branch used to
+// apply the full cached store synchronously on the very first pass. PUSH
+// (e.g. the sidebar library link) starts without those URL params, missing
+// the cache on its first pass, which incidentally gave the browser a paint
+// window PUSH didn't need to earn. These tests assert LibraryView's half of
+// the fix: the frame commits and renders identically regardless of how much
+// data usePaginatedLibrary reports having, and the new timing markers carry
+// the navigation action so a hardware run can show which path is slow.
+// usePaginatedLibrary's own half (deferring a cache hit by one animation
+// frame) is unit-tested directly in usePaginatedLibrary.test.ts.
+describe("LibraryView — route-transition timing instrumentation (prexu-5f12)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseParams.mockReturnValue({ sectionId: "1" });
+    mockUseSearchParams.mockReturnValue([new URLSearchParams(), mockSetSearchParams]);
+    mockUseNavigationType.mockReturnValue("POP");
+    mockUseParentalControls.mockReturnValue({
+      restrictionsEnabled: false,
+      filterByRating: (items: unknown[]) => items,
+      isItemAllowed: () => true,
+      maxContentRating: "none",
+    });
+    mockUseFilterOptions.mockReturnValue({
+      genres: [],
+      years: [],
+      contentRatings: [],
+      resolutions: [],
+      isLoading: false,
+    });
+    global.IntersectionObserver = vi.fn().mockImplementation(function (this: unknown) {
+      (this as Record<string, unknown>).observe = vi.fn();
+      (this as Record<string, unknown>).disconnect = vi.fn();
+      (this as Record<string, unknown>).unobserve = vi.fn();
+    }) as unknown as typeof IntersectionObserver;
+  });
+
+  const pendingLibraryState = {
+    items: [] as unknown[],
+    isLoading: true,
+    isLoadingMore: false,
+    isStale: false,
+    totalSize: 0,
+    error: null,
+    ensureRange: vi.fn(),
+    retry: vi.fn(),
+  };
+
+  it("renders the skeleton frame synchronously on a POP mount even while usePaginatedLibrary is still empty (no blocking on chunk fetches)", () => {
+    mockUseNavigationType.mockReturnValue("POP");
+    mockUsePaginatedLibrary.mockReturnValue(pendingLibraryState);
+
+    renderPage();
+
+    // The frame (filter bar) and grid skeleton are both already in the DOM
+    // on the very first render — nothing here waits on a chunk fetch to
+    // resolve, so this is what the transition commits on.
+    expect(screen.getByTestId("filter-bar")).toBeInTheDocument();
+    expect(screen.getAllByTestId("skeleton-card").length).toBeGreaterThan(0);
+  });
+
+  it("renders the identical frame on a PUSH mount (unchanged behavior)", () => {
+    mockUseNavigationType.mockReturnValue("PUSH");
+    mockUsePaginatedLibrary.mockReturnValue(pendingLibraryState);
+
+    renderPage();
+
+    expect(screen.getByTestId("filter-bar")).toBeInTheDocument();
+    expect(screen.getAllByTestId("skeleton-card").length).toBeGreaterThan(0);
+  });
+
+  it.each([["POP"], ["PUSH"]] as const)(
+    "logs route entry start and first commit tagged with the %s navigation action",
+    (action) => {
+      mockUseNavigationType.mockReturnValue(action);
+      mockUsePaginatedLibrary.mockReturnValue(pendingLibraryState);
+
+      renderPage();
+
+      expect(mockLoggerDebug).toHaveBeenCalledWith(
+        "library",
+        "route entry start",
+        expect.objectContaining({ action, sectionId: "1" }),
+      );
+      expect(mockLoggerDebug).toHaveBeenCalledWith(
+        "library",
+        "first commit",
+        expect.objectContaining({ action, ms: expect.any(Number) }),
+      );
+    },
+  );
+
+  it("logs sparse store ready exactly once, tagged with the navigation action, the first time totalSize becomes known", () => {
+    mockUseNavigationType.mockReturnValue("POP");
+    mockUsePaginatedLibrary.mockReturnValue(pendingLibraryState);
+
+    const { rerender } = renderPage();
+
+    expect(mockLoggerDebug).not.toHaveBeenCalledWith(
+      "library",
+      "sparse store ready",
+      expect.anything(),
+    );
+
+    mockUsePaginatedLibrary.mockReturnValue({
+      ...pendingLibraryState,
+      items: [{ ratingKey: "1", title: "Inception", thumb: "/t1", type: "movie" }],
+      isLoading: false,
+      totalSize: 500,
+    });
+    rerender(
+      <MemoryRouter>
+        <LibraryView />
+      </MemoryRouter>,
+    );
+
+    expect(mockLoggerDebug).toHaveBeenCalledWith(
+      "library",
+      "sparse store ready",
+      expect.objectContaining({ action: "POP", totalSize: 500, populated: 1 }),
+    );
+
+    // A further rerender (e.g. more chunks filling in) must not re-log it.
+    mockLoggerDebug.mockClear();
+    mockUsePaginatedLibrary.mockReturnValue({
+      ...pendingLibraryState,
+      items: [
+        { ratingKey: "1", title: "Inception", thumb: "/t1", type: "movie" },
+        { ratingKey: "2", title: "The Matrix", thumb: "/t2", type: "movie" },
+      ],
+      isLoading: false,
+      totalSize: 500,
+    });
+    rerender(
+      <MemoryRouter>
+        <LibraryView />
+      </MemoryRouter>,
+    );
+    expect(mockLoggerDebug).not.toHaveBeenCalledWith(
+      "library",
+      "sparse store ready",
+      expect.anything(),
+    );
+  });
+
+  it("wires useScrollRestoration with an onRestore callback that logs the restored offset tagged with the navigation action", () => {
+    mockUseNavigationType.mockReturnValue("PUSH");
+    mockUsePaginatedLibrary.mockReturnValue(pendingLibraryState);
+
+    renderPage();
+
+    expect(mockUseScrollRestoration).toHaveBeenCalledWith(
+      expect.objectContaining({ onRestore: expect.any(Function) }),
+    );
+
+    // Simulate the restoration hook actually landing the saved offset —
+    // exercised here rather than in useScrollRestoration's own tests since
+    // the callback's log line is LibraryView's responsibility.
+    const { onRestore } = mockUseScrollRestoration.mock.calls[0][0] as {
+      onRestore: (info: { restoredTo: number }) => void;
+    };
+    mockLoggerDebug.mockClear();
+    onRestore({ restoredTo: 4200 });
+
+    expect(mockLoggerDebug).toHaveBeenCalledWith(
+      "library",
+      "scroll restoration applied",
+      expect.objectContaining({ action: "PUSH", restoredTo: 4200, ms: expect.any(Number) }),
+    );
   });
 });
