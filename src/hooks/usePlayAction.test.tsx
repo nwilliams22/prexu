@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { usePlayAction } from "./usePlayAction";
+import { emitWatchStateChanged } from "../services/watch-state-events";
 import type { PlexMediaItem } from "../types/library";
 
 const mockPlay = vi.fn();
@@ -182,6 +183,79 @@ describe("usePlayAction", () => {
       });
       expect(mockGetItemMetadata).not.toHaveBeenCalled();
       expect(result.current.playOverlay).not.toBeNull();
+    });
+  });
+
+  describe("watch-state events patch the item cache (prexu-r8ib)", () => {
+    it("popover shows the stop-time offset even when no re-render refreshed the item", () => {
+      const { result } = renderHook(() => usePlayAction(), { wrapper });
+      const item = makeMovie({ viewOffset: 821_287 });
+      // Render-time registration (memoized card chain never re-renders after
+      // a viewOffset-only state change, so this is the ONLY registration).
+      const handler = result.current.getPlayHandler(item)!;
+
+      act(() => {
+        emitWatchStateChanged("1", { viewOffsetMs: 860_318 });
+      });
+      act(() => {
+        handler(makeClickEvent());
+      });
+
+      const overlay = result.current.playOverlay as React.ReactElement<{
+        viewOffset: number;
+      }>;
+      expect(overlay).not.toBeNull();
+      expect(overlay.props.viewOffset).toBe(860_318);
+      expect(mockGetItemMetadata).not.toHaveBeenCalled();
+    });
+
+    it("reset events zero the cached offset so the click plays from the start", async () => {
+      mockGetItemMetadata.mockResolvedValue({ viewOffset: 0 });
+      const { result } = renderHook(() => usePlayAction(), { wrapper });
+      const item = makeMovie({ viewOffset: 821_287 });
+      const handler = result.current.getPlayHandler(item)!;
+
+      act(() => {
+        emitWatchStateChanged("1", { viewOffsetMs: 0, reset: true });
+      });
+      act(() => {
+        handler(makeClickEvent());
+      });
+
+      await waitFor(() => {
+        expect(mockPlay).toHaveBeenCalledWith("1");
+      });
+    });
+
+    it("ignores events for other ratingKeys", () => {
+      const { result } = renderHook(() => usePlayAction(), { wrapper });
+      const item = makeMovie({ viewOffset: 821_287 });
+      const handler = result.current.getPlayHandler(item)!;
+
+      act(() => {
+        emitWatchStateChanged("999", { viewOffsetMs: 5 });
+      });
+      act(() => {
+        handler(makeClickEvent());
+      });
+
+      const overlay = result.current.playOverlay as React.ReactElement<{
+        viewOffset: number;
+      }>;
+      expect(overlay.props.viewOffset).toBe(821_287);
+    });
+
+    it("stops patching after unmount", () => {
+      const { result, unmount } = renderHook(() => usePlayAction(), {
+        wrapper,
+      });
+      result.current.getPlayHandler(makeMovie({ viewOffset: 1 }));
+      unmount();
+      expect(() => {
+        act(() => {
+          emitWatchStateChanged("1", { viewOffsetMs: 2 });
+        });
+      }).not.toThrow();
     });
   });
 });

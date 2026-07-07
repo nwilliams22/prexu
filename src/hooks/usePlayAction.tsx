@@ -13,10 +13,11 @@
  * - `playOverlay` renders whichever popover is active — include it in JSX.
  */
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useAuth } from "./useAuth";
 import { usePlayerSession } from "../contexts/PlayerContext";
 import { getItemMetadata } from "../services/plex-library";
+import { onWatchStateChangedDetail } from "../services/watch-state-events";
 import ResumePopover from "../components/ResumePopover";
 import { logger } from "../services/logger";
 import type { PlexMediaItem } from "../types/library";
@@ -59,6 +60,29 @@ export function usePlayAction(): UsePlayActionResult {
   // only the ratingKey determines which cached handler is returned.
   const itemsRef = useRef(new Map<string, PlexMediaItem>());
   const handlersRef = useRef(new Map<string, (e: React.MouseEvent) => void>());
+
+  // itemsRef is normally refreshed by getPlayHandler at render time, but a
+  // viewOffset-only state change may never re-render the memoized card chain
+  // (prexu-r8ib: after a stop, the popover fast path served the play-start
+  // offset). The player emits the authoritative final offset with the
+  // watch-state event, so patch the ref directly — no re-render needed, the
+  // cached handlers read it at click time.
+  useEffect(() => {
+    return onWatchStateChangedDetail(({ ratingKey, viewOffsetMs, reset }) => {
+      if (!ratingKey || (viewOffsetMs === undefined && !reset)) return;
+      const entry = itemsRef.current.get(ratingKey);
+      if (!entry) return;
+      const viewOffset = reset ? 0 : viewOffsetMs;
+      itemsRef.current.set(ratingKey, {
+        ...entry,
+        viewOffset,
+      } as PlexMediaItem);
+      logger.debug("playback", "play-action item cache patched", {
+        ratingKey,
+        viewOffset,
+      });
+    });
+  }, []);
   const playRef = useRef(play);
   playRef.current = play;
   const serverRef = useRef(server);
