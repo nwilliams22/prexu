@@ -218,6 +218,38 @@ describe("getMediaByActor", () => {
     expect(mockServerFetch).not.toHaveBeenCalled();
   });
 
+  it("does NOT cache the result when the request was aborted mid-flight", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    // The mocked fetch ignores the signal, so section queries "succeed" with
+    // empty data — but because the caller aborted, we must not pin that empty
+    // result under this actor for the 10-minute TTL.
+    mockServerFetch
+      .mockResolvedValueOnce(sectionsResponse())
+      .mockResolvedValueOnce(jsonResponse({ MediaContainer: { Metadata: [] } }))
+      .mockResolvedValueOnce(jsonResponse({ MediaContainer: { Metadata: [] } }));
+
+    const aborted = await getMediaByActor(SERVER, TOKEN, "Aborted Actor", controller.signal);
+    expect(aborted).toEqual([]);
+
+    mockServerFetch.mockClear();
+
+    // A subsequent, non-aborted call must re-fetch (cache miss) and return real
+    // data — proving the aborted empty result was never cached. Sections are
+    // cached in base.ts, so only the two section queries hit the network here.
+    mockServerFetch
+      .mockResolvedValueOnce(
+        jsonResponse({ MediaContainer: { Metadata: [{ ratingKey: "m1", title: "Movie A", type: "movie" }] } })
+      )
+      .mockResolvedValueOnce(jsonResponse({ MediaContainer: { Metadata: [] } }));
+
+    const result = await getMediaByActor(SERVER, TOKEN, "Aborted Actor");
+
+    expect(mockServerFetch).toHaveBeenCalled();
+    expect(result.map((r) => r.ratingKey)).toEqual(["m1"]);
+  });
+
   it("isolates the cache per actor name (sections stay shared/cached across actors)", async () => {
     mockServerFetch
       .mockResolvedValueOnce(sectionsResponse())

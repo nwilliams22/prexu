@@ -124,6 +124,16 @@ const ACTOR_SHELF_SIZE = 20;
  *  for BOTH lead actors on every detail view (prexu-0szx.4). */
 const ACTOR_MEDIA_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
 
+/** True when a rejection reason is a fetch/abort cancellation. */
+function isAbortError(reason: unknown): boolean {
+  return (
+    (typeof DOMException !== "undefined" &&
+      reason instanceof DOMException &&
+      reason.name === "AbortError") ||
+    (reason instanceof Error && reason.name === "AbortError")
+  );
+}
+
 /**
  * Find all media featuring a specific actor across all library sections.
  * Uses the Plex library filter endpoint which is more thorough than hub search.
@@ -181,6 +191,22 @@ export async function getMediaByActor(
       }
     }
   }
+  // Don't persist a truncated result produced by a cancelled request
+  // (prexu-9f4s.2): if the caller aborted mid-flight, the section queries were
+  // interrupted and `items` is empty/partial. Caching it here would pin that
+  // wrong result under this actor for the full 10-minute TTL, so the next
+  // (non-aborted) detail view keeps showing an empty "More with [Actor]" row.
+  const aborted =
+    signal?.aborted === true ||
+    results.some((r) => r.status === "rejected" && isAbortError(r.reason));
+  if (aborted) {
+    logger.debug("api", "getMediaByActor: request aborted, skipping cache write", {
+      actorName,
+      count: items.length,
+    });
+    return items;
+  }
+
   cacheSet(cacheKey, items, ACTOR_MEDIA_CACHE_TTL);
   return items;
 }

@@ -50,12 +50,22 @@ vi.mock("../utils/dashboardPrefetch", () => ({
   prefetchDashboardData: vi.fn(),
 }));
 
+// Spy on cacheClear while keeping the REAL implementation (and the real
+// in-memory store shared with cacheGet/cacheSet) so we can assert both that
+// it fires AND that a stale entry is actually gone afterwards (prexu-9f4s.2).
+vi.mock("../services/api-cache", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/api-cache")>();
+  return { ...actual, cacheClear: vi.fn(actual.cacheClear) };
+});
+
 import * as storage from "../services/storage";
 import * as plexApi from "../services/plex-api";
+import * as apiCache from "../services/api-cache";
 import { prefetchDashboardData } from "../utils/dashboardPrefetch";
 
 const mockStorage = vi.mocked(storage);
 const mockPlexApi = vi.mocked(plexApi);
+const mockCacheClear = vi.mocked(apiCache.cacheClear);
 const mockPrefetch = vi.mocked(prefetchDashboardData);
 
 describe("useAuthState", () => {
@@ -274,6 +284,75 @@ describe("useAuthState", () => {
     expect(result.current.server).toBeNull();
     expect(result.current.activeUser).toBeNull();
     expect(mockStorage.clearAuth).toHaveBeenCalled();
+  });
+
+  it("logout() purges the api cache so a re-login can't read the previous user's data", async () => {
+    apiCache.cacheSet(
+      "dashboard:https://server:32400:deck",
+      [{ ratingKey: "prev-user-ondeck" }],
+      60_000,
+    );
+
+    mockPlexApi.getPlexUser.mockResolvedValue({
+      id: 1,
+      username: "u",
+      email: "",
+      friendlyName: "U",
+      thumb: "",
+    });
+
+    const { result } = renderHook(() => useAuthState());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    await act(async () => {
+      await result.current.login("token");
+    });
+
+    await act(async () => {
+      await result.current.logout();
+    });
+
+    expect(mockCacheClear).toHaveBeenCalled();
+    // The stale entry keyed by server URI is actually gone, so the next
+    // identity re-selecting the same URI cannot be served it.
+    expect(
+      apiCache.cacheGet("dashboard:https://server:32400:deck"),
+    ).toBeNull();
+  });
+
+  it("switchUser() purges the api cache so the new Home user isn't served the prior user's data", async () => {
+    mockStorage.getAdminAuth.mockResolvedValue(null);
+    mockStorage.getAuth.mockResolvedValue({
+      authToken: "admin-token",
+      clientIdentifier: "client-id",
+    });
+    mockPlexApi.validateToken.mockResolvedValue(true);
+
+    apiCache.cacheSet(
+      "dashboard:https://server:32400:deck",
+      [{ ratingKey: "prev-user-ondeck" }],
+      60_000,
+    );
+
+    const { result } = renderHook(() => useAuthState());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    const newUser = {
+      id: 2,
+      title: "Kid",
+      username: "kid",
+      thumb: "",
+      isAdmin: false,
+      isHomeUser: true,
+    };
+
+    await act(async () => {
+      await result.current.switchUser("kid-token", newUser);
+    });
+
+    expect(mockCacheClear).toHaveBeenCalled();
+    expect(
+      apiCache.cacheGet("dashboard:https://server:32400:deck"),
+    ).toBeNull();
   });
 
   it("selectServer() saves server data", async () => {

@@ -2,9 +2,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { useCollections, useSectionCollections } from "./useCollections";
 
-const stableServer = { uri: "https://plex.test", accessToken: "token" };
+const DEFAULT_SERVER = { uri: "https://plex.test", accessToken: "token" };
+// Mutable holder so a test can swap the active server and assert the cache key
+// is scoped per server URI (prexu-9f4s.2).
+const authState = vi.hoisted(() => ({
+  server: { uri: "https://plex.test", accessToken: "token" },
+}));
 vi.mock("./useAuth", () => ({
-  useAuth: () => ({ server: stableServer }),
+  useAuth: () => ({ server: authState.server }),
 }));
 
 const stableSections = [
@@ -41,6 +46,7 @@ function makeCollection(key: string, title: string) {
 describe("useCollections", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    authState.server = { ...DEFAULT_SERVER };
     mockCacheGet.mockReturnValue(null);
     mockGetCollections.mockResolvedValue([]);
   });
@@ -93,10 +99,30 @@ describe("useCollections", () => {
     });
 
     expect(mockCacheSet).toHaveBeenCalledWith(
-      "collections:all",
+      "collections:https://plex.test:all",
       expect.any(Array),
       expect.any(Number)
     );
+  });
+
+  it("scopes the cache key by server URI so a different server is never served stale data", async () => {
+    authState.server = { uri: "https://server-a.test", accessToken: "ta" };
+    mockGetCollections.mockResolvedValue([makeCollection("c1", "Action")]);
+    const { result, unmount } = renderHook(() => useCollections());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    const keyA = mockCacheGet.mock.calls[0]?.[0];
+    unmount();
+    mockCacheGet.mockClear();
+    mockCacheGet.mockReturnValue(null);
+
+    authState.server = { uri: "https://server-b.test", accessToken: "tb" };
+    const { result: resultB } = renderHook(() => useCollections());
+    await waitFor(() => expect(resultB.current.isLoading).toBe(false));
+    const keyB = mockCacheGet.mock.calls[0]?.[0];
+
+    expect(keyA).toBe("collections:https://server-a.test:all");
+    expect(keyB).toBe("collections:https://server-b.test:all");
+    expect(keyA).not.toBe(keyB);
   });
 
   it("handles per-section failure gracefully", async () => {

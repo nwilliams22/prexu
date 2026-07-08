@@ -8,6 +8,7 @@ import {
   createPlaylist,
 } from "../services/plex-library";
 import { cacheInvalidate } from "../services/api-cache";
+import { playlistsCacheKey } from "../hooks/usePlaylists";
 import type { PlexPlaylist } from "../types/library";
 
 interface PlaylistPickerProps {
@@ -80,7 +81,7 @@ function PlaylistPicker({
         ratingKey,
         server.clientIdentifier
       );
-      cacheInvalidate("playlists:all");
+      cacheInvalidate(playlistsCacheKey(server.uri));
       toast(`Added to "${playlist.title}"`, "success");
       onSuccess?.();
       onClose();
@@ -105,7 +106,7 @@ function PlaylistPicker({
         ratingKey,
         server.clientIdentifier
       );
-      cacheInvalidate("playlists:all");
+      cacheInvalidate(playlistsCacheKey(server.uri));
       toast(`Added to "${newPlaylistName.trim()}"`, "success");
       onSuccess?.();
       onClose();

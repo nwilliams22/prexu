@@ -18,8 +18,16 @@ export interface UseCollectionsResult {
   retry: () => void;
 }
 
-const CACHE_KEY = "collections:all";
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Cache key for the all-sections collections list, scoped by server URI
+ * (prexu-9f4s.2). Previously a bare `collections:all`, which served one
+ * server's collections for up to the 5-minute TTL after switching servers.
+ */
+function collectionsCacheKey(uri: string): string {
+  return `collections:${uri}:all`;
+}
 
 export function useCollections(): UseCollectionsResult {
   const { server } = useAuth();
@@ -30,14 +38,15 @@ export function useCollections(): UseCollectionsResult {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   const retry = useCallback(() => {
-    cacheInvalidate(CACHE_KEY);
+    if (server) cacheInvalidate(collectionsCacheKey(server.uri));
     setRefreshTrigger((n) => n + 1);
-  }, []);
+  }, [server]);
 
   useEffect(() => {
     if (!server || sections.length === 0) return;
 
-    const cached = cacheGet<CollectionGroup[]>(CACHE_KEY);
+    const cacheKey = collectionsCacheKey(server.uri);
+    const cached = cacheGet<CollectionGroup[]>(cacheKey);
     if (cached) {
       setCollections(cached);
       setIsLoading(false);
@@ -70,7 +79,7 @@ export function useCollections(): UseCollectionsResult {
         if (!cancelled) {
           const filtered = groups.filter((g) => g.items.length > 0);
           setCollections(filtered);
-          cacheSet(CACHE_KEY, filtered, CACHE_TTL);
+          cacheSet(cacheKey, filtered, CACHE_TTL);
         }
       })
       .catch((err) => {

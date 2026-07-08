@@ -2,9 +2,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { usePlaylists } from "./usePlaylists";
 
-const stableServer = { uri: "https://plex.test", accessToken: "token", name: "Test", clientIdentifier: "cid" };
+const DEFAULT_SERVER = { uri: "https://plex.test", accessToken: "token", name: "Test", clientIdentifier: "cid" };
+// Mutable holder so individual tests can swap the active server and assert the
+// cache key is scoped per server URI (prexu-9f4s.2).
+const authState = vi.hoisted(() => ({
+  server: { uri: "https://plex.test", accessToken: "token", name: "Test", clientIdentifier: "cid" },
+}));
 vi.mock("./useAuth", () => ({
-  useAuth: () => ({ server: stableServer }),
+  useAuth: () => ({ server: authState.server }),
 }));
 
 const mockCacheGet = vi.fn(() => null);
@@ -30,6 +35,7 @@ const allPlaylists = [
 describe("usePlaylists", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    authState.server = { ...DEFAULT_SERVER };
     mockCacheGet.mockReturnValue(null);
     mockGetPlaylists.mockResolvedValue(allPlaylists);
   });
@@ -75,7 +81,7 @@ describe("usePlaylists", () => {
     });
 
     expect(mockCacheSet).toHaveBeenCalledWith(
-      "playlists:all",
+      "playlists:https://plex.test:all",
       expect.arrayContaining([expect.objectContaining({ playlistType: "video" })]),
       expect.any(Number)
     );
@@ -121,10 +127,26 @@ describe("usePlaylists", () => {
       result.current.retry();
     });
 
-    expect(mockCacheInvalidate).toHaveBeenCalledWith("playlists:all");
+    expect(mockCacheInvalidate).toHaveBeenCalledWith("playlists:https://plex.test:all");
 
     await waitFor(() => {
       expect(mockGetPlaylists).toHaveBeenCalled();
     });
+  });
+
+  it("scopes the cache key by server URI so a different server is never served stale data", () => {
+    authState.server = { uri: "https://server-a.test", accessToken: "ta", name: "A", clientIdentifier: "a" };
+    const { unmount } = renderHook(() => usePlaylists());
+    const keyA = mockCacheGet.mock.calls[0]?.[0];
+    unmount();
+    mockCacheGet.mockClear();
+
+    authState.server = { uri: "https://server-b.test", accessToken: "tb", name: "B", clientIdentifier: "b" };
+    renderHook(() => usePlaylists());
+    const keyB = mockCacheGet.mock.calls[0]?.[0];
+
+    expect(keyA).toBe("playlists:https://server-a.test:all");
+    expect(keyB).toBe("playlists:https://server-b.test:all");
+    expect(keyA).not.toBe(keyB);
   });
 });
