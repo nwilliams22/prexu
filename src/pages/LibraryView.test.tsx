@@ -91,9 +91,19 @@ vi.mock("../hooks/useMediaContextMenu", () => ({
   useMediaContextMenu: () => ({ openContextMenu: vi.fn(), overlays: null }),
 }));
 
+// Cache one play handler PER ratingKey, mirroring the real usePlayAction
+// contract (a stable per-key handler, undefined for non-playable types) so the
+// callback-identity-stability suite (prexu-9f4s.1) can assert onPlay identity.
+const mockPlayHandlers = new Map<string, (e: React.MouseEvent) => void>();
 vi.mock("../hooks/usePlayAction", () => ({
   usePlayAction: () => ({
-    getPlayHandler: vi.fn(() => undefined),
+    getPlayHandler: (item: { ratingKey: string; type: string }) => {
+      if (item.type !== "movie" && item.type !== "episode") return undefined;
+      if (!mockPlayHandlers.has(item.ratingKey)) {
+        mockPlayHandlers.set(item.ratingKey, () => {});
+      }
+      return mockPlayHandlers.get(item.ratingKey);
+    },
     playOverlay: null,
   }),
 }));
@@ -184,10 +194,27 @@ vi.mock("../components/FilterBar", () => ({
   ),
 }));
 
+// Records the callback props PosterCard receives, keyed by ratingKey, one
+// snapshot per render — lets the identity-stability suite (prexu-9f4s.1)
+// assert the same handler references survive across grid re-renders.
+const mockCapturedPosterProps: Record<string, Array<Record<string, unknown>>> = {};
 vi.mock("../components/PosterCard", () => ({
-  default: ({ title }: { title: string }) => (
-    <div data-testid="poster-card">{title}</div>
-  ),
+  default: (props: {
+    ratingKey: string;
+    title: string;
+    onClick?: unknown;
+    onPlay?: unknown;
+    onContextMenu?: unknown;
+    onMoreClick?: unknown;
+  }) => {
+    (mockCapturedPosterProps[props.ratingKey] ??= []).push({
+      onClick: props.onClick,
+      onPlay: props.onPlay,
+      onContextMenu: props.onContextMenu,
+      onMoreClick: props.onMoreClick,
+    });
+    return <div data-testid="poster-card">{props.title}</div>;
+  },
 }));
 
 vi.mock("../components/SkeletonCard", () => ({
@@ -1134,5 +1161,92 @@ describe("LibraryView — route-transition timing instrumentation (prexu-5f12)",
       "scroll restoration applied",
       expect.objectContaining({ action: "PUSH", restoredTo: 4200, ms: expect.any(Number) }),
     );
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// PosterCard callback identity stability (prexu-9f4s.1)
+//
+// renderLibraryItem used to pass fresh inline arrows
+// (onClick/onContextMenu/onMoreClick/onExpand) to PosterCard on every grid
+// render, minting a new identity per render and defeating PosterCard's
+// React.memo across the whole virtualized grid. The fix routes those through
+// useStableItemCallback (one cached handler per ratingKey). These tests assert
+// the SAME handler references survive across repeated page/grid re-renders for
+// an unchanged item — and would fail if the inline arrows were restored.
+describe("LibraryView — PosterCard callback identity stability (prexu-9f4s.1)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseParams.mockReturnValue({ sectionId: "1" });
+    mockUseSearchParams.mockReturnValue([new URLSearchParams(), mockSetSearchParams]);
+    mockUseNavigationType.mockReturnValue("POP");
+    mockUseParentalControls.mockReturnValue({
+      restrictionsEnabled: false,
+      filterByRating: (items: unknown[]) => items,
+      isItemAllowed: () => true,
+      maxContentRating: "none",
+    });
+    mockUseFilterOptions.mockReturnValue({
+      genres: [],
+      years: [],
+      contentRatings: [],
+      resolutions: [],
+      isLoading: false,
+    });
+    // Reset the shared capture map + per-key play-handler cache so snapshots
+    // from other suites (which also render ratingKey "100") don't leak in.
+    for (const key of Object.keys(mockCapturedPosterProps)) {
+      delete mockCapturedPosterProps[key];
+    }
+    mockPlayHandlers.clear();
+    global.IntersectionObserver = vi.fn().mockImplementation(function (this: unknown) {
+      (this as Record<string, unknown>).observe = vi.fn();
+      (this as Record<string, unknown>).disconnect = vi.fn();
+      (this as Record<string, unknown>).unobserve = vi.fn();
+    }) as unknown as typeof IntersectionObserver;
+  });
+
+  it("passes stable onClick/onPlay/onContextMenu/onMoreClick identities to PosterCard across grid re-renders", () => {
+    mockUsePaginatedLibrary.mockReturnValue({
+      items: [{ ratingKey: "100", title: "Inception", thumb: "/t1", type: "movie" }],
+      isLoading: false,
+      isLoadingMore: false,
+      isStale: false,
+      totalSize: 1,
+      error: null,
+      ensureRange: vi.fn(),
+      loadMore: vi.fn(),
+      retry: vi.fn(),
+    });
+
+    const { rerender } = renderPage();
+    // Force the whole page (and therefore the grid's renderItem) to run again
+    // twice, mimicking unrelated re-renders, without changing the item.
+    rerender(
+      <MemoryRouter>
+        <LibraryView />
+      </MemoryRouter>,
+    );
+    rerender(
+      <MemoryRouter>
+        <LibraryView />
+      </MemoryRouter>,
+    );
+
+    const snaps = mockCapturedPosterProps["100"];
+    expect(snaps.length).toBeGreaterThanOrEqual(3);
+
+    const first = snaps[0]!;
+    expect(typeof first.onClick).toBe("function");
+    expect(typeof first.onPlay).toBe("function");
+    expect(typeof first.onContextMenu).toBe("function");
+    expect(typeof first.onMoreClick).toBe("function");
+
+    for (const snap of snaps) {
+      expect(snap.onClick).toBe(first.onClick);
+      expect(snap.onPlay).toBe(first.onPlay);
+      expect(snap.onContextMenu).toBe(first.onContextMenu);
+      expect(snap.onMoreClick).toBe(first.onMoreClick);
+    }
   });
 });

@@ -165,3 +165,36 @@ describe("usePreferencesState", () => {
     expect(mockStorage.saveUserPreferences).toHaveBeenCalledWith(42, expect.any(Object));
   });
 });
+
+// Regression for prexu-9f4s.1: the context value must keep a stable identity
+// across re-renders that don't change preferences, so a sibling hook's
+// high-frequency state churn in AppProviders doesn't re-render every
+// Preferences consumer.
+describe("usePreferencesState — context value identity (prexu-9f4s.1)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockStorage.getDefaultPreferences.mockReturnValue({ ...defaultPrefs });
+    mockStorage.getPreferences.mockResolvedValue({ ...defaultPrefs });
+    mockStorage.getUserPreferences.mockResolvedValue({ ...defaultPrefs });
+  });
+
+  it("returns a stable object across a re-render that doesn't change its state", async () => {
+    const { result, rerender } = renderHook(() => usePreferencesState());
+    // Let the async mount-load settle so state is quiescent before comparing.
+    await act(async () => {});
+    const first = result.current;
+    rerender();
+    expect(result.current).toBe(first);
+  });
+
+  it("returns a new object when preferences change", async () => {
+    const { result } = renderHook(() => usePreferencesState());
+    await act(async () => {});
+    const before = result.current;
+    act(() => {
+      result.current.updatePreferences({ playback: { quality: "720p" } });
+    });
+    expect(result.current.preferences.playback.quality).toBe("720p");
+    expect(result.current).not.toBe(before);
+  });
+});

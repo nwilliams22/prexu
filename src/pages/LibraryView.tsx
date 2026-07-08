@@ -8,6 +8,7 @@ import { useFilterOptions } from "../hooks/useFilterOptions";
 import { useConstrainedFilterOptions } from "../hooks/useConstrainedFilterOptions";
 import { useMediaContextMenu } from "../hooks/useMediaContextMenu";
 import { usePlayAction } from "../hooks/usePlayAction";
+import { useStableItemCallback } from "../hooks/useStableItemCallback";
 import { useSectionCollections } from "../hooks/useCollections";
 import { useBreakpoint, isMobile } from "../hooks/useBreakpoint";
 import { usePreferences } from "../hooks/usePreferences";
@@ -576,6 +577,24 @@ function LibraryView() {
     [server],
   );
 
+  // Stabilize the per-item handlers PosterCard receives (prexu-9f4s.1).
+  // Previously each `renderLibraryItem` call minted fresh inline arrows
+  // (onClick/onContextMenu/onMoreClick/onExpand) — a new identity every grid
+  // render — which defeated PosterCard's React.memo across the whole
+  // virtualized grid. useStableItemCallback caches one handler PER ratingKey,
+  // reading the freshest item + latest `run` at click time (see Dashboard.tsx
+  // for the established pattern).
+  const stableNavigate = useStableItemCallback<PlexMediaItem, () => void>();
+  const stableContextMenu = useStableItemCallback<
+    PlexMediaItem,
+    (e: React.MouseEvent) => void
+  >();
+  const stableExpand = useStableItemCallback<PlexMediaItem, () => void>();
+  const stableCollectionNavigate = useStableItemCallback<
+    PlexCollection,
+    () => void
+  >();
+
   const renderLibraryItem = useCallback(
     (item: PlexMediaItem) => (
       <PosterCard
@@ -587,26 +606,45 @@ function LibraryView() {
         subtitle={getMediaSubtitle(item, { showEpisodeCount: true })}
         watched={isWatched(item)}
         unwatchedCount={getUnwatchedCount(item)}
-        onClick={() => navigate(`/item/${item.ratingKey}`)}
+        onClick={stableNavigate(item.ratingKey, item, (it) =>
+          navigate(`/item/${it.ratingKey}`),
+        )}
         onHoverIntent={prefetchDetail}
         onPlay={getPlayHandler(item)}
         mediaBadges={getItemMediaBadges(item)}
         showMoreButton
-        onContextMenu={(e) => openContextMenu(e, item)}
-        onMoreClick={(e) => openContextMenu(e, item)}
+        onContextMenu={stableContextMenu(item.ratingKey, item, (it, e) =>
+          openContextMenu(e, it),
+        )}
+        onMoreClick={stableContextMenu(item.ratingKey, item, (it, e) =>
+          openContextMenu(e, it),
+        )}
         onExpand={
           item.type === "show"
-            ? () =>
-                setExpandedKey(
-                  expandedKey === item.ratingKey ? null : item.ratingKey,
-                )
+            ? stableExpand(item.ratingKey, item, (it) =>
+                setExpandedKey((prev) =>
+                  prev === it.ratingKey ? null : it.ratingKey,
+                ),
+              )
             : undefined
         }
         isExpanded={expandedKey === item.ratingKey}
       />
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [expandedKey, navigate, openContextMenu, getPlayHandler, posterUrl, prefetchDetail],
+    [
+      expandedKey,
+      navigate,
+      openContextMenu,
+      getPlayHandler,
+      posterUrl,
+      placeholderForPoster,
+      srcSetForPoster,
+      prefetchDetail,
+      stableNavigate,
+      stableContextMenu,
+      stableExpand,
+    ],
   );
 
   const renderExpansion = useCallback(
@@ -632,10 +670,12 @@ function LibraryView() {
         imageUrl={c.thumb ? posterUrl(c.thumb) : ""}
         title={c.title}
         subtitle={`${c.childCount ?? 0} item${(c.childCount ?? 0) !== 1 ? "s" : ""}`}
-        onClick={() => navigate(`/collection/${c.ratingKey}`)}
+        onClick={stableCollectionNavigate(c.ratingKey, c, (col) =>
+          navigate(`/collection/${col.ratingKey}`),
+        )}
       />
     ),
-    [posterUrl, navigate],
+    [posterUrl, navigate, stableCollectionNavigate],
   );
 
   const getCollectionCardKey = useCallback((c: PlexCollection) => c.ratingKey, []);

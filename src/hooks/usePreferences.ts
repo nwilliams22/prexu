@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useMemo } from "react";
 import {
   getPreferences,
   savePreferences,
@@ -87,5 +87,11 @@ export function usePreferencesState(
     }
   }, [userId]);
 
-  return { preferences, updatePreferences, resetPreferences };
+  // Memoize so AppProviders' high-frequency re-renders don't hand a new
+  // object to every Preferences consumer. Identity changes only when
+  // `preferences` changes (callbacks are userId-stable).
+  return useMemo(
+    () => ({ preferences, updatePreferences, resetPreferences }),
+    [preferences, updatePreferences, resetPreferences],
+  );
 }

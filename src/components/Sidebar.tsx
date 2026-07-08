@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, memo } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { useLibrary } from "../hooks/useLibrary";
@@ -30,13 +30,28 @@ interface SectionMenuState {
   sectionKey: string;
 }
 
-function Sidebar({ collapsed, onToggle, onNavigate, newSections, onMarkSectionSeen }: SidebarProps) {
-  const { server } = useAuth();
-  const { sections, isLoading } = useLibrary();
+/**
+ * Isolated downloads badge (prexu-9f4s.1).
+ *
+ * The badge only needs a COUNT, but download progress mutates the downloads
+ * array many times a second (per-byte ticks). Consuming that context in
+ * Sidebar itself re-ran the entire Sidebar — including its library-section
+ * list — on every tick. Subscribing here instead confines those re-renders
+ * to this tiny node; when the count is unchanged the rendered number is
+ * identical, so the DOM diff is a no-op.
+ */
+const DownloadCountBadge = memo(function DownloadCountBadge() {
   const { downloads } = useDownloads();
   const activeDownloadCount = downloads.filter(
     (d) => d.status === "downloading" || d.status === "queued",
   ).length;
+  if (activeDownloadCount === 0) return null;
+  return <span style={styles.downloadBadge}>{activeDownloadCount}</span>;
+});
+
+function Sidebar({ collapsed, onToggle, onNavigate, newSections, onMarkSectionSeen }: SidebarProps) {
+  const { server } = useAuth();
+  const { sections, isLoading } = useLibrary();
   const health = useServerHealth(server);
   const bp = useBreakpoint();
   const touchMode = isTabletOrBelow(bp);
@@ -197,9 +212,7 @@ function Sidebar({ collapsed, onToggle, onNavigate, newSections, onMarkSectionSe
               <polyline points="7 10 12 15 17 10" />
               <line x1={12} y1={15} x2={12} y2={3} />
             </svg>
-            {activeDownloadCount > 0 && (
-              <span style={styles.downloadBadge}>{activeDownloadCount}</span>
-            )}
+            <DownloadCountBadge />
           </span>
           <span style={{
             ...styles.navLabel,
@@ -474,4 +487,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
 };
 
-export default Sidebar;
+// Memoized so an AppLayout re-render with unchanged props doesn't re-render
+// the whole sidebar (prexu-9f4s.1). Download-progress churn is handled by the
+// isolated DownloadCountBadge above, so Sidebar no longer subscribes to it.
+export default memo(Sidebar);

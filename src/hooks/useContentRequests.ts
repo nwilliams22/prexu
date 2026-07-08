@@ -13,6 +13,7 @@ import {
   useEffect,
   useCallback,
   useRef,
+  useMemo,
 } from "react";
 import { watchSync } from "../services/watch-sync";
 import {
@@ -125,20 +126,31 @@ export function useContentRequestState(
     saveContentRequests(requests);
   }, [requests]);
 
-  // Non-admin users should only see their own requests
-  const visibleRequests = isAdmin
-    ? requests
-    : requests.filter(
-        (r) =>
-          r.requesterUsername === (activeUser?.title || activeUser?.username),
-      );
+  // Non-admin users should only see their own requests. Memoized so its
+  // identity is stable across unrelated re-renders — otherwise the `.filter`
+  // would mint a fresh array every render and defeat the context memo below.
+  const visibleRequests = useMemo(
+    () =>
+      isAdmin
+        ? requests
+        : requests.filter(
+            (r) =>
+              r.requesterUsername ===
+              (activeUser?.title || activeUser?.username),
+          ),
+    [isAdmin, requests, activeUser?.title, activeUser?.username],
+  );
 
   // Compute unread count (admin only — requests after lastRead timestamp)
-  const unreadCount = isAdmin
-    ? requests.filter(
-        (r) => r.status === "pending" && r.requestedAt > lastRead,
-      ).length
-    : 0;
+  const unreadCount = useMemo(
+    () =>
+      isAdmin
+        ? requests.filter(
+            (r) => r.status === "pending" && r.requestedAt > lastRead,
+          ).length
+        : 0,
+    [isAdmin, requests, lastRead],
+  );
 
   // ── Actions ──
 
@@ -335,14 +347,29 @@ export function useContentRequestState(
     };
   }, []);
 
-  return {
-    requests: visibleRequests,
-    isLoading,
-    unreadCount,
-    isRelayConnected,
-    submitRequest,
-    respondToRequest,
-    dismissRequest,
-    markAllRead,
-  };
+  // Memoize so AppProviders' high-frequency re-renders don't hand a new
+  // object to every ContentRequest consumer. Derived values are memoized
+  // above; callbacks are stable via useCallback.
+  return useMemo(
+    () => ({
+      requests: visibleRequests,
+      isLoading,
+      unreadCount,
+      isRelayConnected,
+      submitRequest,
+      respondToRequest,
+      dismissRequest,
+      markAllRead,
+    }),
+    [
+      visibleRequests,
+      isLoading,
+      unreadCount,
+      isRelayConnected,
+      submitRequest,
+      respondToRequest,
+      dismissRequest,
+      markAllRead,
+    ],
+  );
 }

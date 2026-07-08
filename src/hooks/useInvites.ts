@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useMemo } from "react";
 import { watchSync } from "../services/watch-sync";
 import { getPlexUser } from "../services/plex-api";
 import { getRelayUrl } from "../services/storage";
@@ -142,11 +142,17 @@ export function useInviteState(
     };
   }, []);
 
-  return {
-    invites,
-    isRelayConnected,
-    connectToRelay,
-    dismissInvite,
-    refreshInvites,
-  };
+  // Memoize so AppProviders' high-frequency re-renders don't hand a new
+  // object to every Invite consumer. Identity changes only when invite state
+  // changes (callbacks are stable via useCallback).
+  return useMemo(
+    () => ({
+      invites,
+      isRelayConnected,
+      connectToRelay,
+      dismissInvite,
+      refreshInvites,
+    }),
+    [invites, isRelayConnected, connectToRelay, dismissInvite, refreshInvites],
+  );
 }
