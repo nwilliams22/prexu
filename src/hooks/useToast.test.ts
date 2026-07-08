@@ -119,3 +119,26 @@ describe("useToastState", () => {
     expect(result.current.toasts).toHaveLength(1);
   });
 });
+
+// Regression for prexu-9f4s.1: the context value must keep a stable identity
+// across re-renders that don't change its own state, otherwise AppProviders'
+// high-frequency re-renders (download progress, Plex WS) re-render every
+// Toast consumer app-wide on every tick.
+describe("useToastState — context value identity (prexu-9f4s.1)", () => {
+  it("returns a stable object across a re-render that doesn't change its state", () => {
+    const { result, rerender } = renderHook(() => useToastState());
+    const first = result.current;
+    rerender();
+    expect(result.current).toBe(first);
+  });
+
+  it("returns a new object when its own state changes", () => {
+    const { result } = renderHook(() => useToastState());
+    const before = result.current;
+    act(() => {
+      result.current.toast("Hi", "info", 0);
+    });
+    expect(result.current.toasts).toHaveLength(1);
+    expect(result.current).not.toBe(before);
+  });
+});

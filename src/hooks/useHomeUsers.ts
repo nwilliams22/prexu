@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useMemo } from "react";
 import { useAuth } from "./useAuth";
 import { getHomeUsers, switchHomeUser, discoverServers } from "../services/plex-api";
 import type { HomeUser, ActiveUser } from "../types/home-user";
@@ -107,13 +107,19 @@ export function useHomeUsersState(): HomeUsersContextValue {
 
   const clearError = useCallback(() => setSwitchError(null), []);
 
-  return {
-    homeUsers,
-    isLoading,
-    isPlexHome: homeUsers.length >= 2,
-    isSwitching,
-    switchError,
-    switchTo,
-    clearError,
-  };
+  // Memoize so AppProviders' high-frequency re-renders don't hand a new
+  // object to every HomeUsers consumer. `isPlexHome` is derived from
+  // `homeUsers`, so including `homeUsers` in the deps covers it.
+  return useMemo(
+    () => ({
+      homeUsers,
+      isLoading,
+      isPlexHome: homeUsers.length >= 2,
+      isSwitching,
+      switchError,
+      switchTo,
+      clearError,
+    }),
+    [homeUsers, isLoading, isSwitching, switchError, switchTo, clearError],
+  );
 }

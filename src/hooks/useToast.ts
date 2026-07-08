@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useRef, useEffect } from "react";
+import { createContext, useContext, useState, useCallback, useRef, useEffect, useMemo } from "react";
 import type { Toast, ToastVariant } from "../types/toast";
 
 const MAX_TOASTS = 5;
@@ -74,5 +74,16 @@ export function useToastState(): ToastContextValue {
     [dismiss],
   );
 
-  return { toasts, toast: addToast, dismiss, dismissAll };
+  // Memoize the context value so AppProviders re-renders (driven by
+  // high-frequency siblings like download-progress/Plex WS ticks) don't mint
+  // a fresh object every time and re-render every Toast consumer app-wide.
+  // Identity changes only when `toasts` changes (callbacks are stable).
+  // Memoize the context value so AppProviders re-renders (driven by
+  // high-frequency siblings like download-progress/Plex WS ticks) don't mint
+  // a fresh object every time and re-render every Toast consumer app-wide.
+  // Identity changes only when `toasts` changes (callbacks are stable).
+  return useMemo(
+    () => ({ toasts, toast: addToast, dismiss, dismissAll }),
+    [toasts, addToast, dismiss, dismissAll],
+  );
 }
