@@ -1,0 +1,59 @@
+name: Security scan
+
+# SBOM generation + vulnerability scan (prexu-7x8q.6). Mirrors the local
+# `mise run scan` task. REPORT-ONLY for now: it prints findings but does not
+# fail the build, so it never blocks unrelated PRs on a newly-published CVE
+# or on the known backlog (react-router High -> prexu-7x8q.1; tauri/glib
+# Medium -> prexu-7x8q.4/.5). Once that backlog clears, flip to a gate by
+# uncommenting the `--fail-on high` lines below and adding this job to the
+# required checks in branch protection.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC — catch newly-disclosed CVEs weekly
+  pull_request:
+    branches: [main]
+    paths:
+      - "package-lock.json"
+      - "src-tauri/Cargo.lock"
+      - "relay-server/Cargo.lock"
+      - ".github/workflows/security-scan.yml"
+  workflow_dispatch: {}
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install syft + grype
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b "$HOME/.local/bin"
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Cache grype DB
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/grype/db
+          key: grype-db-${{ github.run_id }}
+          restore-keys: grype-db-
+
+      - name: Generate SBOMs
+        run: |
+          mkdir -p .sbom
+          syft package-lock.json         -o syft-json=.sbom/npm.json   -q
+          syft src-tauri/Cargo.lock       -o syft-json=.sbom/tauri.json -q
+          syft relay-server/Cargo.lock    -o syft-json=.sbom/relay.json -q
+
+      - name: Scan (report-only)
+        run: |
+          status=0
+          for eco in npm tauri relay; do
+            echo "::group::grype $eco"
+            # To gate the build, replace the next line with:
+            #   grype "sbom:.sbom/$eco.json" --fail-on high || status=1
+            grype "sbom:.sbom/$eco.json" -o table || true
+            echo "::endgroup::"
+          done
+          exit $status
