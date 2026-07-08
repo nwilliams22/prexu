@@ -1,0 +1,168 @@
+[2026-07-07T02:54:32Z INFO  macos_render_compositing] [spike] source=samples/sample-hevc10.mp4 run_secs=8 no_webview=false
+[2026-07-07T02:54:32Z INFO  macos_render_compositing] [spike] setlocale(LC_NUMERIC, "C") applied before mpv_create
+[2026-07-07T02:54:32Z INFO  macos_render_compositing] [spike] mpv created + initialized (hwdec=auto-safe, vo=libmpv)
+[2026-07-07T02:54:33Z INFO  macos_render_compositing] [spike] WKWebView overlay added (drawsBackground=NO, transparent HTML body)
+[mpv] libmpv_render v: GL_VERSION='4.1 Metal - 90.5'
+[mpv] libmpv_render v: Detected desktop OpenGL 4.1.
+[mpv] libmpv_render v: GL_VENDOR='Apple'
+[mpv] libmpv_render v: GL_RENDERER='Apple M3 Pro'
+[mpv] libmpv_render v: GL_SHADING_LANGUAGE_VERSION='4.10'
+[mpv] libmpv_render v: Loaded extension GL_APPLE_rgb_422.
+[mpv] libmpv_render v: GL_*_swap_control extension missing.
+[mpv] libmpv_render v: Testing FBO format rgba16f
+[mpv] libmpv_render v: Using FBO format rgba16f.
+[mpv] libmpv_render v: Disabling HDR peak computation (one or more of the following is not supported: compute shaders=0, SSBO=0).
+[2026-07-07T02:54:33Z INFO  macos_render_compositing] [mpv/HWDEC] libmpv_render v: Loading hwdec driver 'videotoolbox'
+[2026-07-07T02:54:33Z INFO  macos_render_compositing] [mpv/HWDEC] libmpv_render v: Loading hwdec driver 'vulkan'
+[mpv] libmpv_render/vulkan v: This is not a libplacebo vulkan gpu api context.
+[2026-07-07T02:54:33Z INFO  macos_render_compositing] [spike] mpv render context created (OpenGL backend)
+[2026-07-07T02:54:33Z INFO  macos_render_compositing] [spike] GL_VERSION='4.1 Metal - 90.5' GL_RENDERER='Apple M3 Pro'
+[2026-07-07T02:54:33Z INFO  macos_render_compositing] [spike] loadfile samples/sample-hevc10.mp4
+[2026-07-07T02:54:33Z INFO  macos_render_compositing] [spike] 60 Hz main-thread frame pump installed — entering NSApp run loop
+[mpv] cplayer v: Running hook: auto_profiles/on_before_start_file
+[mpv] cplayer v: Failed sending hook command auto_profiles/on_before_start_file. Removing hook.
+[mpv] cplayer v: Running hook: auto_profiles/on_load
+[mpv] cplayer v: Failed sending hook command auto_profiles/on_load. Removing hook.
+[mpv] cplayer v: Running hook: ytdl_hook/on_load
+[mpv] cplayer v: Running hook: ytdl_hook/on_load
+[mpv] ytdl_hook v: playlist hook
+[mpv] bdmv/bluray v: Opening samples/sample-hevc10.mp4
+[mpv] file v: Opening samples/sample-hevc10.mp4
+[mpv] demux v: Trying demuxers for level=normal.
+[mpv] lavf v: Found 'mov,mp4,m4a,3gp,3g2,mj2' at score=100 size=2048.
+[mpv] file v: stream level seek from 131072 to 12625011
+[mpv] demux v: Detected file format: mov,mp4,m4a,3gp,3g2,mj2 (libavformat)
+[mpv] cplayer v: Opening done: samples/sample-hevc10.mp4
+[mpv] find_files v: Loading external files in samples/
+[mpv] cplayer v: Running hook: auto_profiles/on_preloaded
+[mpv] cplayer v: Failed sending hook command auto_profiles/on_preloaded. Removing hook.
+[mpv] cplayer v: Running hook: ytdl_hook/on_preloaded
+[mpv] lavf v: select track 0
+[mpv] lavf v: select track 1
+[mpv] cplayer info: ● Video  --vid=1  (hevc 1920x1080 30 fps) [default]
+[mpv] cplayer info: ● Audio  --aid=1  (aac 1ch 44100 Hz 69 kbps) [default]
+[mpv] vd v: Container reported FPS: 30.000000
+[mpv] vd v: Codec list:
+[mpv] vd v:     hevc - HEVC (High Efficiency Video Coding)
+[mpv] vd v: Opening decoder hevc
+[2026-07-07T02:54:33Z INFO  macos_render_compositing] [mpv/HWDEC] vd v: Looking at hwdec hevc-videotoolbox...
+[2026-07-07T02:54:33Z INFO  macos_render_compositing] [mpv/HWDEC] vd v: Trying hardware decoding via hevc-videotoolbox.
+[mpv] vd v: Requesting 4 threads for decoding.
+[mpv] vd v: Selected decoder: hevc - HEVC (High Efficiency Video Coding)
+[mpv] vf v: User filter list:
+[mpv] vf v:   (empty)
+[mpv] ad v: Codec list:
+[mpv] ad v:     aac - AAC (Advanced Audio Coding)
+[mpv] ad v:     aac_fixed (aac) - AAC (Advanced Audio Coding)
+[mpv] ad v:     aac_at (aac) - aac (AudioToolbox)
+[mpv] ad v: Opening decoder aac
+[mpv] ad v: Requesting 1 threads for decoding.
+[mpv] ad v: Selected decoder: aac - AAC (Advanced Audio Coding)
+[mpv] af v: User filter list:
+[mpv] af v:   (empty)
+[mpv] cplayer v: Starting playback...
+[mpv] file v: stream level seek from 12651072 to 44
+[mpv] af v: [in] 44100Hz mono 1ch floatp
+[mpv] af v: [userspeed] 44100Hz mono 1ch floatp
+[mpv] af v: [userspeed] (disabled)
+[mpv] af v: [convert] 44100Hz mono 1ch floatp
+[2026-07-07T02:54:33Z INFO  macos_render_compositing] [mpv/HWDEC] vd v: Pixel formats supported by decoder: videotoolbox_vld yuv420p10le
+[mpv] vd v: Codec profile: Main 10 (0x2)
+[2026-07-07T02:54:33Z INFO  macos_render_compositing] [mpv/HWDEC] vd v: Requesting pixfmt 'videotoolbox_vld' from decoder.
+[2026-07-07T02:54:33Z INFO  macos_render_compositing] [spike] backing size now 2560x1440 px (GL context updated)
+[mpv] libmpv_render v: Window size: 2560x1440 (Borders: l=0 t=0 r=0 b=0)
+[mpv] libmpv_render v: Video source: 0x0 (0:0)
+[mpv] libmpv_render v: Video display: (0, 0) 1x1 -> (0, 719) 2560x1
+[mpv] libmpv_render v: Video scale: 2560.000000/1.000000
+[mpv] libmpv_render v: OSD borders: l=0 t=719 r=0 b=720
+[mpv] libmpv_render v: Video borders: l=0 t=719 r=0 b=720
+[2026-07-07T02:54:33Z INFO  macos_render_compositing] [spike] render frame #1: fbo=0 2560x1440
+[2026-07-07T02:54:33Z INFO  macos_render_compositing] [spike] render frame #2: fbo=0 2560x1440
+[2026-07-07T02:54:33Z INFO  macos_render_compositing] [spike] default framebuffer binding after render = 0
+[2026-07-07T02:54:33Z INFO  macos_render_compositing] [spike] render frame #3: fbo=0 2560x1440
+[2026-07-07T02:54:33Z INFO  macos_render_compositing] [mpv/HWDEC] vd info: Using hardware decoding (videotoolbox).
+[2026-07-07T02:54:33Z INFO  macos_render_compositing] [mpv/HWDEC] vd v: Decoder format: 1920x1080 videotoolbox[p010] auto/auto/auto/limited/auto CL=mpeg2/4/h264 crop=1920x1080+0+0 A=none
+[mpv] vd v: Using container aspect ratio.
+[2026-07-07T02:54:33Z INFO  macos_render_compositing] [mpv/HWDEC] vf v: [in] 1920x1080 videotoolbox[p010] bt.709/bt.709/bt.1886/limited/display CL=mpeg2/4/h264 crop=1920x1080+0+0 A=none
+[2026-07-07T02:54:33Z INFO  macos_render_compositing] [mpv/HWDEC] vf v: [userdeint] 1920x1080 videotoolbox[p010] bt.709/bt.709/bt.1886/limited/display CL=mpeg2/4/h264 crop=1920x1080+0+0 A=none
+[mpv] vf v: [userdeint] (disabled)
+[2026-07-07T02:54:33Z INFO  macos_render_compositing] [mpv/HWDEC] vf v: [autovflip] 1920x1080 videotoolbox[p010] bt.709/bt.709/bt.1886/limited/display CL=mpeg2/4/h264 crop=1920x1080+0+0 A=none
+[mpv] vf v: [autovflip] (disabled)
+[2026-07-07T02:54:33Z INFO  macos_render_compositing] [mpv/HWDEC] vf v: [autorotate] 1920x1080 videotoolbox[p010] bt.709/bt.709/bt.1886/limited/display CL=mpeg2/4/h264 crop=1920x1080+0+0 A=none
+[mpv] vf v: [autorotate] (disabled)
+[2026-07-07T02:54:33Z INFO  macos_render_compositing] [mpv/HWDEC] vf v: [convert] 1920x1080 videotoolbox[p010] bt.709/bt.709/bt.1886/limited/display CL=mpeg2/4/h264 crop=1920x1080+0+0 A=none
+[2026-07-07T02:54:33Z INFO  macos_render_compositing] [mpv/HWDEC] vf v: [out] 1920x1080 videotoolbox[p010] bt.709/bt.709/bt.1886/limited/display CL=mpeg2/4/h264 crop=1920x1080+0+0 A=none
+[mpv] ao v: Trying audio driver 'coreaudio'
+[mpv] ao/coreaudio v: requested format: 44100 Hz, mono channels, floatp
+[mpv] ao/coreaudio v: selected audio output device: MacBook Pro Speakers (106)
+[mpv] ao/coreaudio v: input channel layout:
+[mpv] ao/coreaudio v: audio channel layout: tag: <0>, descriptions <2>
+[mpv] ao/coreaudio v:  - description 0: label <4294967295, 64>,  flags: <0>
+[mpv] ao/coreaudio v:  - description 1: label <4294967295, 64>,  flags: <0>
+[mpv] ao/coreaudio v: mp chmap: unknown2
+[mpv] ao/coreaudio v: input channel layout:
+[mpv] ao/coreaudio v: audio channel layout: tag: <0>, descriptions <2>
+[mpv] ao/coreaudio v:  - description 0: label <1, 0>,  flags: <0>
+[mpv] ao/coreaudio v:  - description 1: label <2, 1>,  flags: <0>
+[mpv] ao/coreaudio v: mp chmap: stereo
+[mpv] ao/coreaudio v: Channel layouts:
+[mpv] ao/coreaudio v:  - stereo
+[mpv] ao/coreaudio v:  - mono
+[mpv] ao/coreaudio v: result: mono
+[mpv] ao/coreaudio v: audio channel layout: tag: <0>, descriptions <1>
+[mpv] ao/coreaudio v:  - description 0: label <3, 2>,  flags: <0>
+[mpv] ao/coreaudio v: Latency property cntl: 70 frames
+[mpv] ao/coreaudio v: Latency property zisf: 512 frames
+[mpv] ao/coreaudio v: Latency property tfas: 74 frames
+[mpv] ao/coreaudio v: Device sample rate: 48000.000000
+[mpv] ao/coreaudio v: audiounit latency [ns]: 362811
+[mpv] ao/coreaudio v: device latency [ns]: 13666666
+[mpv] ao/coreaudio v: device buffer: 1238 samples.
+[mpv] ao/coreaudio v: using soft-buffer of 8820 samples.
+[mpv] cplayer info: AO: [coreaudio] 44100Hz mono 1ch floatp
+[mpv] cplayer v: AO: Description: CoreAudio AudioUnit
+[mpv] af v: [convert] (disabled)
+[mpv] af v: [out] 44100Hz mono 1ch floatp
+[2026-07-07T02:54:33Z INFO  macos_render_compositing] [mpv/HWDEC] cplayer info: VO: [libmpv] 1920x1080 videotoolbox[p010]
+[mpv] cplayer v: VO: Description: render API for libmpv
+[2026-07-07T02:54:33Z INFO  macos_render_compositing] [mpv/HWDEC] vo/libmpv v: reconfig to 1920x1080 videotoolbox[p010] bt.709/bt.709/bt.1886/limited/display CL=mpeg2/4/h264 crop=1920x1080+0+0 A=none
+[mpv] libmpv_render v: Window size: 2560x1440 (Borders: l=0 t=0 r=0 b=0)
+[mpv] libmpv_render v: Video source: 1920x1080 (1:1)
+[mpv] libmpv_render v: Video display: (0, 0) 1920x1080 -> (0, 0) 2560x1440
+[mpv] libmpv_render v: Video scale: 1.333333/1.333333
+[mpv] libmpv_render v: OSD borders: l=0 t=0 r=0 b=0
+[mpv] libmpv_render v: Video borders: l=0 t=0 r=0 b=0
+[mpv] libmpv_render v: Testing FBO format rgba16f
+[mpv] libmpv_render error: after creating texture: OpenGL error INVALID_FRAMEBUFFER_OPERATION.
+[mpv] libmpv_render v: Using FBO format rgba16f.
+[mpv] cplayer v: first video frame after restart shown
+[mpv] libmpv_render v: Dither to 8.
+[mpv] osd/libass v: libass API version: 0x1705000
+[mpv] osd/libass v: libass source: tarball: 0.17.5
+[mpv] osd/libass v: Shaper: FriBidi 1.0.16 (SIMPLE) HarfBuzz-ng 14.2.1 (COMPLEX)
+[mpv] osd/libass v: Setting up fonts...
+[mpv] osd/libass v: Using font provider coretext
+[mpv] osd/libass v: Done.
+[mpv] cplayer v: audio ready
+[mpv] cplayer v: starting audio playback
+[mpv] cplayer v: playback restart complete @ 0.000000, audio=playing, video=playing
+[2026-07-07T02:54:35Z INFO  macos_render_compositing] [spike] render frame #120: fbo=0 2560x1440
+[2026-07-07T02:54:36Z INFO  macos_render_compositing] [spike] capture: window #397 → evidence/composited-hevc10-under-webview-macos.png
+[2026-07-07T02:54:36Z INFO  macos_render_compositing] [spike] wrote evidence/composited-hevc10-under-webview-macos.png (2560x1504, 100.0% non-black pixels)
+[2026-07-07T02:54:37Z INFO  macos_render_compositing] [spike] render frame #240: fbo=0 2560x1440
+[2026-07-07T02:54:37Z INFO  macos_render_compositing] [spike] capture: window #397 → evidence/composited-hevc10-under-webview-macos-late.png
+[2026-07-07T02:54:38Z INFO  macos_render_compositing] [spike] wrote evidence/composited-hevc10-under-webview-macos-late.png (2560x1504, 100.0% non-black pixels)
+[2026-07-07T02:54:39Z INFO  macos_render_compositing] [spike] render frame #360: fbo=0 2560x1440
+[2026-07-07T02:54:41Z INFO  macos_render_compositing] [spike] FPS observation: 457 render callbacks over 8.0s = 57.1 fps
+[2026-07-07T02:54:41Z INFO  macos_render_compositing] [spike] teardown 1/4: freeing mpv render context (before GL context)
+[mpv] lavf v: deselect track 0
+[mpv] cplayer info: Video: no video
+[2026-07-07T02:54:41Z INFO  macos_render_compositing] [spike] teardown 1/4: render context freed; GL context still valid → OK
+[2026-07-07T02:54:41Z INFO  macos_render_compositing] [spike] teardown 2/4: mpv `quit` (stops decode + releases audio device)
+[2026-07-07T02:54:41Z INFO  macos_render_compositing] [spike] teardown 3/4: closing NSWindow (releases GL context)
+[mpv] cplayer v: EOF code: 5
+[mpv] cplayer v: finished playback, success (reason 3)
+[mpv] cplayer v: Running hook: ytdl_hook/on_after_end_file
+[2026-07-07T02:54:41Z INFO  macos_render_compositing] [spike] event thread saw MPV_EVENT_SHUTDOWN — exiting
+[2026-07-07T02:54:41Z INFO  macos_render_compositing] [spike] teardown 4/4: [NSApp stop:] + wakeup event to unwind run loop
+[2026-07-07T02:54:41Z INFO  macos_render_compositing] [spike] NSApp run loop exited; mpv terminated; exiting cleanly
