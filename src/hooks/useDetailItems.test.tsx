@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ReactNode } from "react";
-import { renderHook, waitFor } from "@testing-library/react";
+import { renderHook, waitFor, act } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useDetailItems } from "./useDetailItems";
+import { emitWatchStateChanged } from "../services/watch-state-events";
 import type { PaginatedResult, PlexMediaItem } from "../types/library";
 
 const stableServer = { uri: "https://plex.test", accessToken: "token" };
@@ -117,5 +118,37 @@ describe("useDetailItems", () => {
     expect(result.current.isLoading).toBe(false);
     expect(fetchMetadata).not.toHaveBeenCalled();
     expect(fetchItems).not.toHaveBeenCalled();
+  });
+
+  it("refetches items when a watch-state change targets an item in the container", async () => {
+    fetchMetadata.mockResolvedValue({ ratingKey: "c1", title: "My Collection" });
+    fetchItems.mockResolvedValue(makeResult([makeItem("1"), makeItem("2")]));
+
+    const { result } = render("c1");
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(fetchItems).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      emitWatchStateChanged("1", { viewOffsetMs: 0, reset: true });
+    });
+
+    // The invalidation refetches the (mounted, observed) items query, so the
+    // row's watched/progress state is refreshed instead of staying stale.
+    await waitFor(() => expect(fetchItems).toHaveBeenCalledTimes(2));
+  });
+
+  it("ignores watch-state changes for items not in the container", async () => {
+    fetchMetadata.mockResolvedValue({ ratingKey: "c1", title: "My Collection" });
+    fetchItems.mockResolvedValue(makeResult([makeItem("1")]));
+
+    const { result } = render("c1");
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(fetchItems).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      emitWatchStateChanged("999", { viewOffsetMs: 0, reset: true });
+    });
+
+    expect(fetchItems).toHaveBeenCalledTimes(1);
   });
 });

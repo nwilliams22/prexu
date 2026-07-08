@@ -22,6 +22,7 @@ import {
   logServerResolve,
 } from "../services/server-reachability";
 import { logger, redactUrl } from "../services/logger";
+import { cacheClear } from "../services/api-cache";
 import { prefetchDashboardData } from "../utils/dashboardPrefetch";
 
 const TOKEN_REVALIDATION_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
@@ -257,6 +258,12 @@ export function useAuthState(): AuthContextValue {
   }, []);
 
   const logout = useCallback(async () => {
+    // Purge the api-cache first: entries are keyed by server URI only, so the
+    // next logged-in identity that re-selects the SAME server would otherwise
+    // be served the previous user's On Deck / resume offsets / playlists
+    // (prexu-9f4s.2).
+    logger.info("auth", "logout: clearing api cache");
+    cacheClear();
     await clearAuth();
     setAuthToken(null);
     setServer(null);
@@ -276,6 +283,13 @@ export function useAuthState(): AuthContextValue {
 
   const switchUser = useCallback(
     async (newToken: string, user: ActiveUser) => {
+      // Purge the api-cache before swapping identities: cache keys are scoped
+      // by server URI only, and after re-discovery the same URI is re-selected,
+      // so without this the new Home user is served the previous user's On
+      // Deck, resume offsets, and playlists (prexu-9f4s.2).
+      logger.info("auth", "switchUser: clearing api cache");
+      cacheClear();
+
       // If this is the first user switch, preserve the current token as admin
       const existingAdmin = await getAdminAuth();
       if (!existingAdmin && authToken) {

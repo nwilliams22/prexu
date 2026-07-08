@@ -12,6 +12,8 @@ import { useAuth } from "./useAuth";
 import { useDownloads } from "./useDownloads";
 import { useToast } from "./useToast";
 import { markAsWatched, markAsUnwatched } from "../services/plex-library";
+import { emitWatchStateChanged } from "../services/watch-state-events";
+import { logger } from "../services/logger";
 import { buildDownloadItem } from "../components/detail/DownloadButton";
 import ContextMenu from "../components/ContextMenu";
 import type { ContextMenuItem } from "../components/ContextMenu";
@@ -42,6 +44,28 @@ export function watchedToggleActions(item: {
     return inProgress ? ["unwatched", "watched"] : ["unwatched"];
   }
   return inProgress ? ["watched", "unwatched"] : ["watched"];
+}
+
+/**
+ * Apply a manual watched/unwatched toggle and propagate it to the app-wide
+ * cache-invalidation chain (prexu-9f4s.2).
+ *
+ * Both `/:/scrobble` (watched) and `/:/unscrobble` (unwatched) clear the
+ * item's resume marker server-side, so we emit an authoritative "no resume
+ * point" — `viewOffsetMs: 0` with `reset: true`. Without this event the deck
+ * and item-detail caches keep serving the pre-toggle watched/progress state,
+ * because the whole invalidation chain (cache-invalidators.ts, useDashboard,
+ * useItemDetailData) is driven exclusively by watch-state-changed events.
+ */
+export async function applyWatchedToggle(
+  action: "watched" | "unwatched",
+  server: { uri: string; accessToken: string },
+  ratingKey: string,
+): Promise<void> {
+  const mark = action === "watched" ? markAsWatched : markAsUnwatched;
+  logger.debug("api", "applyWatchedToggle", { action, ratingKey });
+  await mark(server.uri, server.accessToken, ratingKey);
+  emitWatchStateChanged(ratingKey, { viewOffsetMs: 0, reset: true });
 }
 
 // ── Internal state shapes ──
@@ -131,8 +155,7 @@ export function useMediaContextMenu(options: UseMediaContextMenuOptions = {}) {
       ): ContextMenuItem => ({
         label: action === "watched" ? "Mark as Watched" : "Mark as Unwatched",
         onClick: async () => {
-          const mark = action === "watched" ? markAsWatched : markAsUnwatched;
-          await mark(server.uri, server.accessToken, item.ratingKey);
+          await applyWatchedToggle(action, server, item.ratingKey);
           onRefreshRef.current?.();
         },
       });
