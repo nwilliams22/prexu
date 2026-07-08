@@ -8,9 +8,11 @@
  * handled by react-query instead of hand-rolled useEffect + cancel refs.
  */
 
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "./useAuth";
 import { logger } from "../services/logger";
+import { onWatchStateChangedDetail } from "../services/watch-state-events";
 import type { PaginatedResult, PlexMediaItem } from "../types/library";
 
 export interface PlexServerLike {
@@ -81,6 +83,35 @@ export function useDetailItems<M, I extends PlexMediaItem>(
       return fetchItems(server as PlexServerLike, containerKey as string);
     },
   });
+
+  // Watch-state freshness (prexu-9f4s.2): the manual mark-watched toggle and
+  // the player both emit `watch-state-changed`, but nothing wired that event
+  // into this TanStack-cached listing, so a collection/playlist row kept its
+  // stale watched/progress state until a full remount. Invalidate the items
+  // query when a change targets an item currently in this container (or a
+  // legacy payload-less event with no ratingKey), so react-query refetches the
+  // affected rows. A ref holds the latest items so the listener closure never
+  // goes stale without re-subscribing on every data change.
+  const queryClient = useQueryClient();
+  const itemsRef = useRef<I[]>([]);
+  itemsRef.current = itemsQuery.data?.items ?? [];
+
+  useEffect(() => {
+    if (!enabled) return;
+    return onWatchStateChangedDetail(({ ratingKey }) => {
+      const affected =
+        ratingKey === undefined ||
+        itemsRef.current.some((item) => item.ratingKey === ratingKey);
+      if (!affected) return;
+      logger.debug("detail", `${queryKey} invalidate items on watch-state change`, {
+        ratingKey,
+        containerKey,
+      });
+      void queryClient.invalidateQueries({
+        queryKey: [queryKey, "items", serverUri, containerKey],
+      });
+    });
+  }, [enabled, queryClient, queryKey, serverUri, containerKey]);
 
   const isMetadataLoading = enabled && metadataQuery.isPending;
   const isItemsLoading = enabled && itemsQuery.isPending;

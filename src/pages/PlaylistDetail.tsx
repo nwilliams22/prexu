@@ -11,6 +11,7 @@ import {
   updatePlaylist,
 } from "../services/plex-library";
 import { cacheInvalidate } from "../services/api-cache";
+import { playlistsCacheKey } from "../hooks/usePlaylists";
 import { useMediaContextMenu } from "../hooks/useMediaContextMenu";
 import { usePlayAction } from "../hooks/usePlayAction";
 import { useScrollRestoration } from "../hooks/useScrollRestoration";
@@ -132,7 +133,7 @@ function PlaylistDetail() {
         title: editTitle.trim(),
         summary: editSummary.trim(),
       });
-      cacheInvalidate("playlists:all");
+      cacheInvalidate(playlistsCacheKey(server.uri));
       setMetaOverride((prev) => {
         const base = prev ?? metadata;
         return base
@@ -156,7 +157,7 @@ function PlaylistDetail() {
     setIsDeleting(true);
     try {
       await deletePlaylist(server.uri, server.accessToken, playlistKey);
-      cacheInvalidate("playlists:all");
+      cacheInvalidate(playlistsCacheKey(server.uri));
       navigate("/playlists", { replace: true });
     } catch (err) {
       setActionError(
@@ -179,7 +180,7 @@ function PlaylistDetail() {
           playlistKey,
           item.playlistItemID
         );
-        cacheInvalidate("playlists:all");
+        cacheInvalidate(playlistsCacheKey(server.uri));
         refreshItems();
       } catch (err) {
         setActionError(
