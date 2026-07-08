@@ -32,7 +32,7 @@ fn progress_at_end(downloaded: u64, total: u64) -> bool {
 /// Windows drive-qualified paths (e.g. `C:foo`).
 ///
 /// Returns `Ok(())` if the value is safe, or `Err` with a static description.
-fn validate_path_component(value: &str) -> Result<(), &'static str> {
+pub(crate) fn validate_path_component(value: &str) -> Result<(), &'static str> {
     if value.is_empty() {
         return Err("path component must not be empty");
     }
@@ -64,16 +64,110 @@ fn validate_path_component(value: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// Validate that a Plex `part_key` is a server-rooted absolute path before it
+/// is concatenated onto `server_url` to build the (token-bearing) download URL.
+///
+/// A `part_key` that does not begin with a single `/` can redirect the
+/// authenticated request to an attacker-controlled host — e.g. `@evil.com`
+/// turns `server_url` into userinfo and `evil.com` into the host, and
+/// `http://evil/…` is an absolute URL that overrides the host entirely. Both
+/// would leak the `X-Plex-Token` off-server (SSRF). A leading `//` is a
+/// protocol-relative / authority-injection vector.
+///
+/// Returns `Ok(())` if the value is a safe rooted path, or `Err` with a static
+/// description (never echo the raw value — log-injection risk).
+fn validate_part_key(part_key: &str) -> Result<(), &'static str> {
+    if part_key.is_empty() {
+        return Err("part_key must not be empty");
+    }
+    if !part_key.starts_with('/') {
+        return Err("part_key must be a server-rooted path");
+    }
+    if part_key.starts_with("//") {
+        return Err("part_key must not start with '//'");
+    }
+    // Control characters could split the HTTP request line / inject headers.
+    if part_key.chars().any(|c| c == '\0' || c == '\r' || c == '\n') {
+        return Err("part_key contains a control character");
+    }
+    Ok(())
+}
+
 /// Manages active downloads with cancellation support.
+///
+/// `active` uses a `std::sync::Mutex` (not tokio's): every critical section is
+/// a single map insert/remove/get with no `.await` held across the lock, and a
+/// blocking lock lets the [`DownloadGuard`] `Drop` release the entry
+/// synchronously on any failure/abort path.
 pub struct DownloadManager {
-    active: Arc<Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>>,
+    active: Arc<ActiveMap>,
     downloads_dir: Mutex<Option<PathBuf>>,
+}
+
+/// Shared map from an in-flight download's rating_key to its cancel `Sender`.
+type ActiveMap = std::sync::Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>;
+
+/// Atomically claim `rating_key` in the active-download map, rejecting a second
+/// concurrent download of the same key. Two writers to one `.part` file
+/// interleave bytes, and a blind insert would orphan the first download's
+/// cancel `Sender` (its select loop then busy-spins on the closed watch
+/// channel). The check-and-insert happens under a single lock with no `.await`
+/// between, so it is race-free.
+///
+/// On rejection, logs a fixed message (never the raw rating_key — log-injection
+/// risk) and returns an informative error.
+fn try_claim_active(
+    active: &ActiveMap,
+    rating_key: &str,
+    cancel_tx: tokio::sync::watch::Sender<bool>,
+) -> Result<(), String> {
+    let mut guard = active
+        .lock()
+        .map_err(|_| "download manager lock poisoned".to_string())?;
+    if guard.contains_key(rating_key) {
+        log::warn!("[downloads] rejected duplicate in-flight download for rating_key");
+        return Err("A download for this item is already in progress".to_string());
+    }
+    guard.insert(rating_key.to_string(), cancel_tx);
+    Ok(())
+}
+
+/// RAII guard that guarantees a download's active-map entry and its partial
+/// `.part` temp file are cleaned up if `download_media` returns early for ANY
+/// reason (request failure, non-2xx, write/flush/rename error, stream error,
+/// or cancellation). Without it, an early `return Err(…)` before the manual
+/// cleanup stranded the cancel `Sender` in the map forever and left the temp
+/// file on disk.
+///
+/// Cleanup is synchronous (safe in `Drop`): a `std::sync::Mutex` lock plus a
+/// best-effort `std::fs::remove_file`. The guard is declared *before* the file
+/// handle, so at scope exit the `BufWriter`/`File` drops first (closing the fd)
+/// and the temp file is removed afterwards — correct ordering on Windows.
+struct DownloadGuard {
+    active: Arc<ActiveMap>,
+    rating_key: String,
+    temp_path: PathBuf,
+}
+
+impl Drop for DownloadGuard {
+    fn drop(&mut self) {
+        if let Ok(mut active) = self.active.lock() {
+            active.remove(&self.rating_key);
+        }
+        // On the success path the temp file has already been renamed away, so
+        // NotFound is expected and silent; only surface real removal errors.
+        match std::fs::remove_file(&self.temp_path) {
+            Ok(()) => log::debug!("[downloads] removed partial temp file on cleanup"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => log::warn!("[downloads] failed to remove temp file on cleanup: {}", e),
+        }
+    }
 }
 
 impl DownloadManager {
     pub fn new() -> Self {
         Self {
-            active: Arc::new(Mutex::new(HashMap::new())),
+            active: Arc::new(std::sync::Mutex::new(HashMap::new())),
             downloads_dir: Mutex::new(None),
         }
     }
@@ -142,6 +236,12 @@ pub async fn download_media(
         log::warn!("[downloads] rejected download request: invalid file_name — {}", reason);
         return Err(format!("Invalid file_name: {}", reason));
     }
+    // Guard against SSRF: a non-rooted part_key could redirect the token-bearing
+    // fetch to an attacker host. Log the reason only, never the raw value.
+    if let Err(reason) = validate_part_key(&part_key) {
+        log::warn!("[downloads] rejected download request: invalid part_key — {}", reason);
+        return Err(format!("Invalid part_key: {}", reason));
+    }
 
     let downloads_dir = resolve_downloads_dir().await?;
     let item_dir = downloads_dir.join(&rating_key);
@@ -152,12 +252,19 @@ pub async fn download_media(
     let final_path = item_dir.join(&file_name);
     let temp_path = item_dir.join(format!("{}.part", &file_name));
 
-    // Set up cancellation
+    // Set up cancellation and atomically claim the rating_key (rejects a second
+    // in-flight download of the same key — see `try_claim_active`).
     let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
-    {
-        let mut active = state.active.lock().await;
-        active.insert(rating_key.clone(), cancel_tx);
-    }
+    try_claim_active(&state.active, &rating_key, cancel_tx)?;
+
+    // From here on, any early return must release the active-map entry AND drop
+    // the partial temp file. This RAII guard does both on scope exit, so the
+    // error paths below only need to emit progress + return.
+    let _cleanup = DownloadGuard {
+        active: state.active.clone(),
+        rating_key: rating_key.clone(),
+        temp_path: temp_path.clone(),
+    };
 
     // Build download URL
     let sep = if part_key.contains('?') { "&" } else { "?" };
@@ -241,15 +348,12 @@ pub async fn download_media(
                         }
                     }
                     Some(Err(e)) => {
-                        drop(file);
-                        let _ = tokio::fs::remove_file(&temp_path).await;
                         // Strip the URL (contains X-Plex-Token) before logging
                         // or forwarding to the webview via the progress event.
                         let safe_err = e.without_url();
                         log::error!("[downloads] stream error for {}: {:?}", rating_key, safe_err);
                         emit_progress(downloaded, "error", Some(safe_err.to_string()));
-                        let mut active = state.active.lock().await;
-                        active.remove(&rating_key);
+                        // _cleanup guard drops the map entry + temp file on return.
                         return Err(format!("Download error: {}", safe_err));
                     }
                     None => break, // Stream complete
@@ -257,18 +361,16 @@ pub async fn download_media(
             }
             _ = cancel_rx.changed() => {
                 if *cancel_rx.borrow() {
-                    drop(file);
-                    let _ = tokio::fs::remove_file(&temp_path).await;
                     emit_progress(downloaded, "cancelled", None);
-                    let mut active = state.active.lock().await;
-                    active.remove(&rating_key);
+                    // _cleanup guard drops the map entry + temp file on return.
                     return Ok(());
                 }
             }
         }
     }
 
-    // Flush and rename
+    // Flush and rename. Drop the writer first so the OS file handle is closed
+    // before the rename (required on Windows).
     file.flush().await.map_err(|e| format!("Failed to flush file: {}", e))?;
     drop(file);
     tokio::fs::rename(&temp_path, &final_path)
@@ -280,9 +382,8 @@ pub async fn download_media(
     // the real byte count in the complete event.
     emit_progress(downloaded, "complete", None);
 
-    let mut active = state.active.lock().await;
-    active.remove(&rating_key);
-
+    // The _cleanup guard removes the active-map entry (and the now-renamed-away
+    // temp file, which is a no-op) when it drops at end of scope.
     log::info!("[Download] Complete: {} -> {:?}", rating_key, final_path);
     Ok(())
 }
@@ -293,7 +394,10 @@ pub async fn cancel_download(
     rating_key: String,
     state: tauri::State<'_, DownloadManager>,
 ) -> Result<(), String> {
-    let active = state.active.lock().await;
+    let active = state
+        .active
+        .lock()
+        .map_err(|_| "download manager lock poisoned".to_string())?;
     if let Some(tx) = active.get(&rating_key) {
         let _ = tx.send(true);
         log::info!("[Download] Cancelled: {}", rating_key);
@@ -307,14 +411,27 @@ pub async fn delete_download(
     rating_key: String,
     state: tauri::State<'_, DownloadManager>,
 ) -> Result<(), String> {
+    delete_download_impl(&rating_key, &state).await
+}
+
+/// Testable core of [`delete_download`] (no `tauri::State` dependency).
+async fn delete_download_impl(rating_key: &str, manager: &DownloadManager) -> Result<(), String> {
+    // Guard against path traversal via attacker-influenced rating_key: without
+    // this, `join("..")` / an absolute path escapes the downloads dir and
+    // remove_dir_all would recursively delete an arbitrary directory. Log the
+    // reason only, never the raw value (log-injection risk).
+    if let Err(reason) = validate_path_component(rating_key) {
+        log::warn!("[downloads] rejected delete_download: invalid rating_key — {}", reason);
+        return Err(format!("Invalid rating_key: {}", reason));
+    }
     let downloads_dir = {
-        let cached = state.downloads_dir.lock().await;
+        let cached = manager.downloads_dir.lock().await;
         match &*cached {
             Some(dir) => dir.clone(),
             None => resolve_downloads_dir().await?,
         }
     };
-    let item_dir = downloads_dir.join(&rating_key);
+    let item_dir = downloads_dir.join(rating_key);
     if item_dir.exists() {
         tokio::fs::remove_dir_all(&item_dir)
             .await
@@ -359,14 +476,30 @@ pub async fn get_local_file_path(
     rating_key: String,
     state: tauri::State<'_, DownloadManager>,
 ) -> Result<Option<String>, String> {
+    get_local_file_path_impl(&rating_key, &state).await
+}
+
+/// Testable core of [`get_local_file_path`] (no `tauri::State` dependency).
+async fn get_local_file_path_impl(
+    rating_key: &str,
+    manager: &DownloadManager,
+) -> Result<Option<String>, String> {
+    // Guard against path traversal via attacker-influenced rating_key: without
+    // this, `join("..")` / an absolute path escapes the downloads dir and could
+    // enumerate/read files anywhere on disk. Log the reason only, never the raw
+    // value (log-injection risk).
+    if let Err(reason) = validate_path_component(rating_key) {
+        log::warn!("[downloads] rejected get_local_file_path: invalid rating_key — {}", reason);
+        return Err(format!("Invalid rating_key: {}", reason));
+    }
     let downloads_dir = {
-        let cached = state.downloads_dir.lock().await;
+        let cached = manager.downloads_dir.lock().await;
         match &*cached {
             Some(dir) => dir.clone(),
             None => resolve_downloads_dir().await?,
         }
     };
-    let item_dir = downloads_dir.join(&rating_key);
+    let item_dir = downloads_dir.join(rating_key);
     if !item_dir.exists() {
         return Ok(None);
     }
@@ -388,8 +521,27 @@ pub async fn get_local_file_path(
 
 #[cfg(test)]
 mod tests {
-    use super::{progress_at_end, validate_path_component};
+    use super::{
+        delete_download_impl, get_local_file_path_impl, progress_at_end, try_claim_active,
+        validate_part_key, validate_path_component, ActiveMap, DownloadGuard, DownloadManager,
+    };
     use crate::util::redact_url;
+
+    /// Create a unique, existing temp directory for a test (no `tempfile` dep,
+    /// which would require touching the dependency lockfile).
+    fn unique_temp_dir(tag: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir()
+            .join(format!("prexu-test-{}-{}-{}-{}", tag, std::process::id(), nanos, n));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 
     #[test]
     fn unknown_total_never_signals_at_end() {
@@ -522,5 +674,159 @@ mod tests {
         assert!(validate_path_component("file<name").is_err());
         assert!(validate_path_component("file>name").is_err());
         assert!(validate_path_component("file|name").is_err());
+    }
+
+    // ── part_key host-pinning (SSRF) ──
+
+    #[test]
+    fn valid_part_key_is_accepted() {
+        assert!(validate_part_key("/library/parts/12345/1600000000/file.mkv").is_ok());
+        assert!(validate_part_key("/library/parts/1/file.mkv?download=1").is_ok());
+    }
+
+    #[test]
+    fn part_key_without_leading_slash_is_rejected() {
+        // Userinfo injection: `server_url + "@evil.com"` makes evil.com the host.
+        assert!(validate_part_key("@evil.com/steal").is_err());
+        // An absolute URL overrides the host entirely.
+        assert!(validate_part_key("http://evil.com/steal").is_err());
+        // A bare relative path is not server-rooted.
+        assert!(validate_part_key("library/parts/1/file.mkv").is_err());
+        assert!(validate_part_key("").is_err());
+    }
+
+    #[test]
+    fn protocol_relative_part_key_is_rejected() {
+        assert!(validate_part_key("//evil.com/steal").is_err());
+    }
+
+    #[test]
+    fn part_key_with_control_chars_is_rejected() {
+        assert!(validate_part_key("/library\r\nHost: evil").is_err());
+        assert!(validate_part_key("/library\0/x").is_err());
+    }
+
+    // ── concurrent same-key rejection ──
+
+    #[test]
+    fn try_claim_active_rejects_duplicate_key() {
+        let active: ActiveMap = std::sync::Mutex::new(std::collections::HashMap::new());
+        let (tx1, _rx1) = tokio::sync::watch::channel(false);
+        let (tx2, _rx2) = tokio::sync::watch::channel(false);
+        // First claim of the key succeeds.
+        assert!(try_claim_active(&active, "42", tx1).is_ok());
+        // A second, concurrent claim of the SAME key is rejected — the first
+        // download's cancel Sender must not be clobbered.
+        assert!(try_claim_active(&active, "42", tx2).is_err());
+        assert_eq!(active.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn try_claim_active_allows_distinct_keys() {
+        let active: ActiveMap = std::sync::Mutex::new(std::collections::HashMap::new());
+        let (tx1, _rx1) = tokio::sync::watch::channel(false);
+        let (tx2, _rx2) = tokio::sync::watch::channel(false);
+        assert!(try_claim_active(&active, "1", tx1).is_ok());
+        assert!(try_claim_active(&active, "2", tx2).is_ok());
+        assert_eq!(active.lock().unwrap().len(), 2);
+    }
+
+    // ── error-path cleanup (RAII guard) ──
+
+    #[test]
+    fn download_guard_releases_map_entry_and_temp_file_on_drop() {
+        let dir = unique_temp_dir("guard");
+        let temp_path = dir.join("file.mkv.part");
+        std::fs::write(&temp_path, b"partial bytes").unwrap();
+        assert!(temp_path.exists());
+
+        let active: std::sync::Arc<ActiveMap> =
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        let (tx, _rx) = tokio::sync::watch::channel(false);
+        active.lock().unwrap().insert("77".to_string(), tx);
+        assert_eq!(active.lock().unwrap().len(), 1);
+
+        // Simulate a failed / early-returning download: the guard drops at the
+        // end of this scope, mirroring an early `return Err(…)`.
+        {
+            let _guard = DownloadGuard {
+                active: active.clone(),
+                rating_key: "77".to_string(),
+                temp_path: temp_path.clone(),
+            };
+        }
+
+        assert!(
+            active.lock().unwrap().is_empty(),
+            "active-map entry (cancel Sender) must be released on failure"
+        );
+        assert!(!temp_path.exists(), "partial .part temp file must be removed on failure");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── path-traversal rejection at the sinks (with no fs mutation) ──
+
+    #[tokio::test]
+    async fn delete_download_rejects_traversal_and_does_not_mutate_fs() {
+        let base = unique_temp_dir("del");
+        let downloads = base.join("downloads");
+        std::fs::create_dir_all(&downloads).unwrap();
+        // A victim directory OUTSIDE the downloads dir that an unguarded
+        // `join("../victim")` / absolute path would recursively delete.
+        let victim = base.join("victim");
+        std::fs::create_dir_all(&victim).unwrap();
+        std::fs::write(victim.join("keep.txt"), b"important").unwrap();
+
+        let manager = DownloadManager::new();
+        *manager.downloads_dir.lock().await = Some(downloads.clone());
+
+        assert!(
+            delete_download_impl("../victim", &manager).await.is_err(),
+            "'..' traversal rating_key must be rejected"
+        );
+        let victim_abs = victim.to_string_lossy().to_string();
+        assert!(
+            delete_download_impl(&victim_abs, &manager).await.is_err(),
+            "absolute-path rating_key must be rejected"
+        );
+
+        assert!(
+            victim.join("keep.txt").exists(),
+            "delete_download must not escape the downloads dir and delete outside files"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn get_local_file_path_rejects_traversal() {
+        let base = unique_temp_dir("glp");
+        let downloads = base.join("downloads");
+        std::fs::create_dir_all(&downloads).unwrap();
+        let secret = base.join("secret");
+        std::fs::create_dir_all(&secret).unwrap();
+        std::fs::write(secret.join("passwd"), b"root:x:0:0").unwrap();
+
+        let manager = DownloadManager::new();
+        *manager.downloads_dir.lock().await = Some(downloads.clone());
+
+        assert!(
+            get_local_file_path_impl("../secret", &manager).await.is_err(),
+            "'..' traversal rating_key must be rejected, not enumerated"
+        );
+        let secret_abs = secret.to_string_lossy().to_string();
+        assert!(
+            get_local_file_path_impl(&secret_abs, &manager).await.is_err(),
+            "absolute-path rating_key must be rejected"
+        );
+
+        // A valid but non-existent key still returns Ok(None), not an error.
+        assert!(matches!(
+            get_local_file_path_impl("99999", &manager).await,
+            Ok(None)
+        ));
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

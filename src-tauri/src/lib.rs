@@ -242,6 +242,15 @@ fn handle_proxy_request(
 
     // Serve local downloaded files via /local/{ratingKey}
     if let Some(rating_key) = path.strip_prefix("/local/") {
+        // Guard against path traversal: `join("..")` / an absolute rating_key
+        // escapes the downloads dir and would read files anywhere on disk.
+        // Reuse the same validator the download sinks use. Log the reason only,
+        // never the raw value (log-injection risk).
+        if let Err(reason) = crate::downloads::validate_path_component(rating_key) {
+            log::warn!("[Proxy] rejected /local request: invalid rating_key — {}", reason);
+            write_error(&mut stream, 400, "Bad Request")?;
+            return Ok(());
+        }
         if let Some(dl_dir) = downloads_dir {
             let item_dir = std::path::Path::new(dl_dir).join(rating_key);
             // Find the first non-.part file
