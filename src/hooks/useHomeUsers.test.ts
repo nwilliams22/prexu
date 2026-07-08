@@ -213,3 +213,36 @@ describe("useHomeUsersState", () => {
     expect(result.current.switchError).toBeNull();
   });
 });
+
+// Regression for prexu-9f4s.1: the context value must keep a stable identity
+// across re-renders that don't change its state, so AppProviders' unrelated
+// high-frequency re-renders don't re-render every HomeUsers consumer.
+describe("useHomeUsersState — context value identity (prexu-9f4s.1)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetHomeUsers.mockResolvedValue(fakeUsers);
+    mockSwitchHomeUser.mockResolvedValue("new-token");
+    mockDiscoverServers.mockResolvedValue([]);
+  });
+
+  it("returns a stable object across a re-render that doesn't change its state", async () => {
+    const { result, rerender } = renderHook(() => useHomeUsersState());
+    // Wait for the mount fetch to settle so state is quiescent.
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+    const first = result.current;
+    rerender();
+    expect(result.current).toBe(first);
+  });
+
+  it("returns a new object when its own state changes (home users load)", async () => {
+    const { result } = renderHook(() => useHomeUsersState());
+    const before = result.current; // homeUsers still empty here
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+    expect(result.current.homeUsers).toEqual(fakeUsers);
+    expect(result.current).not.toBe(before);
+  });
+});

@@ -272,3 +272,51 @@ describe("useContentRequestState", () => {
     expect(result.current.unreadCount).toBe(0);
   });
 });
+
+// Regression for prexu-9f4s.1: the context value (and its memoized derived
+// fields visibleRequests/unreadCount) must keep a stable identity across
+// re-renders that don't change its state, so AppProviders' high-frequency
+// re-renders don't re-render every ContentRequest consumer app-wide.
+describe("useContentRequestState — context value identity (prexu-9f4s.1)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetContentRequests.mockResolvedValue([]);
+    mockGetRequestsLastRead.mockResolvedValue(0);
+    mockWatchSyncOn.mockReturnValue(vi.fn());
+  });
+
+  it("returns a stable object across a re-render that doesn't change its state", async () => {
+    const { result, rerender } = renderHook(() =>
+      useContentRequestState("token", adminUser),
+    );
+    // Wait for the mount load to settle so state is quiescent.
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+    const first = result.current;
+    rerender();
+    expect(result.current).toBe(first);
+  });
+
+  it("returns a new object when its own state changes (request submitted)", async () => {
+    const { result } = renderHook(() =>
+      useContentRequestState("token", adminUser),
+    );
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+    const before = result.current;
+    act(() => {
+      result.current.submitRequest({
+        tmdbId: 456,
+        mediaType: "movie",
+        title: "New Movie",
+        year: "2025",
+        posterPath: null,
+        overview: "",
+      });
+    });
+    expect(result.current.requests).toHaveLength(1);
+    expect(result.current).not.toBe(before);
+  });
+});
