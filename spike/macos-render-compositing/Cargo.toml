@@ -1,0 +1,49 @@
+# THROWAWAY feasibility spike — beads prexu-ia6w.2.
+#
+# The macOS analog of spike/wayland-render-compositing (prexu-axj4.1). Proves (or
+# refutes) that mpv's render API (libmpv/render.h, OpenGL backend) can composite
+# decoded video frames UNDERNEATH a transparent WKWebView inside ONE NSWindow on
+# Apple Silicon — the make-or-break unknown gating the macOS native-player epic.
+#
+# Widget tree (mirrors how a Tauri/wry webview would stack on macOS):
+#
+#   NSWindow
+#     └─ contentView (layer-backed)
+#          ├─ (base)    NSOpenGLView   ← mpv_render_context_render() draws here
+#          └─ (overlay) WKWebView (drawsBackground = NO) ← HTML/React UI
+#
+# AppKit sibling subviews composite via their backing layers into the window's
+# single surface — the macOS equivalent of GtkOverlay widget stacking.
+#
+# NOT a workspace member. Standalone. Uses the vendored libmpv2 crate (with its
+# render_no_block addition) via a path dependency, exactly like production will.
+# DO NOT SHIP.
+[package]
+name = "macos-render-compositing-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "macos_render_compositing"
+path = "src/main.rs"
+
+[dependencies]
+log = "0.4"
+env_logger = "0.11"
+
+# objc2 (core runtime only): msg_send!/class!/sel! against runtime-looked-up
+# AppKit/WebKit classes. We deliberately bypass the typed objc2-app-kit /
+# objc2-web-kit wrappers for this throwaway (see FINDINGS.md "objc2 vs cocoa").
+objc2 = "0.6"
+
+# The vendored libmpv2 (4.1.0 + render_no_block) — the exact crate production uses.
+libmpv2 = { path = "../../src-tauri/vendor/libmpv2" }
+# Raw sys for the event/log-message loop (request_log_messages, wait_event).
+libmpv2-sys = "4"
+
+# PNG encoding of captured window pixels for evidence/.
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[profile.dev]
+opt-level = 1
