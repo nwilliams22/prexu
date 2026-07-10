@@ -204,19 +204,24 @@ The same pattern applies to two other seams:
 
 ## Local gate: `mise run ci` parity gaps
 
-`mise.toml`'s `ci` task depends on `lint`, `tsc`, `test`, `cargo-check`,
-`e2e`. Compared to CI it is missing:
+**Closed by W10 (prexu-pd1x.10).** `mise.toml`'s `ci` task now depends on
+`lint`, `tsc`, `test`, `clippy-relay`, `test-relay`, `clippy-tauri`,
+`test-tauri`, `e2e`, `hw-probe:selftest`. The Rust gate added:
 
-1. relay-server `cargo test` (the WS integration suite guarding the
+1. `test-relay` — relay-server `cargo test` (WS integration suite guarding the
    keepalive-tick race prexu-waec and rate-limit flake prexu-3a78)
-2. relay-server `cargo clippy --all-targets -- -D warnings` (mise runs bare
-   `cargo check`)
-3. src-tauri `cargo test` — runnable on the Linux dev box (system
-   `libmpv-dev`, see `docs/linux-dev.md`)
-4. src-tauri `cargo clippy`
+2. `clippy-relay` — relay-server `cargo clippy --all-targets -- -D warnings`
+   (replaced the bare `cargo check`)
+3. `test-tauri` — src-tauri `cargo test --lib` (excludes the libmpv-gated
+   `headless_mpv` integration test; system `libmpv-dev`, see `docs/linux-dev.md`)
+4. `clippy-tauri` — src-tauri `cargo clippy --all-targets -- -D warnings`,
+   gated behind a `build` (dist bundle for `generate_context!`)
 
-A dev can green `mise run ci` while breaking every Rust test in the repo.
-Fixed by W10.
+The src-tauri Rust tasks `depend` on a frontend `build`. Note: **Linux**
+src-tauri clippy still runs nowhere in GitHub CI (only the Windows job clippies,
+and it can't see `#[cfg(target_os = "linux")]` code) — W10 immediately caught an
+`assertions_on_constants` lint in `popout.rs` that had been invisible. Adding
+that clippy step to CI's `linux-build` job is a filed follow-up.
 
 ## Prioritized roadmap
 
