@@ -1146,7 +1146,9 @@ impl PlayerState {
     /// pop-out state accessor exercised by the enter/exit state-machine tests;
     /// its former production caller (the legacy host topmost reassert) was
     /// removed when composition hosting became unconditional (prexu-zfyi).
-    #[cfg(target_os = "windows")]
+    /// Cross-platform accessor (W5): the pop-out stash it reads is platform-
+    /// neutral, so the Linux build compiles it for the un-gated state tests.
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     #[allow(dead_code)]
     pub(crate) fn is_in_popout(&self) -> bool {
         self.pre_popout_geometry
@@ -1731,6 +1733,17 @@ mod tests {
         );
         assert!(serde_json::from_str::<MinimizeCorner>(r#""diagonal""#).is_err());
     }
+}
+
+// Cross-platform PlayerState pop-out / minimize-inset state tests (W5, prexu-pd1x.5).
+// These exercise pure state-machine logic — pre_popout_geometry stash round-trip and
+// minimize-inset clear — that is identical on Windows and Linux, so they run in the
+// linux-build CI job too, not only on Windows. The remaining tests in `mod tests` stay
+// Windows-only: they call Windows-gated helpers (compute_minimize_inset, the atomic
+// focus-reassert latch, the geometry throttle/flusher).
+#[cfg(all(test, any(target_os = "windows", target_os = "linux")))]
+mod cross_platform_state_tests {
+    use super::*;
 
     // ── Pop-out enter/exit state transitions ─────────────────────────────
 
@@ -1773,6 +1786,9 @@ mod tests {
         assert!(!state.is_in_popout());
     }
 
+    // Windows-only: inspects the Windows `geom` field (Linux stores minimize in
+    // `linux_margin`, with no cross-platform non-consuming getter yet — see follow-up).
+    #[cfg(target_os = "windows")]
     #[test]
     fn clear_minimize_snapshot_drops_leftover_inset_on_teardown() {
         let state = PlayerState::new();
@@ -1795,6 +1811,9 @@ mod tests {
         assert!(state.geom.lock().unwrap().minimize.is_none());
     }
 
+    // Windows-only: inspects the Windows `geom` field (Linux stores minimize in
+    // `linux_margin`, with no cross-platform non-consuming getter yet — see follow-up).
+    #[cfg(target_os = "windows")]
     #[test]
     fn popout_enter_clears_leftover_minimize_inset() {
         let state = PlayerState::new();
@@ -1811,6 +1830,9 @@ mod tests {
         assert!(state.geom.lock().unwrap().minimize.is_none());
     }
 
+    // Windows-only: inspects the Windows `geom` field (Linux stores minimize in
+    // `linux_margin`, with no cross-platform non-consuming getter yet — see follow-up).
+    #[cfg(target_os = "windows")]
     #[test]
     fn popout_enter_is_noop_on_minimize_when_already_none() {
         let state = PlayerState::new();
@@ -1820,6 +1842,9 @@ mod tests {
         assert!(!state.is_in_popout());
     }
 
+    // Windows-only: inspects the Windows `geom` field (Linux stores minimize in
+    // `linux_margin`, with no cross-platform non-consuming getter yet — see follow-up).
+    #[cfg(target_os = "windows")]
     #[test]
     fn popout_enter_then_exit_round_trips_without_minimize_leaking() {
         let state = PlayerState::new();
