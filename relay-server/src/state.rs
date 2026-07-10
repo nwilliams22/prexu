@@ -34,6 +34,10 @@ pub struct AppState {
     /// api.themoviedb.org / plex.tv on every request. Clone per use —
     /// it's an Arc bump.
     pub http: reqwest::Client,
+    /// WebSocket server-initiated keepalive cadence (unsolicited `Pong`).
+    /// 30s in production; overridable via `with_keepalive_interval` so the
+    /// integration tests can exercise the tick without a 30s wait.
+    pub keepalive_interval: std::time::Duration,
 }
 
 impl Default for AppState {
@@ -50,6 +54,15 @@ impl AppState {
             pending_invites: DashMap::new(),
             tmdb_timestamps: Mutex::new(VecDeque::new()),
             http: reqwest::Client::new(),
+            keepalive_interval: std::time::Duration::from_secs(30),
+        }
+    }
+
+    /// Build an `AppState` with a custom keepalive cadence (tests only).
+    pub fn with_keepalive_interval(interval: std::time::Duration) -> Self {
+        Self {
+            keepalive_interval: interval,
+            ..Self::new()
         }
     }
 
