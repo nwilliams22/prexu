@@ -39,3 +39,6 @@ blob-report/
 *.db
 .beads-credential-key
 .sbom/
+
+# hw-probe generated report (point-in-time on-hardware run output)
+hw-probe-report.md

@@ -1,0 +1,6 @@
+[player:linux] WebKit DMABUF renderer enabled (default)
+[player:linux] mpv render context created (OpenGL backend); starting 60 Hz frame pump
+[player:linux] compositor installed
+[player:linux] first-frame reveal armed — host-window-ready on next rendered frame
+[player:linux] first-frame reveal armed — host-window-ready on next rendered frame
+[player:linux] first frame rendered after arm → player://host-window-ready

@@ -38,6 +38,15 @@ version = "latest"
 [tools."ubi:anchore/grype"]
 version = "latest"
 
+# Nushell — the on-hardware probe suite (scripts/hw-probe, prexu-pd1x.2) is
+# written in nu. Provisioning it here lets `mise run hw-probe:*` (and the
+# CI-side selftest) work on any machine, including the Linux dev box.
+[tools."github:nushell/nushell"]
+version = "latest"
+[tools."github:nushell/nushell".platforms]
+linux-x64 = { asset_pattern = "*x86_64-unknown-linux-gnu*" }
+macos-arm64 = { asset_pattern = "*aarch64-apple-darwin*" }
+
 [tasks.sbom]
 description = "Generate SBOMs for all three ecosystems (npm, tauri, relay)"
 run = """
@@ -77,6 +86,26 @@ run = "cargo check"
 description = "Install Playwright browsers and run E2E tests"
 run = "npx playwright install --with-deps chromium && npm run test:e2e -- --project=chromium"
 
+# On-hardware probe suite (prexu-pd1x.2). `hw-probe` runs the auto checks +
+# writes a report on the Linux dev box; the sub-tasks are the individual
+# entry points. `hw-probe:selftest` is the mutation-checked verdict core — it
+# needs only nushell (no app/GPU/compositor) so it runs in the CI gate.
+[tasks."hw-probe"]
+description = "On-hardware probe suite: log invariants + luminance + probes, with report (Linux dev box)"
+run = "nu scripts/hw-probe/run.nu"
+
+[tasks."hw-probe:selftest"]
+description = "Mutation-checked self-tests for the hw-probe verdict core (CI-safe: nushell only)"
+run = "nu scripts/hw-probe/selftest.nu"
+
+[tasks."hw-probe:log"]
+description = "Structured-log assertion runner over the newest app log"
+run = "nu scripts/hw-probe/log-assert.nu"
+
+[tasks."hw-probe:luminance"]
+description = "Single luminance sample of the current screen (content/navy/black)"
+run = "nu scripts/hw-probe/luminance.nu sample"
+
 [tasks.ci]
-description = "Run full CI pipeline (lint, type check, unit tests, cargo check, E2E tests)"
-depends = ["lint", "tsc", "test", "cargo-check", "e2e"]
+description = "Run full CI pipeline (lint, type check, unit tests, cargo check, E2E, hw-probe selftest)"
+depends = ["lint", "tsc", "test", "cargo-check", "e2e", "hw-probe:selftest"]
