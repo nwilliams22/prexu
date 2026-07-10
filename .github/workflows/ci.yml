@@ -39,6 +39,18 @@ jobs:
       - name: Unit tests
         run: npx vitest run
 
+      # hw-probe verdict core (prexu-pd1x.2): the mutation-checked self-tests for
+      # the on-hardware probe suite. Pure nushell — no app/GPU/compositor — so it
+      # enforces the log-invariant/luminance/probe verdicts on every PR. The
+      # optional end-to-end luminance leg self-skips when ImageMagick v7 is absent.
+      - name: Set up Nushell
+        uses: hustcer/setup-nu@v3
+        with:
+          version: "*"
+
+      - name: hw-probe selftest
+        run: nu scripts/hw-probe/selftest.nu
+
       - name: Relay server clippy
         run: cd relay-server && cargo clippy --all-targets -- -D warnings
 

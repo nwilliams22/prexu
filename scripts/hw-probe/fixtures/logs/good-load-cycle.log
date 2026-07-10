@@ -1,0 +1,16 @@
+[player:linux] WebKit DMABUF renderer enabled (default)
+[player:linux] GtkGLArea realized (GL context current)
+[player:linux] mpv render context created (OpenGL backend); starting 60 Hz frame pump
+[player:linux] compositor installed
+[player:cmd] load_url: reveal-mute armed (linux)
+[player:events] first PlaybackRestart → arming compositor first-frame reveal
+[player:linux] first-frame reveal armed — host-window-ready on next rendered frame
+[player:linux] first frame rendered after arm → player://host-window-ready
+[player:linux] video-margin-ratio applied left=0.0000 right=0.0000 top=0.0000 bottom=0.0000 sub-scale=1.0000 sub-use-margins=true
+[player:cmd] seek 30.000
+[player:cmd] seek 65.500
+[player:cmd] load_url: reveal-mute armed (linux)
+[player:events] first PlaybackRestart → arming compositor first-frame reveal
+[player:linux] first-frame reveal armed — host-window-ready on next rendered frame
+[player:linux] first frame rendered after arm → player://host-window-ready
+[player:linux] video-margin-ratio applied left=0.0000 right=0.0000 top=0.0000 bottom=0.3333 sub-scale=0.6667 sub-use-margins=false

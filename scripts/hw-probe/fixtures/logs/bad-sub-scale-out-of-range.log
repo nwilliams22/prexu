@@ -1,0 +1,6 @@
+[player:linux] WebKit DMABUF renderer enabled (default)
+[player:linux] mpv render context created (OpenGL backend); starting 60 Hz frame pump
+[player:linux] compositor installed
+[player:linux] first-frame reveal armed — host-window-ready on next rendered frame
+[player:linux] first frame rendered after arm → player://host-window-ready
+[player:linux] video-margin-ratio applied left=0.0000 right=0.0000 top=0.0000 bottom=0.1000 sub-scale=1.4200 sub-use-margins=false
