@@ -1031,3 +1031,100 @@ async fn test_message_not_relayed_to_sender() {
         resp
     );
 }
+
+// ── W11 (prexu-pd1x.11): keepalive-Pong + connection reuse ──────────────────
+
+/// Start a test server with a custom (short) keepalive cadence so the
+/// server-initiated Pong tick can be exercised without a 30s wait.
+async fn start_test_server_with_keepalive(interval: Duration) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("failed to bind ephemeral port");
+    let addr = listener.local_addr().unwrap();
+
+    let state = Arc::new(prexu_relay::AppState::with_keepalive_interval(interval));
+    prexu_relay::spawn_cleanup_task(state.clone());
+    let app = prexu_relay::build_router(state);
+
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+
+    addr
+}
+
+/// The server emits an UNSOLICITED keepalive `Pong` on its interval (not a
+/// reply to a client ping). Guards the reader-loop `keepalive.tick()` arm.
+#[tokio::test]
+async fn test_server_keepalive_pong_tick() {
+    let addr = start_test_server_with_keepalive(Duration::from_millis(120)).await;
+    let mut ws = ws_connect(addr).await;
+    authenticate(&mut ws, "keepalive_user").await;
+
+    // Send nothing. Within ~one interval the server should push a pong on its own.
+    let msg = ws_try_recv(&mut ws, Duration::from_millis(700)).await;
+    assert_eq!(
+        msg.expect("expected an unsolicited keepalive pong")["type"],
+        "pong",
+    );
+}
+
+/// A single authenticated connection is reusable across session lifecycles:
+/// create a session, leave it (destroyed while empty), then create another on
+/// the SAME socket.
+#[tokio::test]
+async fn test_ws_connection_reused_across_session_lifecycles() {
+    let addr = start_test_server().await;
+    let mut ws = ws_connect(addr).await;
+    authenticate(&mut ws, "reuse_user").await;
+
+    ws_send(
+        &mut ws,
+        &serde_json::json!({
+            "type": "create_session",
+            "session_id": "reuse-a",
+            "media_title": "Movie A",
+            "media_rating_key": "1",
+            "media_type": "movie"
+        }),
+    )
+    .await;
+    let a = ws_recv(&mut ws).await;
+    assert_eq!(a["type"], "session_created");
+    assert_eq!(a["session_id"], "reuse-a");
+
+    // Leave (alone => session destroyed). Drain any leave-side message.
+    ws_send(&mut ws, &serde_json::json!({ "type": "leave_session" })).await;
+    let _ = ws_try_recv(&mut ws, Duration::from_millis(200)).await;
+
+    // Reuse the SAME connection for a fresh session.
+    ws_send(
+        &mut ws,
+        &serde_json::json!({
+            "type": "create_session",
+            "session_id": "reuse-b",
+            "media_title": "Movie B",
+            "media_rating_key": "2",
+            "media_type": "movie"
+        }),
+    )
+    .await;
+    let b = ws_recv(&mut ws).await;
+    assert_eq!(b["type"], "session_created");
+    assert_eq!(b["session_id"], "reuse-b");
+}
+
+/// The client ping/pong channel is reusable — repeated pings on one connection
+/// each get exactly one pong.
+#[tokio::test]
+async fn test_client_ping_pong_channel_reused() {
+    let addr = start_test_server().await;
+    let mut ws = ws_connect(addr).await;
+    authenticate(&mut ws, "ping_reuse_user").await;
+
+    for _ in 0..3 {
+        ws_send(&mut ws, &serde_json::json!({ "type": "ping" })).await;
+        let resp = ws_recv(&mut ws).await;
+        assert_eq!(resp["type"], "pong");
+    }
+}

@@ -120,8 +120,8 @@ pub async fn handle_connection(ws: WebSocket, state: SharedState) {
     // so a keepalive Pong never races the first broadcast on a freshly-connected
     // socket (prexu-waec — flaky WS integration tests). 30s cadence thereafter.
     let mut keepalive = interval_at(
-        Instant::now() + Duration::from_secs(30),
-        Duration::from_secs(30),
+        Instant::now() + state.keepalive_interval,
+        state.keepalive_interval,
     );
     let state_clone = state.clone();
     let username_clone = username.clone();
