@@ -926,6 +926,57 @@ describe("mute scope (prexu-jphh)", () => {
     const second = renderHook(() => useNativePlayer("ep2"));
     expect(second.result.current.isMuted).toBe(false);
   });
+
+  // W9 (prexu-pd1x.9), plan C.3: raising the volume above zero is an implicit
+  // "I want to hear this" — it must auto-unmute (state + the mpv-side invoke),
+  // funnelled through applyMuted so the Linux reveal-mute workaround still holds.
+  it("raising volume above 0 while muted auto-unmutes (state + player_set_muted)", async () => {
+    const { result } = renderHook(() => useNativePlayer("ep1"));
+    act(() => {
+      result.current.toggleMute();
+    });
+    expect(result.current.isMuted).toBe(true);
+
+    vi.mocked(invoke).mockClear();
+    act(() => {
+      result.current.setVolume(0.5);
+    });
+
+    expect(result.current.isMuted).toBe(false);
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("player_set_muted", { muted: false }),
+    );
+  });
+
+  it("setting volume to 0 does NOT unmute — mute is a distinct control", () => {
+    const { result } = renderHook(() => useNativePlayer("ep1"));
+    act(() => {
+      result.current.toggleMute();
+    });
+    expect(result.current.isMuted).toBe(true);
+
+    vi.mocked(invoke).mockClear();
+    act(() => {
+      result.current.setVolume(0);
+    });
+
+    // Still muted, and no auto-unmute invoke was funnelled.
+    expect(result.current.isMuted).toBe(true);
+    expect(invoke).not.toHaveBeenCalledWith("player_set_muted", { muted: false });
+  });
+
+  it("raising volume while already unmuted does not emit a spurious unmute invoke", () => {
+    const { result } = renderHook(() => useNativePlayer("ep1"));
+    expect(result.current.isMuted).toBe(false);
+
+    vi.mocked(invoke).mockClear();
+    act(() => {
+      result.current.setVolume(0.8);
+    });
+
+    expect(result.current.isMuted).toBe(false);
+    expect(invoke).not.toHaveBeenCalledWith("player_set_muted", { muted: false });
+  });
 });
 
 // ── Linux-only reveal-mute workaround (prexu-axj4.5) ────────────────────────
