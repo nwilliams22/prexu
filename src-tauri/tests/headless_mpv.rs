@@ -25,7 +25,7 @@
 //! The test binary locates libmpv-2.dll via the PATH or the DLL already
 //! copied to target\debug\deps\ at build time (see CI job for details).
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 mod inner {
     use libmpv2::{
         events::{Event, EventContext, PropertyData},
@@ -189,7 +189,7 @@ mod inner {
 // On non-Windows platforms the bundled DLL cannot be loaded; the test is
 // skipped rather than erroring so `cargo test` on Linux (CI ubuntu job) is
 // not broken.
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 #[test]
 #[ignore]
 fn signal_chain_init_fileloaded_duration_eof() {

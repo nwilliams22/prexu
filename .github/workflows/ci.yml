@@ -224,3 +224,4 @@ jobs:
       - name: Test src-tauri
         working-directory: src-tauri
         run: cargo test
+
