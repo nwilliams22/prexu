@@ -241,6 +241,13 @@ only at the mounted-surface layer.
 
 ### W2 — On-hardware probe suite (`scripts/hw-probe`) — L
 
+**Status: implemented (prexu-pd1x.2).** Delivered as `scripts/hw-probe/` (nushell)
++ `mise run hw-probe*` tasks + `docs/hw-probe-runbook.md`. Pure verdict core
+(`verdict.nu`) is mutation-checked by `hw-probe:selftest` in CI; live probes run
+on the dev box. Capture auto-falls-through grim→spectacle→import (grim has no
+KDE support); geometry probes are X11-only per the plan. Validated against a real
+`Prexu.log`: log/timing/zombie/luminance all green.
+
 One command to run on the Linux box against a real Plex server (not CI).
 Components: (1) structured-log assertion runner — ordered invariants from
 `tauri-plugin-log` output (arm→rendered pair exactly once per load, no
