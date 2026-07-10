@@ -2558,8 +2558,11 @@ mod tests {
             // Sanity bound carried over from the pre-fgrt tests: neither
             // degenerate-zero (no fix at all) nor so large it eats most of
             // the video (a modest strip, not a second minimize-sized inset).
-            assert!(POPOUT_SUBTITLE_MARGIN_RATIO > 0.0);
-            assert!(POPOUT_SUBTITLE_MARGIN_RATIO < 0.4);
+            // Compile-time asserts — the operand is a const, so a runtime
+            // assert is a no-op (clippy::assertions_on_constants). These fail
+            // the build if the constant ever drifts out of range.
+            const _: () = assert!(POPOUT_SUBTITLE_MARGIN_RATIO > 0.0);
+            const _: () = assert!(POPOUT_SUBTITLE_MARGIN_RATIO < 0.4);
         }
 
         // ---- PlayerState round trip: set_popout_margin_ratio / margin_ratios --

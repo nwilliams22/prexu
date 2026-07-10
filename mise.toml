@@ -77,10 +77,39 @@ run = "npx tsc --noEmit"
 description = "Run unit tests"
 run = "npx vitest run"
 
-[tasks.cargo-check]
-description = "Check relay server compilation"
+# Frontend bundle. src-tauri's generate_context!() embeds dist/ at compile time
+# (release.yml builds the frontend before any cargo step), so the src-tauri Rust
+# gate below depends on this.
+[tasks.build]
+description = "Build the frontend bundle (dist/)"
+run = "npm run build"
+
+# Rust gate (prexu-pd1x.10). The local gate previously ran only `cargo check` on
+# the relay — src-tauri Rust and clippy never ran, so Rust breakage was invisible
+# locally. Linux src-tauri clippy also runs nowhere in GitHub CI (only the
+# Windows job clippies, and it cannot see #[cfg(target_os = "linux")] code), so
+# this is the only place Linux-only lints/tests are caught before merge.
+[tasks."clippy-relay"]
+description = "Relay server clippy (-D warnings)"
 dir = "relay-server"
-run = "cargo check"
+run = "cargo clippy --all-targets -- -D warnings"
+
+[tasks."test-relay"]
+description = "Relay server tests (WS integration suite)"
+dir = "relay-server"
+run = "cargo test"
+
+[tasks."clippy-tauri"]
+description = "src-tauri clippy (-D warnings); needs the frontend bundle"
+depends = ["build"]
+dir = "src-tauri"
+run = "cargo clippy --all-targets -- -D warnings"
+
+[tasks."test-tauri"]
+description = "src-tauri library unit tests (excludes the libmpv headless_mpv integration test)"
+depends = ["build"]
+dir = "src-tauri"
+run = "cargo test --lib"
 
 [tasks.e2e]
 description = "Install Playwright browsers and run E2E tests"
@@ -107,5 +136,5 @@ description = "Single luminance sample of the current screen (content/navy/black
 run = "nu scripts/hw-probe/luminance.nu sample"
 
 [tasks.ci]
-description = "Run full CI pipeline (lint, type check, unit tests, cargo check, E2E, hw-probe selftest)"
-depends = ["lint", "tsc", "test", "cargo-check", "e2e", "hw-probe:selftest"]
+description = "Full local gate: lint, tsc, unit tests, relay + src-tauri clippy/test, E2E, hw-probe selftest"
+depends = ["lint", "tsc", "test", "clippy-relay", "test-relay", "clippy-tauri", "test-tauri", "e2e", "hw-probe:selftest"]
