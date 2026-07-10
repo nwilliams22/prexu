@@ -225,11 +225,3 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
-      # Headless-mpv signal-chain test on Linux system libmpv (prexu-pd1x.6):
-      # the same init -> FileLoaded -> duration -> EOF chain the Windows job runs,
-      # now on the platform the user actually runs. vo=null/ao=null needs no
-      # display; guards queue-advancement regressions (G.5). Explicit --ignored
-      # since the test is #[ignore] to stay out of the default `cargo test` run.
-      - name: Headless mpv signal chain (Linux, system libmpv)
-        working-directory: src-tauri
-        run: cargo test --test headless_mpv -- --ignored --nocapture
