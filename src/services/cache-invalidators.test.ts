@@ -209,6 +209,25 @@ describe("cache-invalidators", () => {
       expect(cacheGet(deckKey)).toBeNull();
     });
 
+    it("invalidates the recently-added movies/shows shelf caches once the delay has elapsed (prexu-5yyz)", () => {
+      const moviesKey = "dashboard:http://server:32400:movies";
+      const showsKey = "dashboard:http://server:32400:shows";
+      cacheSet(moviesKey, [{ title: "Recent Movie" }], 60 * 60 * 1000);
+      cacheSet(showsKey, [{ title: "Recent Show" }], 60 * 60 * 1000);
+
+      emitWatchStateChanged();
+
+      // Bundled into the same delayed sweep as the deck — still present now.
+      expect(cacheGet(moviesKey)).not.toBeNull();
+      expect(cacheGet(showsKey)).not.toBeNull();
+
+      vi.advanceTimersByTime(DECK_INVALIDATION_DELAY_MS);
+
+      // Cleared so the next dashboard fetch re-reads fresh watch-state badges.
+      expect(cacheGet(moviesKey)).toBeNull();
+      expect(cacheGet(showsKey)).toBeNull();
+    });
+
     // Item-detail cache invalidation on watch-state change (prexu-lz4t).
     // Nested here (rather than a sibling describe) so it reuses this block's
     // single beforeAll(initializeCacheInvalidators()) and fake-timer

@@ -66,6 +66,7 @@ export function initializeCacheInvalidators(): void {
     });
     setTimeout(() => {
       invalidateDeckCaches();
+      invalidateRecentlyAddedCaches();
     }, DECK_INVALIDATION_DELAY_MS);
 
     if (hasOffset) {
@@ -106,6 +107,32 @@ export function invalidateDeckCaches(): void {
     (key) => key.startsWith("dashboard:") && key.endsWith(":deck"),
   );
   logger.debug("api", "invalidated deck caches on watch state change");
+}
+
+/**
+ * Invalidate the recently-added shelf caches (`dashboard:{uri}:movies` and
+ * `dashboard:{uri}:shows`) across all servers on a watch-state change
+ * (prexu-5yyz).
+ *
+ * Those cards carry watch-state badges (watched checkmark / resume progress).
+ * Unlike the deck (prexu-ix52) and item-detail (prexu-lz4t) caches, nothing
+ * cleared these on a watch-state change, so a just-watched item's card kept its
+ * pre-playback badge for up to the shelves' 60-minute TTL — and because
+ * useDashboard's freshness check skips a still-fresh (non-invalidated) entry,
+ * even the periodic visibilitychange revalidation would serve the stale cache.
+ *
+ * Bundled into the same delayed sweep as `invalidateDeckCaches` for the same
+ * PMS-ingestion timing reason (DECK_INVALIDATION_DELAY_MS): a too-early refetch
+ * of the recentlyAdded listing can race the server's async watch-state
+ * ingestion and re-cache the pre-stop watched-state into a fresh 60-min entry.
+ */
+export function invalidateRecentlyAddedCaches(): void {
+  cacheInvalidateWhere(
+    (key) =>
+      key.startsWith("dashboard:") &&
+      (key.endsWith(":movies") || key.endsWith(":shows")),
+  );
+  logger.debug("api", "invalidated recently-added shelf caches on watch state change");
 }
 
 /**
