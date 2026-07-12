@@ -139,6 +139,59 @@ test.describe("library scroll restoration on back/POP", () => {
       .poll(() => main.evaluate((el) => (el as HTMLElement).scrollTop), { timeout: 6000 })
       .toBeGreaterThan(1000);
   });
+
+  test("going back restores filter/sort selection and virtual window grid state", async ({ page }) => {
+    await page.goto("/library/1");
+    await expect(page.getByText("Grid Movie 00")).toBeAttached();
+
+    const sortSelect = page.getByLabel("Sort by");
+    const main = page.locator("main");
+
+    // Verify initial sort is the default (Title)
+    const initialSort = await sortSelect.inputValue();
+    expect(initialSort).toBe("titleSort:asc");
+
+    // Change sort to "Date Added" (addedAt:desc) — this verifies the sort
+    // control state will be preserved. The mock returns the same items regardless
+    // of sort param, but the URL param should be persisted and the control
+    // should reflect the user's last selection.
+    await sortSelect.selectOption("addedAt:desc");
+
+    // Wait for the sort change to apply (API request + grid re-render)
+    await page.waitForLoadState("networkidle");
+
+    // Scroll down to see items at a consistent scroll offset
+    await main.evaluate((el) => el.scrollTo(0, 1400));
+    await expect.poll(() => main.evaluate((el) => (el as HTMLElement).scrollTop)).toBeGreaterThan(1200);
+
+    // Capture the first visible grid card's text content to verify the virtual
+    // window state (which items are rendered) is preserved across POP navigation.
+    const firstVisibleCardBefore = await page.locator(".card-enter").first().textContent();
+    expect(firstVisibleCardBefore).toBeTruthy();
+
+    // Navigate away via the fixed header home button
+    await page.getByRole("button", { name: "Prexu" }).click();
+    await expect(page).toHaveURL(/\/$|\/\?/);
+
+    // Go back
+    await page.goBack();
+    await expect(page).toHaveURL(/\/library\/1/);
+
+    // Assert 1: Filter/sort selection is still active — the sort dropdown
+    // still reflects "Date Added" (addedAt:desc)
+    await expect(sortSelect).toHaveValue("addedAt:desc");
+
+    // Assert 2: Virtual window grid state is preserved — the same first-visible
+    // grid item is still rendered (implies the grid layout and scroll context
+    // are restored)
+    const firstVisibleCardAfter = await page.locator(".card-enter").first().textContent();
+    expect(firstVisibleCardAfter).toBe(firstVisibleCardBefore);
+
+    // Assert 3: Scroll position is restored (from the original test requirement)
+    await expect
+      .poll(() => main.evaluate((el) => (el as HTMLElement).scrollTop), { timeout: 6000 })
+      .toBeGreaterThan(1000);
+  });
 });
 
 // --------------------------------------------------------------------------
