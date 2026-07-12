@@ -213,3 +213,32 @@ describe("ControlsBottomBar responsive compaction (prexu-52ky)", () => {
     expect(container.querySelector("[data-reflow-tick]")?.getAttribute("data-reflow-tick")).toBe("5");
   });
 });
+
+describe("E.1-gate: popout button visibility (prexu-5mse)", () => {
+  let originalResizeObserver: typeof globalThis.ResizeObserver;
+
+  beforeEach(() => {
+    originalResizeObserver = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver;
+    MockResizeObserver.reset();
+  });
+
+  afterEach(() => {
+    globalThis.ResizeObserver = originalResizeObserver;
+  });
+
+  it("renders the popout button when isPiPSupported is true and onTogglePiP is provided", () => {
+    render(<ControlsBottomBar {...baseProps({ isPiPSupported: true, onTogglePiP: vi.fn() })} />);
+    expect(screen.getByLabelText("Pop out floating player")).toBeTruthy();
+  });
+
+  it("does not render the popout button when isPiPSupported is false", () => {
+    render(<ControlsBottomBar {...baseProps({ isPiPSupported: false })} />);
+    expect(screen.queryByLabelText("Pop out floating player")).toBeNull();
+  });
+
+  it("does not render the popout button when onTogglePiP is undefined", () => {
+    render(<ControlsBottomBar {...baseProps({ isPiPSupported: true, onTogglePiP: undefined })} />);
+    expect(screen.queryByLabelText("Pop out floating player")).toBeNull();
+  });
+});
