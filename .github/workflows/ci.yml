@@ -191,6 +191,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: Install Linux dependencies
         run: |
@@ -216,6 +218,10 @@ jobs:
       # bundle must exist before cargo build.
       - name: Build frontend
         run: npm run build
+
+      - name: Lint src-tauri (clippy)
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Build src-tauri (native player, system libmpv)
         working-directory: src-tauri
