@@ -53,6 +53,14 @@ def main [] {
     let badsub = (load-log "bad-sub-scale-out-of-range.log")
     $t = ($t | append (expect "MUTATION: sub-scale 1.42 out of range -> fail" (check-sub-scale $badsub | get status) "fail"))
 
+    # B.4 — use-margins must pair with the not-minimized state (sub_compensation:
+    # zero margins -> (1.0, true); any non-zero margin -> (_, false)).
+    $t = ($t | append (expect "good: use-margins pairs with restore state" (check-sub-use-margins $good | get status) "pass"))
+    let noumlines = (load-log "bad-missing-dmabuf.log")
+    $t = ($t | append (expect "use-margins absent -> skip" (check-sub-use-margins $noumlines | get status) "skip"))
+    let baduseMargins = (load-log "bad-use-margins-not-restored.log")
+    $t = ($t | append (expect "MUTATION: restored (zero margins) but use-margins false -> fail" (check-sub-use-margins $baduseMargins | get status) "fail"))
+
     # inset-clear: absent + not required = skip; absent + required = fail; present = pass
     $t = ($t | append (expect "inset-clear absent, optional -> skip" (check-inset-clear $good | get status) "skip"))
     $t = ($t | append (expect "MUTATION: inset-clear absent, required -> fail" (check-inset-clear $good --required | get status) "fail"))
@@ -93,6 +101,27 @@ def main [] {
     $t = ($t | append (expect "MUTATION: geometry-drift 3px -> fail" (geometry-drift {x: 0, y: 0, w: 1280, h: 720} {x: 3, y: 0, w: 1280, h: 720} | get status) "fail"))
     $t = ($t | append (expect "fullscreen present" (parse-fullscreen-state "_NET_WM_STATE(ATOM) = _NET_WM_STATE_FULLSCREEN") true))
     $t = ($t | append (expect "fullscreen absent" (parse-fullscreen-state "_NET_WM_STATE(ATOM) = _NET_WM_STATE_MAXIMIZED_VERT") false))
+
+    # --- E.3/G.3 click-sweep (point/vector math + liveness verdict; live probe
+    # is X11-only, tested here so it runs on a Wayland/CI box) ---
+    let win = { x: 100, y: 200, w: 800, h: 600 }
+    let pts = (sweep-points $win)
+    $t = ($t | append (expect "sweep-points count = 9 (corners+edges+center)" ($pts | length) 9))
+    $t = ($t | append (expect "sweep-points top-left corner inset" ($pts | first) { x: 104, y: 204 }))
+    $t = ($t | append (expect "sweep-points interior center" ($pts | get 4) { x: 500, y: 500 }))
+    $t = ($t | append (expect "sweep-points bottom-right corner inset" ($pts | last) { x: 896, y: 796 }))
+
+    let vecs = (edge-drag-vectors $win)
+    $t = ($t | append (expect "edge-drag-vectors count = 4" ($vecs | length) 4))
+    let top_vec = ($vecs | where edge == "top" | first)
+    $t = ($t | append (expect "edge-drag top: drags outward (up)" ($top_vec.to.y < $top_vec.from.y) true))
+    let right_vec = ($vecs | where edge == "right" | first)
+    $t = ($t | append (expect "edge-drag right: drags outward (right)" ($right_vec.to.x > $right_vec.from.x) true))
+
+    $t = ($t | append (expect "click-sweep-liveness: pid alive, no zombie -> pass" (click-sweep-liveness-verdict 111 [111 222] [[pid stat comm]; [111 S prexu] [222 R mpv]] | get status) "pass"))
+    $t = ($t | append (expect "click-sweep-liveness: no pid observed -> skip" (click-sweep-liveness-verdict 0 [] [] | get status) "skip"))
+    $t = ($t | append (expect "MUTATION: click-sweep-liveness pid gone after sweep -> fail" (click-sweep-liveness-verdict 111 [222] [[pid stat comm]; [222 R mpv]] | get status) "fail"))
+    $t = ($t | append (expect "MUTATION: click-sweep-liveness pid alive but zombie present -> fail" (click-sweep-liveness-verdict 111 [111 222] [[pid stat comm]; [111 S prexu] [222 "Z" "mpv <defunct>"]] | get status) "fail"))
 
     # --- Optional end-to-end luminance (only if ImageMagick present) ---
     if (which magick | is-not-empty) {

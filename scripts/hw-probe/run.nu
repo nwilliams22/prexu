@@ -1,10 +1,11 @@
 #!/usr/bin/env nu
 # hw-probe orchestrator (W2). One command for the Linux dev box.
 #
-# Runs the fully-automatable checks (log invariants, first-play timing from the
-# log, zombie scan, one luminance sample) and prints the operator-driven probes
-# to run by hand (RSS/CPU/stress seek loops, transition sampling, X11 geometry).
-# Writes a combined Markdown report for human review.
+# Runs the fully-automatable checks (log invariants incl. B.4 use-margins,
+# first-play timing from the log, zombie scan, one luminance sample) and
+# prints the operator-driven probes to run by hand (RSS/CPU/stress seek loops,
+# transition sampling, X11 geometry, X11 click-sweep). Writes a combined
+# Markdown report for human review.
 #
 #   nu scripts/hw-probe/run.nu                       # auto checks + report
 #   nu scripts/hw-probe/run.nu --report out.md       # custom report path
@@ -87,6 +88,7 @@ def main [--logfile: string = "", --report: string = "hw-probe-report.md", --req
     print "  nu scripts/hw-probe/probes.nu rss --samples 20        # N.1 seek-loop RSS"
     print "  nu scripts/hw-probe/probes.nu cpu --samples 20        # N.3 steady CPU"
     print "  nu scripts/hw-probe/probes.nu stress --duration 30sec # G.1 minimize/restore watchdog"
+    print "  nu scripts/hw-probe/probes.nu click-sweep             # E.3/G.3 X11 click/drag sweep + liveness"
     print "  nu scripts/hw-probe/luminance.nu transition --samples 8 # A/D navy-stage scan"
 
     # Report file
