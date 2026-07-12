@@ -70,6 +70,15 @@ jobs:
       - name: E2E tests
         run: npm run test:e2e -- --project=chromium
 
+      # Player-chrome shim (prexu-ceiz): drives the real player chrome via
+      # the "player-chrome-test" Vite mode + usePlayer stub — see
+      # playwright.config.ts and src/hooks/usePlayer.playwright-stub.ts.
+      # Kept as its own step (not folded into the line above) so a failure
+      # here is unambiguous about which project regressed. Cheap to run —
+      # a handful of specs against an already-installed chromium.
+      - name: E2E tests (player-chrome)
+        run: npm run test:e2e -- --project=player-chrome
+
   headless-mpv:
     name: Headless mpv integration (Windows)
     runs-on: windows-latest
@@ -262,6 +271,21 @@ jobs:
       - name: Lint src-tauri (clippy)
         working-directory: src-tauri
         run: cargo clippy --all-targets -- -D warnings
+
+      # Mechanical proof (prexu-ceiz) that the player-chrome-test Vite alias
+      # (vite.config.ts) never reaches a real production build: this IS the
+      # same `npm run build` (mode "production", no --mode flag) that ships
+      # in the actual app bundle below. Grep the built output for the stub
+      # module's distinctive marker string (also used in its own mode-guard
+      # throw) — zero matches proves the stub was never resolved into this
+      # bundle.
+      - name: Verify player-chrome test stub absent from production bundle
+        run: |
+          if grep -R "PLAYER_CHROME_TEST_STUB_v1" dist/; then
+            echo "ERROR: player-chrome test stub leaked into the production bundle" >&2
+            exit 1
+          fi
+          echo "OK: player-chrome test stub marker absent from dist/"
 
       - name: Build src-tauri (native player, system libmpv)
         working-directory: src-tauri
