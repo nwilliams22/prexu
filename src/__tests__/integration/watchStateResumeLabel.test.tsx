@@ -25,7 +25,7 @@
  * See watchStateHarness.tsx for the surfaces and the fake-fetch wiring.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { screen, within, act, cleanup } from "@testing-library/react";
+import { screen, within, act, cleanup, fireEvent } from "@testing-library/react";
 import { formatTimeMs } from "../../utils/time-format";
 import { warmItemDetailCache } from "../../hooks/useItemDetailData";
 import {
@@ -37,6 +37,8 @@ import {
   DURATION_MS,
   makeMovie,
   makeEpisode,
+  makeSeason,
+  makeShow,
   seedDeckCache,
   seedDetailCache,
   installInvalidatorsOnce,
@@ -50,6 +52,8 @@ import {
   StaticCardPopoverSurface,
   HeroContinueSurface,
   DetailHeroSurface,
+  DetailPageSurface,
+  EpisodeListSurface,
 } from "./watchStateHarness";
 import { cacheGet, cacheSet } from "../../services/api-cache";
 
@@ -59,6 +63,11 @@ const A = 372_000; // 6:12 — the PRIOR session's offset (the stale value)
 const B = 470_000; // 7:50 — what the player just reported at stop
 const LABEL_A = formatTimeMs(A); // "6:12"
 const LABEL_B = formatTimeMs(B); // "7:50"
+
+// The season/show ratingKeys the episode-row list surface mounts under —
+// match makeEpisode's default parentRatingKey/grandparentRatingKey exactly.
+const SEASON_RK = "season-1";
+const SHOW_RK = "show-1";
 
 // ── Mocks: ONLY the external boundary (Plex HTTP) + unavoidable app context ─
 // The Plex fetch layer — the ONE thing we fake so the test controls what the
@@ -149,6 +158,15 @@ vi.mock("../../components/detail/DownloadButton", () => ({ default: () => null }
 vi.mock("../../components/player/SubtitleSearchPanel", () => ({ default: () => null }));
 vi.mock("../../services/subtitle-search", () => ({
   setSelectedSubtitleStream: vi.fn(),
+}));
+
+// EpisodeListSection's own context-menu wiring (right-click → watched-toggle
+// /fix-match/playlist dialogs) is a sibling of the resume-label seam, pulling
+// in useDownloads/Tauri storage that would otherwise need mocking for no
+// seam-relevant reason — same "outside the seam" treatment as the leaf
+// buttons above. EpisodeListSection.test.tsx mocks this identically.
+vi.mock("../../hooks/useMediaContextMenu", () => ({
+  useMediaContextMenu: () => ({ openContextMenu: () => {}, overlays: null }),
 }));
 
 // ── Assertion helpers ─────────────────────────────────────────────────────
@@ -479,6 +497,102 @@ describe("detail-page hero — resume label reflects the final offset B", () => 
     expectResumeLabel(LABEL_A);
 
     emitStop(RK, { viewOffsetMs: B });
+    expectResumeLabel(LABEL_B);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SURFACE 3b — ErrorState retry loop on a mounted detail page (J.5). No
+// existing test drives a REAL ErrorState retry click → REAL refetch success
+// → REAL error clear → REAL recovered content, all on one mounted page:
+// ItemDetail.test.tsx mocks BOTH ErrorState and useItemDetailData, so it only
+// proves "clicking Retry calls refreshItem"; useItemDetailData.test.ts stops
+// at "cold load failure surfaces a page-level error" and never retries.
+// DetailPageSurface mounts both real pieces over this suite's same fake
+// Plex-fetch boundary (mockGetItemMetadata) as every other surface here.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("ErrorState retry loop on a mounted detail page (J.5)", () => {
+  it("retry click refetches and recovers real content (resume label) after a cold-load failure", async () => {
+    mockGetItemMetadata.mockRejectedValueOnce(new Error("network down"));
+    await mountAndSettle(<DetailPageSurface />);
+
+    expect(screen.getByTestId("detail-error")).toBeInTheDocument();
+    expect(screen.getByText("network down")).toBeInTheDocument();
+    const retryButton = screen.getByRole("button", { name: "Retry" });
+
+    // PMS is reachable now — the retry-triggered refetch resolves with real
+    // content instead of erroring again.
+    mockGetItemMetadata.mockResolvedValueOnce(makeMovie(RK, A));
+    act(() => {
+      fireEvent.click(retryButton);
+    });
+    await advance(0);
+
+    expect(screen.queryByTestId("detail-error")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expectResumeLabel(LABEL_A);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SURFACE 4 — Season page's episode-row LIST (EpisodeListSection). Mirrors
+// ItemDetail.tsx:579-593. The suite's only prior episode coverage ("applies
+// to an episode row's own resume label" above) mounts an episode as the
+// page's own `item` on DetailHeroSurface — exercising useItemDetailData's
+// listener's `matchesItem` branch only. A season page's episode list instead
+// runs through the listener's `matchesEpisodes` branch (patching one entry
+// INSIDE the mounted `episodes` ARRAY), which was untested until now.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("episode-row list surface (season page) — resume label reflects the final offset B", () => {
+  it("(a) T+0: mounted episodes-list STATE patch updates a row's resume label immediately (matchesEpisodes branch)", async () => {
+    currentRatingKey = SEASON_RK;
+    seedDetailCache(makeSeason(SEASON_RK), [makeEpisode(RK, A)]);
+    await mountAndSettle(<EpisodeListSurface />);
+    expect(screen.getByTestId(`episode-offset-${RK}`)).toHaveTextContent(String(A));
+    const row = screen.getByLabelText(`Play Episode ${RK}`);
+
+    emitStop(RK, { viewOffsetMs: B });
+    // No advance, no refetch: useItemDetailData's matchesEpisodes branch
+    // patches the mounted episodes[] state in place, synchronously — asserted
+    // directly here (decoupled from usePlayAction's own independent itemsRef
+    // patch on the same event, see EpisodeListSurface's doc comment).
+    expect(screen.getByTestId(`episode-offset-${RK}`)).toHaveTextContent(String(B));
+
+    clickPlay(row);
+    expectResumeLabel(LABEL_B);
+    expectNoResumeLabel(LABEL_A);
+  });
+
+  it("(b) a payload-less stop's broad item-detail invalidation forces a genuine refetch that corrects a listed episode's resume label", async () => {
+    currentRatingKey = SEASON_RK;
+    seedDetailCache(makeSeason(SEASON_RK), [makeEpisode(RK, A)]);
+    const first = await mountAndSettle(<EpisodeListSurface />);
+
+    // PMS has now ingested the stop — wire the season fetch chain to reflect
+    // it BEFORE the invalidation below forces a remount to refetch.
+    mockGetItemMetadata.mockImplementation(
+      async (_uri: string, _token: string, key: string) => {
+        if (key === SEASON_RK) return makeSeason(SEASON_RK);
+        return makeShow(SHOW_RK);
+      },
+    );
+    mockGetItemChildren.mockImplementation(
+      async (_uri: string, _token: string, key: string) => {
+        if (key === SEASON_RK) return [makeEpisode(RK, B)];
+        return []; // siblingSeasons
+      },
+    );
+
+    // Payload-less (no ratingKey) event: no in-place patch anywhere — only
+    // cache-invalidators' BROAD, undelayed item-detail sweep (the one branch
+    // that reaches a season-keyed bundle; the ratingKey-precise branch
+    // documented in cache-invalidators.ts's "Known gap" comment cannot)
+    // clears the season's cached bundle.
+    emitLegacyStop();
+
+    first.unmount();
+    await mountAndSettle(<EpisodeListSurface />);
+    clickPlay(screen.getByLabelText(`Play Episode ${RK}`));
     expectResumeLabel(LABEL_B);
   });
 });
