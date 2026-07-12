@@ -1,9 +1,11 @@
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use tokio::net::TcpListener;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream};
@@ -1127,4 +1129,132 @@ async fn test_client_ping_pong_channel_reused() {
         let resp = ws_recv(&mut ws).await;
         assert_eq!(resp["type"], "pong");
     }
+}
+
+// ── N.4 (prexu-p8hy): TMDb proxy reuses the shared reqwest::Client ─────────
+//
+// pd1x.11 (above) proved WebSocket connection reuse but never touched the
+// HTTP side: `AppState::http` (state.rs) is a single shared `reqwest::Client`
+// so that TMDb proxy requests reuse one pooled upstream connection instead of
+// paying a fresh TCP+TLS handshake per call. This section proves that.
+
+/// A fixed JSON body every stub response answers with. Content doesn't
+/// matter — the proxy test only asserts success + connection count.
+const STUB_BODY: &[u8] = br#"{"results":[]}"#;
+
+/// Start a minimal HTTP/1.1 stub server: a bare `TcpListener` accept loop
+/// that counts every ACCEPTED TCP connection in an `AtomicUsize` and speaks
+/// just enough HTTP/1.1 keep-alive to answer each request on that connection
+/// with a fixed JSON body. Returns the stub's address and a handle to the
+/// connection counter.
+async fn start_counting_stub() -> (SocketAddr, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("failed to bind stub port");
+    let addr = listener.local_addr().unwrap();
+    let connections = Arc::new(AtomicUsize::new(0));
+    let counter = connections.clone();
+
+    tokio::spawn(async move {
+        loop {
+            let (stream, _) = match listener.accept().await {
+                Ok(pair) => pair,
+                Err(_) => break,
+            };
+            counter.fetch_add(1, Ordering::SeqCst);
+            tokio::spawn(serve_stub_connection(stream));
+        }
+    });
+
+    (addr, connections)
+}
+
+/// Serve one keep-alive HTTP/1.1 connection: read and answer requests in a
+/// loop with a fixed JSON body until the peer closes the socket.
+async fn serve_stub_connection(mut stream: TcpStream) {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 1024];
+
+    loop {
+        buf.clear();
+        loop {
+            match stream.read(&mut chunk).await {
+                Ok(0) => return, // peer closed the connection
+                Ok(n) => {
+                    buf.extend_from_slice(&chunk[..n]);
+                    if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                Err(_) => return,
+            }
+        }
+
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n",
+            STUB_BODY.len()
+        );
+        if stream.write_all(response.as_bytes()).await.is_err() {
+            return;
+        }
+        if stream.write_all(STUB_BODY).await.is_err() {
+            return;
+        }
+    }
+}
+
+/// Start a test relay server whose TMDb proxy is pointed at `tmdb_base`
+/// instead of the real TMDb API (`AppState::with_tmdb_api_base`).
+async fn start_test_server_with_tmdb_base(tmdb_base: String) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("failed to bind ephemeral port");
+    let addr = listener.local_addr().unwrap();
+
+    let state = Arc::new(prexu_relay::AppState::with_tmdb_api_base(tmdb_base));
+    prexu_relay::spawn_cleanup_task(state.clone());
+    let app = prexu_relay::build_router(state);
+
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+
+    addr
+}
+
+/// N sequential TMDb proxy requests through the relay reuse ONE upstream TCP
+/// connection because every handler clones the same `AppState::http`
+/// `reqwest::Client`, which owns one pooled connection per host. Guards
+/// against a regression to a fresh `reqwest::Client::new()` per request.
+#[tokio::test]
+async fn test_tmdb_proxy_reuses_shared_http_client() {
+    // SAFETY (test-only): no other test reads TMDB_API_KEY, and this
+    // process-wide env var only affects this test binary.
+    std::env::set_var("TMDB_API_KEY", "test-key");
+
+    let (stub_addr, connections) = start_counting_stub().await;
+    let relay_addr = start_test_server_with_tmdb_base(format!("http://{}", stub_addr)).await;
+
+    const N: usize = 5;
+    for i in 0..N {
+        let url = format!(
+            "http://{}/tmdb/search/movie?query=test{}&page=1",
+            relay_addr, i
+        );
+        let resp = reqwest::get(&url).await.expect("proxy request failed");
+        assert!(
+            resp.status().is_success(),
+            "request {} failed: {}",
+            i,
+            resp.status()
+        );
+        let _ = resp.text().await.unwrap();
+    }
+
+    assert_eq!(
+        connections.load(Ordering::SeqCst),
+        1,
+        "expected exactly one upstream TCP connection reused across {} proxy requests",
+        N
+    );
 }
