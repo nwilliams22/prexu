@@ -21,7 +21,8 @@ fn default_page() -> u32 {
     1
 }
 
-const TMDB_API_BASE: &str = "https://api.themoviedb.org/3";
+/// Real TMDb API base URL; also the default for `AppState::tmdb_api_base`.
+pub(crate) const TMDB_API_BASE: &str = "https://api.themoviedb.org/3";
 
 /// Boxed error response. Boxing keeps the `Result` `Err`-variant small
 /// (axum's `Response` is ~128 bytes), satisfying clippy's `result_large_err`.
@@ -108,7 +109,7 @@ pub async fn search_movie(
     let client = state.http.clone();
     let url = format!(
         "{}/search/movie?query={}&page={}&include_adult=false&language=en-US",
-        TMDB_API_BASE,
+        state.tmdb_api_base,
         urlencoding::encode(&params.query),
         params.page,
     );
@@ -126,7 +127,7 @@ pub async fn search_tv(
     let client = state.http.clone();
     let url = format!(
         "{}/search/tv?query={}&page={}&include_adult=false&language=en-US",
-        TMDB_API_BASE,
+        state.tmdb_api_base,
         urlencoding::encode(&params.query),
         params.page,
     );
@@ -144,7 +145,7 @@ pub async fn search_person(
     let client = state.http.clone();
     let url = format!(
         "{}/search/person?query={}&include_adult=false&language=en-US",
-        TMDB_API_BASE,
+        state.tmdb_api_base,
         urlencoding::encode(&params.query),
     );
     proxy_tmdb(&client, &url, &api_key).await
@@ -161,7 +162,7 @@ pub async fn find_by_external_id(
     let client = state.http.clone();
     let url = format!(
         "{}/find/{}?external_source=imdb_id&language=en-US",
-        TMDB_API_BASE, external_id,
+        state.tmdb_api_base, external_id,
     );
     proxy_tmdb(&client, &url, &api_key).await
 }
@@ -175,7 +176,7 @@ pub async fn person_detail(
     check_rate_limit(&state).map_err(|e| *e)?;
     let api_key = get_api_key().map_err(|e| *e)?;
     let client = state.http.clone();
-    let url = format!("{}/person/{}?language=en-US", TMDB_API_BASE, person_id);
+    let url = format!("{}/person/{}?language=en-US", state.tmdb_api_base, person_id);
     proxy_tmdb(&client, &url, &api_key).await
 }
 
@@ -190,7 +191,7 @@ pub async fn person_credits(
     let client = state.http.clone();
     let url = format!(
         "{}/person/{}/combined_credits?language=en-US",
-        TMDB_API_BASE, person_id,
+        state.tmdb_api_base, person_id,
     );
     proxy_tmdb(&client, &url, &api_key).await
 }
@@ -206,7 +207,7 @@ pub async fn movie_detail(
     let client = state.http.clone();
     let url = format!(
         "{}/movie/{}?language=en-US&append_to_response=credits",
-        TMDB_API_BASE, movie_id,
+        state.tmdb_api_base, movie_id,
     );
     proxy_tmdb(&client, &url, &api_key).await
 }
@@ -222,7 +223,7 @@ pub async fn tv_detail(
     let client = state.http.clone();
     let url = format!(
         "{}/tv/{}?language=en-US&append_to_response=credits",
-        TMDB_API_BASE, tv_id,
+        state.tmdb_api_base, tv_id,
     );
     proxy_tmdb(&client, &url, &api_key).await
 }
