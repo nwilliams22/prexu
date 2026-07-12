@@ -13,17 +13,23 @@ _.path = ["{{env.HOME}}/.cargo/bin"]
 # (.beads/embeddeddolt) and `bd dolt push/pull` work without it. Left unset;
 # restore only if switching back to server mode.
 
-# Beads issue tracker + its Dolt backend, so `mise install` provisions `bd` on
-# any machine (e.g. the Linux dev box). The task graph itself travels in git as
-# .beads/issues.jsonl; bd rebuilds its local Dolt DB from that jsonl on first
-# run. Asset patterns per the beads install docs — verify on the box if a
-# release layout changes.
+# Beads issue tracker, so `mise install` provisions `bd` on any machine (e.g.
+# the Linux dev box). bd 1.1+ runs an embedded Dolt engine (.beads/embeddeddolt,
+# gitignored) — the canonical store. Sync rides the git remote as refs/dolt/data
+# (`bd dolt push/pull`); fresh clones run `bd bootstrap`. The tracked
+# .beads/issues.jsonl is a passive export (grep/viewers/bootstrap fallback),
+# not the source of truth. Asset patterns per the beads install docs — verify
+# on the box if a release layout changes. (Upstream repo is now
+# github.com/gastownhall/beads; the steveyegge URL redirects.)
 [tools."github:steveyegge/beads"]
 version = "latest"
 [tools."github:steveyegge/beads".platforms]
 linux-x64 = { asset_pattern = "beads_*_linux_amd64.tar.gz" }
 macos-arm64 = { asset_pattern = "beads_*_darwin_arm64.tar.gz" }
 
+# Optional since the bd 1.1.0 re-init: the embedded Dolt engine needs no
+# external dolt binary. Kept only for manual `dolt` CLI inspection of the DB
+# and as a fallback if we ever switch to `bd init --server` mode.
 [tools."github:dolthub/dolt"]
 version = "latest"
 [tools."github:dolthub/dolt".platforms]
