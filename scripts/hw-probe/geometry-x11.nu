@@ -29,16 +29,8 @@ def require-x11 []: nothing -> bool {
     }
 }
 
-def find-window [name: string]: nothing -> record {
-    let rows = (
-        ^wmctrl -lG
-        | lines
-        | each { |l| parse-wmctrl-geometry $l }
-        | where { |r| ($r | is-not-empty) }
-    )
-    let match = ($rows | where { |r| ($r.title | str downcase | str contains ($name | str downcase)) })
-    if ($match | is-empty) { {} } else { $match | first }
-}
+# find-window is shared with the E.3/G.3 click-sweep probe; it lives in
+# lib.nu (imported via `use lib.nu *` above) and is no longer defined here.
 
 # Primary screen dims via xrandr; {0,0} if unavailable.
 def screen-dims []: nothing -> record {
