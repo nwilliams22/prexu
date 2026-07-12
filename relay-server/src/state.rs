@@ -34,6 +34,12 @@ pub struct AppState {
     /// api.themoviedb.org / plex.tv on every request. Clone per use —
     /// it's an Arc bump.
     pub http: reqwest::Client,
+    /// Base URL the TMDb proxy sends requests to. Defaults to the real TMDb
+    /// API; overridable via `with_tmdb_api_base` so integration tests can
+    /// point the proxy at a local stub server and prove requests reuse
+    /// `http`'s pooled connection instead of opening a fresh one per call
+    /// (prexu-p8hy).
+    pub tmdb_api_base: String,
     /// WebSocket server-initiated keepalive cadence (unsolicited `Pong`).
     /// 30s in production; overridable via `with_keepalive_interval` so the
     /// integration tests can exercise the tick without a 30s wait.
@@ -54,6 +60,7 @@ impl AppState {
             pending_invites: DashMap::new(),
             tmdb_timestamps: Mutex::new(VecDeque::new()),
             http: reqwest::Client::new(),
+            tmdb_api_base: crate::tmdb_proxy::TMDB_API_BASE.to_string(),
             keepalive_interval: std::time::Duration::from_secs(30),
         }
     }
@@ -62,6 +69,16 @@ impl AppState {
     pub fn with_keepalive_interval(interval: std::time::Duration) -> Self {
         Self {
             keepalive_interval: interval,
+            ..Self::new()
+        }
+    }
+
+    /// Build an `AppState` with a custom TMDb proxy base URL (tests only), so
+    /// the proxy can be pointed at a local stub server instead of the real
+    /// TMDb API (prexu-p8hy).
+    pub fn with_tmdb_api_base(base: String) -> Self {
+        Self {
+            tmdb_api_base: base,
             ..Self::new()
         }
     }
