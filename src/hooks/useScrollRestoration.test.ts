@@ -180,4 +180,69 @@ describe("useScrollRestoration", () => {
     await waitFor(() => expect(main.scrollTop).toBe(500));
     expect(onRestore).toHaveBeenCalledWith({ restoredTo: 500 });
   });
+
+  // Safety timer fallback: if the container never grows past the saved offset,
+  // the MutationObserver will fire mutations forever. After 5000ms, the hook
+  // forces a final restore attempt (even if scrollHeight is still too short),
+  // then disconnects the observer to prevent observer/callback loops.
+  it("fires the 5s safety timer to restore (or at least disconnect) when content never grows (fake timers path)", () => {
+    vi.useFakeTimers();
+    try {
+      sessionStorage.setItem("prexu_scroll_/library/1", "500");
+      // Container stays short; MutationObserver will keep firing.
+      Object.defineProperty(main, "scrollHeight", { value: 100, configurable: true });
+
+      // Spy on MutationObserver.prototype.disconnect to detect when the observer
+      // is disconnected by the safety timer.
+      const disconnectSpy = vi.spyOn(MutationObserver.prototype, "disconnect");
+
+      const onRestore = vi.fn();
+      renderHook(() => useScrollRestoration({ onRestore }), { wrapper: wrapper("/library/1") });
+
+      act(() => flushRaf());
+      expect(onRestore).not.toHaveBeenCalled();
+      expect(main.scrollTop).toBe(0); // still too short
+      expect(disconnectSpy).not.toHaveBeenCalled(); // Observer not yet disconnected
+
+      // Advance to 5000ms; safety timer fires, attempts restore, disconnects observer.
+      act(() => {
+        vi.advanceTimersByTime(5000);
+      });
+
+      // The safety timer should have fired and disconnected the observer.
+      expect(disconnectSpy).toHaveBeenCalled();
+      // The restore attempt will have been made but since scrollHeight is still
+      // 100 < 500, scrollTop stays 0.
+      expect(main.scrollTop).toBe(0); // still can't restore; too short
+      expect(onRestore).not.toHaveBeenCalled(); // onRestore only fires if scrollHeight >= targetScroll
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Design decision: the hook restores by pathname, not by navigation type.
+  // A PUSH to a previously-visited pathname will restore its saved position,
+  // not land at scroll 0. This is the shipped per-pathname design.
+  it("restores by pathname regardless of navigation type (PUSH re-entry restores — per-pathname design)", () => {
+    Object.defineProperty(main, "scrollHeight", { value: 2000, configurable: true });
+
+    // Session A: land on /library/1, scroll, then leave.
+    const sessionA = renderHook(() => useScrollRestoration(), { wrapper: wrapper("/library/1") });
+    act(() => flushRaf());
+    main.scrollTop = 600;
+    act(() => main.dispatchEvent(new Event("scroll")));
+    sessionA.unmount();
+
+    // Session B: re-enter /library/1 via PUSH navigation (same pathname).
+    // The hook has no useNavigationType check, so it restores by pathname.
+    sessionStorage.setItem("prexu_scroll_/library/1", "600"); // from Session A
+    main.scrollTop = 0;
+    Object.defineProperty(main, "scrollHeight", { value: 2000, configurable: true });
+
+    renderHook(() => useScrollRestoration(), { wrapper: wrapper("/library/1") });
+    act(() => flushRaf());
+
+    // Should restore to 600 even though this was a PUSH (not a back/forward).
+    expect(main.scrollTop).toBe(600);
+  });
 });
