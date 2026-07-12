@@ -176,6 +176,40 @@ jobs:
           RUST_LOG: debug
         run: cargo test --test headless_mpv -- --nocapture --ignored
 
+  headless-mpv-linux:
+    name: Headless mpv integration (Linux, libmpv 2.x)
+    runs-on: ubuntu-24.04
+    # Validates the signal chain on Linux using system libmpv with API 2.x.
+    # ubuntu-24.04 ships libmpv.so.2 (mpv 2.x), whereas ubuntu-22.04 has only
+    # API 1.x (mpv 0.35) and fails with VersionMismatch. This job mirrors the
+    # Windows headless job but uses the system libmpv instead of a bundled DLL.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install libmpv (API 2.x)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libmpv-dev
+
+      - name: Verify libmpv version
+        run: |
+          echo "Installed libmpv version:"
+          apt-cache policy libmpv-dev
+          echo ""
+          echo "libmpv.so symlinks:"
+          ldconfig -p | grep libmpv
+
+      - name: Run headless_mpv integration test
+        working-directory: src-tauri
+        env:
+          RUST_LOG: debug
+        run: cargo test --test headless_mpv -- --nocapture --ignored
+
   linux-build:
     name: Linux src-tauri build (native player + libmpv)
     runs-on: ubuntu-22.04

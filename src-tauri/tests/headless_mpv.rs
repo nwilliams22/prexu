@@ -15,8 +15,12 @@
 //! GATING:
 //!   #[ignore]              — keeps test out of `cargo test` default run;
 //!                            requires explicit `-- --ignored` to run.
-//!   #[cfg(target_os = "windows")] — bundled libmpv-2.dll is a Windows binary;
-//!                            linux/mac runners cannot load it.
+//!   #[cfg(any(target_os = "windows", target_os = "linux"))]
+//!                          — Windows: uses bundled libmpv-2.dll (API 2.x).
+//!                            Linux: requires system libmpv-dev (API 2.x / libmpv.so.2).
+//!                            macOS: not supported (no player module compiles there).
+//!                            NOTE: Linux CI uses ubuntu-24.04 which ships libmpv 2.x;
+//!                            ubuntu-22.04 has only API 1.x (mpv 0.35) and will fail.
 //!
 //! Running locally:
 //!   cd src-tauri
@@ -186,16 +190,16 @@ mod inner {
     }
 }
 
-// On non-Windows platforms the bundled DLL cannot be loaded; the test is
-// skipped rather than erroring so `cargo test` on Linux (CI ubuntu job) is
-// not broken.
+// On non-Windows/Linux platforms the test cannot run (Windows uses bundled libmpv-2.dll,
+// Linux requires system libmpv with API 2.x). The skip stub allows `cargo test` on macOS
+// to complete without error.
 #[cfg(not(any(target_os = "windows", target_os = "linux")))]
 #[test]
 #[ignore]
 fn signal_chain_init_fileloaded_duration_eof() {
     eprintln!(
-        "[headless_mpv] skipped on non-Windows — libmpv-2.dll is a Windows binary. \
-         Run this test on Windows with: \
-         cd src-tauri && cargo test --test headless_mpv -- --nocapture --ignored"
+        "[headless_mpv] skipped on this platform. Test requires: \
+         Windows (bundled libmpv-2.dll) or Linux with libmpv-dev (API 2.x / libmpv.so.2). \
+         Run with: cd src-tauri && cargo test --test headless_mpv -- --nocapture --ignored"
     );
 }
