@@ -825,11 +825,8 @@ pub async fn player_enter_popout(
     // storm to read the stale inset and shrink the host to the bottom-right
     // corner of the new popout window. Clearing here is authoritative —
     // subsequent Resized events will all see minimize=None.
-    {
-        let had = state.geom.lock().map(|g| g.minimize.is_some()).unwrap_or(false);
-        if had {
-            log::debug!("[player:popout] clearing leftover minimize inset on enter");
-        }
+    if state.get_minimize().is_some() {
+        log::debug!("[player:popout] clearing leftover minimize inset on enter");
         let _ = state.set_minimize(None);
     }
 

@@ -1300,6 +1300,17 @@ impl PlayerState {
             .map(|mut g| g.minimize = state)
             .map_err(|_| "minimize lock poisoned".to_string())
     }
+
+    /// Read the current in-window minimize corner-inset state (Windows).
+    /// Non-consuming (unlike `clear_minimize_snapshot`), so it can be used by
+    /// `player_enter_popout`'s mutual-exclusion guard and by state-round-trip
+    /// tests without disturbing what's being asserted. Mirrors the Linux
+    /// `get_minimize` accessor so `cross_platform_state_tests` can assert
+    /// minimize-inset state via the same call on both platforms (prexu-b3vq).
+    #[cfg(target_os = "windows")]
+    pub(crate) fn get_minimize(&self) -> Option<MinimizeState> {
+        self.geom.lock().ok().and_then(|g| g.minimize)
+    }
 }
 
 impl Default for PlayerState {
@@ -1308,7 +1319,15 @@ impl Default for PlayerState {
     }
 }
 
-#[cfg(all(test, target_os = "windows"))]
+// This module used to be whole-file `#[cfg(all(test, target_os = "windows"))]`.
+// Un-gated (prexu-b3vq) for `any(windows, linux)` at the module level; tests that
+// exercise genuinely Windows-only production code (inset-math, the focus-reassert
+// atomic latch, the geometry throttle/flusher — see each group's own comment below)
+// keep an individual `#[cfg(target_os = "windows")]`. Everything else here — the
+// timeline-context tests, the `is_in_popout` tests, the soft-stop no-op test, and the
+// `MinimizeCorner` deserialize test — exercises cross-platform code paths and now runs
+// on Linux too.
+#[cfg(all(test, any(target_os = "windows", target_os = "linux")))]
 mod tests {
     use super::*;
 
@@ -1368,8 +1387,20 @@ mod tests {
         assert!(state.take_timeline_ctx().is_none());
     }
 
+    // ---- Minimize-inset math (Windows-only) -----------------------------
+    // `compute_minimize_inset` computes an absolute PHYSICAL-PIXEL host rect
+    // for Win32 `SetWindowPos` — a representation that only exists under the
+    // Windows composition host (see the fn's own doc in `geometry.rs`). Linux
+    // has no separate host window to position; it insets mpv's video area
+    // directly via ratio-based `video-margin-ratio-*` GTK properties instead
+    // (`MarginState`/`compute_margin_ratios` in `commands::minimize`, which
+    // has its own Linux-side tests). There is no shared platform-neutral core
+    // to extract between the two — the math genuinely differs (absolute px
+    // rect vs. ratio of live allocation) — so these stay Windows-only.
+
     /// 360×200 mini-rect at 16 px padding, bottom-right corner. Mirrors
     /// `DEFAULT_MINI_RECT` from `src/utils/mini-rect.ts`.
+    #[cfg(target_os = "windows")]
     const DEFAULT: MinimizeState = MinimizeState {
         width: 360,
         height: 200,
@@ -1377,6 +1408,7 @@ mod tests {
         corner: MinimizeCorner::BottomRight,
     };
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn inset_at_scale_1_matches_legacy_physical_math() {
         // 1920×1080 client at 100% DPI. With logical = physical at 1.0,
@@ -1388,6 +1420,7 @@ mod tests {
         assert_eq!((x, y, w, h), (1544, 864, 360, 200));
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn inset_rescales_when_dpi_changes() {
         // Move from 100% → 125% DPI on a 2400×1350 physical client (which
@@ -1402,6 +1435,7 @@ mod tests {
         assert_eq!((x, y, w, h), (1930, 1080, 450, 250));
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn inset_honors_left_anchored_corners() {
         let state = MinimizeState {
@@ -1413,6 +1447,7 @@ mod tests {
         assert_eq!((x, y, w, h), (116, 66, 360, 200));
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn inset_clamps_when_client_smaller_than_mini() {
         // User shrunk the window below the mini width — offsets must clamp
@@ -1424,6 +1459,11 @@ mod tests {
     }
 
     // ---- Focus-restore host reassert guard (prexu-5l5) -----------------
+    // `is_in_popout_*` below exercise the cross-platform `pre_popout_geometry`
+    // stash + `is_in_popout()` accessor and run on Linux too. The
+    // `focus_reassert_latch_*` tests further down exercise the atomic
+    // focus-reassert latch, which stays Windows-only — see that group's own
+    // comment.
 
     #[test]
     fn is_in_popout_false_on_fresh_state() {
@@ -1455,12 +1495,22 @@ mod tests {
         assert!(!state.is_in_popout());
     }
 
+    // The atomic focus-reassert latch (`pending_focus_reassert` /
+    // `mark_focus_lost` / `consume_focus_reassert`) exists purely to gate
+    // `reassert_host_on_focus`, which re-runs the DirectComposition commit on
+    // a stale Windows composition-host swapchain after alt-tab occlusion (see
+    // that fn's doc, prexu-5l5). Linux has no separate host swapchain to go
+    // stale in this way (the GtkGLArea render loop doesn't suffer the same
+    // occlusion staleness), so there is no Linux behavior for this latch to
+    // gate — it stays Windows-only.
+    #[cfg(target_os = "windows")]
     #[test]
     fn focus_reassert_latch_starts_clear() {
         let state = PlayerState::new();
         assert!(!state.consume_focus_reassert());
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn focus_reassert_latch_set_then_consume_once() {
         let state = PlayerState::new();
@@ -1469,6 +1519,7 @@ mod tests {
         assert!(!state.consume_focus_reassert(), "second consume returns false — latch cleared");
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn focus_reassert_latch_multi_set_still_consumes_once() {
         // Multiple Focused(false) events in a row (Tauri can emit
@@ -1483,6 +1534,10 @@ mod tests {
     }
 
     // ---- Soft stop (prexu-7fe) -----------------------------------------
+    // `stop_playback` is cross-platform (`#[cfg(any(windows, linux))]` on
+    // `PlayerState::stop_playback`), so its no-op-before-init behavior is
+    // verified on both. `reassert_host_on_focus` itself takes a raw Win32
+    // `HWND` and only exists on Windows, so its no-op test stays gated.
 
     #[test]
     fn stop_playback_is_noop_when_mpv_not_init() {
@@ -1492,6 +1547,7 @@ mod tests {
         assert!(!state.is_initialised());
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn reassert_host_on_focus_is_noop_when_mpv_not_init() {
         let state = PlayerState::new();
@@ -1502,9 +1558,18 @@ mod tests {
     }
 
     // ---- Trailing-edge geometry flush (prexu-hhx) ----------------------
+    // This whole group drives `PlayerState::geom` (a `Mutex<GeomState>`) and
+    // `GEOMETRY_SYNC_MIN_INTERVAL` — both Windows-only: the throttle exists
+    // to coalesce Win32 `SetWindowPos` calls ahead of an mpv D3D11 swapchain
+    // rebuild storm (see the field doc on `geom`). Linux has no host window
+    // to throttle SetWindowPos-equivalent calls for — GTK's own widget
+    // allocation drives resize directly, with nothing analogous to debounce.
+    // There is no platform-neutral core to extract here without inventing a
+    // throttle Linux doesn't need, so this stays Windows-only.
 
     /// Force the throttle clock far enough in the past that the next
     /// `sync_geometry` call is guaranteed to pass the throttle gate.
+    #[cfg(target_os = "windows")]
     fn release_throttle(state: &PlayerState) {
         let past = Instant::now()
             .checked_sub(GEOMETRY_SYNC_MIN_INTERVAL * 2)
@@ -1512,6 +1577,7 @@ mod tests {
         state.geom.lock().unwrap().last_sync = past;
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn throttled_sync_geometry_stores_pending() {
         let state = PlayerState::new();
@@ -1527,6 +1593,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn multi_throttled_overwrites_to_latest() {
         let state = PlayerState::new();
@@ -1540,6 +1607,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn flush_consumes_pending_geometry() {
         let state = PlayerState::new();
@@ -1562,6 +1630,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn flush_with_no_pending_is_noop() {
         let state = PlayerState::new();
@@ -1574,6 +1643,7 @@ mod tests {
         assert!(state.geom.lock().unwrap().last_geometry.is_none());
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn claim_trailing_schedule_is_one_shot_until_flushed() {
         let state = PlayerState::new();
@@ -1596,6 +1666,7 @@ mod tests {
     /// subsequent calls. `wake_flusher` is safe to call only on the true
     /// return, so only one `notify_one` is dispatched per burst — exactly as
     /// the old per-burst `std::thread::spawn` dedup did.
+    #[cfg(target_os = "windows")]
     #[test]
     fn flusher_dedup_one_wake_per_burst() {
         let state = PlayerState::new();
@@ -1612,6 +1683,7 @@ mod tests {
     /// After `flush_pending_geometry` clears `trailing_scheduled`, the next
     /// burst can claim again — the flusher is re-armed for the next drag
     /// session.
+    #[cfg(target_os = "windows")]
     #[test]
     fn flusher_re_armed_after_flush() {
         let state = PlayerState::new();
@@ -1638,6 +1710,7 @@ mod tests {
     /// pending. This ordering lets a Resized event that arrives concurrently
     /// during flush claim a new schedule and issue a new `notify_one` for the
     /// geometry that arrived after the flush started — no geometry is lost.
+    #[cfg(target_os = "windows")]
     #[test]
     fn flusher_clear_before_consume_ordering() {
         let state = PlayerState::new();
@@ -1672,6 +1745,7 @@ mod tests {
     /// After `destroy()` takes + aborts the handle, it must be `None` again.
     /// We use `tokio::spawn` to produce a real `JoinHandle` without needing
     /// a live `AppHandle`.
+    #[cfg(target_os = "windows")]
     #[tokio::test]
     async fn flusher_handle_lifecycle() {
         let state = PlayerState::new();
@@ -1735,12 +1809,22 @@ mod tests {
     }
 }
 
-// Cross-platform PlayerState pop-out / minimize-inset state tests (W5, prexu-pd1x.5).
+// Cross-platform PlayerState pop-out / minimize-inset state tests (W5, prexu-pd1x.5;
+// minimize-inset round-trips un-gated in prexu-b3vq via the `get_minimize` accessor).
 // These exercise pure state-machine logic — pre_popout_geometry stash round-trip and
-// minimize-inset clear — that is identical on Windows and Linux, so they run in the
-// linux-build CI job too, not only on Windows. The remaining tests in `mod tests` stay
-// Windows-only: they call Windows-gated helpers (compute_minimize_inset, the atomic
-// focus-reassert latch, the geometry throttle/flusher).
+// minimize-inset set/clear round-trips (teardown, popout-enter mutual exclusion) — that
+// is identical on Windows and Linux (both platforms expose the same `set_minimize` /
+// `get_minimize` / `clear_minimize_snapshot` signatures, backed by `geom.minimize` on
+// Windows and `linux_margin` on Linux), so they run in the linux-build CI job too, not
+// only on Windows. The remaining tests in `mod tests` stay Windows-only where they
+// depend on genuinely Windows-only infrastructure that has no Linux equivalent to run
+// against: `compute_minimize_inset`'s absolute-pixel host-rect math (Linux insets video
+// via ratio-based `video-margin-ratio-*` GTK properties instead — a structurally
+// different representation, see `MarginState`), the atomic focus-reassert latch (guards
+// `reassert_host_on_focus`, itself Windows-only composition-host machinery), and the
+// geometry throttle/flusher (Windows' Win32 `SetWindowPos` needs throttling; GTK drives
+// Linux resize directly with no equivalent to throttle). See the PR description for the
+// per-group rationale.
 #[cfg(all(test, any(target_os = "windows", target_os = "linux")))]
 mod cross_platform_state_tests {
     use super::*;
@@ -1786,9 +1870,11 @@ mod cross_platform_state_tests {
         assert!(!state.is_in_popout());
     }
 
-    // Windows-only: inspects the Windows `geom` field (Linux stores minimize in
-    // `linux_margin`, with no cross-platform non-consuming getter yet — see follow-up).
-    #[cfg(target_os = "windows")]
+    // Cross-platform (prexu-b3vq): both platforms expose the same
+    // `set_minimize`/`get_minimize` signatures — Windows backs them with the
+    // `geom.minimize` field, Linux with `linux_margin` — so this STATE
+    // round-trip (set inset -> cleared on teardown/popout-enter) is verified
+    // identically on both without touching either platform's private field.
     #[test]
     fn clear_minimize_snapshot_drops_leftover_inset_on_teardown() {
         let state = PlayerState::new();
@@ -1798,22 +1884,19 @@ mod cross_platform_state_tests {
             padding: 16,
             corner: MinimizeCorner::BottomLeft,
         })).unwrap();
-        assert!(state.geom.lock().unwrap().minimize.is_some());
+        assert!(state.get_minimize().is_some());
 
         let had = state.clear_minimize_snapshot();
         assert!(had, "snapshot should have been present before teardown");
         assert!(
-            state.geom.lock().unwrap().minimize.is_none(),
+            state.get_minimize().is_none(),
             "minimize snapshot must be cleared so next session starts full"
         );
 
         assert!(!state.clear_minimize_snapshot());
-        assert!(state.geom.lock().unwrap().minimize.is_none());
+        assert!(state.get_minimize().is_none());
     }
 
-    // Windows-only: inspects the Windows `geom` field (Linux stores minimize in
-    // `linux_margin`, with no cross-platform non-consuming getter yet — see follow-up).
-    #[cfg(target_os = "windows")]
     #[test]
     fn popout_enter_clears_leftover_minimize_inset() {
         let state = PlayerState::new();
@@ -1823,28 +1906,22 @@ mod cross_platform_state_tests {
             padding: 16,
             corner: MinimizeCorner::BottomRight,
         })).unwrap();
-        assert!(state.geom.lock().unwrap().minimize.is_some());
+        assert!(state.get_minimize().is_some());
 
         // Simulate what player_enter_popout does: clear minimize.
         state.set_minimize(None).unwrap();
-        assert!(state.geom.lock().unwrap().minimize.is_none());
+        assert!(state.get_minimize().is_none());
     }
 
-    // Windows-only: inspects the Windows `geom` field (Linux stores minimize in
-    // `linux_margin`, with no cross-platform non-consuming getter yet — see follow-up).
-    #[cfg(target_os = "windows")]
     #[test]
     fn popout_enter_is_noop_on_minimize_when_already_none() {
         let state = PlayerState::new();
-        assert!(state.geom.lock().unwrap().minimize.is_none());
+        assert!(state.get_minimize().is_none());
         state.set_minimize(None).unwrap();
-        assert!(state.geom.lock().unwrap().minimize.is_none());
+        assert!(state.get_minimize().is_none());
         assert!(!state.is_in_popout());
     }
 
-    // Windows-only: inspects the Windows `geom` field (Linux stores minimize in
-    // `linux_margin`, with no cross-platform non-consuming getter yet — see follow-up).
-    #[cfg(target_os = "windows")]
     #[test]
     fn popout_enter_then_exit_round_trips_without_minimize_leaking() {
         let state = PlayerState::new();
@@ -1860,12 +1937,12 @@ mod cross_platform_state_tests {
         *state.pre_popout_geometry.lock().unwrap() = Some((50, 50, 1920, 1080));
 
         assert!(state.is_in_popout());
-        assert!(state.geom.lock().unwrap().minimize.is_none());
+        assert!(state.get_minimize().is_none());
 
         // exit: consume stash
         let taken = state.pre_popout_geometry.lock().unwrap().take();
         assert_eq!(taken, Some((50, 50, 1920, 1080)));
         assert!(!state.is_in_popout());
-        assert!(state.geom.lock().unwrap().minimize.is_none());
+        assert!(state.get_minimize().is_none());
     }
 }
