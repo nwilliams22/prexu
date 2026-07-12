@@ -54,3 +54,5 @@
 # - github.repo
 
 sync.remote: "git+https://github.com/nwilliams22/prexu.git"
+export:
+    auto: true
