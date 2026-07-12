@@ -42,6 +42,8 @@ import { useItemDetailData } from "../../hooks/useItemDetailData";
 import PosterCard from "../../components/PosterCard";
 import HeroSlideshow, { type HeroSlide } from "../../components/HeroSlideshow";
 import ItemHeroSection from "../../components/detail/ItemHeroSection";
+import EpisodeListSection from "../../components/detail/EpisodeListSection";
+import ErrorState from "../../components/ErrorState";
 import { cacheClear, cacheSet } from "../../services/api-cache";
 import {
   initializeCacheInvalidators,
@@ -53,7 +55,13 @@ import {
   emitWatchStateChanged,
   type WatchStateOffset,
 } from "../../services/watch-state-events";
-import type { PlexMediaItem, PlexEpisode, PlexMovie } from "../../types/library";
+import type {
+  PlexMediaItem,
+  PlexEpisode,
+  PlexMovie,
+  PlexSeason,
+  PlexShow,
+} from "../../types/library";
 
 // ── Fixed test world ──────────────────────────────────────────────────────
 
@@ -119,20 +127,69 @@ export function makeEpisode(
   } as PlexEpisode;
 }
 
+/** A season item — the `item` a season DETAIL page mounts (episodes are its children). */
+export function makeSeason(
+  ratingKey: string,
+  extra: Partial<PlexSeason> = {},
+): PlexSeason {
+  return {
+    ratingKey,
+    title: `Season ${ratingKey}`,
+    type: "season",
+    thumb: `/thumb/${ratingKey}`,
+    addedAt: 0,
+    index: 1,
+    parentRatingKey: "show-1",
+    parentTitle: "Show",
+    parentThumb: "/thumb/show-1",
+    leafCount: 1,
+    viewedLeafCount: 0,
+    ...extra,
+  } as PlexSeason;
+}
+
+/** A show item — fetched as a season's `parentShow` (see fetchDetailBundle's season branch). */
+export function makeShow(
+  ratingKey: string,
+  extra: Partial<PlexShow> = {},
+): PlexShow {
+  return {
+    ratingKey,
+    title: `Show ${ratingKey}`,
+    type: "show",
+    thumb: `/thumb/${ratingKey}`,
+    addedAt: 0,
+    year: 2020,
+    childCount: 1,
+    leafCount: 1,
+    viewedLeafCount: 0,
+    studio: "Test Studio",
+    ...extra,
+  } as PlexShow;
+}
+
 // ── Cache seeding ─────────────────────────────────────────────────────────
 
 export function seedDeckCache(items: PlexMediaItem[]): void {
   cacheSet(DECK_KEY, items, DECK_TTL);
 }
 
-/** Seed the item-detail bundle cache exactly as useItemDetailData shapes it. */
-export function seedDetailCache(item: PlexMediaItem): void {
+/**
+ * Seed the item-detail bundle cache exactly as useItemDetailData shapes it.
+ * `episodes` lets a season-page seed carry its child episode list (see
+ * EpisodeListSurface below) — defaults to `[]`, matching every non-season
+ * caller's prior behavior exactly.
+ */
+export function seedDetailCache(
+  item: PlexMediaItem,
+  episodes: PlexEpisode[] = [],
+): void {
   cacheSet(
     detailKey(item.ratingKey),
     {
       item,
       seasons: [],
-      episodes: [],
+      episodes,
       parentShow: null,
       siblingSeasons: [],
       siblingEpisodes: [],
@@ -319,6 +376,88 @@ export function DetailHeroSurface(): React.ReactElement {
         isAdmin={false}
         onFixMatch={() => {}}
         refreshItem={() => {}}
+      />
+    </div>
+  );
+}
+
+/**
+ * Full loading/error/hero slice of the detail page: real useItemDetailData →
+ * real ErrorState (retry wired straight to refreshItem) on a fetch failure,
+ * OR real memo(ItemHeroSection) once content loads. Mirrors ItemDetail.tsx's
+ * isLoading/error/movie branches (~304-333).
+ *
+ * The J.5 gap this closes: ItemDetail.test.tsx mocks BOTH ErrorState and
+ * useItemDetailData, so it only proves "clicking Retry calls refreshItem" —
+ * never that a REAL retry-triggered refetch actually clears the REAL error
+ * and paints REAL recovered content. This surface mounts both for real, over
+ * the same fake Plex-fetch boundary as every other surface in this file, so
+ * a retry loop that silently fails to clear `error` (or never re-fetches)
+ * would leave the ErrorState mounted forever instead of surfacing content.
+ */
+export function DetailPageSurface(): React.ReactElement {
+  const { item, isLoading, error, refreshItem } = useItemDetailData();
+  if (isLoading) return <div data-testid="detail-loading">loading</div>;
+  if (error || !item) {
+    return (
+      <div data-testid="detail-error">
+        <ErrorState message={error ?? "Item not found"} onRetry={refreshItem} />
+      </div>
+    );
+  }
+  return (
+    <div data-testid="detail-hero">
+      <ItemHeroSection
+        item={item as PlexMovie}
+        artUrl={(p) => p}
+        posterUrl={(p) => p}
+        isAdmin={false}
+        onFixMatch={() => {}}
+        refreshItem={refreshItem}
+      />
+    </div>
+  );
+}
+
+/**
+ * Season detail page's episode-row LIST: real useItemDetailData mounted
+ * `episodes` STATE → real EpisodeListSection → real usePlayAction → real
+ * ResumePopover. Mirrors ItemDetail.tsx:579-593 (the "season" branch).
+ *
+ * The gap this closes: the suite's only episode coverage
+ * ("applies to an episode row's own resume label", below) mounts an episode
+ * as the page's own `item` on DetailHeroSurface — exercising useItemDetailData's
+ * listener's `matchesItem` branch only. A season page's episode LIST instead
+ * runs through the listener's `matchesEpisodes`/`matchesSiblingEpisodes`
+ * branch (useItemDetailData.ts ~600-641), which patches one entry INSIDE the
+ * mounted `episodes` ARRAY — untested until now.
+ *
+ * The `episode-offset-*` spans below are test-only instrumentation (NOT part
+ * of the real EpisodeListSection tree) exposing the mounted `episodes[]`
+ * state's own viewOffset directly. They exist because usePlayAction keeps its
+ * OWN independent itemsRef patch on the exact same event (see
+ * StaticCardPopoverSurface's #87 anchor above) — every render of a row calls
+ * `getPlayHandler(ep)`, which re-warms itemsRef with whatever `ep` it was
+ * just given, so the ResumePopover alone can't distinguish "useItemDetailData's
+ * `episodes` state was patched" from "usePlayAction's own listener patched
+ * itemsRef independently of that state". The spans give this suite a direct,
+ * unambiguous read on the STATE this surface's gap is actually about, while
+ * the popover click still proves the end-to-end rendered-label outcome.
+ */
+export function EpisodeListSurface(): React.ReactElement {
+  const { episodes } = useItemDetailData();
+  return (
+    <div data-testid="episode-list">
+      {episodes.map((ep) => (
+        <span key={ep.ratingKey} data-testid={`episode-offset-${ep.ratingKey}`}>
+          {ep.viewOffset ?? 0}
+        </span>
+      ))}
+      <EpisodeListSection
+        episodes={episodes}
+        seasonFading={false}
+        episodeThumbUrl={(p) => p}
+        formatDuration={(ms) => `${ms}ms`}
       />
     </div>
   );
