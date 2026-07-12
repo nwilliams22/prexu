@@ -257,12 +257,29 @@ fn css_font_to_family(css: &str) -> String {
     }
 }
 
-#[tauri::command]
-pub async fn player_apply_sub_style(
-    style: SubStyle,
-    state: State<'_, PlayerState>,
-) -> Result<(), String> {
-    log::info!("[player:cmd] apply_sub_style {:?}", style);
+/// One property write `player_apply_sub_style` performs, carrying the value
+/// in the exact type passed to libmpv2's `set_property` (`Str`/`F64`
+/// dispatch below mirrors the original individual `mpv.set_property` calls
+/// exactly, so this extraction changes nothing about what mpv receives).
+enum SubStyleValue {
+    Str(String),
+    F64(f64),
+}
+
+/// Pure computation half of `player_apply_sub_style`: maps a `SubStyle` to
+/// the ordered list of mpv property writes. Extracted so the property list
+/// is unit-testable without a live mpv handle, and so it is the SINGLE
+/// source of truth `player_apply_sub_style` applies from below — no
+/// hand-maintained parallel list to drift out of sync.
+///
+/// This is the B.5 guard (docs/test-automation-plan.md row B.5, prexu-b3vq):
+/// `sub-scale` must never appear in this list. That mpv property belongs
+/// exclusively to the Linux mini-mode compensation in
+/// `linux_compositor::apply_video_margins` (~line 724), which multiplies
+/// whatever `sub-font-size` the user style below sets by the mini viewport's
+/// height fraction — the two must compose rather than fight over the same
+/// property.
+fn sub_style_writes(style: &SubStyle) -> Vec<(&'static str, SubStyleValue)> {
     let bg_alpha = (style.background_opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
     let bg_with_alpha = format!("{}{:02X}", style.background_color, bg_alpha);
     // mpv default sub-font-size is 55. Scale linearly with the user's
@@ -270,15 +287,33 @@ pub async fn player_apply_sub_style(
     let font_size = 55.0_f64 * (style.size / 100.0);
     let shadow_offset = if style.shadow_enabled { 2.0 } else { 0.0 };
     let font = css_font_to_family(&style.font_family);
+    vec![
+        ("sub-font", SubStyleValue::Str(font)),
+        ("sub-font-size", SubStyleValue::F64(font_size)),
+        ("sub-color", SubStyleValue::Str(style.text_color.clone())),
+        ("sub-border-color", SubStyleValue::Str(style.outline_color.clone())),
+        ("sub-border-size", SubStyleValue::F64(style.outline_width)),
+        ("sub-back-color", SubStyleValue::Str(bg_with_alpha)),
+        ("sub-shadow-offset", SubStyleValue::F64(shadow_offset)),
+    ]
+}
+
+#[tauri::command]
+pub async fn player_apply_sub_style(
+    style: SubStyle,
+    state: State<'_, PlayerState>,
+) -> Result<(), String> {
+    log::info!("[player:cmd] apply_sub_style {:?}", style);
+    let font = css_font_to_family(&style.font_family);
     log::debug!("[player:cmd] sub-font resolved '{}' -> '{}'", style.font_family, font);
+    let writes = sub_style_writes(&style);
     state.with_mpv(|mpv| {
-        mpv.set_property("sub-font", font.as_str())?;
-        mpv.set_property("sub-font-size", font_size)?;
-        mpv.set_property("sub-color", style.text_color.as_str())?;
-        mpv.set_property("sub-border-color", style.outline_color.as_str())?;
-        mpv.set_property("sub-border-size", style.outline_width)?;
-        mpv.set_property("sub-back-color", bg_with_alpha.as_str())?;
-        mpv.set_property("sub-shadow-offset", shadow_offset)?;
+        for (name, value) in &writes {
+            match value {
+                SubStyleValue::Str(s) => mpv.set_property(name, s.as_str())?,
+                SubStyleValue::F64(f) => mpv.set_property(name, *f)?,
+            };
+        }
         Ok(())
     })
 }
@@ -410,7 +445,10 @@ pub async fn player_engine_status() -> Result<EngineStatus, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{css_font_to_family, mpv_quote, redact_url, validate_header_field, validate_url_scheme};
+    use super::{
+        css_font_to_family, mpv_quote, redact_url, sub_style_writes, validate_header_field,
+        validate_url_scheme, SubStyle,
+    };
 
     #[test]
     fn takes_first_family_and_strips_quotes() {
@@ -546,5 +584,57 @@ mod tests {
     #[test]
     fn header_with_crlf_rejected() {
         assert!(validate_header_field("val\r\nX-Injected: pwned").is_err());
+    }
+
+    // --- B.5 guard: apply_sub_style never writes sub-scale ---
+    // (docs/test-automation-plan.md row B.5, prexu-b3vq). `sub-scale` is
+    // exclusively the Linux mini-mode compensation's property
+    // (linux_compositor.rs `apply_video_margins`, ~line 724); the
+    // user-facing sub style must never touch it, or the two would fight
+    // over the same mpv property.
+
+    fn sample_sub_style() -> SubStyle {
+        SubStyle {
+            size: 120.0,
+            font_family: "'Courier New', monospace".into(),
+            text_color: "#FFFFFF".into(),
+            background_color: "#000000".into(),
+            background_opacity: 0.5,
+            outline_color: "#111111".into(),
+            outline_width: 2.0,
+            shadow_enabled: true,
+        }
+    }
+
+    #[test]
+    fn apply_sub_style_never_writes_sub_scale() {
+        let writes = sub_style_writes(&sample_sub_style());
+        let names: Vec<&str> = writes.iter().map(|(name, _)| *name).collect();
+        assert!(
+            !names.contains(&"sub-scale"),
+            "apply_sub_style must never write sub-scale — that belongs solely \
+             to linux_compositor's mini-mode compensation, got {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn apply_sub_style_writes_expected_property_set() {
+        // Pins the exact property list (order included) so any accidental
+        // addition/removal/reorder is caught, not just a sub-scale add.
+        let writes = sub_style_writes(&sample_sub_style());
+        let names: Vec<&str> = writes.iter().map(|(name, _)| *name).collect();
+        assert_eq!(
+            names,
+            vec![
+                "sub-font",
+                "sub-font-size",
+                "sub-color",
+                "sub-border-color",
+                "sub-border-size",
+                "sub-back-color",
+                "sub-shadow-offset",
+            ]
+        );
     }
 }
