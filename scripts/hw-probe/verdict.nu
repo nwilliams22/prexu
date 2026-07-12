@@ -116,6 +116,38 @@ export def check-sub-scale [lines: list<string>]: nothing -> record {
     { name: "sub-scale-values", section: "B.2-B.5", status: (if ($bad | is-empty) { "pass" } else { "fail" }), detail: $"n=($vals | length) out-of-range=($bad | length)" }
 }
 
+# B.4 — use-margins pairs with the "not minimized" state. Ground truth is
+# `sub_compensation` (linux_compositor.rs ~L375): zero margin ratios (left,
+# right, top, bottom all 0.0 — "not minimized / cleared") return
+# `sub-use-margins=true`; any non-zero margin combination returns `false`.
+# Reads the same "video-margin-ratio applied left=<f> right=<f> top=<f>
+# bottom=<f> sub-scale=<f> sub-use-margins=<bool>" line as check-sub-scale, but
+# pairs the margins against the boolean instead of range-checking sub-scale.
+# Skips (does not fail) when no such lines are present (subs never exercised).
+export def check-sub-use-margins [lines: list<string>]: nothing -> record {
+    let applied = ($lines | where { |l| ($l | str contains $MARK_SUB_APPLIED) and ($l | str contains "sub-use-margins=") })
+    if ($applied | is-empty) {
+        return { name: "sub-use-margins", section: "B.4", status: "skip", detail: "no sub-use-margins lines (subs not exercised)" }
+    }
+    let rows = (
+        $applied
+        | each { |l|
+            $l | parse --regex 'left=(?<left>[0-9.]+)\s+right=(?<right>[0-9.]+)\s+top=(?<top>[0-9.]+)\s+bottom=(?<bottom>[0-9.]+)\s+sub-scale=(?<scale>[0-9.]+)\s+sub-use-margins=(?<um>true|false)'
+            | get 0?
+        }
+        | compact
+    )
+    let mismatched = (
+        $rows
+        | where { |r|
+            let zero = (($r.left | into float) == 0.0 and ($r.right | into float) == 0.0 and ($r.top | into float) == 0.0 and ($r.bottom | into float) == 0.0)
+            let um = ($r.um == "true")
+            $zero != $um
+        }
+    )
+    { name: "sub-use-margins", section: "B.4", status: (if ($mismatched | is-empty) { "pass" } else { "fail" }), detail: $"n=($rows | length) mismatched=($mismatched | length)" }
+}
+
 # --- Luminance classification (A/D/F visual-state detection) ---
 
 # Classify a captured frame from its per-channel means (each 0..1) into the
@@ -238,4 +270,73 @@ export def deadlock-verdict [heartbeats_ms: list<int>, --watchdog-ms: int = 5000
     let gaps = ($heartbeats_ms | window 2 | each { |w| ($w | last) - ($w | first) })
     let maxgap = ($gaps | math max)
     { status: (if $maxgap <= $watchdog_ms { "pass" } else { "fail" }), max_gap_ms: $maxgap, detail: $"max heartbeat gap=($maxgap)ms watchdog=($watchdog_ms)ms" }
+}
+
+# --- E.3/G.3 X11 click-sweep (coordinate math is pure and CI-tested here; the
+# live xdotool/process I/O that feeds it lives in lib.nu/probes.nu) ---
+
+# E.3/G.3 — click-sweep target points across a window: 4 corners, 4 edge
+# midpoints, and the interior center (9 points), inset by `inset` px so
+# xdotool doesn't land exactly on a WM resize-grip hairline. Pure coordinate
+# math so the point set is unit-tested without a live X11 session.
+export def sweep-points [win: record, --inset: int = 4]: nothing -> list<record> {
+    let left = $win.x + $inset
+    let right = $win.x + $win.w - $inset
+    let top = $win.y + $inset
+    let bottom = $win.y + $win.h - $inset
+    let midx = $win.x + ($win.w // 2)
+    let midy = $win.y + ($win.h // 2)
+    [
+        { x: $left, y: $top }
+        { x: $midx, y: $top }
+        { x: $right, y: $top }
+        { x: $left, y: $midy }
+        { x: $midx, y: $midy }
+        { x: $right, y: $midy }
+        { x: $left, y: $bottom }
+        { x: $midx, y: $bottom }
+        { x: $right, y: $bottom }
+    ]
+}
+
+# E.3 — edge drag-resize vectors: for each of the 4 edges, a `{from, to}` drag
+# starting just inside the edge (grabbing the WM resize grip) and moving
+# `delta` px outward — the axj4.3 click-crash class was a resize-grab race, so
+# this exercises all four grips. Pure coordinate math; unit-tested without a
+# live X11 session.
+export def edge-drag-vectors [win: record, --inset: int = 2, --delta: int = 20]: nothing -> list<record> {
+    let midx = $win.x + ($win.w // 2)
+    let midy = $win.y + ($win.h // 2)
+    [
+        { edge: "top", from: { x: $midx, y: ($win.y + $inset) }, to: { x: $midx, y: ($win.y - $delta) } }
+        { edge: "bottom", from: { x: $midx, y: ($win.y + $win.h - $inset) }, to: { x: $midx, y: ($win.y + $win.h + $delta) } }
+        { edge: "left", from: { x: ($win.x + $inset), y: $midy }, to: { x: ($win.x - $delta), y: $midy } }
+        { edge: "right", from: { x: ($win.x + $win.w - $inset), y: $midy }, to: { x: ($win.x + $win.w + $delta), y: $midy } }
+    ]
+}
+
+# E.3/G.3 — click-sweep process liveness: the app pid observed before the
+# sweep must still be present in the post-sweep pid list, with no zombie/
+# defunct process for it. A click/drag storm across the window (axj4.3
+# click-crash class) must not crash or hang the app. Reuses zombie-verdict's
+# zombie scan for the "no defunct process" half instead of re-deriving it.
+export def click-sweep-liveness-verdict [
+    pid: int
+    running_after: list<int>
+    ps_rows: list<record>
+]: nothing -> record {
+    if $pid == 0 {
+        return { status: "skip", detail: "no app pid observed before sweep" }
+    }
+    let alive = ($running_after | any { |p| $p == $pid })
+    let zv = (zombie-verdict $ps_rows)
+    let status = if ($alive and $zv.status == "pass") { "pass" } else { "fail" }
+    let detail = if not $alive {
+        $"app pid ($pid) not found after click sweep — crashed or exited"
+    } else if $zv.status != "pass" {
+        $"app alive but zombie present: ($zv.detail)"
+    } else {
+        $"app pid ($pid) alive after sweep, ($zv.detail)"
+    }
+    { status: $status, detail: $detail }
 }

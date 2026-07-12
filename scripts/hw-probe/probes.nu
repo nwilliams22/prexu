@@ -1,5 +1,5 @@
 #!/usr/bin/env nu
-# System probes (W2, plan sections N.1/N.2/N.3, G.1, G.2).
+# System probes (W2, plan sections N.1/N.2/N.3, G.1, G.2, E.3/G.3).
 #
 # Sample the running app's health and compare against the pure verdicts in
 # verdict.nu. Each probe finds the app pid automatically (or takes --pid) and
@@ -10,6 +10,7 @@
 #   nu scripts/hw-probe/probes.nu timing                                  # N.2 first-play latency (from log)
 #   nu scripts/hw-probe/probes.nu zombie                                  # G.2 no defunct app/mpv
 #   nu scripts/hw-probe/probes.nu stress  --duration 30sec --key m        # G.1 minimize/restore watchdog
+#   nu scripts/hw-probe/probes.nu click-sweep                             # E.3/G.3 X11 click/drag sweep + liveness
 
 use verdict.nu *
 use lib.nu *
@@ -22,7 +23,7 @@ def resolve-pid [pid: int]: nothing -> int {
 }
 
 def main [] {
-    print "usage: probes.nu (rss | cpu | timing | zombie | stress) [flags]"
+    print "usage: probes.nu (rss | cpu | timing | zombie | stress | click-sweep) [flags]"
     exit 2
 }
 
@@ -119,5 +120,50 @@ def "main stress" [
     }
     let v = (deadlock-verdict $heartbeats --watchdog-ms $watchdog_ms)
     print $"stress: (fmt-status $v.status) — ($v.detail), ($heartbeats | length) heartbeats"
+    if $v.status == "fail" { exit 1 }
+}
+
+# E.3/G.3 — X11 click/drag sweep across the app window (4 corners, 4 edge
+# midpoints, interior center) plus an edge drag-resize pass, then a
+# process-liveness verdict (axj4.3 click-crash class). X11-only — the native
+# surface has no addressable per-window geometry on Wayland, so xdotool can't
+# target it there; that leg stays manual per the plan (mirrors
+# geometry-x11.nu's X11 gate). The point/vector math (sweep-points,
+# edge-drag-vectors) and the pass/fail decision (click-sweep-liveness-verdict)
+# are pure, in verdict.nu; this driver is the only I/O.
+def "main click-sweep" [--pid: int = 0, --name: string = "Prexu", --settle: duration = 100ms] {
+    let s = (hw-session)
+    if $s.type != "x11" {
+        print $"(ansi yellow)SKIP(ansi reset) click-sweep: X11 session required — this is ($s.type); xdotool needs an addressable window \(Wayland stays manual per the plan\)"
+        return
+    }
+    if not (have xdotool) {
+        print $"(ansi yellow)SKIP(ansi reset) click-sweep: xdotool not installed"
+        return
+    }
+    if not (have wmctrl) {
+        print $"(ansi yellow)SKIP(ansi reset) click-sweep: wmctrl not installed"
+        return
+    }
+    let p = (resolve-pid $pid)
+    if $p == 0 { print $"(ansi yellow)SKIP(ansi reset) click-sweep: app not running — no prexu pid"; return }
+    let win = (find-window $name)
+    if ($win | is-empty) { print $"(ansi yellow)SKIP(ansi reset) click-sweep: no window matching ($name)"; return }
+
+    print $"Click sweep over ($win.w)x($win.h)+($win.x)+($win.y) — pid ($p)..."
+    for pt in (sweep-points $win) {
+        xdotool-click $pt.x $pt.y | ignore
+        sleep $settle
+    }
+    print "Edge drag-resize pass..."
+    for d in (edge-drag-vectors $win) {
+        xdotool-drag $d.from.x $d.from.y $d.to.x $d.to.y | ignore
+        sleep $settle
+    }
+
+    let running = (app-pids)
+    let zrows = (ps-zombies)
+    let v = (click-sweep-liveness-verdict $p $running $zrows)
+    print $"click-sweep: (fmt-status $v.status) — ($v.detail)"
     if $v.status == "fail" { exit 1 }
 }

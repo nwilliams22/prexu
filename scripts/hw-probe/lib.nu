@@ -1,10 +1,13 @@
 # Live I/O helpers for the hw-probe suite.
 #
 # Everything here touches the real machine: the compositor, /proc, ImageMagick,
-# ffmpeg, xprop/wmctrl. The pure verdicts these feed live in `verdict.nu` and are
-# tested in CI; this module is exercised on the Linux dev box against a running
+# ffmpeg, xprop/wmctrl, xdotool (key/mouse injection). The pure verdicts these
+# feed live in `verdict.nu` and are tested in CI; this module is exercised on
+# the Linux dev box against a running
 # Prexu + real Plex server. Functions degrade gracefully (return "skip"/empty)
 # when a prerequisite tool or the app is absent, so a partial run still reports.
+
+use verdict.nu [parse-wmctrl-geometry]
 
 # Default process name for the running app (Cargo bin `name = "prexu"`).
 export const APP_NAME = "prexu"
@@ -141,6 +144,40 @@ export def send-key [keysym: string]: nothing -> bool {
     } else {
         false
     }
+}
+
+# --- Mouse injection (X11 only — feeds the E.3/G.3 click-sweep probe; the
+# pass/fail decision (click-sweep-liveness-verdict) and the point/vector math
+# it drives on (sweep-points, edge-drag-vectors) live in verdict.nu) ---
+
+# Move the pointer to (x,y) and click button 1 (X11, via xdotool). Best-effort
+# — the caller judges liveness after the whole sweep, not per-click.
+export def xdotool-click [x: int, y: int]: nothing -> bool {
+    (do { ^xdotool mousemove --sync $x $y click 1 } | complete | get exit_code) == 0
+}
+
+# Drag button 1 from (x1,y1) to (x2,y2) — used for the edge drag-resize pass
+# (E.3 axj4.3 class). X11, via xdotool mousedown/mousemove/mouseup (xdotool
+# has no single "drag" verb; the button must be held across the move).
+export def xdotool-drag [x1: int, y1: int, x2: int, y2: int]: nothing -> bool {
+    let down = (do { ^xdotool mousemove --sync $x1 $y1 mousedown 1 } | complete | get exit_code) == 0
+    let moved = (do { ^xdotool mousemove --sync $x2 $y2 } | complete | get exit_code) == 0
+    let up = (do { ^xdotool mouseup 1 } | complete | get exit_code) == 0
+    $down and $moved and $up
+}
+
+# Find the app window by title substring via `wmctrl -lG` (X11 only). Returns
+# {} if no match. Shared by geometry-x11.nu (E.2/E.4/G.4) and the click-sweep
+# probe (E.3/G.3) — both need the same window rect.
+export def find-window [name: string]: nothing -> record {
+    let rows = (
+        ^wmctrl -lG
+        | lines
+        | each { |l| parse-wmctrl-geometry $l }
+        | where { |r| ($r | is-not-empty) }
+    )
+    let match = ($rows | where { |r| ($r.title | str downcase | str contains ($name | str downcase)) })
+    if ($match | is-empty) { {} } else { $match | first }
 }
 
 # All processes in a zombie/defunct state, as {pid, stat, comm} records.

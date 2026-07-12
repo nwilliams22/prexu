@@ -23,6 +23,7 @@ export def assert-log [logfile: string, --require-inset]: nothing -> list<record
         (check-gl-resolver $lines)
         (check-first-frame-pairing $lines)
         (check-sub-scale $lines)
+        (check-sub-use-margins $lines)
         (check-inset-clear $lines --required=$require_inset)
     ]
 }
