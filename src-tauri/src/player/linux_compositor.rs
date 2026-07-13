@@ -496,6 +496,17 @@ pub fn install(window: &WebviewWindow, app: AppHandle) {
             return;
         }
     };
+    // prexu-jlqt: capture the real (GTK-layer) window size BEFORE the reparent
+    // below — this reflects tauri-plugin-window-state's restored size. The
+    // reparent makes GTK renegotiate the toplevel down to its natural size
+    // (~710x660) while tao keeps reporting the pre-shrink size, so the shrink
+    // is invisible to tauri APIs and silently clobbers the restored state on
+    // every boot. The guard after install re-asserts THIS size.
+    let pre_reparent_size = gtk_window.size();
+    log::info!(
+        "[player:linux] pre-reparent window size {}x{}",
+        pre_reparent_size.0, pre_reparent_size.1
+    );
     let vbox = match window.default_vbox() {
         Ok(v) => v,
         Err(e) => {
@@ -569,6 +580,13 @@ pub fn install(window: &WebviewWindow, app: AppHandle) {
     }
 
     // (3) Wire the render lifecycle and store the compositor.
+    // (Resolved before `app` moves into the Compositor below; used by the
+    // prexu-jlqt boot size guard after install.)
+    let saved_state_path = app
+        .path()
+        .app_config_dir()
+        .ok()
+        .map(|d| d.join(".window-state.json"));
     let comp = Rc::new(Compositor {
         app,
         gl_area,
@@ -580,6 +598,94 @@ pub fn install(window: &WebviewWindow, app: AppHandle) {
     });
     wire_gl_area(&comp);
     COMPOSITOR.with(|c| *c.borrow_mut() = Some(comp));
+
+    // prexu-jlqt: the reparent above kills the in-flight window-state restore
+    // (tauri-plugin-window-state re-applies the saved size via tao at window
+    // creation; the configure hasn't completed by the time GTK renegotiates
+    // the toplevel down to its ~710x660 natural size, and tao never notices —
+    // no Resized event, inner_size keeps the stale value). The plugin's
+    // tao-level restore_state ALSO gets mangled when re-run after the
+    // reparent (2010x2250 requested -> 800x798 materialized, verified
+    // 2026-07-12), so read the plugin's saved size ourselves and re-apply it
+    // at the GTK layer — the layer where resizes demonstrably stick. Position
+    // is compositor-controlled on Wayland (cannot be honored app-side); GTK
+    // move is attempted only under X11. Falls back to the tauri.conf.json
+    // size when no usable saved state exists (first run). One-shot with a
+    // short retry window so a user resize is never fought.
+    {
+        const MIN: (i32, i32) = (800, 600); // tauri.conf.json minWidth/minHeight
+        const CONFIGURED: (i32, i32) = (1280, 800); // tauri.conf.json width/height
+        let win = gtk_window.clone();
+        let mut checks = 0;
+        let mut attempted = false;
+        glib::timeout_add_local(std::time::Duration::from_millis(300), move || {
+            checks += 1;
+            let (w, h) = win.size();
+            let below_min = crate::boot_size_needs_guard(
+                (w.max(0) as u32, h.max(0) as u32),
+                (MIN.0 as u32, MIN.1 as u32),
+            );
+            if below_min && !attempted {
+                attempted = true;
+                // Saved size from the plugin's file; None on first run or parse issues.
+                let saved: Option<(i32, i32, i32, i32)> = saved_state_path
+                    .as_ref()
+                    .and_then(|p| std::fs::read_to_string(p).ok())
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                    .and_then(|v| {
+                        let m = v.get("main")?;
+                        Some((
+                            m.get("width")?.as_i64()? as i32,
+                            m.get("height")?.as_i64()? as i32,
+                            m.get("x")?.as_i64()? as i32,
+                            m.get("y")?.as_i64()? as i32,
+                        ))
+                    })
+                    .filter(|(sw, sh, _, _)| *sw >= MIN.0 && *sh >= MIN.1);
+                let (tw, th) = saved.map(|(sw, sh, _, _)| (sw, sh)).unwrap_or(CONFIGURED);
+                log::info!(
+                    "[player:linux] boot size guard: {w}x{h} below min — GTK-layer restore to {tw}x{th} (saved-state={})",
+                    saved.is_some()
+                );
+                win.resize(tw, th);
+                if let Some((_, _, sx, sy)) = saved {
+                    // Position restore only works where the app controls
+                    // placement (X11); Wayland compositors ignore/forbid it.
+                    let is_x11 = std::env::var("XDG_SESSION_TYPE")
+                        .map(|v| v == "x11")
+                        .unwrap_or(false);
+                    if is_x11 {
+                        win.move_(sx, sy);
+                        log::info!("[player:linux] boot position restore (X11): {sx},{sy}");
+                    } else {
+                        log::debug!(
+                            "[player:linux] boot position restore skipped — Wayland placement is compositor-controlled"
+                        );
+                    }
+                }
+                return glib::ControlFlow::Continue;
+            }
+            if below_min && checks >= 5 {
+                log::info!(
+                    "[player:linux] boot size guard fallback: still {w}x{h} — resizing to {}x{}",
+                    CONFIGURED.0, CONFIGURED.1
+                );
+                win.resize(CONFIGURED.0, CONFIGURED.1);
+                return glib::ControlFlow::Break;
+            }
+            if !below_min && (attempted || checks >= 10) {
+                log::info!(
+                    "[player:linux] boot size guard settled: {w}x{h} (gtk-restore-attempted={attempted})"
+                );
+                return glib::ControlFlow::Break;
+            }
+            if checks >= 12 {
+                return glib::ControlFlow::Break;
+            }
+            glib::ControlFlow::Continue
+        });
+    }
+
     log::info!("[player:linux] compositor installed");
 }
 
