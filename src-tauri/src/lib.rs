@@ -670,6 +670,19 @@ pub fn run() {
     builder
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
+                // Boot size guard (prexu-jlqt): re-assert the configured
+                // minimum. The actual below-min boot shrink happens at the
+                // GTK layer during linux_compositor::install's reparent and
+                // is INVISIBLE to tao (inner_size keeps reporting the
+                // pre-shrink value; no Resized event fires — verified
+                // 2026-07-12), so detection + repair live in
+                // linux_compositor.rs next to the reparent. This tao-level
+                // floor still covers non-reparent paths on all platforms.
+                let _ = window.set_min_size(Some(tauri::LogicalSize::new(
+                    BOOT_MIN_SIZE.0 as f64,
+                    BOOT_MIN_SIZE.1 as f64,
+                )));
+
                 // Window is `visible: false` in tauri.conf.json. We do NOT
                 // call window.show() here — the frontend invokes
                 // app_ready once React has painted its first frame
@@ -759,6 +772,43 @@ pub fn run() {
         .unwrap_or_else(|e| {
             log::error!("Failed to run tauri application: {}", e);
         });
+}
+
+// ── Boot size guard (prexu-jlqt) ─────────────────────────────────────────────
+// Must match tauri.conf.json's main-window minWidth/minHeight.
+
+const BOOT_MIN_SIZE: (u32, u32) = (800, 600);
+
+/// True when the current logical size is below the configured floor in either
+/// dimension — i.e. something (the GTK reparent renegotiation) overrode our
+/// size. Used by the GTK-layer guard in `player::linux_compositor::install`.
+pub(crate) fn boot_size_needs_guard(current: (u32, u32), min: (u32, u32)) -> bool {
+    current.0 < min.0 || current.1 < min.1
+}
+
+#[cfg(test)]
+mod boot_size_tests {
+    use super::{boot_size_needs_guard, BOOT_MIN_SIZE};
+
+    #[test]
+    fn below_min_width_triggers_guard() {
+        assert!(boot_size_needs_guard((710, 660), BOOT_MIN_SIZE));
+    }
+
+    #[test]
+    fn below_min_height_only_triggers_guard() {
+        assert!(boot_size_needs_guard((1280, 599), BOOT_MIN_SIZE));
+    }
+
+    #[test]
+    fn at_exact_min_does_not_trigger() {
+        assert!(!boot_size_needs_guard((800, 600), BOOT_MIN_SIZE));
+    }
+
+    #[test]
+    fn configured_size_does_not_trigger() {
+        assert!(!boot_size_needs_guard((1280, 800), BOOT_MIN_SIZE));
+    }
 }
 
 // ── Proxy helper tests (pure — no sockets, no files) ─────────────────────────
