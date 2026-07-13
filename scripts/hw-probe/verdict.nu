@@ -23,6 +23,13 @@ export const MARK_ARM = "first-frame reveal armed"
 export const MARK_FIRE = "first frame rendered after arm"
 export const MARK_DROP = "stale first-frame reveal arm dropped"
 export const MARK_INSET_CLEAR = "clearing leftover minimize inset on enter"
+# prexu-uf4m: popout exit stamps its restore geometry and the compositor logs
+# each (deduped) webview GTK allocation; both carry a t=<epoch-millis> marker
+# because the log's own timestamps are second-precision. The gap between them
+# is how far the webview's layout lags a programmatic window resize — the
+# "controls stay popout-sized for a second" class.
+export const MARK_EXIT_APPLIED = "exit geometry applied"
+export const MARK_WEBVIEW_ALLOC = "webview allocated"
 # The applied sub-scale is logged by apply_video_margin_ratio (linux_compositor
 # ~L730): "video-margin-ratio applied ... sub-scale=<f> sub-use-margins=<b>".
 export const MARK_SUB_APPLIED = "video-margin-ratio applied"
@@ -33,6 +40,52 @@ export const MARK_GL_CONTEXT = "mpv render context created (OpenGL backend)"
 # Count log lines containing a substring.
 export def count-matches [lines: list<string>, needle: string]: nothing -> int {
     $lines | where ($it | str contains $needle) | length
+}
+
+# Extract the t=<epoch-millis> marker from a log line; -1 when absent.
+export def t-marker-of [line: string]: nothing -> int {
+    let m = ($line | parse --regex ' t=(?<t>[0-9]+)')
+    if ($m | is-empty) { -1 } else { $m | get 0.t | into int }
+}
+
+# E.4/prexu-uf4m — after every popout exit applies its restore geometry, the
+# webview's GTK allocation must follow within the gap ceiling. Assumes the
+# exit changes the window size (it always does: popout is small by
+# construction, the restore target is the stashed full-size rect), so the
+# compositor's deduped allocation log always produces a following line.
+export def check-popout-exit-alloc-gap [lines: list<string>, --max-gap-ms: int = 800]: nothing -> record {
+    let exits = ($lines | where ($it | str contains $MARK_EXIT_APPLIED))
+    if ($exits | is-empty) {
+        return {
+            name: "popout-exit-alloc-gap", section: "E.4/uf4m",
+            status: "skip", detail: "0 exit-applied lines"
+        }
+    }
+    let alloc_ts = (
+        $lines
+        | where ($it | str contains $MARK_WEBVIEW_ALLOC)
+        | each { |l| t-marker-of $l }
+        | where $it >= 0
+    )
+    mut worst = -1
+    mut unresolved = 0
+    for ex in $exits {
+        let t0 = (t-marker-of $ex)
+        if $t0 < 0 { $unresolved += 1; continue }
+        let following = ($alloc_ts | where $it >= $t0)
+        if ($following | is-empty) {
+            $unresolved += 1
+        } else {
+            let gap = (($following | math min) - $t0)
+            if $gap > $worst { $worst = $gap }
+        }
+    }
+    let ok = ($unresolved == 0) and ($worst <= $max_gap_ms)
+    {
+        name: "popout-exit-alloc-gap", section: "E.4/uf4m",
+        status: (if $ok { "pass" } else { "fail" }),
+        detail: $"exits=($exits | length) worst-gap=($worst)ms ceiling=($max_gap_ms)ms unresolved=($unresolved)"
+    }
 }
 
 # Pre.2 — the WebKit DMABUF renderer must be enabled (not disabled at startup).

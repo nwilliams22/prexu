@@ -67,6 +67,30 @@ def main [] {
     let inset = ($good | append "[player:popout] clearing leftover minimize inset on enter")
     $t = ($t | append (expect "inset-clear present, required -> pass" (check-inset-clear $inset --required | get status) "pass"))
 
+    # popout-exit allocation gap (prexu-uf4m): the t=<ms> markers pair the
+    # exit-applied line with the next webview allocation.
+    let gap_ok = [
+        "[player:popout] exit geometry applied 2010x2250 t=1000"
+        "[player:linux] webview allocated 2010x2214 t=1300"
+    ]
+    $t = ($t | append (expect "popout-exit alloc gap 300ms -> pass" (check-popout-exit-alloc-gap $gap_ok | get status) "pass"))
+    let gap_boundary = [
+        "[player:popout] exit geometry applied 2010x2250 t=1000"
+        "[player:linux] webview allocated 2010x2214 t=1800"
+    ]
+    $t = ($t | append (expect "popout-exit alloc gap exactly at 800ms ceiling -> pass" (check-popout-exit-alloc-gap $gap_boundary | get status) "pass"))
+    let gap_slow = [
+        "[player:popout] exit geometry applied 2010x2250 t=1000"
+        "[player:linux] webview allocated 2010x2214 t=2201"
+    ]
+    $t = ($t | append (expect "MUTATION: popout-exit alloc gap 1201ms -> fail" (check-popout-exit-alloc-gap $gap_slow | get status) "fail"))
+    let gap_orphan = [
+        "[player:linux] webview allocated 2010x2214 t=900"
+        "[player:popout] exit geometry applied 2010x2250 t=1000"
+    ]
+    $t = ($t | append (expect "MUTATION: exit with no following allocation -> fail" (check-popout-exit-alloc-gap $gap_orphan | get status) "fail"))
+    $t = ($t | append (expect "no popout exits -> skip" (check-popout-exit-alloc-gap $good | get status) "skip"))
+
     # --- Luminance classification (measured means from real ImageMagick output) ---
     $t = ($t | append (expect "classify navy (#000080)" (classify-luminance 0.0362 0.0 0.0 0.5019) "navy"))
     $t = ($t | append (expect "classify black" (classify-luminance 0.0 0.0 0.0 0.0) "black"))

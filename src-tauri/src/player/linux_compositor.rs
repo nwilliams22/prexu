@@ -569,7 +569,22 @@ pub fn install(window: &WebviewWindow, app: AppHandle) {
         webview_widget.connect_realize(|w| {
             clear_opaque_region(w, true);
         });
-        webview_widget.connect_size_allocate(|w, _alloc| {
+        // Log webview allocations (deduped on change) with a millis marker —
+        // paired with popout.rs's "exit geometry applied t=" line, the
+        // hw-probe allocation-gap verdict measures how far the webview's
+        // layout lags a programmatic window resize (prexu-uf4m).
+        let last_alloc = std::cell::Cell::new((0i32, 0i32));
+        webview_widget.connect_size_allocate(move |w, alloc| {
+            let dims = (alloc.width(), alloc.height());
+            if dims != last_alloc.get() {
+                last_alloc.set(dims);
+                log::debug!(
+                    "[player:linux] webview allocated {}x{} t={}",
+                    dims.0,
+                    dims.1,
+                    crate::util::epoch_ms()
+                );
+            }
             clear_opaque_region(w, false);
         });
         // Already realized (unlikely at setup, the toplevel is still hidden) —

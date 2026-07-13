@@ -308,6 +308,51 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     };
   }, [endResize]);
 
+  // prexu-uf4m: popout enter/exit is a programmatic mega-resize, and
+  // WebKitGTK's layout — and with it the browser `resize` event the drag
+  // path above keys on — lags it by up to ~1s at 4K. Waiting for that event
+  // hides the chrome only AFTER it was already visibly wrong-sized. Rust
+  // brackets host-window transitions with player://host-window-busy/-ready,
+  // so hide at busy (T0, before the resize even starts) and reveal on the
+  // first viewport reflow that follows (the renderTick effect below): the
+  // chrome reappears the moment its layout is actually correct. Pointer
+  // movement and the fallback timer below still reveal it early if the
+  // reflow signal never comes.
+  const hostTransitionRef = useRef(false);
+  useEffect(() => {
+    // Native shell only — the browser/e2e builds never emit these events.
+    if (!SUPPORTS_PLAYER_POPOUT) return;
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        const un = await listen("player://host-window-busy", () => {
+          logger.debug("player", "host-window-busy — hiding chrome for host transition");
+          hostTransitionRef.current = true;
+          setIsResizing(true);
+          if (resizeFallbackRef.current) clearTimeout(resizeFallbackRef.current);
+          resizeFallbackRef.current = setTimeout(endResize, 1500);
+        });
+        if (cancelled) un();
+        else unlisten = un;
+      } catch (err) {
+        logger.warn("player", "host-window-busy listen failed", String(err));
+      }
+    })();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [endResize]);
+  useEffect(() => {
+    if (hostTransitionRef.current) {
+      hostTransitionRef.current = false;
+      logger.debug("player", "viewport reflow after host transition — revealing chrome");
+      endResize();
+    }
+  }, [renderTick, endResize]);
+
   // Sync-aware play/seek
   const togglePlay = wt.isInSession ? wt.syncTogglePlay : player.togglePlay;
   const seek = wt.isInSession ? wt.syncSeek : player.seek;

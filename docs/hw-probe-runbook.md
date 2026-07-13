@@ -78,7 +78,7 @@ The app log is auto-discovered at
 
 | Probe | Command | Plan | Checks |
 | --- | --- | --- | --- |
-| log invariants | `probes`/`log-assert.nu` | Pre, A.1–A.3, B.2–B.5, E.5, F.1 | DMABUF enabled, compositor installed, GL render context up, first-frame arm↔render pairing (no seek re-emit), sub-scale in (0,1], use-margins pairs with not-minimized (B.4), popout inset-clear |
+| log invariants | `probes`/`log-assert.nu` | Pre, A.1–A.3, B.2–B.5, E.4/E.5, F.1 | DMABUF enabled, compositor installed, GL render context up, first-frame arm↔render pairing (no seek re-emit), sub-scale in (0,1], use-margins pairs with not-minimized (B.4), popout inset-clear, popout-exit→webview allocation gap under 800 ms (prexu-uf4m; both lines carry `t=<ms>` markers because log timestamps are second-precision) |
 | first-play timing | `probes.nu timing` | N.2 | arm→render latency under ceiling (±1 s log precision) |
 | zombie scan | `probes.nu zombie` | G.2 | no defunct app/mpv after exit — run *after* quitting |
 
@@ -161,19 +161,22 @@ audio-over-navy (prexu-91t8), navy stages (prexu-hg1j), sub-scale wrongness
 (prexu-91k4, via log values), a use-margins regression that leaves subs
 rendering into the surface margin after restore (B.4), minimize/restore
 deadlock (prexu-skr2), the PR #34 zombie process, E.4 popout geometry drift,
+the popout-exit controls-reflow lag (prexu-uf4m — webview allocation trailing
+the window resize),
 and the axj4.3 click/drag crash class (E.3/G.3, via the click-sweep
 process-liveness check).
 
 ## Self-test / CI enforcement
 
 ```bash
-mise run hw-probe:selftest        # 56 assertions incl. 16 mutation checks
+mise run hw-probe:selftest        # 61 assertions incl. 18 mutation checks
 ```
 
 Each mutation assertion feeds a known-bad input (reveal re-emit on seek,
 re-arm before fire, DMABUF disabled, sub-scale 1.42, restored-but-use-margins-
 false, inset-clear absent when required, navy/black in a transition, RSS leak,
 CPU pegged, slow first-play, defunct mpv, heartbeat gap, 3 px geometry drift,
+popout-exit allocation gap over ceiling / exit with no following allocation,
 click-sweep pid gone, click-sweep zombie present) and asserts the verdict
 flips to `fail`. It runs in `mise run ci` and in GitHub Actions
 (`hustcer/setup-nu` → `nu scripts/hw-probe/selftest.nu`).
