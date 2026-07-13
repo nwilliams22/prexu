@@ -25,6 +25,7 @@ export def assert-log [logfile: string, --require-inset]: nothing -> list<record
         (check-sub-scale $lines)
         (check-sub-use-margins $lines)
         (check-inset-clear $lines --required=$require_inset)
+        (check-popout-exit-alloc-gap $lines)
     ]
 }
 

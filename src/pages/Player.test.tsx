@@ -176,9 +176,44 @@ vi.mock("../services/logger", () => ({
 // on a plain viewport resize; see PlayerControls.tickrender.test.tsx for
 // the deeper memo-defeat behavior with the real component stack.
 vi.mock("../components/PlayerControls", () => ({
-  default: ({ reflowTick }: { reflowTick?: number }) => (
-    <div data-testid="player-controls" data-reflow-tick={reflowTick} />
+  default: ({
+    reflowTick,
+    visible,
+    suppressTransition,
+  }: {
+    reflowTick?: number;
+    visible?: boolean;
+    suppressTransition?: boolean;
+  }) => (
+    <div
+      data-testid="player-controls"
+      data-reflow-tick={reflowTick}
+      data-visible={String(visible)}
+      data-suppress-transition={String(suppressTransition)}
+    />
   ),
+}));
+
+// prexu-uf4m: the host-transition chrome hide listens for
+// player://host-window-busy, but only when the popout capability exists —
+// force it on in jsdom, keeping everything else from the real module.
+vi.mock("../hooks/player/engineResolution", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../hooks/player/engineResolution")>()),
+  SUPPORTS_PLAYER_POPOUT: true,
+}));
+
+// Captures the Player's tauri event subscriptions so tests can fire
+// player://host-window-busy like the Rust popout enter/exit paths do.
+const tauriEventHandlers = vi.hoisted(
+  () => ({}) as Record<string, (evt: unknown) => void>,
+);
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async (event: string, cb: (evt: unknown) => void) => {
+    tauriEventHandlers[event] = cb;
+    return () => {
+      delete tauriEventHandlers[event];
+    };
+  }),
 }));
 
 vi.mock("../components/ParticipantOverlay", () => ({
@@ -418,5 +453,110 @@ describe("Player – chrome reflow nudge on viewport resize", () => {
     // PlayerControls prop must track together, in the same flush — nothing
     // here is debounced or deferred to a later tick.
     expect(getByTestId("player-controls").dataset.reflowTick).toBe("2");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// prexu-uf4m: host-transition chrome hide. Popout enter/exit is a
+// programmatic mega-resize whose browser-side signals (resize event,
+// ResizeObserver) lag by up to ~1s on WebKitGTK at 4K — so the chrome must
+// hide when Rust announces the transition (player://host-window-busy) and
+// reveal on the first viewport reflow that follows, when its layout is
+// actually correct against the new dimensions.
+// ---------------------------------------------------------------------------
+
+describe("Player – host-transition chrome hide (prexu-uf4m)", () => {
+  let originalResizeObserver: typeof globalThis.ResizeObserver;
+
+  beforeEach(() => {
+    originalResizeObserver = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver;
+    MockResizeObserver.reset();
+    for (const key of Object.keys(tauriEventHandlers)) delete tauriEventHandlers[key];
+  });
+
+  afterEach(() => {
+    globalThis.ResizeObserver = originalResizeObserver;
+    vi.useRealTimers();
+  });
+
+  function renderPlayer() {
+    return render(
+      <MemoryRouter initialEntries={["/play/123"]}>
+        <Player ratingKey="123" offset={null} />
+      </MemoryRouter>,
+    );
+  }
+
+  async function renderAndFlushListeners() {
+    const utils = renderPlayer();
+    // The busy listener registers through a dynamic import — flush it.
+    await act(async () => {});
+    expect(tauriEventHandlers["player://host-window-busy"]).toBeDefined();
+    return utils;
+  }
+
+  it("hides the chrome the moment host-window-busy fires — before any viewport resize arrives", async () => {
+    const { getByTestId } = await renderAndFlushListeners();
+
+    expect(getByTestId("player-controls").dataset.visible).toBe("true");
+
+    await act(async () => {
+      tauriEventHandlers["player://host-window-busy"](null);
+    });
+
+    expect(getByTestId("player-controls").dataset.visible).toBe("false");
+    expect(getByTestId("player-controls").dataset.suppressTransition).toBe("true");
+  });
+
+  it("reveals the chrome on the first viewport reflow after the transition", async () => {
+    const { getByTestId } = await renderAndFlushListeners();
+
+    await act(async () => {
+      tauriEventHandlers["player://host-window-busy"](null);
+    });
+    expect(getByTestId("player-controls").dataset.visible).toBe("false");
+
+    const observer = MockResizeObserver.getLatest();
+    await act(async () => {
+      observer.simulateResize(1920, 2112);
+    });
+
+    expect(getByTestId("player-controls").dataset.visible).toBe("true");
+    expect(getByTestId("player-controls").dataset.suppressTransition).toBe("false");
+    // The same reflow also nudged the memoized chrome (prexu-trbl contract).
+    expect(getByTestId("player-controls").dataset.reflowTick).toBe("1");
+  });
+
+  it("falls back to revealing the chrome after 1500ms if no reflow ever arrives", async () => {
+    const { getByTestId } = await renderAndFlushListeners();
+
+    vi.useFakeTimers();
+    await act(async () => {
+      tauriEventHandlers["player://host-window-busy"](null);
+    });
+    expect(getByTestId("player-controls").dataset.visible).toBe("false");
+
+    await act(async () => {
+      vi.advanceTimersByTime(1499);
+    });
+    expect(getByTestId("player-controls").dataset.visible).toBe("false");
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(getByTestId("player-controls").dataset.visible).toBe("true");
+  });
+
+  it("a plain viewport reflow without a host transition never touches visibility", async () => {
+    const { getByTestId } = await renderAndFlushListeners();
+
+    const observer = MockResizeObserver.getLatest();
+    await act(async () => {
+      observer.simulateResize(1280, 720);
+    });
+
+    expect(getByTestId("player-controls").dataset.visible).toBe("true");
+    expect(getByTestId("player-controls").dataset.suppressTransition).toBe("false");
   });
 });
