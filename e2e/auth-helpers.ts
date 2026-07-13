@@ -92,9 +92,17 @@ export async function setupAuthenticatedState(page: Page) {
     }),
   );
 
-  // Helper: skip interception for requests to the Vite dev server (app navigation).
-  // Only intercept API calls to external servers (Plex, etc.).
-  const isAppRequest = (url: string) => url.includes("localhost:1420");
+  // Helper: skip interception for requests to the Vite dev server (app source
+  // modules, navigation, etc.) — only intercept calls to the mocked Plex
+  // server itself. Checked by EXCLUDING the mock Plex server's host
+  // ("localhost:32400", seeded above as server_data.uri) rather than
+  // matching a specific app dev-server port: the default project's server
+  // runs on 1420, but the player-chrome project (prexu-ceiz) runs its own
+  // dedicated server on a different port (see playwright.config.ts) and
+  // still needs its own source-module requests (e.g.
+  // src/services/plex-library/*.ts) to fall through instead of being
+  // mistaken for a real Plex API call and served fake JSON.
+  const isAppRequest = (url: string) => !url.includes("localhost:32400");
 
   // IMPORTANT: Playwright routes use LIFO matching (last registered = highest priority).
   // Register catch-all routes FIRST so specific routes registered after take priority.
