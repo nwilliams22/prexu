@@ -271,3 +271,167 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
+  desktop-smoke-linux:
+    name: "Desktop smoke (Xvfb, Linux) [advisory]"
+    runs-on: ubuntu-22.04
+    # Advisory only (prexu-510g, spike prexu-pd1x.12): launches the actual
+    # built binary headlessly under Xvfb and asserts launch + liveness + clean
+    # exit + no zombie child. Reaching a painted dashboard needs Plex auth —
+    # OUT of scope; this is process-lifecycle only. webkit2gtk under Xvfb can
+    # be flaky (no real GPU/DRM device), so this job retries and never blocks
+    # merges (continue-on-error). Runner mirrors linux-build/release.yml
+    # (ubuntu-22.04 is what the Linux release actually ships on), so the smoke
+    # exercises the same base the release AppImage targets. Builds itself
+    # independently rather than downloading linux-build's output — no
+    # artifact-upload/download pattern exists yet in this file, and every
+    # other job here already stays decoupled the same way.
+    continue-on-error: true
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux + Xvfb dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libmpv-dev \
+            xvfb
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # generate_context!() embeds the frontend dist at compile time, so the
+      # bundle must exist before cargo build (same requirement as linux-build).
+      - name: Build frontend
+        run: npm run build
+
+      - name: Build src-tauri (debug)
+        working-directory: src-tauri
+        run: cargo build
+
+      # Launch the real binary under Xvfb and assert it launches, stays alive
+      # for a liveness window, exits cleanly on SIGTERM, and leaves no defunct
+      # child process. Scope is strictly launch/liveness/exit — a painted
+      # dashboard needs a reachable Plex server + auth, which stays out of
+      # scope for this smoke (prexu-pd1x.12 spike). Retries once: webkit2gtk
+      # under Xvfb is known-flaky with no real GPU/DRM device.
+      - name: Xvfb desktop smoke (launch, liveness, clean exit)
+        env:
+          # Xvfb has no DRM/GPU device: steer WebKit/GL off hardware-backed
+          # paths so a missing DMABUF/GPU codepath degrades fail-soft (see
+          # player::linux_compositor's HTML5-fallback contract) instead of
+          # taking the whole webview down with it.
+          WEBKIT_DISABLE_DMABUF_RENDERER: "1"
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          set -uo pipefail
+
+          BINARY="src-tauri/target/debug/prexu"
+          INITIAL_WAIT=5
+          ALIVE_SECS=18
+          EXIT_TIMEOUT=15
+          MAX_ATTEMPTS=2
+          # Logged unconditionally at the top of
+          # player::linux_compositor::install(), which setup() calls before
+          # any playback/auth — present on every successful boot regardless
+          # of Plex reachability.
+          STARTUP_MARKER="compositor installed"
+
+          overall_status=1
+
+          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+            echo "=== Xvfb smoke attempt ${attempt}/${MAX_ATTEMPTS} ==="
+            LOGFILE="smoke-attempt-${attempt}.log"
+
+            xvfb-run -a "$BINARY" > "$LOGFILE" 2>&1 &
+            XVFB_RUN_PID=$!
+
+            # Give the wrapper time to start Xvfb and exec the binary.
+            sleep "$INITIAL_WAIT"
+            APP_PID="$(pgrep -x prexu | head -1 || true)"
+
+            if [ -z "$APP_PID" ]; then
+              echo "FAIL: app did not start (no 'prexu' process found)"
+              cat "$LOGFILE" || true
+              kill -KILL "$XVFB_RUN_PID" 2>/dev/null || true
+              continue
+            fi
+            echo "app pid=$APP_PID (xvfb-run wrapper pid=$XVFB_RUN_PID)"
+
+            sleep "$ALIVE_SECS"
+            if ! kill -0 "$APP_PID" 2>/dev/null; then
+              echo "FAIL: app exited before the ${ALIVE_SECS}s liveness window elapsed"
+              cat "$LOGFILE" || true
+              continue
+            fi
+            echo "PASS: app alive after ${ALIVE_SECS}s"
+
+            kill -TERM "$APP_PID"
+            exited=0
+            for _ in $(seq 1 "$EXIT_TIMEOUT"); do
+              if ! kill -0 "$APP_PID" 2>/dev/null; then
+                exited=1
+                break
+              fi
+              sleep 1
+            done
+
+            if [ "$exited" -ne 1 ]; then
+              echo "FAIL: app did not exit within ${EXIT_TIMEOUT}s of SIGTERM"
+              kill -KILL "$APP_PID" 2>/dev/null || true
+              cat "$LOGFILE" || true
+              continue
+            fi
+            echo "PASS: app exited cleanly after SIGTERM"
+
+            wait "$XVFB_RUN_PID" 2>/dev/null || true
+
+            # Zombie/defunct check — concept reused from
+            # scripts/hw-probe/probes.nu `zombie-verdict` / `ps-zombies`
+            # (plain ps/awk here per prexu-510g; nushell not required in CI).
+            zombies="$(ps -eo pid,stat,comm | awk '$2 ~ /Z/ && ($3 ~ /prexu/ || $3 ~ /mpv/) {print}')"
+            if [ -n "$zombies" ]; then
+              echo "FAIL: defunct process(es) found after exit:"
+              echo "$zombies"
+              continue
+            fi
+            echo "PASS: no defunct prexu/mpv processes"
+
+            # Informational only: startup-log capture under xvfb-run can be
+            # unreliable, so this never fails the smoke (prexu-510g decision)
+            # — the process-lifecycle assertions above already satisfy scope.
+            if grep -qF "$STARTUP_MARKER" "$LOGFILE"; then
+              echo "INFO: startup marker '${STARTUP_MARKER}' found in captured log"
+            else
+              echo "WARN: startup marker '${STARTUP_MARKER}' not found in captured log (non-fatal)"
+            fi
+
+            overall_status=0
+            break
+          done
+
+          exit "$overall_status"
+
+      - name: Upload smoke logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xvfb-desktop-smoke-logs
+          path: smoke-attempt-*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
