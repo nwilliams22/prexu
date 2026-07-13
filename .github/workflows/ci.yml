@@ -176,6 +176,16 @@ jobs:
           RUST_LOG: debug
         run: cargo test --test headless_mpv -- --nocapture --ignored
 
+      # This job stubs the ANGLE DLLs (see the stub step above), so the two
+      # DLL-integrity tests (SHA-256 pin + Authenticode) can never pass here
+      # and are skipped. They validate real artifacts on real Windows boxes
+      # and in release packaging, not CI stubs.
+      - name: Run src-tauri lib tests
+        working-directory: src-tauri
+        env:
+          MPV_SOURCE: ${{ github.workspace }}\src-tauri\ci\mpv
+        run: cargo test --lib -- --skip angle_dlls_match_sha256_pins --skip angle_dlls_authenticode_valid
+
   headless-mpv-linux:
     name: Headless mpv integration (Linux, libmpv 2.x)
     runs-on: ubuntu-24.04
