@@ -1483,11 +1483,27 @@ fn schedule_popout_exit_resize_retry(app: &AppHandle, main: &tauri::WebviewWindo
             let n = attempt.get() + 1;
             attempt.set(n);
 
-            let actual = match win.inner_size() {
-                Ok(s) => (s.width, s.height),
+            // prexu-c6no/uf4m: verify via the GTK layer, not tao — tao's
+            // inner_size doesn't track compositor/GTK reality here (observed
+            // live: attempts saw 2100x2340 then the stale 2010x2250 while GTK
+            // had already allocated the requested 1920x2112 within 14ms), so
+            // the loop re-issued spurious set_sizes whose extra configures
+            // forced pointless WebKit relayouts mid-transition. This closure
+            // runs on the GTK main thread (dispatched via run_on_main_thread),
+            // so reading the GtkWindow directly is safe.
+            let actual = match win.gtk_window() {
+                Ok(g) => {
+                    use gtk::prelude::GtkWindowExt;
+                    let (gw, gh) = g.size();
+                    let scale = win.scale_factor().unwrap_or(1.0);
+                    (
+                        ((gw.max(0) as f64) * scale).round() as u32,
+                        ((gh.max(0) as f64) * scale).round() as u32,
+                    )
+                }
                 Err(e) => {
                     log::warn!(
-                        "[player:popout] exit-resize-retry: inner_size query failed: {:?}",
+                        "[player:popout] exit-resize-retry: gtk_window query failed: {:?}",
                         e
                     );
                     return glib::ControlFlow::Continue;
@@ -1791,9 +1807,54 @@ pub async fn player_enter_popout(
         log::warn!("[player:popout] outer_position for stash failed: {e}");
         (0, 0)
     });
-    let size = main
-        .inner_size()
-        .map_err(|e| format!("inner_size for stash failed: {e}"))?;
+    // prexu-c6no: tao's inner_size is blind to compositor-applied sizes on
+    // Wayland (KWin window rules, quick-tile snaps) — it reports the last
+    // size tao itself negotiated, not the real allocation (observed live:
+    // window at 1920x2112 via a KWin rule while tao still said 2010x2250),
+    // so exit restored a stale rect. Read the real size from the GTK layer
+    // on the main thread and convert logical->physical to keep the stash
+    // contract; fall back to tao's view if the round-trip fails.
+    let size = {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let gtk_main = main.clone();
+        let gtk_logical = match app.run_on_main_thread(move || {
+            let logical = gtk_main.gtk_window().ok().map(|g| {
+                use gtk::prelude::GtkWindowExt;
+                g.size()
+            });
+            let _ = tx.send(logical);
+        }) {
+            Ok(()) => rx
+                .recv_timeout(std::time::Duration::from_millis(250))
+                .ok()
+                .flatten(),
+            Err(e) => {
+                log::warn!("[player:popout] gtk-size dispatch for stash failed: {e}");
+                None
+            }
+        };
+        match gtk_logical {
+            Some((gw, gh)) if gw > 0 && gh > 0 => {
+                let scale = main.scale_factor().unwrap_or(1.0);
+                let phys = tauri::PhysicalSize::new(
+                    (gw as f64 * scale).round() as u32,
+                    (gh as f64 * scale).round() as u32,
+                );
+                log::debug!(
+                    "[player:popout] stash size from GTK layer: {gw}x{gh} logical -> {}x{} physical (scale {scale})",
+                    phys.width, phys.height
+                );
+                phys
+            }
+            _ => {
+                log::warn!(
+                    "[player:popout] GTK-layer size unavailable — stashing tao inner_size (may be stale, prexu-c6no)"
+                );
+                main.inner_size()
+                    .map_err(|e| format!("inner_size for stash failed: {e}"))?
+            }
+        }
+    };
     if let Ok(mut g) = state.pre_popout_geometry.lock() {
         *g = Some((pos.0, pos.1, size.width, size.height));
         log::debug!(
@@ -2107,6 +2168,12 @@ pub async fn player_exit_popout(
             "[player:popout] restoring previously-tiled window to ({x},{y},{w}x{h}) — \
              scheduling verify-and-retry (prexu-fgrt)"
         );
+        // Stable marker for the hw-probe allocation-gap verdict (prexu-uf4m);
+        // t= carries millis because log timestamps are second-precision.
+        log::info!(
+            "[player:popout] exit geometry applied {w}x{h} t={}",
+            crate::util::epoch_ms()
+        );
         schedule_popout_exit_resize_retry(&app, &main, (w, h));
     } else {
         main.set_decorations(true)
@@ -2117,6 +2184,21 @@ pub async fn player_exit_popout(
             log::warn!("[player:popout] restore set_position failed: {e}");
         }
         log::debug!("[player:popout] restored main to ({x},{y},{w}x{h})");
+        // Stable marker for the hw-probe allocation-gap verdict (prexu-uf4m);
+        // t= carries millis because log timestamps are second-precision.
+        log::info!(
+            "[player:popout] exit geometry applied {w}x{h} t={}",
+            crate::util::epoch_ms()
+        );
+        // prexu-c6no: the "non-tiled lands in one configure" assumption no
+        // longer holds — ~30ms after this restore, a stale tao-cached rect
+        // gets re-applied over it (observed live: our 1920x2112 restore,
+        // GTK-allocated within 14ms, then re-allocated 2010x2202 at +30ms
+        // and left there, since only the tiled branch had the guard). Run
+        // the same GTK-verified retry loop on this path too; when nothing
+        // interferes it confirms on attempt 1 and exits without a single
+        // re-issue.
+        schedule_popout_exit_resize_retry(&app, &main, (w, h));
     }
 
     // Re-maximize AFTER restoring the windowed geometry above (prexu-6qi5.4)

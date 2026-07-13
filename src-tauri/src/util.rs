@@ -1,5 +1,15 @@
 //! Shared utility functions for the Prexu Tauri backend.
 
+/// Milliseconds since the Unix epoch, for `t=<ms>` markers in log lines whose
+/// consumers (scripts/hw-probe) need sub-second timing — the log's own
+/// timestamps are second-precision (prexu-uf4m allocation-gap verdict).
+pub fn epoch_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
 /// Mask any X-Plex-Token query value in a URL, then truncate to 80 chars for
 /// logging. Truncation alone is insufficient: with a short server URI the
 /// token itself falls inside the truncation window.
