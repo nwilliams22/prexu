@@ -529,8 +529,37 @@ pub fn run() {
     // (progressive video dimming). The TOPLEVEL window stays transparent:false
     // (tauri.linux.conf.json — Wayland-bleed, prexu-duna); only the webview
     // WIDGET goes transparent.
+    // Diagnostic modes (prexu-41cw/nfx6 experiment switches, made permanent):
+    // PREXU_STOCK_WEBVIEW=1 — no creation-time transparency AND no compositor
+    // (fully stock webview; the nfx6 explicit-sync crash repro).
+    // PREXU_NO_COMPOSITOR=1 — transparent webview, no overlay/reparent (the
+    // 41cw resize-baseline config; native player fails soft to HTML5).
+    //
+    // prexu-nfx6 explicit-sync guard: these modes crash instantly on
+    // KWin+NVIDIA (Gdk Error 71). Root cause (WAYLAND_DEBUG, 2026-07-15,
+    // webkit2gtk 2.52.4 / driver 595.84 / egl-wayland2 1.0.1 / KWin 6.7.2):
+    // GTK3 software-paints the toplevel via wl_shm while WebKit's EGL init
+    // makes egl-wayland2 register a wp_linux_drm_syncobj surface on the SAME
+    // wl_surface — from then on every buffer commit must carry an acquire
+    // point, so GDK's next SHM commit (GTK3 predates explicit sync) is a
+    // fatal protocol error. The normal compositor mode is structurally
+    // immune: the GLArea keeps every commit on the EGL path. Fix: fall back
+    // to implicit sync at the NVIDIA EGL layer for these modes only, set
+    // BEFORE anything connects to Wayland. An explicit user value wins.
     #[cfg(target_os = "linux")]
-    wry::set_pending_webview_transparency(true);
+    {
+        let diagnostic_mode = std::env::var_os("PREXU_STOCK_WEBVIEW").is_some()
+            || std::env::var_os("PREXU_NO_COMPOSITOR").is_some();
+        if needs_explicit_sync_guard(
+            diagnostic_mode,
+            std::env::var_os("__NV_DISABLE_EXPLICIT_SYNC").is_some(),
+        ) {
+            std::env::set_var("__NV_DISABLE_EXPLICIT_SYNC", "1");
+        }
+        if std::env::var_os("PREXU_STOCK_WEBVIEW").is_none() {
+            wry::set_pending_webview_transparency(true);
+        }
+    }
 
     // Per-session log file (prexu-0pkf): rotate the previous run's log BEFORE
     // the log plugin opens its LogDir target inside Builder::run — after that
@@ -738,7 +767,23 @@ pub fn run() {
                 // any playback. Failures fall back to HTML5 (engine-failed).
                 #[cfg(target_os = "linux")]
                 {
-                    player::linux_compositor::install(&window, app.handle().clone());
+                    if std::env::var_os("PREXU_NO_COMPOSITOR").is_some()
+                        || std::env::var_os("PREXU_STOCK_WEBVIEW").is_some()
+                    {
+                        // Diagnostic mode: no reparent/GLArea. attach_mpv later
+                        // logs "compositor not installed" and emits
+                        // player://engine-failed, so playback falls back to
+                        // HTML5 — browsing works, native player disabled.
+                        log::warn!(
+                            "[player:linux] compositor install SKIPPED (PREXU_NO_COMPOSITOR/PREXU_STOCK_WEBVIEW) — native player disabled"
+                        );
+                        log::warn!(
+                            "[player:linux] explicit-sync guard (prexu-nfx6): __NV_DISABLE_EXPLICIT_SYNC={:?}",
+                            std::env::var("__NV_DISABLE_EXPLICIT_SYNC").ok()
+                        );
+                    } else {
+                        player::linux_compositor::install(&window, app.handle().clone());
+                    }
 
                     // Close-time Plex timeline report (prexu-50f), same as the
                     // Windows path: on window close mid-playback the JS unmount
@@ -797,6 +842,30 @@ pub fn run() {
         .unwrap_or_else(|e| {
             log::error!("Failed to run tauri application: {}", e);
         });
+}
+
+// ── Explicit-sync guard decision (prexu-nfx6) ────────────────────────────────
+
+/// True when the KWin+NVIDIA explicit-sync guard should force
+/// `__NV_DISABLE_EXPLICIT_SYNC=1`: a stock/no-compositor diagnostic mode is
+/// requested AND the user has not already set the variable themselves — an
+/// explicit user value (including "0" to force the crash repro) always wins.
+#[cfg(any(target_os = "linux", test))]
+fn needs_explicit_sync_guard(diagnostic_mode: bool, user_set_override: bool) -> bool {
+    diagnostic_mode && !user_set_override
+}
+
+#[cfg(test)]
+mod explicit_sync_guard_tests {
+    use super::needs_explicit_sync_guard;
+
+    #[test]
+    fn guards_only_diagnostic_modes_and_respects_user_override() {
+        assert!(needs_explicit_sync_guard(true, false), "diagnostic mode gets the guard");
+        assert!(!needs_explicit_sync_guard(true, true), "user's own value must win (incl. =0 repro)");
+        assert!(!needs_explicit_sync_guard(false, false), "normal mode untouched — GLArea path is immune");
+        assert!(!needs_explicit_sync_guard(false, true));
+    }
 }
 
 // ── Per-session log rotation (prexu-0pkf) ────────────────────────────────────
