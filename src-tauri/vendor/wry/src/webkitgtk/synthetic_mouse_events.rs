@@ -1,3 +1,7 @@
+// Vendored: run_javascript is deprecated (webkit2gtk 2.40) in favour of
+// evaluate_javascript; keeping upstream's call to minimize local drift.
+#![allow(deprecated)]
+
 use std::{cell::RefCell, rc::Rc};
 
 use gtk::{

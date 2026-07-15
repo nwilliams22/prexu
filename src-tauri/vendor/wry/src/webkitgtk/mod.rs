@@ -328,7 +328,10 @@ impl InnerWebView {
       // background color
       if let Some((red, green, blue, alpha)) = attributes.background_color {
         webview.set_background_color(&gtk::gdk::RGBA::new(
-          red as _, green as _, blue as _, alpha as _,
+          red as f64 / 255.0,
+          green as f64 / 255.0,
+          blue as f64 / 255.0,
+          alpha as f64 / 255.0,
         ));
       }
     }
@@ -389,6 +392,8 @@ impl InnerWebView {
         if let Some(pending_scripts) = pending_scripts_.take() {
           let cancellable: Option<&Cancellable> = None;
           for script in pending_scripts {
+            // Vendored: deprecated in webkit2gtk 2.40; upstream call kept.
+            #[allow(deprecated)]
             webview.run_javascript(&script, cancellable, |_| ());
           }
         }
@@ -732,6 +737,8 @@ impl InnerWebView {
       #[cfg(feature = "tracing")]
       let span = SendEnteredSpan(tracing::debug_span!("wry::eval").entered());
 
+      // Vendored: deprecated in webkit2gtk 2.40; upstream call kept.
+      #[allow(deprecated)]
       self.webview.run_javascript(js, cancellable, |result| {
         #[cfg(feature = "tracing")]
         drop(span);
@@ -799,7 +806,10 @@ impl InnerWebView {
 
   pub fn set_background_color(&self, (red, green, blue, alpha): RGBA) -> Result<()> {
     self.webview.set_background_color(&gtk::gdk::RGBA::new(
-      red as _, green as _, blue as _, alpha as _,
+      red as f64 / 255.0,
+      green as f64 / 255.0,
+      blue as f64 / 255.0,
+      alpha as f64 / 255.0,
     ));
     Ok(())
   }
