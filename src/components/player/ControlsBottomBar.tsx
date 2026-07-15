@@ -60,6 +60,9 @@ interface ControlsBottomBarProps {
   isPiPActive?: boolean;
   isPiPSupported?: boolean;
   onTogglePiP?: () => void;
+  /** Fullscreen toggle that hides the chrome synchronously before the
+   *  resize (prexu-ngsa); falls back to player.toggleFullscreen. */
+  onToggleFullscreen?: () => void;
   /** When true, the PiP/Pop-out button shows pop-out semantics ("Pop out"
    *  label and tooltip) instead of browser PiP. Set on the native player
    *  path (7il.4). */
@@ -113,6 +116,7 @@ function ControlsBottomBar({
   isPiPActive,
   isPiPSupported,
   onTogglePiP,
+  onToggleFullscreen,
   isPopOutMode,
   isMinimizeSupported,
   isMinimizeActive,
@@ -613,7 +617,7 @@ function ControlsBottomBar({
             {/* Fullscreen — priority tier 1 (prexu-52ky), same as pop-out:
                 NEVER collapses. */}
             <button
-              onClick={player.toggleFullscreen}
+              onClick={onToggleFullscreen ?? player.toggleFullscreen}
               style={{
                 ...styles.controlButton,
                 ...(mobile ? { padding: "0.5rem" } : {}),
