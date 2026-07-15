@@ -27,6 +27,7 @@ const { serverMock, hlsLoaderMock, timelineMock, streamsMock } = vi.hoisted(() =
     durationRef: { current: 0 },
     isPlayingRef: { current: false },
     ratingKeyRef: { current: "" },
+    wasWatchedAtStartRef: { current: false },
     startTimeline: vi.fn(),
     stopTimeline: vi.fn(),
     reportStopped: vi.fn(),
