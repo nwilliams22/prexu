@@ -10,6 +10,8 @@ mod util;
 
 use tauri_plugin_log::{Target, TargetKind};
 use tauri::{AppHandle, Manager};
+#[cfg(target_os = "linux")]
+use tauri::Emitter;
 use std::io::{BufRead, BufReader, Read as StdRead, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
@@ -792,6 +794,20 @@ pub fn run() {
                     // still alive at CloseRequested (fires before teardown).
                     let report_handle = app.handle().clone();
                     window.on_window_event(move |event| {
+                        // prexu-41cw probe: window://resized on Linux. The
+                        // Windows host handler (player/events.rs) emits this
+                        // on every WM_SIZE, but no Linux code did — so the
+                        // frontend resize-latency probe (AppLayout) had no
+                        // OS-truth size target and logged all-zero bursts.
+                        // Payload shape matches the Windows emitter:
+                        // (physical width, physical height).
+                        if let tauri::WindowEvent::Resized(size) = event {
+                            log::debug!(
+                                "[window] resized {}x{} → window://resized (linux)",
+                                size.width, size.height
+                            );
+                            let _ = report_handle.emit("window://resized", (size.width, size.height));
+                        }
                         if matches!(
                             event,
                             tauri::WindowEvent::CloseRequested { .. }
