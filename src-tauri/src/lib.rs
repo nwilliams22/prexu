@@ -782,6 +782,11 @@ const BOOT_MIN_SIZE: (u32, u32) = (800, 600);
 /// True when the current logical size is below the configured floor in either
 /// dimension — i.e. something (the GTK reparent renegotiation) overrode our
 /// size. Used by the GTK-layer guard in `player::linux_compositor::install`.
+///
+/// The only runtime caller is Linux-gated, and Windows CI clippy runs
+/// `-D warnings` (prexu-tejj); `test` stays in the cfg so the pure-function
+/// tests below keep running on every platform.
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn boot_size_needs_guard(current: (u32, u32), min: (u32, u32)) -> bool {
     current.0 < min.0 || current.1 < min.1
 }
