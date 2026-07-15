@@ -726,10 +726,13 @@ fn dispatch(
             }
             #[cfg(target_os = "linux")]
             (REPLY_IDLE_ACTIVE, PropertyData::Flag(idle)) => {
-                // Pump-gate mirror only — the frontend has no idle-active
+                // Compositor-internal only — the frontend has no idle-active
                 // consumer; player://ready / player://eof carry those edges.
+                // Feeds the pump gate AND the overlay wake/sleep edge
+                // (prexu-ertt Phase 1): file loaded ⇔ overlay composites.
                 log::debug!("[player:events] idle-active={}", idle);
                 crate::player::linux_compositor::set_pump_idle(idle);
+                crate::player::linux_compositor::set_overlay_active(app, !idle);
             }
             (REPLY_BUFFERING, PropertyData::Flag(b)) => {
                 log::debug!("[player:events] buffering={}", b);
