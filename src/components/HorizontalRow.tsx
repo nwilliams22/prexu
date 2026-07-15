@@ -83,18 +83,29 @@ function HorizontalRow({ title, children, onSeeAll }: HorizontalRowProps) {
   // Re-check scroll state when child count changes (async data loading)
   const childCount = Children.count(children);
 
+  // prexu-v3j5: the ResizeObserver fires on every frame of a window drag and
+  // scroll fires per scrolled pixel — coalesce the geometry read + setState
+  // to one rAF per frame, after layout, so the arrows stop flickering
+  // against mid-relayout geometry and the row stops re-rendering per event.
+  const scrollStateRaf = useRef(0);
+  const scheduleScrollState = useCallback(() => {
+    cancelAnimationFrame(scrollStateRaf.current);
+    scrollStateRaf.current = requestAnimationFrame(updateScrollState);
+  }, [updateScrollState]);
+
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    updateScrollState();
-    el.addEventListener("scroll", updateScrollState, { passive: true });
-    const observer = new ResizeObserver(updateScrollState);
+    updateScrollState(); // initial read stays synchronous (first paint)
+    el.addEventListener("scroll", scheduleScrollState, { passive: true });
+    const observer = new ResizeObserver(scheduleScrollState);
     observer.observe(el);
     return () => {
-      el.removeEventListener("scroll", updateScrollState);
+      el.removeEventListener("scroll", scheduleScrollState);
       observer.disconnect();
+      cancelAnimationFrame(scrollStateRaf.current);
     };
-  }, [updateScrollState, childCount]);
+  }, [updateScrollState, scheduleScrollState, childCount]);
 
   const scroll = (direction: "left" | "right") => {
     const el = scrollRef.current;
