@@ -11,6 +11,7 @@ import { useFocusTrap } from "../hooks/useFocusTrap";
 import { useRouteAnnouncer } from "../hooks/useRouteAnnouncer";
 import { useNewContent } from "../hooks/useNewContent";
 import { createLeadingTrailingGate } from "../utils/resize-tick";
+import { createResizeLatencyTracker } from "../utils/resize-latency";
 
 // Quiet time after the last resize event before the trailing React commit
 // (prexu-v3j5). Long enough to sit out a continuous drag, short enough that
@@ -76,8 +77,22 @@ function AppLayout() {
     // below stay per-frame: they are what actually fight the WebView paint
     // lag (prexu-uzk); React only needs to bracket the burst so anything
     // render-derived from layout is correct at rest.
+    // prexu-41cw probe: how far does WebKit's layout lag the OS window during
+    // a burst, and how many STALE sizes does it commit (direction-reversal
+    // signature)? Targets come from the Tauri window://resized payload — the
+    // browser's own innerWidth IS the laggy layout viewport. Summary logged
+    // once per burst at the trailing edge; grep "[layout] resize burst".
+    const latency = createResizeLatencyTracker(() => performance.now());
+    const layoutObserver = new ResizeObserver((entries) => {
+      const rect = entries[entries.length - 1]?.contentRect;
+      if (rect) latency.onLayoutObserved(rect.width);
+    });
+    layoutObserver.observe(document.documentElement);
     const gate = createLeadingTrailingGate(RESIZE_SETTLE_MS, (edge) => {
       logger.debug("layout", "resize tick", { edge });
+      if (edge === "trailing") {
+        logger.info("layout", "resize burst settled", { ...latency.summarize() });
+      }
       setResizeTick((t) => t + 1);
     });
     const onResize = () => {
@@ -114,7 +129,18 @@ function AppLayout() {
     (async () => {
       try {
         const { listen } = await import("@tauri-apps/api/event");
-        tauriUnlisten = await listen("window://resized", () => onResize());
+        // The payload is the OS-truth physical size from Rust's
+        // WindowEvent::Resized — the probe's authoritative target (CSS px).
+        // The browser resize listener deliberately does NOT feed the
+        // tracker: its innerWidth is the lagging layout viewport, and using
+        // it as the target would fake instant catch-ups.
+        tauriUnlisten = await listen<[number, number]>("window://resized", (event) => {
+          const physicalWidth = event.payload?.[0];
+          if (typeof physicalWidth === "number") {
+            latency.onResizeEvent(physicalWidth / window.devicePixelRatio);
+          }
+          onResize();
+        });
       } catch (err) {
         logger.warn(
           "layout",
@@ -128,6 +154,7 @@ function AppLayout() {
       window.removeEventListener("resize", onResize);
       cancelAnimationFrame(raf);
       gate.dispose();
+      layoutObserver.disconnect();
       tauriUnlisten?.();
     };
   }, []);
