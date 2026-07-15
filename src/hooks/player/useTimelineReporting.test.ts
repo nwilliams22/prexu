@@ -255,3 +255,70 @@ describe("useTimelineReporting.reportStopped", () => {
     });
   });
 });
+
+describe("rewatch early-stop guard (prexu-6d78)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("never unscrobbles an already-watched item on early stop", () => {
+    const result = setup();
+    act(() => {
+      result.current.ratingKeyRef.current = "19937";
+      result.current.durationRef.current = 1421; // seconds
+      result.current.currentTimeRef.current = 3; // < 60s
+      result.current.wasWatchedAtStartRef.current = true;
+      result.current.reportStopped();
+    });
+    // /:/unscrobble marks the item UNWATCHED — firing it on a rewatch
+    // destroys the user's watched state (verified live against PMS).
+    expect(markAsUnwatched).not.toHaveBeenCalled();
+    expect(reportTimelineBeacon).not.toHaveBeenCalled();
+    // The Now Playing session must still end (prexu-9cj5 contract holds).
+    expect(reportTimeline).toHaveBeenCalledWith(
+      SERVER.uri,
+      SERVER.accessToken,
+      "19937",
+      "stopped",
+      3_000,
+      1_421_000,
+    );
+  });
+
+  it("keeps the unscrobble path for items not watched at session start", () => {
+    const result = setup();
+    act(() => {
+      result.current.ratingKeyRef.current = "19937";
+      result.current.durationRef.current = 1421;
+      result.current.currentTimeRef.current = 3;
+      result.current.wasWatchedAtStartRef.current = false;
+      result.current.reportStopped();
+    });
+    expect(markAsUnwatched).toHaveBeenCalledWith(
+      SERVER.uri,
+      SERVER.accessToken,
+      "19937",
+    );
+  });
+
+  it("leaves the >60s resume-offset path unaffected by the watched flag", () => {
+    const result = setup();
+    act(() => {
+      result.current.ratingKeyRef.current = "19937";
+      result.current.durationRef.current = 1421;
+      result.current.currentTimeRef.current = 95; // > 60s
+      result.current.wasWatchedAtStartRef.current = true;
+      result.current.reportStopped();
+    });
+    // PMS keeps viewCount on a mid-item stop (verified live) — recording
+    // the resume offset is correct for rewatches too.
+    expect(reportTimelineBeacon).toHaveBeenCalledWith(
+      SERVER.uri,
+      SERVER.accessToken,
+      "19937",
+      95_000,
+      1_421_000,
+    );
+    expect(markAsUnwatched).not.toHaveBeenCalled();
+  });
+});
