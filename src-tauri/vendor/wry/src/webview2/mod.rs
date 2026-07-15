@@ -464,7 +464,11 @@ impl InnerWebView {
     _background_color: Option<(u8, u8, u8, u8)>,
   ) -> Result<ICoreWebView2Controller> {
     let env3 = env.cast::<ICoreWebView2Environment3>()?;
-    let (tx, rx) = mpsc::channel();
+    // Explicit channel type: unlike create_controller (where the payload
+    // Result IS the fn's return expression and infers from the signature),
+    // the payload here is bound to a local for the QI cast below, so the
+    // error slot needs naming (E0283 otherwise — caught by Windows CI).
+    let (tx, rx) = mpsc::channel::<Result<ICoreWebView2CompositionController>>();
 
     let handler = CreateCoreWebView2CompositionControllerCompletedHandler::create(Box::new(
       move |error_code, controller| {
