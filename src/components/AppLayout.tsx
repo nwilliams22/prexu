@@ -10,6 +10,12 @@ import { useBreakpoint, isMobile, isTabletOrBelow, isDesktopOrAbove } from "../h
 import { useFocusTrap } from "../hooks/useFocusTrap";
 import { useRouteAnnouncer } from "../hooks/useRouteAnnouncer";
 import { useNewContent } from "../hooks/useNewContent";
+import { createLeadingTrailingGate } from "../utils/resize-tick";
+
+// Quiet time after the last resize event before the trailing React commit
+// (prexu-v3j5). Long enough to sit out a continuous drag, short enough that
+// the settle commit is imperceptible after release.
+const RESIZE_SETTLE_MS = 150;
 import { useRouteTransitionSpinner } from "../hooks/useRouteTransitionSpinner";
 import Sidebar from "./Sidebar";
 import NavButtons from "./NavButtons";
@@ -62,6 +68,18 @@ function AppLayout() {
   const [, setResizeTick] = useState(0);
   useEffect(() => {
     let raf = 0;
+    // prexu-v3j5: the React commit fires on burst EDGES only (leading +
+    // trailing) — committing per frame re-rendered the entire routed tree
+    // on every drag frame, the "shelf arrows re-rendering" jitter share of
+    // prexu-41cw, and each of those renders lengthened WebKit's serial
+    // relayout queue (the stale-direction repaints). The DOM-level nudges
+    // below stay per-frame: they are what actually fight the WebView paint
+    // lag (prexu-uzk); React only needs to bracket the burst so anything
+    // render-derived from layout is correct at rest.
+    const gate = createLeadingTrailingGate(RESIZE_SETTLE_MS, (edge) => {
+      logger.debug("layout", "resize tick", { edge });
+      setResizeTick((t) => t + 1);
+    });
     const onResize = () => {
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
@@ -83,7 +101,7 @@ function AppLayout() {
         // eslint-disable-next-line @typescript-eslint/no-unused-expressions
         root.scrollLeft;
         root.scrollLeft = sx;
-        setResizeTick((t) => t + 1);
+        gate.poke();
       });
     };
     window.addEventListener("resize", onResize);
@@ -109,6 +127,7 @@ function AppLayout() {
     return () => {
       window.removeEventListener("resize", onResize);
       cancelAnimationFrame(raf);
+      gate.dispose();
       tauriUnlisten?.();
     };
   }, []);
