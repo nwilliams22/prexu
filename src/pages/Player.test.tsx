@@ -180,17 +180,21 @@ vi.mock("../components/PlayerControls", () => ({
     reflowTick,
     visible,
     suppressTransition,
+    pip,
   }: {
     reflowTick?: number;
     visible?: boolean;
     suppressTransition?: boolean;
+    pip?: { onToggle?: () => void };
   }) => (
     <div
       data-testid="player-controls"
       data-reflow-tick={reflowTick}
       data-visible={String(visible)}
       data-suppress-transition={String(suppressTransition)}
-    />
+    >
+      <button data-testid="pip-toggle" onClick={() => pip?.onToggle?.()} />
+    </div>
   ),
 }));
 
@@ -267,11 +271,16 @@ vi.mock("../hooks/player/useShowCreditsLength", () => ({
   useShowCreditsLength: () => 0,
 }));
 
+// Stateful so the prexu-ngsa suite can flip isPopOut per test.
+const popOutState = vi.hoisted(() => ({
+  isPopOut: false,
+  togglePopOut: vi.fn(),
+}));
 vi.mock("../hooks/player/usePopOutPlayer", () => ({
   usePopOutPlayer: () => ({
-    isPopOut: false,
+    isPopOut: popOutState.isPopOut,
     isPopOutSupported: false,
-    togglePopOut: vi.fn(),
+    togglePopOut: popOutState.togglePopOut,
   }),
 }));
 
@@ -473,6 +482,8 @@ describe("Player – host-transition chrome hide (prexu-uf4m)", () => {
     globalThis.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver;
     MockResizeObserver.reset();
     for (const key of Object.keys(tauriEventHandlers)) delete tauriEventHandlers[key];
+    popOutState.isPopOut = false;
+    popOutState.togglePopOut = vi.fn();
   });
 
   afterEach(() => {
@@ -558,5 +569,37 @@ describe("Player – host-transition chrome hide (prexu-uf4m)", () => {
 
     expect(getByTestId("player-controls").dataset.visible).toBe("true");
     expect(getByTestId("player-controls").dataset.suppressTransition).toBe("false");
+  });
+
+  // prexu-ngsa: frontend-initiated transitions must hide synchronously at
+  // the invoke site — the busy event's IPC delivery can lag ~1s when the
+  // web process is congested, which left wrong-sized chrome visible.
+  it("exiting popout hides the chrome synchronously, without any event round-trip", async () => {
+    popOutState.isPopOut = true;
+    const { getByTestId } = await renderAndFlushListeners();
+
+    expect(getByTestId("player-controls").dataset.visible).toBe("true");
+
+    await act(async () => {
+      getByTestId("pip-toggle").click();
+    });
+
+    // No busy event was fired and no reflow simulated — the hide must have
+    // come from the synchronous path in togglePiP.
+    expect(getByTestId("player-controls").dataset.visible).toBe("false");
+    expect(popOutState.togglePopOut).toHaveBeenCalledOnce();
+    popOutState.isPopOut = false;
+  });
+
+  it("entering popout does NOT hide the chrome (shrink direction stays live)", async () => {
+    popOutState.isPopOut = false;
+    const { getByTestId } = await renderAndFlushListeners();
+
+    await act(async () => {
+      getByTestId("pip-toggle").click();
+    });
+
+    expect(getByTestId("player-controls").dataset.visible).toBe("true");
+    expect(popOutState.togglePopOut).toHaveBeenCalledOnce();
   });
 });

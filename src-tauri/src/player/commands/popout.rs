@@ -1756,6 +1756,13 @@ pub async fn player_enter_popout(
         .get_webview_window("main")
         .ok_or_else(|| "main webview window not found".to_string())?;
 
+    // prexu-ngsa: enter is deliberately NOT bracketed with host-window-busy.
+    // The shrink direction showed no wrong-chrome complaints, and hiding the
+    // chrome until the post-shrink reflow just delayed the popout controls
+    // appearing by seconds (verified live 2026-07-12). Only exit and
+    // fullscreen — the enlarge directions where stale-viewport chrome is
+    // glaring — get the hide.
+
     // Pop-out and minimize are mutually exclusive (same frontend race as the
     // Windows command — see its doc). On Linux "minimize" is a set of
     // video-margin-ratio insets, so clear both the snapshot and the live

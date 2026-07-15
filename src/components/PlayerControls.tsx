@@ -73,6 +73,11 @@ interface PlayerControlsProps {
   minimize?: MinimizeProps;
   queue?: QueueProps;
   subtitleSearch?: SubtitleSearchProps;
+  /** Fullscreen toggle that hides the chrome synchronously before the
+   *  window resize starts (prexu-ngsa) — WebKitGTK's relayout lags large
+   *  resizes, so chrome laid out against the stale viewport must never be
+   *  visible. Falls back to player.toggleFullscreen when absent. */
+  onToggleFullscreen?: () => void;
   /** True while any bottom-bar popup is open — pins controls visible. */
   onPanelPinChange?: (pinned: boolean) => void;
   /** Bumped by Player.tsx's viewport-resize ResizeObserver (prexu-0p3).
@@ -87,7 +92,7 @@ interface PlayerControlsProps {
   reflowTick?: number;
 }
 
-function PlayerControls({ player, onExit, onPrevious, visible, suppressTransition, syncIndicator, chapters, onSeek, onActivity, onNextEpisode, onPrevEpisode, audioEnhancements, onAudioEnhancementChange, pip, minimize, queue, subtitleSearch, onPanelPinChange, reflowTick = 0 }: PlayerControlsProps) {
+function PlayerControls({ player, onExit, onPrevious, visible, suppressTransition, syncIndicator, chapters, onSeek, onActivity, onNextEpisode, onPrevEpisode, audioEnhancements, onAudioEnhancementChange, pip, minimize, queue, subtitleSearch, onPanelPinChange, onToggleFullscreen, reflowTick = 0 }: PlayerControlsProps) {
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
   const [previousHovered, setPreviousHovered] = useState(false);
@@ -216,6 +221,7 @@ function PlayerControls({ player, onExit, onPrevious, visible, suppressTransitio
           ratingKey={subtitleSearch?.ratingKey}
           onSubtitleDownloaded={subtitleSearch?.onDownloaded}
           onPanelPinChange={onPanelPinChange}
+          onToggleFullscreen={onToggleFullscreen}
           reflowTick={reflowTick}
         />
       </div>
