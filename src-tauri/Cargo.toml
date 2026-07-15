@@ -19,7 +19,7 @@ tauri-build = { version = "2.5.4", features = [] }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
-tauri = { version = "2.10.0", features = ["devtools"] }
+tauri = { version = "2.11", features = ["devtools"] }
 tauri-plugin-http = "2"
 reqwest = { version = "0.12", features = ["rustls-tls", "blocking", "stream"] }
 tokio = { version = "1", features = ["fs", "rt-multi-thread", "macros", "sync"] }
@@ -89,7 +89,7 @@ sha2 = "0.10"
 webview2-com = "0.38"
 # Direct dep purely for `wry::set_pending_composition_hosting` (the composition
 # opt-in added to the vendored fork); resolves to vendor/wry via [patch].
-wry = "0.54"
+wry = "0.55"
 
 # ── Linux native player (prexu-axj4.3): render-API compositing ──
 # libmpv render context composited under the transparent WebKitWebView via a
@@ -113,13 +113,13 @@ libloading = "0.8"
 # creation-time webview-transparency opt-in added to the vendored fork —
 # mirror of the Windows composition-hosting entry above); resolves to
 # vendor/wry via [patch].
-wry = "0.54"
+wry = "0.55"
 
 # Path C3c (prexu-60mz.3): vendored fork of wry to add a WebView2 composition-
 # controller hosting path (CreateCoreWebView2CompositionController +
 # SetRootVisualTarget) so the React webview can live as a transparent
 # DirectComposition visual above the mpv video visual on the main Tauri HWND.
-# Pinned to the exact version Tauri 2.10 resolves (0.54.2); the patch must stay
+# Pinned to the exact version Tauri 2.11 resolves (0.55.1); the patch must stay
 # API-compatible with what Tauri calls. Re-base on wry bumps when Tauri bumps.
 [patch.crates-io]
 wry = { path = "vendor/wry" }
