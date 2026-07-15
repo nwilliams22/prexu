@@ -532,6 +532,28 @@ pub fn run() {
     #[cfg(target_os = "linux")]
     wry::set_pending_webview_transparency(true);
 
+    // Per-session log file (prexu-0pkf): rotate the previous run's log BEFORE
+    // the log plugin opens its LogDir target inside Builder::run — after that
+    // the file is held open. Result: <productName>.log holds ONLY the current
+    // session; the previous session survives as <productName>.prev.log; never
+    // more than two files. Caveat: a second app instance rotates the live log
+    // before the single-instance plugin turns it away (plugins init later) —
+    // the running instance keeps writing to the renamed file, so nothing is
+    // lost, but current/prev swap roles until the next clean start.
+    let context = tauri::generate_context!();
+    let session_log_note = {
+        let name = context
+            .config()
+            .product_name
+            .clone()
+            .unwrap_or_else(|| "app".into());
+        match app_log_dir(&context.config().identifier).map(|d| rotate_session_log(&d, &name)) {
+            Some(true) => format!("[setup] fresh session log — previous run kept as {name}.prev.log"),
+            Some(false) => "[setup] fresh session log — no previous log to rotate".to_string(),
+            None => "[setup] session-log rotation skipped — no log dir resolved".to_string(),
+        }
+    };
+
     let builder = tauri::Builder::default()
         .manage(ProxyState::new())
         .manage(downloads::DownloadManager::new())
@@ -668,7 +690,10 @@ pub fn run() {
     ]);
 
     builder
-        .setup(|app| {
+        .setup(move |app| {
+            // First line of every session log — states the rotation outcome
+            // (the rotation itself ran pre-logger at the top of run()).
+            log::info!("{session_log_note}");
             if let Some(window) = app.get_webview_window("main") {
                 // Boot size guard (prexu-jlqt): re-assert the configured
                 // minimum. The actual below-min boot shrink happens at the
@@ -768,10 +793,75 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .unwrap_or_else(|e| {
             log::error!("Failed to run tauri application: {}", e);
         });
+}
+
+// ── Per-session log rotation (prexu-0pkf) ────────────────────────────────────
+
+/// Default tauri `app_log_dir` for this platform, resolved WITHOUT an
+/// AppHandle — the rotation must run before the app (and its path resolver)
+/// exists. Mirrors tauri's convention: linux/windows put logs under the
+/// local-data dir, macOS under ~/Library/Logs.
+fn app_log_dir(identifier: &str) -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        dirs::home_dir().map(|h| h.join("Library").join("Logs").join(identifier))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        dirs::data_local_dir().map(|d| d.join(identifier).join("logs"))
+    }
+}
+
+/// Move the previous session's `<name>.log` to `<name>.prev.log` so the
+/// current file contains only this run; the older `.prev.log` is replaced.
+/// Returns whether a rotation happened. Best-effort by design: failures must
+/// never block boot, and the logger is not up yet — the caller logs the
+/// outcome once it is.
+fn rotate_session_log(logs_dir: &std::path::Path, name: &str) -> bool {
+    let current = logs_dir.join(format!("{name}.log"));
+    if !current.exists() {
+        return false;
+    }
+    let previous = logs_dir.join(format!("{name}.prev.log"));
+    // Remove first — renaming onto an existing file is platform-dependent.
+    let _ = std::fs::remove_file(&previous);
+    std::fs::rename(&current, &previous).is_ok()
+}
+
+#[cfg(test)]
+mod session_log_tests {
+    use super::rotate_session_log;
+
+    #[test]
+    fn rotates_current_log_and_replaces_previous() {
+        let dir = std::env::temp_dir().join(format!("prexu-logrot-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let current = dir.join("Prexu.log");
+        let previous = dir.join("Prexu.prev.log");
+        std::fs::write(&current, "this session").unwrap();
+        std::fs::write(&previous, "two sessions ago").unwrap();
+        assert!(rotate_session_log(&dir, "Prexu"));
+        assert!(!current.exists(), "current log must start fresh");
+        assert_eq!(
+            std::fs::read_to_string(&previous).unwrap(),
+            "this session",
+            "previous slot must hold the last session, not accumulate"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn no_op_when_no_log_exists() {
+        let dir = std::env::temp_dir().join(format!("prexu-logrot-none-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!rotate_session_log(&dir, "Prexu"));
+        assert!(!dir.join("Prexu.prev.log").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
 
 // ── Boot size guard (prexu-jlqt) ─────────────────────────────────────────────
