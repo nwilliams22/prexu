@@ -303,6 +303,13 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
         return;
       }
 
+      // prexu-6d78: capture watched-ness from the FRESH play-start metadata —
+      // gates the early-stop unscrobble so a rewatch can't wipe watched
+      // state. After the supersede check so only the winning init writes it;
+      // optional-chained because test doubles return partial results.
+      timeline.wasWatchedAtStartRef.current =
+        (((prepared as { playable?: { viewCount?: number } } | null)?.playable?.viewCount) ?? 0) > 0;
+
       applyPreparedMetadata(prepared, {
         setTitle,
         setSubtitle,

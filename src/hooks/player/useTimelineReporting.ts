@@ -37,6 +37,14 @@ export interface TimelineReportingResult {
   durationRef: React.MutableRefObject<number>;
   isPlayingRef: React.MutableRefObject<boolean>;
   ratingKeyRef: React.MutableRefObject<string>;
+  /**
+   * Whether the item was ALREADY watched (viewCount > 0) when this session
+   * started — set by the player from the fresh play-start metadata. Gates the
+   * early-stop `/:/unscrobble`: that endpoint doesn't just clear the resume
+   * marker, it marks the item UNWATCHED, so firing it on a rewatch silently
+   * destroys the user's watched state (prexu-6d78).
+   */
+  wasWatchedAtStartRef: React.MutableRefObject<boolean>;
 }
 
 export function useTimelineReporting(
@@ -47,6 +55,7 @@ export function useTimelineReporting(
   const durationRef = useRef(0);
   const isPlayingRef = useRef(false);
   const ratingKeyRef = useRef("");
+  const wasWatchedAtStartRef = useRef(false);
 
   const startTimeline = useCallback(() => {
     if (timelineRef.current) clearInterval(timelineRef.current);
@@ -79,6 +88,33 @@ export function useTimelineReporting(
     const timeMs = currentTimeRef.current * 1000;
 
     if (timeMs < RESUME_CLEAR_THRESHOLD_MS) {
+      if (wasWatchedAtStartRef.current) {
+        // Rewatch early-stop (prexu-6d78): /:/unscrobble marks the item
+        // UNWATCHED — verified live against PMS — so for an already-watched
+        // item it must never fire. A stopped report under 60s records
+        // nothing, so the pre-session state (watched, plus any prior resume
+        // marker) survives untouched, which is exactly the "didn't really
+        // start it" semantics this branch wants. No watch-state event: the
+        // server state did not change.
+        logger.info("playback", "early stop (<60s) on already-watched item — watched state preserved", {
+          ratingKey,
+          timeMs: Math.round(timeMs),
+        });
+        logger.debug("playback", "final offset sent at stop", {
+          ratingKey,
+          timeMs: Math.round(timeMs),
+          branch: "rewatch-noop",
+        });
+        reportTimeline(
+          server.uri,
+          server.accessToken,
+          ratingKey,
+          "stopped",
+          timeMs,
+          durationRef.current * 1000,
+        );
+        return;
+      }
       // Early stop: deterministically clear the resume marker via
       // /:/unscrobble. Relying on Plex to implicitly drop the marker for a
       // `state=stopped` beacon with time < 60s does NOT work when a prior
@@ -181,6 +217,7 @@ export function useTimelineReporting(
       durationRef,
       isPlayingRef,
       ratingKeyRef,
+      wasWatchedAtStartRef,
     }),
     [startTimeline, stopTimeline, reportStopped],
   );
