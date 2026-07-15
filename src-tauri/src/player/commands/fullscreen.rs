@@ -49,12 +49,22 @@ pub async fn player_set_fullscreen(
     // synchronise and no D3D11-swapchain-rebuild storm to suppress.
     #[cfg(target_os = "linux")]
     let fs_result = {
+        // prexu-ngsa: bracket the toggle so the frontend chrome-hide
+        // (player://host-window-busy listener, prexu-uf4m) covers fullscreen
+        // — the same WebKitGTK large-resize relayout lag class as popout
+        // exit (see the player-transition-hide-until-correct memory). Linux
+        // only: the Windows path below has its own transition machinery
+        // (set_fullscreen_transition) and useTransparentWindow reacts to
+        // busy on Windows, so bracketing there needs on-Windows visual
+        // verification first.
+        let _ = app.emit("player://host-window-busy", ());
         let fs_result = main
             .set_fullscreen(fullscreen)
             .map_err(|e| format!("set_fullscreen failed: {}", e));
         let actual_fs = main.is_fullscreen().unwrap_or(fullscreen);
         log::info!("[player:cmd] set_fullscreen: emitting actual_fs={}", actual_fs);
         let _ = app.emit("player://fullscreen", actual_fs);
+        let _ = app.emit("player://host-window-ready", ());
         fs_result
     };
 

@@ -174,6 +174,14 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   // The native path has a separate button for in-window minimize (the small
   // corner mode). The two modes are mutually exclusive — `handleMinimize`
   // exits pop-out first when needed, and `togglePiP` exits minimize first.
+  // prexu-ngsa: forward declaration for the synchronous chrome-hide (the
+  // real callback is defined with the resize machinery below; callbacks up
+  // here call through the ref). Frontend-initiated transitions must hide the
+  // chrome BEFORE invoking the Rust command — the host-window-busy event is
+  // only a backstop, and its IPC delivery can lag by up to ~1s when the web
+  // process is congested (observed live), leaving wrong-sized chrome visible.
+  const beginHostTransitionRef = useRef<() => void>(() => {});
+
   const pip = usePictureInPicture(player.videoRef);
   const popOut = usePopOutPlayer();
   // Pop-out is native window management (Windows + Linux since
@@ -200,6 +208,10 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
       if (playerMinimize.isMinimized) {
         playerMinimize.restoreFromMinimize();
       }
+      // Exit direction only (prexu-ngsa): the enlarge back to full size is
+      // where stale-viewport chrome is glaring. Enter (shrink) stays
+      // un-hidden — hiding there only delayed the popout controls.
+      if (isPopOut) beginHostTransitionRef.current();
       togglePopOut();
     } else if (!isNativeEngine) {
       toggleBrowserPiP();
@@ -208,13 +220,14 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     // pipSupported is already false there so the button isn't shown. Linux
     // native's window-management affordance is minimize instead, rendered
     // separately below via SUPPORTS_PLAYER_MINIMIZE.
-  }, [togglePopOut, toggleBrowserPiP, playerMinimize, isNativeEngine]);
+  }, [togglePopOut, toggleBrowserPiP, playerMinimize, isNativeEngine, isPopOut]);
 
   const handleMinimize = useCallback(() => {
     // Mutual exclusion with pop-out: if currently popped out, exit
     // pop-out first, then minimize. isPopOut can only be true when
     // SUPPORTS_PLAYER_POPOUT is (Windows), so this is a no-op on Linux.
     if (SUPPORTS_PLAYER_POPOUT && isPopOut) {
+      beginHostTransitionRef.current(); // exit-popout enlarge (prexu-ngsa)
       togglePopOut();
     }
     playerMinimize.minimize();
@@ -319,6 +332,18 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   // movement and the fallback timer below still reveal it early if the
   // reflow signal never comes.
   const hostTransitionRef = useRef(false);
+  const beginHostTransition = useCallback(() => {
+    logger.debug("player", "host transition begin — hiding chrome");
+    hostTransitionRef.current = true;
+    setIsResizing(true);
+    if (resizeFallbackRef.current) clearTimeout(resizeFallbackRef.current);
+    resizeFallbackRef.current = setTimeout(endResize, 1500);
+  }, [endResize]);
+  // Frontend-initiated transitions (popout exit, fullscreen) call this
+  // synchronously at the invoke site via the ref declared above — before the
+  // Rust command even runs. The busy listener below is the backstop for any
+  // transition initiated elsewhere.
+  beginHostTransitionRef.current = beginHostTransition;
   useEffect(() => {
     // Native shell only — the browser/e2e builds never emit these events.
     if (!SUPPORTS_PLAYER_POPOUT) return;
@@ -329,10 +354,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
         const { listen } = await import("@tauri-apps/api/event");
         const un = await listen("player://host-window-busy", () => {
           logger.debug("player", "host-window-busy — hiding chrome for host transition");
-          hostTransitionRef.current = true;
-          setIsResizing(true);
-          if (resizeFallbackRef.current) clearTimeout(resizeFallbackRef.current);
-          resizeFallbackRef.current = setTimeout(endResize, 1500);
+          beginHostTransition();
         });
         if (cancelled) un();
         else unlisten = un;
@@ -344,7 +366,18 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
       cancelled = true;
       unlisten?.();
     };
-  }, [endResize]);
+  }, [beginHostTransition]);
+  // Fullscreen resizes the window as violently as popout exit — hide first,
+  // synchronously, for every entry point (double-click, keyboard, the
+  // bottom-bar button via the onToggleFullscreen prop).
+  const toggleFullscreenWithTransition = useCallback(() => {
+    beginHostTransition();
+    player.toggleFullscreen();
+  }, [beginHostTransition, player.toggleFullscreen]);
+  const exitPopOutWithTransition = useCallback(() => {
+    beginHostTransition();
+    togglePopOut();
+  }, [beginHostTransition, togglePopOut]);
   useEffect(() => {
     if (hostTransitionRef.current) {
       hostTransitionRef.current = false;
@@ -360,7 +393,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   // Click-to-pause / double-click-fullscreen
   const handleVideoClick = useVideoClickHandling(
     togglePlay,
-    player.toggleFullscreen,
+    toggleFullscreenWithTransition,
     resetHideTimer,
   );
 
@@ -560,7 +593,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     duration: player.duration,
     volume: player.volume,
     setVolume: player.setVolume,
-    toggleFullscreen: player.toggleFullscreen,
+    toggleFullscreen: toggleFullscreenWithTransition,
     toggleMute: player.toggleMute,
     isFullscreen: player.isFullscreen,
     onBack: lifecycle.exit,
@@ -720,7 +753,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
       {SUPPORTS_PLAYER_POPOUT && popOut.isPopOut && (
         <>
           <PopoutDragStrip visible={chromeVisible} />
-          <PopoutExitButton visible={chromeVisible} onExit={togglePopOut} />
+          <PopoutExitButton visible={chromeVisible} onExit={exitPopOutWithTransition} />
           <PopoutResizeZones />
         </>
       )}
@@ -846,6 +879,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
             onDownloaded: handleSubtitleDownloaded,
           }}
           onPanelPinChange={setPanelPinned}
+          onToggleFullscreen={toggleFullscreenWithTransition}
           syncIndicator={syncIndicator}
           reflowTick={renderTick}
         />
