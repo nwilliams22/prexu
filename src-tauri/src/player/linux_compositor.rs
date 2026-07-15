@@ -339,6 +339,35 @@ fn reset_pump_gate() {
     PUMP_IDLE.store(true, Ordering::Relaxed);
 }
 
+// ── Overlay quiescence (prexu-ertt Phase 1) ─────────────────────────────────
+//
+// The prexu-41cw cost-isolation matrix showed the overlay stack owns a share
+// of the ~2s WebKitGTK relayout lag on large 4K resizes even with no video on
+// screen: a visible GLArea makes GTK realloc + blit its buffer on every
+// damage/drag frame (it draws even with no render context), and holding the
+// webview's opaque region EMPTY app-wide forces the compositor to alpha-blend
+// the whole (opaque) React UI instead of taking the opaque fast path. Both
+// costs only buy anything while mpv frames are being composited, so they are
+// scoped to file-loaded-ness: the overlay wakes on the idle-active=false edge
+// (events.rs) and sleeps on idle-active=true / detach. NOT keyed on
+// attach_mpv — the boot warmup attaches a parked idle mpv and the app must
+// stay quiescent for dashboard resize speed.
+
+static OVERLAY_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// True while the overlay must composite video (file loaded). Read by the
+/// webview size-allocate handler on the GTK main thread.
+fn overlay_active() -> bool {
+    OVERLAY_ACTIVE.load(Ordering::Relaxed)
+}
+
+/// Flip the overlay flag, returning true only on a real edge (state changed).
+/// Callers schedule GTK work exclusively on edges, so repeated idle-active
+/// reports and the detach backstop stay no-ops.
+fn overlay_flag_transition(active: bool) -> bool {
+    OVERLAY_ACTIVE.swap(active, Ordering::Relaxed) != active
+}
+
 // ── Pure helpers (unit-tested; no GTK/GL required) ─────────────────────────────
 
 /// Physical-pixel FBO size from the GLArea's logical allocation and the DPI
@@ -409,6 +438,18 @@ fn clear_opaque_region(widget: &gtk::Widget, verbose: bool) {
     }
 }
 
+/// Hand opaque-region control back to GTK/WebKit (`None` = "compute it").
+/// Called on overlay sleep so the quiescent dashboard regains the
+/// compositor's opaque fast path immediately, instead of waiting for the
+/// next size-allocate (where WebKit recomputes and re-sets its own region).
+fn restore_opaque_region(widget: &gtk::Widget) {
+    let Some(gdk_window) = widget.window() else {
+        return;
+    };
+    gdk_window.set_opaque_region(None);
+    log::info!("[player:linux] webview opaque region restored to GTK-computed (quiescent)");
+}
+
 // ── Compositor state (GTK-main-thread only) ────────────────────────────────────
 
 thread_local! {
@@ -430,6 +471,9 @@ struct Compositor {
     gl_fns: Cell<Option<GlFns>>,
     /// The 60 Hz `queue_render` pump source; removed on teardown.
     pump_source: RefCell<Option<glib::SourceId>>,
+    /// The composited webview widget (`None` under PREXU_NO_WEBVIEW). Held for
+    /// the overlay wake/sleep opaque-region policy (prexu-ertt Phase 1).
+    webview: Option<gtk::Widget>,
 }
 
 impl Compositor {
@@ -544,7 +588,8 @@ pub fn install(window: &WebviewWindow, app: AppHandle) {
     overlay.add(&gl_area); // base child = video
     // PREXU_NO_WEBVIEW=1: diagnostic isolation — render mpv only, no webview
     // (discriminates GL-layer bugs from webview-compositing bugs on hardware).
-    if std::env::var_os("PREXU_NO_WEBVIEW").is_none() {
+    let webview_composited = std::env::var_os("PREXU_NO_WEBVIEW").is_none();
+    if webview_composited {
         webview_widget.set_hexpand(true);
         webview_widget.set_vexpand(true);
         overlay.add_overlay(&webview_widget); // overlay child = webview (transparent bg)
@@ -558,6 +603,16 @@ pub fn install(window: &WebviewWindow, app: AppHandle) {
     log::info!(
         "[player:linux] reparent done — webview (direct overlay child) over GtkGLArea; UI subtree shown"
     );
+    // prexu-ertt Phase 1: start quiescent — hidden, GTK skips the GLArea's
+    // per-damage buffer realloc + blit entirely while browsing. The
+    // idle-active=false edge shows it (set_overlay_active). The GLArea still
+    // REALIZES during show_all above (tao pre-realizes the toplevel —
+    // verified in the 2026-07-15 boot log), which is harmless: realized ≠
+    // drawn, and render-context creation correctly waits for attach_mpv.
+    // Size negotiation is unaffected: the overlay's request is driven by the
+    // webview (a GLArea requests ~0px), so this cannot re-trigger the
+    // prexu-jlqt boot-shrink class.
+    gl_area.hide();
 
     // Fix B (belt-and-braces on top of the creation-time transparency): clear
     // the webview GdkWindow's opaque region so GDK/the compositor never treat
@@ -585,7 +640,13 @@ pub fn install(window: &WebviewWindow, app: AppHandle) {
                     crate::util::epoch_ms()
                 );
             }
-            clear_opaque_region(w, false);
+            // prexu-ertt Phase 1: re-assert only while the overlay is awake.
+            // Quiescent, WebKit's freshly computed opaque region is exactly
+            // what restores the compositor's opaque fast path for the
+            // (opaque) React UI — one of the measured 4K resize-lag shares.
+            if overlay_active() {
+                clear_opaque_region(w, false);
+            }
         });
         // Already realized (unlikely at setup, the toplevel is still hidden) —
         // apply now rather than waiting for a realize that already happened.
@@ -610,6 +671,7 @@ pub fn install(window: &WebviewWindow, app: AppHandle) {
         realized: Cell::new(false),
         gl_fns: Cell::new(None),
         pump_source: RefCell::new(None),
+        webview: webview_composited.then(|| webview_widget.clone()),
     });
     wire_gl_area(&comp);
     COMPOSITOR.with(|c| *c.borrow_mut() = Some(comp));
@@ -720,6 +782,10 @@ pub fn attach_mpv(app: &AppHandle, mpv: Arc<Mpv>) {
                         return;
                     }
                 }
+                // NOTE: no overlay wake here (prexu-ertt Phase 1) — attach
+                // also fires for the boot warmup's parked idle mpv, and boot
+                // must stay quiescent. Wake rides the idle-active=false edge
+                // in events.rs (set_overlay_active).
                 try_create_render_context(&comp);
             }
             None => {
@@ -732,6 +798,49 @@ pub fn attach_mpv(app: &AppHandle, mpv: Arc<Mpv>) {
         }
     }) {
         log::error!("[player:linux] attach_mpv: run_on_main_thread failed: {e:?}");
+    }
+}
+
+/// Edge-triggered overlay wake/sleep (prexu-ertt Phase 1). Called from the
+/// mpv event-pump thread on idle-active flips — a file is loaded ⇔ the
+/// overlay must composite video — and force-slept from `detach_mpv` as a
+/// teardown backstop. While asleep the GLArea is hidden (GTK skips its
+/// per-damage buffer work) and the webview keeps WebKit's own opaque region
+/// (compositor fast-paths the opaque React UI).
+pub(crate) fn set_overlay_active(app: &AppHandle, active: bool) {
+    if !overlay_flag_transition(active) {
+        return;
+    }
+    log::info!(
+        "[player:linux] overlay {} — scheduling GTK transition",
+        if active { "wake" } else { "sleep" }
+    );
+    if let Err(e) = app.run_on_main_thread(move || {
+        let comp = COMPOSITOR.with(|c| c.try_borrow().ok().and_then(|g| g.clone()));
+        let Some(comp) = comp else {
+            log::warn!("[player:linux] overlay transition: compositor not installed");
+            return;
+        };
+        if active {
+            // Show first: on a mapped toplevel this realizes the GLArea
+            // synchronously, so the realize handler's render-context create
+            // runs before the first frame is due.
+            comp.gl_area.show();
+            if let Some(wv) = comp.webview.as_ref() {
+                // WebKit recomputed a real opaque region while quiescent —
+                // empty it again so GTK alpha-blends the webview over video.
+                clear_opaque_region(wv, false);
+            }
+            log::info!("[player:linux] overlay awake — GLArea shown, webview opaque region cleared");
+        } else {
+            comp.gl_area.hide();
+            if let Some(wv) = comp.webview.as_ref() {
+                restore_opaque_region(wv);
+            }
+            log::info!("[player:linux] overlay quiescent — GLArea hidden, opaque region GTK-computed");
+        }
+    }) {
+        log::error!("[player:linux] overlay transition: run_on_main_thread failed: {e:?}");
     }
 }
 
@@ -782,6 +891,17 @@ pub fn detach_mpv(app: &AppHandle) {
             };
             if let Ok(mut g) = comp.mpv.try_borrow_mut() {
                 let _ = g.take();
+            }
+            // Teardown backstop (prexu-ertt Phase 1): the idle-active=true
+            // edge may never arrive from an mpv that is being destroyed —
+            // force the overlay quiescent here. Edge-guarded: a no-op when
+            // the idle edge already slept it.
+            if overlay_flag_transition(false) {
+                comp.gl_area.hide();
+                if let Some(wv) = comp.webview.as_ref() {
+                    restore_opaque_region(wv);
+                }
+                log::info!("[player:linux] overlay quiescent (detach) — GLArea hidden, opaque region GTK-computed");
             }
             if freed {
                 log::info!("[player:linux] mpv render context freed (detach)");
@@ -993,8 +1113,10 @@ fn wire_gl_area(comp: &Rc<Compositor>) {
             // Pacing is ours anyway: the 60 Hz pump + GTK vsync drive frame
             // timing, so target-time blocking buys nothing here.
             match render.render_no_block::<()>(fbo_id, w, h, true) {
+                // Success is silent: this fires on every GTK repaint of the
+                // overlay (UI animation damage included), so even trace level
+                // floods dev logs. Only the error path logs.
                 Ok(()) => {
-                    log::trace!("[player:linux] render frame fbo={fbo_id} {w}x{h}");
                     // prexu-91t8: the load reveal fires HERE — a frame is now
                     // actually in the GLArea buffer (on screen within one GTK
                     // frame-clock cycle) — not on PlaybackRestart. Only on a
@@ -1199,7 +1321,24 @@ fn try_create_render_context(comp: &Rc<Compositor>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{engine_failure_reason, fbo_dimensions, should_pump, sub_compensation};
+    use super::{
+        engine_failure_reason, fbo_dimensions, overlay_active, overlay_flag_transition,
+        should_pump, sub_compensation,
+    };
+
+    #[test]
+    fn overlay_flag_edges_and_levels() {
+        // One test exercises the whole sequence: the flag is a shared static,
+        // so splitting these asserts across tests would race under the
+        // parallel runner.
+        assert!(!overlay_active(), "boot default must be quiescent");
+        assert!(overlay_flag_transition(true), "false→true is an edge");
+        assert!(overlay_active());
+        assert!(!overlay_flag_transition(true), "true→true must not re-trigger GTK work");
+        assert!(overlay_flag_transition(false), "true→false is an edge");
+        assert!(!overlay_active());
+        assert!(!overlay_flag_transition(false), "false→false must be a no-op (detach after idle-edge sleep)");
+    }
 
     #[test]
     fn fbo_dimensions_scale_1_is_identity() {
