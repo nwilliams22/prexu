@@ -3,6 +3,11 @@
 /// Milliseconds since the Unix epoch, for `t=<ms>` markers in log lines whose
 /// consumers (scripts/hw-probe) need sub-second timing — the log's own
 /// timestamps are second-precision (prexu-uf4m allocation-gap verdict).
+///
+/// Linux-gated: every caller (linux_compositor, the Linux popout commands)
+/// is, and the Windows CI clippy gate runs `-D warnings` (prexu-tejj). Widen
+/// the cfg when another platform grows a `t=` consumer.
+#[cfg(target_os = "linux")]
 pub fn epoch_ms() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
