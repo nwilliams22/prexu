@@ -34,9 +34,15 @@ export interface ResizeBurstSummary {
   caughtUp: boolean;
 }
 
-/** documentElement width may differ from the viewport by a scrollbar-ish
- *  sliver; anything within this many CSS px counts as "caught up". */
-const WIDTH_TOLERANCE_PX = 2;
+/** documentElement width sits BELOW the window width by a scrollbar-class
+ *  sliver — measured 4px on the 4K/KDE box (window 1920 ↔ viewport 1916),
+ *  and the exact value varies with scrollbar presence. Anything within this
+ *  many CSS px of the target counts as "caught up": mid-drag stale widths
+ *  differ by hundreds of px, so a generous match keeps seconds-scale lag
+ *  measurements honest while never confusing a stale layout for a caught-up
+ *  one. (v1 used 2px and the final layout NEVER matched — armed catch-ups
+ *  sat silent forever.) */
+const WIDTH_TOLERANCE_PX = 16;
 
 export function createResizeLatencyTracker(now: () => number) {
   let events = 0;
@@ -110,5 +116,10 @@ export function createResizeLatencyTracker(now: () => number) {
     return summary;
   };
 
-  return { onResizeEvent, onLayoutObserved, summarize };
+  /** The still-armed target width, or -1 when disarmed. Exposed so the
+   *  caller can log armed-but-unmatched late observations — the silent
+   *  failure mode that hid the v2 tolerance bug. */
+  const armedTargetWidth = () => (events === 0 ? targetWidth : -1);
+
+  return { onResizeEvent, onLayoutObserved, summarize, armedTargetWidth };
 }
