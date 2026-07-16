@@ -86,7 +86,17 @@ function AppLayout() {
     const layoutObserver = new ResizeObserver((entries) => {
       const rect = entries[entries.length - 1]?.contentRect;
       if (!rect) return;
+      const armedBefore = latency.armedTargetWidth();
       const lateCatchupMs = latency.onLayoutObserved(rect.width);
+      if (lateCatchupMs === null && armedBefore >= 0) {
+        // A late layout landed but didn't match the armed target — the
+        // silent case that hid the v2 tolerance bug. Visible so a probe
+        // mis-calibration never costs another measurement round.
+        logger.debug("layout", "late layout observation while armed (no match)", {
+          observed: Math.round(rect.width),
+          target: Math.round(armedBefore),
+        });
+      }
       if (lateCatchupMs !== null) {
         // The 41cw headline number: last resize event → layout finally at
         // the final size. Measured on-hardware that this lands AFTER the

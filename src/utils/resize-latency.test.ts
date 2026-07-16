@@ -49,13 +49,24 @@ describe("createResizeLatencyTracker", () => {
     expect(s.staleObservations).toBe(1);
   });
 
-  it("tolerates scrollbar-sliver width differences", () => {
+  it("tolerates scrollbar-class width differences (measured 4px on the 4K box)", () => {
     const clock = makeClock();
     const tracker = createResizeLatencyTracker(clock.now);
-    tracker.onResizeEvent(1000);
+    tracker.onResizeEvent(1920);
     clock.advance(20);
-    tracker.onLayoutObserved(998); // within 2px tolerance
+    tracker.onLayoutObserved(1916); // window 1920 ↔ documentElement 1916
     expect(tracker.summarize().caughtUp).toBe(true);
+  });
+
+  it("does not confuse a genuinely stale layout with a caught-up one", () => {
+    const clock = makeClock();
+    const tracker = createResizeLatencyTracker(clock.now);
+    tracker.onResizeEvent(1920);
+    clock.advance(20);
+    tracker.onLayoutObserved(1900); // 20px off — beyond tolerance, stale
+    const s = tracker.summarize();
+    expect(s.caughtUp).toBe(false);
+    expect(s.staleObservations).toBe(1);
   });
 
   it("measures the late catch-up after the burst was summarized", () => {
@@ -82,6 +93,19 @@ describe("createResizeLatencyTracker", () => {
     expect(tracker.summarize().caughtUp).toBe(true);
     clock.advance(500);
     expect(tracker.onLayoutObserved(1000)).toBeNull();
+  });
+
+  it("exposes the armed target for mismatch logging, -1 when disarmed or in-burst", () => {
+    const clock = makeClock();
+    const tracker = createResizeLatencyTracker(clock.now);
+    expect(tracker.armedTargetWidth()).toBe(-1);
+    tracker.onResizeEvent(1920);
+    expect(tracker.armedTargetWidth()).toBe(-1); // in-burst: not "armed"
+    clock.advance(150);
+    tracker.summarize(); // not caught up → stays armed
+    expect(tracker.armedTargetWidth()).toBe(1920);
+    tracker.onLayoutObserved(1916); // late catch-up disarms
+    expect(tracker.armedTargetWidth()).toBe(-1);
   });
 
   it("ignores layouts outside a burst and resets after summarize", () => {
