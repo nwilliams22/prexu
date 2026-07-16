@@ -58,6 +58,32 @@ describe("createResizeLatencyTracker", () => {
     expect(tracker.summarize().caughtUp).toBe(true);
   });
 
+  it("measures the late catch-up after the burst was summarized", () => {
+    const clock = makeClock();
+    const tracker = createResizeLatencyTracker(clock.now);
+    tracker.onResizeEvent(1600);
+    clock.advance(150);
+    expect(tracker.summarize().caughtUp).toBe(false); // settle fired first
+    clock.advance(1850);
+    expect(tracker.onLayoutObserved(1200)).toBeNull(); // still stale — stays armed
+    clock.advance(200);
+    // 150 + 1850 + 200 = 2200ms after the last resize event: the 41cw number.
+    expect(tracker.onLayoutObserved(1600)).toBe(2200);
+    // Disarmed after the catch-up: same-size layouts later are not ours.
+    expect(tracker.onLayoutObserved(1600)).toBeNull();
+  });
+
+  it("a caught-up burst disarms — no phantom late catch-up afterwards", () => {
+    const clock = makeClock();
+    const tracker = createResizeLatencyTracker(clock.now);
+    tracker.onResizeEvent(1000);
+    clock.advance(50);
+    tracker.onLayoutObserved(1000); // in-burst catch-up
+    expect(tracker.summarize().caughtUp).toBe(true);
+    clock.advance(500);
+    expect(tracker.onLayoutObserved(1000)).toBeNull();
+  });
+
   it("ignores layouts outside a burst and resets after summarize", () => {
     const clock = makeClock();
     const tracker = createResizeLatencyTracker(clock.now);

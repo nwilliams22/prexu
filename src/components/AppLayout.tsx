@@ -85,7 +85,18 @@ function AppLayout() {
     const latency = createResizeLatencyTracker(() => performance.now());
     const layoutObserver = new ResizeObserver((entries) => {
       const rect = entries[entries.length - 1]?.contentRect;
-      if (rect) latency.onLayoutObserved(rect.width);
+      if (!rect) return;
+      const lateCatchupMs = latency.onLayoutObserved(rect.width);
+      if (lateCatchupMs !== null) {
+        // The 41cw headline number: last resize event → layout finally at
+        // the final size. Measured on-hardware that this lands AFTER the
+        // settle window almost every time (WebKit commits ~no layouts
+        // mid-drag), so it gets its own line rather than dying with the
+        // burst summary.
+        logger.info("layout", "resize late catch-up", {
+          lagMs: Math.round(lateCatchupMs),
+        });
+      }
     });
     layoutObserver.observe(document.documentElement);
     const gate = createLeadingTrailingGate(RESIZE_SETTLE_MS, (edge) => {
@@ -125,6 +136,12 @@ function AppLayout() {
     // on every WM_SIZE so we don't depend on the browser's resize event
     // alone. Webview-side `window.resize` can be batched under
     // transparent-window mode; the Tauri event always lands.
+    // cancelled-flag pattern (same as Player.tsx's event subscriptions):
+    // listen() resolves async, so under StrictMode's mount→unmount→mount the
+    // first effect's cleanup runs BEFORE the promise lands and the leaked
+    // listener kept feeding a dead tracker — every burst was double-logged,
+    // once with a disconnected observer (events:N, observations:0).
+    let cancelled = false;
     let tauriUnlisten: (() => void) | undefined;
     (async () => {
       try {
@@ -134,13 +151,15 @@ function AppLayout() {
         // The browser resize listener deliberately does NOT feed the
         // tracker: its innerWidth is the lagging layout viewport, and using
         // it as the target would fake instant catch-ups.
-        tauriUnlisten = await listen<[number, number]>("window://resized", (event) => {
+        const un = await listen<[number, number]>("window://resized", (event) => {
           const physicalWidth = event.payload?.[0];
           if (typeof physicalWidth === "number") {
             latency.onResizeEvent(physicalWidth / window.devicePixelRatio);
           }
           onResize();
         });
+        if (cancelled) un();
+        else tauriUnlisten = un;
       } catch (err) {
         logger.warn(
           "layout",
@@ -151,6 +170,7 @@ function AppLayout() {
     })();
 
     return () => {
+      cancelled = true;
       window.removeEventListener("resize", onResize);
       cancelAnimationFrame(raf);
       gate.dispose();
