@@ -55,9 +55,25 @@ export function createResizeLatencyTracker(now: () => number) {
     caughtUp = false;
   };
 
-  const onLayoutObserved = (width: number) => {
-    // Content-driven documentElement resizes outside a burst are not ours.
-    if (events === 0) return;
+  /**
+   * Returns the LATE catch-up lag (ms) when this observation is the layout
+   * finally matching the target AFTER the burst was summarized — the 41cw
+   * headline number (measured on-hardware: WebKit commits almost no layouts
+   * mid-drag, so the catch-up almost always lands after the settle window).
+   * Returns null for every in-burst or non-matching observation.
+   */
+  const onLayoutObserved = (width: number): number | null => {
+    if (events === 0) {
+      // Post-summarize: the target stays armed until the layout reaches it,
+      // so the late catch-up is measured instead of discarded. Unrelated
+      // content-driven documentElement resizes (no armed target) are not
+      // ours and stay ignored.
+      if (targetWidth >= 0 && Math.abs(width - targetWidth) <= WIDTH_TOLERANCE_PX) {
+        targetWidth = -1;
+        return now() - lastEventAt;
+      }
+      return null;
+    }
     layoutObservations++;
     if (Math.abs(width - targetWidth) <= WIDTH_TOLERANCE_PX) {
       const lag = now() - lastEventAt;
@@ -67,6 +83,7 @@ export function createResizeLatencyTracker(now: () => number) {
     } else {
       staleObservations++;
     }
+    return null;
   };
 
   const summarize = (): ResizeBurstSummary => {
@@ -83,8 +100,13 @@ export function createResizeLatencyTracker(now: () => number) {
     staleObservations = 0;
     maxCatchupLagMs = 0;
     lastCatchupLagMs = -1;
+    // The target (and its event timestamp) deliberately survive the reset
+    // when the burst never caught up — see onLayoutObserved's late-catch-up
+    // path. A caught-up burst disarms so unrelated later layouts are ignored.
+    if (caughtUp) {
+      targetWidth = -1;
+    }
     caughtUp = false;
-    targetWidth = -1;
     return summary;
   };
 
