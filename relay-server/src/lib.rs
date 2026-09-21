@@ -1,5 +1,6 @@
 pub mod connection;
 pub mod messages;
+pub mod pending_invites;
 pub mod plex_auth;
 pub mod server;
 pub mod session;

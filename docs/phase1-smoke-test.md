@@ -1,87 +1,49 @@
-# Phase 1 smoke test (paste in Tauri devtools console)
+# Native-player IPC smoke test
 
-Run with `npm run tauri dev`. When the window appears, open devtools (F12 or right-click → Inspect) and paste the snippet below.
+Updated 2026-09-20 for the current Windows/Linux render-API player. This is a
+small command/event diagnostic, not the old audio-only Phase 1 acceptance test.
+Use [normal playback smoke tests](phase2-smoke-test.md) for UI and rendering.
 
-## What this verifies
-
-- libmpv-2.dll loads at runtime (no STATUS_DLL_NOT_FOUND on first command call)
-- All 11 `player_*` tauri commands are reachable across the IPC bridge
-- `PlayerState::ensure_init` succeeds (mpv handle constructed with hwdec/vo/keep-open/force-window/volume-max config)
-- Event pump thread fires `player://*` events
-- `time-pos`, `duration`, `paused`, `buffering`, `eof` events are observable
-
-## What this does NOT verify (Phase 2+)
-
-- Video rendering — mpv was init'd with `force-window=no` and there's no `--wid` yet, so no video surface exists. Audio plays.
-- Hardware decoding engagement — needs a render target.
-- Plex auth header forwarding end-to-end — uses a public test URL here.
-
-## Snippet
+Run `npm run tauri dev` after installing native dependencies. Stop ordinary
+playback before invoking commands directly. In desktop devtools, import the
+API modules from the Vite dev server (the global `window.__TAURI__` is not
+enabled in this app). These imports are for `tauri dev`, not packaged builds:
 
 ```js
-// === Phase 1 smoke test ==================================================
-const { invoke } = window.__TAURI__.core;
-const { listen } = window.__TAURI__.event;
-
-const log = (k, v) => console.log(`[player] ${k}`, v);
-
-// 1. Subscribe to all player events
-const unsubs = await Promise.all([
-  listen('player://time-pos',  e => log('time-pos',  e.payload.toFixed(2))),
-  listen('player://duration',  e => log('duration',  e.payload)),
-  listen('player://paused',    e => log('paused',    e.payload)),
-  listen('player://buffering', e => log('buffering', e.payload)),
-  listen('player://eof',       _ => log('eof',       null)),
-  listen('player://ready',     _ => log('ready',     null)),
-  listen('player://error',     e => log('error',     e.payload)),
-]);
-
-// Helper to tear everything down at the end
-window.__phase1cleanup = async () => {
-  for (const u of unsubs) u();
+const { invoke } = await import('/node_modules/@tauri-apps/api/core.js');
+const { listen } = await import('/node_modules/@tauri-apps/api/event.js');
+const events = ['ready', 'duration', 'time-pos', 'paused', 'buffering', 'eof', 'error'];
+const unsubs = await Promise.all(events.map(name =>
+  listen(`player://${name}`, event => console.log(name, event.payload))
+));
+window.__playerSmokeCleanup = async () => {
+  for (const unsubscribe of unsubs) unsubscribe();
   await invoke('player_unload');
-  console.log('[player] cleaned up');
 };
-
-// 2. Load a public test stream (Big Buck Bunny, CC-BY)
-const TEST_URL = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
-console.log('[player] loading test url…');
 await invoke('player_load_url', {
-  url: TEST_URL,
-  headers: {},          // no Plex headers needed for public URL
+  url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+  headers: {},
   startOffsetMs: 0,
 });
-
-// You should see within a few seconds:
-//   [player] ready
-//   [player] duration ~596
-//   [player] paused false
-//   [player] time-pos 0.25  (then 0.50, 0.75, … updating ~4 Hz)
-//
-// Audio should also play through the default device.
-
-// 3. Try transport commands manually:
-//   await invoke('player_pause');                       // expect: paused true
-//   await invoke('player_play');                        // expect: paused false
-//   await invoke('player_seek', { seconds: 60 });       // expect: time-pos jumps to ~60
-//   await invoke('player_set_volume', { vol: 50 });     // half volume
-//   await invoke('player_set_muted', { muted: true });  // silent
-//   await invoke('player_set_af_chain', { preset: 'night' });
-//
-// 4. When done, run:  await window.__phase1cleanup()
+// Run individually after playback begins:
+// await invoke('player_pause');
+// await invoke('player_play');
+// await invoke('player_seek', { seconds: 60 });
+// await invoke('player_set_volume', { vol: 50 });
+// await invoke('player_set_muted', { muted: true });
+// Always finish with:
+// await window.__playerSmokeCleanup();
 ```
 
-## Pass criteria
+The public sample depends on network availability. Success means the command
+bridge and native initialization work, playback events arrive, transport changes
+are observable, and cleanup stops audio without hanging. Direct IPC bypasses
+the React player session/overlay, so a hidden video surface is not a visual
+acceptance failure for this snippet. Do not change `vo` or `force-window` to
+repair it: production uses the render API, not a standalone mpv window.
 
-- No DLL-not-found error on first `invoke('player_load_url', …)`.
-- `[player] ready` and `[player] duration ~596` appear in the console within ~5 s.
-- `[player] time-pos` updates at ~4 Hz once playback starts (rate-limited by the event pump).
-- Audio plays.
-- Pause/play/seek change `time-pos` reporting accordingly.
-- `await window.__phase1cleanup()` at the end exits cleanly (no panic in the dev log).
-
-## If it fails
-
-- **"failed to find … libmpv-2.dll"** at app launch → `target/debug/libmpv-2.dll` is missing. Re-run `cd src-tauri && cargo build --bin prexu` with `MPV_SOURCE` set, then restart `npm run tauri dev`.
-- **`mpv init failed: …`** on first invoke → check the dev log; `vo=gpu-next` may be rejected without a window on some drivers. Workaround: temporarily change `force-window=no` to `force-window=yes` in `src-tauri/src/player/mod.rs` (mpv will pop its own window for testing).
-- **No `time-pos` events** → event pump didn't start; check the dev log for `Failed to spawn event thread`.
+For failures, retain the exact command error and native logs. On Windows check
+[libmpv and ANGLE staging](../src-tauri/bin/README.md). On Linux check system
+libmpv, the GL context/compositor logs, and [diagnostic modes](linux-dev.md).
+For deterministic signal-chain coverage, use the configured headless-mpv tests
+in [validation coverage](test-automation-plan.md).

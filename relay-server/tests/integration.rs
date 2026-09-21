@@ -21,13 +21,16 @@ const RECV_TIMEOUT: Duration = Duration::from_secs(5);
 /// Auth bypass is enabled at compile time via the `test-mode` feature
 /// (activated automatically for dev/test builds in Cargo.toml).
 async fn start_test_server() -> SocketAddr {
-
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("failed to bind ephemeral port");
     let addr = listener.local_addr().unwrap();
 
-    let state = Arc::new(prexu_relay::AppState::new());
+    let state = Arc::new(
+        prexu_relay::AppState::new()
+            .with_public_url("wss://trusted-relay.example/ws")
+            .unwrap(),
+    );
     prexu_relay::spawn_cleanup_task(state.clone());
     let app = prexu_relay::build_router(state);
 
@@ -156,7 +159,9 @@ async fn test_auth_timeout() {
     // Server should send auth_error or close the connection
     let msg_type = msg["type"].as_str().unwrap_or("");
     assert!(
-        msg_type == "auth_error" || msg_type == "connection_closed" || msg_type == "connection_error",
+        msg_type == "auth_error"
+            || msg_type == "connection_closed"
+            || msg_type == "connection_error",
         "expected auth_error or close, got: {}",
         msg
     );
@@ -181,7 +186,10 @@ async fn test_invalid_auth_message() {
     let resp = ws_try_recv(&mut ws, Duration::from_millis(500)).await;
     // None is expected: no response yet (waiting for auth).
     if let Some(val) = resp {
-        assert_ne!(val["type"], "auth_ok", "should not get auth_ok for non-auth message");
+        assert_ne!(
+            val["type"], "auth_ok",
+            "should not get auth_ok for non-auth message"
+        );
     }
 }
 
@@ -409,11 +417,7 @@ async fn test_session_destroyed_when_empty() {
     ws_recv(&mut ws).await; // session_created
 
     // Leave session — session should be destroyed (only participant)
-    ws_send(
-        &mut ws,
-        &serde_json::json!({ "type": "leave_session" }),
-    )
-    .await;
+    ws_send(&mut ws, &serde_json::json!({ "type": "leave_session" })).await;
 
     // Trying to join should fail
     let mut ws2 = ws_connect(addr).await;
@@ -718,7 +722,7 @@ async fn test_invite_to_connected_user() {
             "media_title": "Test Movie",
             "media_rating_key": "12345",
             "media_type": "movie",
-            "sender_username": "host_inv",
+            "sender_username": "forged-host",
             "sender_thumb": "https://example.com/thumb.jpg",
             "relay_url": "ws://localhost:8080/ws"
         }),
@@ -731,6 +735,11 @@ async fn test_invite_to_connected_user() {
     assert_eq!(invite["session_id"], "inv-test");
     assert_eq!(invite["media_title"], "Test Movie");
     assert_eq!(invite["sender_username"], "host_inv");
+    assert_eq!(
+        invite["sender_thumb"],
+        "https://plex.tv/users/host_inv/avatar"
+    );
+    assert_eq!(invite["relay_url"], "wss://trusted-relay.example/ws");
 }
 
 #[tokio::test]
@@ -763,7 +772,7 @@ async fn test_invite_to_offline_user_delivered_on_connect() {
             "media_title": "Test Movie",
             "media_rating_key": "12345",
             "media_type": "movie",
-            "sender_username": "host_pend",
+            "sender_username": "forged-host",
             "sender_thumb": "",
             "relay_url": "ws://localhost/ws"
         }),
@@ -784,6 +793,11 @@ async fn test_invite_to_offline_user_delivered_on_connect() {
     assert_eq!(invites.len(), 1);
     assert_eq!(invites[0]["session_id"], "pend-test");
     assert_eq!(invites[0]["sender_username"], "host_pend");
+    assert_eq!(
+        invites[0]["sender_thumb"],
+        "https://plex.tv/users/host_pend/avatar"
+    );
+    assert_eq!(invites[0]["relay_url"], "wss://trusted-relay.example/ws");
 }
 
 #[tokio::test]
@@ -974,10 +988,7 @@ async fn test_rate_limiting() {
             }
             Some(msg) => {
                 if msg["type"] == "auth_error"
-                    && msg["reason"]
-                        .as_str()
-                        .unwrap_or("")
-                        .contains("Rate limit")
+                    && msg["reason"].as_str().unwrap_or("").contains("Rate limit")
                 {
                     rate_limited = true;
                     break;
@@ -1228,8 +1239,8 @@ async fn start_test_server_with_tmdb_base(tmdb_base: String) -> SocketAddr {
 /// against a regression to a fresh `reqwest::Client::new()` per request.
 #[tokio::test]
 async fn test_tmdb_proxy_reuses_shared_http_client() {
-    // SAFETY (test-only): no other test reads TMDB_API_KEY, and this
-    // process-wide env var only affects this test binary.
+    // Test-only credential for the local stub. Invalid-ID tests reject requests
+    // before credentials are read; no test mutates this key to another value.
     std::env::set_var("TMDB_API_KEY", "test-key");
 
     let (stub_addr, connections) = start_counting_stub().await;
@@ -1237,10 +1248,12 @@ async fn test_tmdb_proxy_reuses_shared_http_client() {
 
     const N: usize = 5;
     for i in 0..N {
-        let url = format!(
-            "http://{}/tmdb/search/movie?query=test{}&page=1",
-            relay_addr, i
-        );
+        let path = match i {
+            0 => "/tmdb/find/tt1234567".to_string(),
+            1 => "/tmdb/find/nm1234567".to_string(),
+            _ => format!("/tmdb/search/movie?query=test{i}&page=1"),
+        };
+        let url = format!("http://{relay_addr}{path}");
         let resp = reqwest::get(&url).await.expect("proxy request failed");
         assert!(
             resp.status().is_success(),
@@ -1257,4 +1270,210 @@ async fn test_tmdb_proxy_reuses_shared_http_client() {
         "expected exactly one upstream TCP connection reused across {} proxy requests",
         N
     );
+}
+
+// Security regression coverage: exercise the wire boundary, not only helpers.
+async fn start_server_with_state(state: Arc<prexu_relay::AppState>) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = prexu_relay::build_router(state);
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    addr
+}
+
+async fn create_test_session(ws: &mut WsStream, id: &str) {
+    ws_send(
+        ws,
+        &serde_json::json!({
+            "type": "create_session", "session_id": id,
+            "media_title": "Server-owned title", "media_rating_key": "123", "media_type": "movie"
+        }),
+    )
+    .await;
+    assert_eq!(ws_recv(ws).await["type"], "session_created");
+}
+
+#[tokio::test]
+async fn test_invites_reject_nonmembers_and_missing_sessions() {
+    let addr = start_test_server().await;
+    let mut host = ws_connect(addr).await;
+    authenticate(&mut host, "owner").await;
+    create_test_session(&mut host, "private-session").await;
+    let mut outsider = ws_connect(addr).await;
+    authenticate(&mut outsider, "outsider").await;
+    for session in ["private-session", "nonexistent"] {
+        ws_send(
+            &mut outsider,
+            &serde_json::json!({
+                "type": "invite", "session_id": session, "target_username": "owner",
+                "sender_username": "owner", "relay_url": "wss://attacker.example/ws"
+            }),
+        )
+        .await;
+        let response = ws_recv(&mut outsider).await;
+        assert_eq!(response["type"], "session_error");
+        assert!(response["reason"].as_str().unwrap().contains("belong"));
+    }
+    assert!(ws_try_recv(&mut host, Duration::from_millis(100))
+        .await
+        .is_none());
+}
+
+#[tokio::test]
+async fn test_invites_fail_closed_without_public_url() {
+    let state = Arc::new(prexu_relay::AppState::new());
+    let addr = start_server_with_state(state.clone()).await;
+    let mut host = ws_connect(addr).await;
+    authenticate(&mut host, "host").await;
+    create_test_session(&mut host, "session").await;
+    ws_send(
+        &mut host,
+        &serde_json::json!({
+            "type": "invite", "session_id": "session", "target_username": "offline",
+            "relay_url": "wss://attacker.example/ws"
+        }),
+    )
+    .await;
+    let response = ws_recv(&mut host).await;
+    assert_eq!(response["type"], "session_error");
+    assert!(response["reason"].as_str().unwrap().contains("public URL"));
+    assert!(state.pending_invites.take("offline").is_none());
+}
+
+#[tokio::test]
+async fn test_offline_invites_deduplicate_and_use_session_metadata() {
+    let addr = start_test_server().await;
+    let mut host = ws_connect(addr).await;
+    authenticate(&mut host, "real-host").await;
+    create_test_session(&mut host, "session").await;
+    for _ in 0..3 {
+        ws_send(
+            &mut host,
+            &serde_json::json!({
+                "type": "invite", "session_id": "session", "target_username": "recipient",
+                "media_title": "Forged title", "media_rating_key": "999", "media_type": "episode",
+                "sender_username": "forged", "sender_thumb": "forged",
+                "relay_url": "wss://attacker.example/ws"
+            }),
+        )
+        .await;
+    }
+    // A ping response is an ordering barrier: all prior invites were processed.
+    ws_send(&mut host, &serde_json::json!({"type": "ping"})).await;
+    assert_eq!(ws_recv(&mut host).await["type"], "pong");
+    let mut guest = ws_connect(addr).await;
+    authenticate(&mut guest, "recipient").await;
+    let response = ws_recv(&mut guest).await;
+    let invites = response["invites"].as_array().unwrap();
+    assert_eq!(invites.len(), 1);
+    assert_eq!(invites[0]["media_title"], "Server-owned title");
+    assert_eq!(invites[0]["media_rating_key"], "123");
+    assert_eq!(invites[0]["media_type"], "movie");
+    assert_eq!(invites[0]["sender_username"], "real-host");
+    assert_eq!(invites[0]["relay_url"], "wss://trusted-relay.example/ws");
+}
+
+#[tokio::test]
+async fn test_read_idle_timeout_releases_connection_and_session_despite_server_pongs() {
+    let mut state = prexu_relay::AppState::with_keepalive_interval(Duration::from_millis(30));
+    state.read_idle_timeout = Duration::from_millis(500);
+    let state = Arc::new(state);
+    let addr = start_server_with_state(state.clone()).await;
+    let mut ws = ws_connect(addr).await;
+    authenticate(&mut ws, "idle-host").await;
+    create_test_session(&mut ws, "idle-session").await;
+    // Client stays connected without reading/sending; the server's own traffic
+    // must not count as inbound activity or keep this ghost session alive.
+    timeout(Duration::from_secs(3), async {
+        while state.connections.contains_key("idle-host") {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("idle connection was never cleaned up");
+    assert!(!state.sessions.contains_key("idle-session"));
+}
+
+#[tokio::test]
+async fn test_inbound_frames_refresh_read_idle_deadline() {
+    let mut state = prexu_relay::AppState::new();
+    state.read_idle_timeout = Duration::from_millis(500);
+    let state = Arc::new(state);
+    let addr = start_server_with_state(state.clone()).await;
+    let mut ws = ws_connect(addr).await;
+    authenticate(&mut ws, "active-user").await;
+    for _ in 0..8 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        ws_send(&mut ws, &serde_json::json!({"type": "ping"})).await;
+        assert_eq!(ws_recv(&mut ws).await["type"], "pong");
+    }
+    assert!(state.connections.contains_key("active-user"));
+    timeout(Duration::from_secs(3), async {
+        while state.connections.contains_key("active-user") {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("connection did not expire after inbound traffic stopped");
+}
+
+#[tokio::test]
+async fn test_tmdb_rejects_path_and_query_injection_before_upstream_request() {
+    let (stub_addr, connections) = start_counting_stub().await;
+    let addr = start_test_server_with_tmdb_base(format!("http://{stub_addr}")).await;
+    for id in [
+        "..%2F..%2Faccount",
+        "tt123%3Fextra%3D1",
+        "tt123%26x%3D1",
+        "tt123%23fragment",
+        "tt",
+        "nm",
+        "12345",
+        "ttabc",
+        "tt%EF%BC%91",
+        "tt123%252Faccount",
+    ] {
+        let response = reqwest::get(format!("http://{addr}/tmdb/find/{id}"))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            reqwest::StatusCode::BAD_REQUEST,
+            "id={id}"
+        );
+    }
+    assert_eq!(connections.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn test_public_url_configuration_rejects_unsafe_or_unusable_endpoints() {
+    for url in [
+        "https://relay.example/ws",
+        "file:///ws",
+        "wss://user:secret@relay.example/ws",
+        "wss://relay.example/ws?token=secret",
+        "wss://relay.example/ws#fragment",
+        "wss://relay.example/wrong",
+    ] {
+        assert!(
+            prexu_relay::AppState::new().with_public_url(url).is_err(),
+            "{url}"
+        );
+    }
+    for url in [
+        "ws://localhost:9847/ws",
+        "wss://relay.example/ws",
+        "ws://[::1]:9847/ws",
+    ] {
+        assert_eq!(
+            prexu_relay::AppState::new()
+                .with_public_url(url)
+                .unwrap()
+                .public_url
+                .as_deref(),
+            Some(url)
+        );
+    }
 }

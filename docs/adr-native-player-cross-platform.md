@@ -1,16 +1,19 @@
 # ADR: Native (libmpv) player — cross-platform extension to macOS + Linux
 
-## Status
+## Status — superseded historical assessment
 
-Proposed (recommendation only — the maintainer makes the final call).
+This document evaluated the former Windows sibling-HWND/`wid` architecture.
+Its defer/no-go recommendations are no longer the project direction.
 
-Decision per platform:
-- **macOS:** Defer.
-- **Linux:** No-go for the current architecture; defer any native player.
-- **Windows:** Unchanged — remains the sole supported native-player target.
+- Linux render-API playback is accepted and implemented: see the
+  [Linux ADR](adr-native-player-render-api.md).
+- macOS native opt-in is accepted but not integrated; HTML5 remains the current
+  engine. See the [macOS ADR](adr-native-player-macos.md).
+- Windows now uses the render API through ANGLE/DirectComposition.
 
-Tracked as beads epic `prexu-efy` (Phase 5). Companion status:
-`docs/native-player-status.md` (Phase 5 findings section).
+The context, options, and sources below are retained as historical rationale.
+References to shipped architecture and missing hardware refer to the original
+assessment, not today's source tree. See [current status](native-player-status.md).
 
 ## Context
 

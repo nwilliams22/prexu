@@ -1,5 +1,10 @@
 # dcomp-overlay spike — RUN & WHAT-TO-LOOK-FOR
 
+> Historical experiment: results and commands below describe this spike and its
+> recorded environment, not current production setup or a live task queue. See
+> [current player status](../../docs/native-player-status.md) and Beads for
+> implementation progress and remaining acceptance.
+
 THROWAWAY feasibility spike for **beads prexu-k0i2 / Path C2**. It combines the
 two independently-proven halves of Path C into ONE DirectComposition tree on ONE
 plain top-level window, standalone (outside Tauri):

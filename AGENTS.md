@@ -115,3 +115,31 @@ bd prime                # Refresh Beads context
 
 **Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
 <!-- END BEADS CODEX SETUP -->
+
+## Project context and documentation
+
+Prexu uses React 19/TypeScript, Tauri v2, and a Rust/Axum relay. Windows and
+Linux have native libmpv render-API backends; macOS currently uses HTML5.
+Read `docs/README.md` for maintained guides and `docs/native-player-status.md`
+for implementation/acceptance boundaries. Historical rollout/spike documents
+are evidence, not current branch or task instructions.
+
+- Keep substantive shared guidance in AGENTS.md and CLAUDE.md consistent.
+- Use skills available in the active agent environment; old plugin/model names
+  in historical issues do not establish available tools or permissions.
+- Use Beads for tracking. Follow active user/orchestrator delegation rules;
+  do not require teams or a particular model for routine work.
+- Run checks appropriate to the change. `mise run ci` covers frontend, relay,
+  desktop Rust, Chromium E2E and probe self-tests; see
+  `docs/test-automation-plan.md` for omitted checks and hardware limits.
+- Keep documentation aligned with code/configuration. Separate implemented
+  behavior, historical measurements, intended designs, and unverified acceptance.
+
+## Logging conventions
+
+Use Rust `log` macros and the TypeScript logger in `src/services/logger.ts`.
+Use module tags such as `[player:cmd]` in Rust and `player:cmd` in TypeScript.
+Log state transitions and errors; keep high-frequency events at debug/trace.
+Correlate relevant IPC operations across the Rust/TypeScript boundary.
+Never log secrets or token-bearing URLs; use the existing redaction helpers.
+Truncating a URL is not a substitute for removing credentials.

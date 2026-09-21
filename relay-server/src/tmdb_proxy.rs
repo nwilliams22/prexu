@@ -56,11 +56,7 @@ fn get_api_key() -> Result<String, ProxyError> {
 }
 
 /// Build a reqwest client with the TMDb auth header.
-fn tmdb_request(
-    client: &reqwest::Client,
-    url: &str,
-    api_key: &str,
-) -> reqwest::RequestBuilder {
+fn tmdb_request(client: &reqwest::Client, url: &str, api_key: &str) -> reqwest::RequestBuilder {
     client
         .get(url)
         .header("Accept", "application/json")
@@ -157,6 +153,17 @@ pub async fn find_by_external_id(
 
     Path(external_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, Response> {
+    let digits = external_id
+        .strip_prefix("tt")
+        .or_else(|| external_id.strip_prefix("nm"));
+    if !digits.is_some_and(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())) {
+        warn!("Rejected invalid IMDb identifier");
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Expected an IMDb identifier (tt or nm followed by digits)",
+        )
+            .into_response());
+    }
     check_rate_limit(&state).map_err(|e| *e)?;
     let api_key = get_api_key().map_err(|e| *e)?;
     let client = state.http.clone();
@@ -176,7 +183,10 @@ pub async fn person_detail(
     check_rate_limit(&state).map_err(|e| *e)?;
     let api_key = get_api_key().map_err(|e| *e)?;
     let client = state.http.clone();
-    let url = format!("{}/person/{}?language=en-US", state.tmdb_api_base, person_id);
+    let url = format!(
+        "{}/person/{}?language=en-US",
+        state.tmdb_api_base, person_id
+    );
     proxy_tmdb(&client, &url, &api_key).await
 }
 
@@ -233,6 +243,9 @@ pub async fn tmdb_status() -> impl IntoResponse {
     if std::env::var("TMDB_API_KEY").is_ok() {
         (StatusCode::OK, "TMDb proxy available")
     } else {
-        (StatusCode::SERVICE_UNAVAILABLE, "TMDb API key not configured")
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "TMDb API key not configured",
+        )
     }
 }

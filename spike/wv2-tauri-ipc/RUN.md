@@ -1,5 +1,10 @@
 # wv2-tauri-ipc spike — RUN & WHAT-TO-LOOK-FOR
 
+> Historical experiment: results and commands below describe this spike and its
+> recorded environment, not current production setup or a live task queue. See
+> [current player status](../../docs/native-player-status.md) and Beads for
+> implementation progress and remaining acceptance.
+
 THROWAWAY feasibility spike for **beads prexu-60mz.1 / Path C3a** — the GATE for
 the C3 fork-vs-bypass decision.
 

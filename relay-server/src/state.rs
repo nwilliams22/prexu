@@ -9,7 +9,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use dashmap::DashMap;
 use tokio::sync::mpsc;
 
-use crate::messages::PendingInviteInfo;
+use crate::pending_invites::PendingInvites;
 
 /// Shared application state (wrapped in Arc for thread-safe sharing).
 pub type SharedState = Arc<AppState>;
@@ -24,8 +24,12 @@ pub struct AppState {
     pub sessions: DashMap<String, Session>,
     /// plex_username -> ConnectionHandle
     pub connections: DashMap<String, ConnectionHandle>,
-    /// plex_username -> Vec<PendingInvite> (for users not currently connected)
-    pub pending_invites: DashMap<String, Vec<PendingInviteInfo>>,
+    /// Bounded, expiring offline invites keyed by recipient username.
+    pub pending_invites: PendingInvites,
+    /// Operator-configured WebSocket URL advertised in invites; None disables invites.
+    pub public_url: Option<String>,
+    /// Maximum time without an inbound WebSocket frame.
+    pub read_idle_timeout: std::time::Duration,
     /// Global request timestamps for TMDb proxy rate limiting
     tmdb_timestamps: Mutex<VecDeque<Instant>>,
     /// Shared outbound HTTP client (prexu-0szx.12). A `reqwest::Client`
@@ -57,12 +61,32 @@ impl AppState {
         Self {
             sessions: DashMap::new(),
             connections: DashMap::new(),
-            pending_invites: DashMap::new(),
+            pending_invites: PendingInvites::default(),
+            public_url: None,
+            read_idle_timeout: std::time::Duration::from_secs(90),
             tmdb_timestamps: Mutex::new(VecDeque::new()),
             http: reqwest::Client::new(),
             tmdb_api_base: crate::tmdb_proxy::TMDB_API_BASE.to_string(),
             keepalive_interval: std::time::Duration::from_secs(30),
         }
+    }
+
+    /// Configure the trusted URL used for all invites, never a client-supplied URL.
+    pub fn with_public_url(mut self, value: &str) -> Result<Self, String> {
+        let url = reqwest::Url::parse(value).map_err(|_| "Invalid public relay URL")?;
+        if value.len() > 2048
+            || !matches!(url.scheme(), "ws" | "wss")
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.path() != "/ws"
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err("Public relay URL must be ws(s)://host[:port]/ws without credentials, query, or fragment".into());
+        }
+        self.public_url = Some(url.to_string());
+        Ok(self)
     }
 
     /// Build an `AppState` with a custom keepalive cadence (tests only).
@@ -93,7 +117,10 @@ impl AppState {
         };
 
         // Remove expired timestamps
-        while timestamps.front().is_some_and(|t| now.duration_since(*t) > TMDB_RATE_LIMIT_WINDOW) {
+        while timestamps
+            .front()
+            .is_some_and(|t| now.duration_since(*t) > TMDB_RATE_LIMIT_WINDOW)
+        {
             timestamps.pop_front();
         }
 

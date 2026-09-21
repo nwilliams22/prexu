@@ -2,9 +2,9 @@
 
 `scripts/hw-probe/` is the W2 probe suite from `docs/test-automation-plan.md`:
 one-command-ish checks that run on the **Linux dev box** against a real Plex
-server and a running Prexu, converting most of the manual plan's eyeball steps
-(`docs/linux-on-hardware-test-plan.md` sections A, D, B, E, F, G, N) into a
-report you skim instead of 27 hand-run steps.
+server and a running Prexu, checking parts of the manual plan
+(`docs/linux-on-hardware-test-plan.md` sections A, D, B, E, F, G, N). Several
+transitions still require an operator; a report covers only the exercised inputs.
 
 It is **not** a CI job — it needs a real compositor + GPU + Plex. The one piece
 that *does* run in CI is `hw-probe:selftest` (the mutation-checked verdict core).
@@ -30,7 +30,7 @@ Provisioned by `mise install` (nushell) plus system packages:
 
 | Tool | Used for | Notes |
 | --- | --- | --- |
-| `nu` (nushell) | all scripts | `mise install` (pinned in `mise.toml`) |
+| `nu` (nushell) | all scripts | `mise install` (configured as `latest` in `mise.toml`) |
 | ImageMagick (`magick`) | luminance means | v7 `magick`; forces `-colorspace sRGB` |
 | `ffmpeg`/`ffprobe` | luminance ground truth | frame extraction at a timestamp |
 | `grim`+`slurp` / `spectacle` / `import` | screen capture | auto fall-through, see below |
@@ -169,7 +169,7 @@ process-liveness check).
 ## Self-test / CI enforcement
 
 ```bash
-mise run hw-probe:selftest        # 61 assertions incl. 18 mutation checks
+mise run hw-probe:selftest        # pure verdict assertions and known-bad mutation cases
 ```
 
 Each mutation assertion feeds a known-bad input (reveal re-emit on seek,
@@ -189,3 +189,12 @@ good + a bad fixture under `fixtures/logs/` with matching assertions in
 `selftest.nu`. **Verify the marker against a real `Prexu.log`** before trusting
 it — several markers here were initially wrong because the same concept logs
 differently across the events/compositor sides and across build history.
+
+## Current limits (audit 2026-09-20)
+
+`prexu-vbb2` / `prexu-331f` track the future in-app driver, screen recording,
+and step-based verdict pipeline; that driver is not implemented. Resource
+ceilings still need build-profile calibration (`prexu-xxct`), and capture
+cold-start retry is tracked in `prexu-s83x`. The saved report is not full release
+acceptance. DOM/allocation timing does not establish when WebKit presents the
+correct pixels (`prexu-41cw` / `prexu-v6pr`).

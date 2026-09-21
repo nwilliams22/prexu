@@ -20,6 +20,11 @@ Tracked as beads epic `prexu-ia6w`. Evidence: spikes `prexu-ia6w.1`
 (`spike/macos-webkit-codec-gap/FINDINGS.md`) and `prexu-ia6w.2`
 (`spike/macos-render-compositing/FINDINGS.md` + `evidence/`).
 
+Implementation audit (2026-09-20): this is an accepted design, not shipped
+macOS native support. `IS_NATIVE_PLAYER_PLATFORM` currently includes only
+Windows and Linux. `prexu-ttz9` and native integration remain open. The
+architecture and engine-selection sections below describe intended work.
+
 ## Context
 
 The native player exists because of platform codec gaps: Windows WebView2
@@ -135,7 +140,7 @@ AV1 on M1/M2 unverified; TrueHD/DTS remain transcodes until users opt into
 native.
 
 **Sequencing note:** prexu-ttz9 (codec gate) is the higher-value, lower-cost
-item and should land **before or alongside** ia6w.4 — it improves the default
+item and should land **before** ia6w.4 — it improves the default
 engine every macOS user gets, whether or not they ever enable native.
 
 ## Open questions (carried into gated tasks)

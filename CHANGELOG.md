@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Changes present in the source tree since 0.7.1; this is not a release announcement.
+
+### Added
+
+- Linux native libmpv render-API playback under WebKitGTK, with engine selection,
+  HTML5 fallback, mini-player subtitle compensation, and Linux popout support.
+- Integration coverage for watch-state surfaces, startup, postplay, browser
+  player chrome, Linux/Windows headless mpv, and hardware-probe verdicts.
+- Semi-automated Linux hardware probes and advisory Xvfb process-lifecycle CI.
+- macOS codec/compositing spike evidence and an accepted native opt-in ADR;
+  production macOS native playback remains unimplemented.
+
+### Changed
+
+- Tauri upgraded to 2.11.5 and the composition-hosting fork re-vendored on Wry 0.55.1.
+- Faster startup, Linux mpv warmup, streaming file proxy, library/detail caching,
+  hover prefetch, virtualized grids, and narrower React updates.
+- Dependency remediation, a local High/Critical vulnerability scan gate, and
+  report-only security scanning in GitHub Actions.
+
+### Fixed
+
+- Linux first-frame reveal, mini-player/restore and popout transitions,
+  compositor idle work, and diagnostic-mode explicit-sync handling.
+- Stale resume/watch-state surfaces and early-stop handling for already-watched media.
+- Resize-driven frontend churn; added resize-latency diagnostics. The remaining
+  WebKitGTK presentation stall is still tracked in `prexu-41cw` / `prexu-v6pr`.
+
+- Relay invites now use authenticated identity, session membership/metadata,
+  and an operator-configured endpoint. Offline invite queues are bounded and
+  deduplicated; WebSockets expire after 90 seconds without inbound activity.
+- TMDb external-ID lookup rejects path/query injection before proxying.
+
+### Deployment notes
+
+- The relay now requires `--public-url ws(s)://host[:port]/ws` to send invites.
+  If omitted, invites fail closed; other relay features remain available.
+
+### Remaining release acceptance
+
+- Linux libmpv release provisioning, AppImage/rpm runtime verification and build
+  provenance (`prexu-axj4.7`), plus remaining hardware/codec checks.
+- Deploy and verify the relay security fixes; other `prexu-9f4s` review findings
+  remain open.
+- macOS platform-aware HTML5 direct-play gate (`prexu-ttz9`).
+
 ## [0.7.1] - 2026-06-26
 
 Cross-platform build groundwork. No user-facing app changes on Windows; this

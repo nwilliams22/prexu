@@ -28,9 +28,7 @@ pub async fn handle_connection(ws: WebSocket, state: SharedState) {
     let auth_result = tokio::time::timeout(Duration::from_secs(10), async {
         while let Some(Ok(msg)) = ws_receiver.next().await {
             if let Message::Text(text) = msg {
-                if let Ok(ClientMessage::Auth { plex_token, .. }) =
-                    serde_json::from_str(&text)
-                {
+                if let Ok(ClientMessage::Auth { plex_token, .. }) = serde_json::from_str(&text) {
                     return Some(plex_token);
                 }
             }
@@ -91,7 +89,7 @@ pub async fn handle_connection(ws: WebSocket, state: SharedState) {
     }
 
     // Deliver any pending invites
-    if let Some((_, invites)) = state.pending_invites.remove(&username) {
+    if let Some(invites) = state.pending_invites.take(&username) {
         if !invites.is_empty() {
             let msg = ServerMessage::PendingInvites { invites };
             if let Ok(json) = serde_json::to_string(&msg) {
@@ -128,9 +126,13 @@ pub async fn handle_connection(ws: WebSocket, state: SharedState) {
     let thumb_clone = thumb.clone();
     let mut msg_timestamps: VecDeque<Instant> = VecDeque::new();
 
+    let mut last_activity = Instant::now();
     loop {
         tokio::select! {
             msg = ws_receiver.next() => {
+                if matches!(&msg, Some(Ok(_))) {
+                    last_activity = Instant::now();
+                }
                 match msg {
                     Some(Ok(Message::Text(text))) => {
                         // Rate limiting: sliding window
@@ -158,9 +160,13 @@ pub async fn handle_connection(ws: WebSocket, state: SharedState) {
                             &tx,
                         );
                     }
-                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
                     _ => {} // Ignore binary, ping/pong handled by axum
                 }
+            }
+            _ = tokio::time::sleep_until(last_activity + state.read_idle_timeout) => {
+                warn!(user = %username_clone, "WebSocket read idle timeout, disconnecting");
+                break;
             }
             _ = keepalive.tick() => {
                 let pong = ServerMessage::Pong;
@@ -230,24 +236,8 @@ fn handle_client_message(
         ClientMessage::Invite {
             target_username,
             session_id,
-            media_title,
-            media_rating_key,
-            media_type,
-            sender_username,
-            sender_thumb,
-            relay_url,
         } => {
-            session::handle_invite(
-                state,
-                &target_username,
-                &session_id,
-                &media_title,
-                &media_rating_key,
-                &media_type,
-                &sender_username,
-                &sender_thumb,
-                &relay_url,
-            );
+            session::handle_invite(state, &target_username, &session_id, username, thumb);
         }
 
         ClientMessage::Play {

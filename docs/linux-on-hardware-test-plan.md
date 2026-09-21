@@ -1,13 +1,16 @@
-# Linux on-hardware test plan (2026-07-04)
+# Linux on-hardware acceptance scenarios
 
-Consolidated verification plan for everything merged since the axj4.5 test
-session, plus the still-open Linux verification items. Run with
+Originally assembled 2026-07-04; documentation audited 2026-09-20. These are
+expected behaviors, not a record that all scenarios passed. The automation
+epic is closed; see [current coverage](test-automation-plan.md) and the
+[probe runbook](hw-probe-runbook.md) for automated portions. Record fresh
+results with commit, build profile, GPU/driver, session type, and media codecs. Run with
 `npm run tauri dev` against a real Plex server.
 
 Covers: PR #36 (first-frame reveal, prexu-91t8), PR #37 (mini-player
 subtitle scale, prexu-91k4), PR #39 (per-session mute, prexu-jphh),
 PR #40 (instant transitions, prexu-hg1j), PR #41 (Linux popout,
-prexu-axj4.10), and the open prexu-5jxx X11 sweep.
+prexu-axj4.10), and the deferred prexu-5jxx X11 sweep.
 
 Sections H–N cover the perf & UX sweep epic (prexu-0szx, PRs #42–#48):
 hls.js chunk split, streaming proxy, Linux mpv warmup + pump gate, relay
@@ -89,9 +92,9 @@ A–E unless a step says otherwise.
      should feel instant (<~300 ms to dashboard), vs the old ~2 s
      (frame → navy → dashboard).
    - If a residual delay remains, note WHERE it sits (frame hold vs
-     dashboard paint) — next step per prexu-hg1j notes is instrumenting
-     `player_unload` IPC duration.
-2. Minimize → expand: minimize, then click the mini player to restore.
+     dashboard paint), including `player_unload` IPC duration. Consult current
+     Beads status rather than reopening the historical diagnosis automatically.
+2. Minimize → expand: minimize, then use the mini-player restore control.
    - Expect: the mini video expands in place to full size — no navy
      stage, no ~1 s hold. Log: `restore IPC done (optimistic flip already applied)`.
 3. Enter minimize: full → mini.
@@ -134,7 +137,7 @@ A–E unless a step says otherwise.
    - Expect: lifecycle exits popout FIRST (window restores to full
      pre-popout geometry) and then the dashboard appears at normal size.
 
-## F. X11 session sweep (prexu-5jxx — still open)
+## F. X11 session sweep (prexu-5jxx — deferred)
 
 Log into an X11 session and repeat a compressed pass:
 
@@ -147,7 +150,7 @@ Log into an X11 session and repeat a compressed pass:
 5. Popout with full corner-placement expectations (E.2–E.4, X11 rows).
 6. Note DMABUF behavior differences, if any (webkit may pick a different
    renderer under X11 — capture the startup log block).
-7. Record results on prexu-5jxx (close it if everything passes).
+7. Record results on prexu-5jxx; reconcile its acceptance before closing.
 
 ## G. Regression spot-checks (previous session's fixes)
 
