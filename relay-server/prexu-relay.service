@@ -5,6 +5,8 @@ After=network.target
 [Service]
 Type=simple
 User=plex
+# Add --public-url wss://your-relay.example/ws to enable invitations.
+# Use the real endpoint reachable by all clients, not the bind address.
 ExecStart=/usr/local/bin/prexu-relay --port 8080
 Restart=always
 RestartSec=5

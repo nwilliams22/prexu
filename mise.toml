@@ -92,9 +92,8 @@ run = "npm run build"
 
 # Rust gate (prexu-pd1x.10). The local gate previously ran only `cargo check` on
 # the relay — src-tauri Rust and clippy never ran, so Rust breakage was invisible
-# locally. Linux src-tauri clippy also runs nowhere in GitHub CI (only the
-# Windows job clippies, and it cannot see #[cfg(target_os = "linux")] code), so
-# this is the only place Linux-only lints/tests are caught before merge.
+# locally. The GitHub linux-build job also runs Linux src-tauri clippy; this local
+# task catches the same target-specific lint failures before submission.
 [tasks."clippy-relay"]
 description = "Relay server clippy (-D warnings)"
 dir = "relay-server"

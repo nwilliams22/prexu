@@ -11,29 +11,34 @@ records the architecture that does work on Wayland, proven on hardware.
 
 - **Linux:** native libmpv via the **render API**, default engine, with HTML5
   `<video>` fallback. (this ADR)
-- **macOS:** still deferred (no Apple-Silicon hardware) — separate later epic.
-- **Windows:** unchanged — keeps the shipped `wid`/HWND player; a later epic
-  migrates it to this same render-API path so all platforms converge.
+- **macOS:** HTML5 in production; native opt-in accepted and spiked, awaiting
+  integration after `prexu-ttz9` (see [macOS ADR](adr-native-player-macos.md)).
+- **Windows:** already uses the render API over ANGLE/DirectComposition.
 
 Tracked as beads epic `prexu-axj4`. Evidence: spike `prexu-axj4.1`
 (`spike/wayland-render-compositing/`, `FINDINGS.md` + `evidence/`). Codec scope:
 `prexu-duna.3`. Supersedes-context: the `native-player-cross-platform-direction`
 project memory.
 
+Implementation audit (2026-09-20): the compositor and engine selection are in
+production source. Hardware matrix, codec coverage, and distribution acceptance
+remain open. Versioned spike results below are historical measurements.
+
 ## Context
 
 Prexu's HTML5 `<video>` + hls.js engine on Linux/WebKitGTK direct-plays only a
 narrow codec set; HEVC 8/10-bit, AV1, and AC3/E-AC3/TrueHD/DTS force a Plex
 **transcode** (prexu-duna.3 measured ~17% of the movie library transcoding on
-video, ~170 titles on audio). A native libmpv engine direct-plays all of these.
+video, ~170 titles on audio). These codecs define the native-player verification scope; per-codec hardware
+acceptance remains tracked in `prexu-axj4.8`.
 
-The shipped **Windows** player is a foreign-window-embedding design: a sibling
+The **historical Windows** player was a foreign-window-embedding design: a sibling
 top-level `HWND` is handed to mpv as `wid`, mpv renders into it with
 `vo=gpu-next`, and the transparent WebView2 is z-ordered on top with **manual
 Win32 geometry synchronisation** (`SetWindowPos` on every resize/move/DPI
 change). mpv's `--wid` embedding is supported on x11/win32/cocoa but **not on
 Wayland** (the default session on current KDE/GNOME), which is what made the
-prior ADR call Linux a NO-GO.
+prior ADR call Linux a NO-GO. Windows has since migrated to the render API.
 
 mpv itself recommends the **render API** (`libmpv/render.h` — a caller-owned
 GL/Vulkan/Metal surface) over `wid` embedding. The open question this ADR
@@ -93,10 +98,10 @@ single committed buffer containing both.
   `gtk::Box`. To put video underneath, reparent at startup: create a
   `GtkOverlay`, move wry's webview widget in as the overlay child, add our
   `GtkGLArea` as the base child, set the overlay as the window's child.
-- Frame driving: a ~60 Hz `glib::timeout_add_local` → `queue_render()` is the
-  reliable driver; mpv's `set_update_callback` (marshalled to the main thread via
-  a `glib` channel) supplements it. (In the spike the update callback alone did
-  not reliably pump redraws.)
+- Frame driving: a 16 ms `glib::timeout_add_local` queues rendering when
+  mpv signals a frame or playback is active. The update callback sets an atomic
+  flag; paused/idle ticks skip work unless signalled. GTK rendering stays on
+  the main thread.
 - Threading: all GL + `mpv_render_context_render` run on the GTK main thread
   inside the `render` signal (the only place the GLArea context is current).
   Never touch GTK objects off-thread.
@@ -109,22 +114,23 @@ single committed buffer containing both.
 ### Hardware decode (prexu-axj4.6)
 
 NVDEC confirmed on the spike box. VAAPI (Intel/AMD) and the full hwdec matrix are
-gated work; `hwdec=auto` selects per platform. AV1 / TrueHD / DTS direct-play
+gated work; `hwdec=auto-safe` selects per platform. AV1 / TrueHD / DTS direct-play
 through the same path are expected from libmpv's codec support but are
 **verified per-codec in prexu-axj4.8**, not assumed here.
 
 ### Engine selection + fallback (prexu-axj4.4)
 
-Native libmpv default on Linux. Fall back to HTML5 `<video>` when `libmpv.so` is
-absent, the render path fails to initialise on the running compositor/GPU, or the
-user toggles it off in Settings.
+Native libmpv default on Linux. Fall back to HTML5 `<video>` when a runtime engine failure is reported, or
+select HTML5 in Settings. Linux dynamically links libmpv: a missing loader
+dependency can prevent startup before the in-app fallback runs.
 
 ### Distribution + licensing (prexu-axj4.7)
 
-Dynamically link an **LGPL**-configured libmpv (avoid GPL prebuilts to retain
-dynamic-linking rights). AppImage bundles `libmpv.so`; the rpm declares the
-distro `libmpv` dependency. Linux CI provisions libmpv analogously to the
-existing Windows leg.
+The distribution target is a dynamically linked libmpv build with verified
+licensing/provenance, bundled for AppImage and declared as an rpm runtime
+dependency. This is not complete: CI provisions system libmpv, but release.yml
+does not yet provision it on Linux, and the bundle config has no explicit rpm
+libmpv dependency. See `prexu-axj4.7` and [Linux setup](linux-dev.md).
 
 ## Consequences
 
@@ -150,8 +156,8 @@ existing Windows leg.
 
 **Harder / new surface:**
 
-- A **second rendering backend** distinct from the Windows `wid` path until the
-  later Windows→render-API migration converges them.
+- A **second platform compositor** alongside Windows ANGLE/DirectComposition;
+  both now consume libmpv render-API output.
 - libmpv `.so` bundling (AppImage) + rpm dependency + Linux CI provisioning, and
   LGPL-cleanliness verification of the chosen build.
 - **Webview transparency vs. the toplevel `transparent:false` decision.** Prexu
@@ -194,8 +200,8 @@ existing Windows leg.
 - Per-codec direct-play confirmation: AV1, TrueHD/DTS passthrough, HEVC 8-bit
   (axj4.8 re-verifies the full duna.3 gap through the native player).
 - VAAPI path on Intel/AMD (axj4.6).
-- Reconciling webview-widget transparency with toplevel `transparent:false` +
-  `WEBKIT_DISABLE_DMABUF_RENDERER` (axj4.3).
+- Webview-widget transparency was resolved in axj4.3; the remaining large-resize
+  presentation stall is tracked in `prexu-41cw` / `prexu-v6pr`.
 
 ## Sources
 

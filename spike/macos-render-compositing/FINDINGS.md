@@ -1,5 +1,10 @@
 # Spike prexu-ia6w.2 — mpv render-API video under a transparent WKWebView (macOS)
 
+> Historical experiment: results and commands below describe this spike and its
+> recorded environment, not current production setup or a live task queue. See
+> [current player status](../../docs/native-player-status.md) and Beads for
+> implementation progress and remaining acceptance.
+
 **Verdict: GO.** mpv's render API (libmpv/render.h, OpenGL backend) composites
 decoded video frames UNDERNEATH a transparent `WKWebView` inside ONE `NSWindow`
 on Apple Silicon — proven on hardware, playing a real HEVC 10-bit sample, with

@@ -25,15 +25,11 @@ pub enum ClientMessage {
         session_id: String,
     },
     LeaveSession,
+    // Legacy identity, media and relay_url fields are ignored by serde.
+    // The authenticated connection and server state supply these values.
     Invite {
         target_username: String,
         session_id: String,
-        media_title: String,
-        media_rating_key: String,
-        media_type: String,
-        sender_username: String,
-        sender_thumb: String,
-        relay_url: String,
     },
     Play {
         current_time: f64,

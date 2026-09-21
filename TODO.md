@@ -1,4 +1,7 @@
-# TODO
+# Historical completed UI checklist
+
+Retained as completed history. Current work, priorities, and dependencies live
+in Beads (`bd prime`, `bd ready`); see [current status](docs/native-player-status.md).
 
 1. [x] **Clickable hero gallery slider** — Make the current item in the dashboard hero gallery clickable, navigating to the movie/episode detail page
 2. [x] **Alphabetical filter on collections library** — Add the A-Z letter sidebar filter to the collections library page

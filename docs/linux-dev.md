@@ -1,106 +1,101 @@
-# Linux development & packaging
+# Linux development and packaging
 
-Status: **runtime-verified** — Prexu builds **and runs** on Linux today (HTML5
-`<video>` engine), verified on Nobara/Fedora 43 + KDE Plasma **Wayland** + NVIDIA
-(prexu-duna.3). Playback works via Plex; non-H.264/AAC media transcodes (see
-[Wayland runtime notes](#wayland-runtime-notes)). The native libmpv player is
-Windows-only (see
-[`adr-native-player-cross-platform.md`](adr-native-player-cross-platform.md)).
-This doc captures what's known so a Linux dev session can start fast. Verify
-package names on the actual machine — distro packages drift.
+Audited 2026-09-20. Linux native libmpv playback is implemented and has been
+exercised on KDE Plasma Wayland/NVIDIA. Broad GPU/codec coverage and release
+packaging acceptance remain open. See [implementation status](native-player-status.md).
 
-## Three separate concerns
+## Dependencies and launch
 
-| Concern | Distro-specific? | Status |
-|---------|------------------|--------|
-| **Compile + link** of `src-tauri` | No — source-level, distro-agnostic | ✅ CI-verified on ubuntu-22.04 (`linux-build` job) |
-| **Dev environment** (devel packages) | Yes — apt vs dnf names differ | documented below, unverified on Fedora |
-| **Runtime + packaging** (.rpm/.AppImage, codec support) | Yes | ⏳ needs a real Linux box |
-
-The CI `linux-build` job proves the code compiles **and links** without libmpv
-(it guards the `-lmpv` regression from prexu-nesp). It does **not** prove
-runtime behaviour on any given distro — WebKitGTK codec support and the
-eventual render-API player must be tested on hardware.
-
-## Dev setup
-
-### Fedora (target daily-driver distro)
-
-Per the Tauri v2 Linux prerequisites — **verify exact package names on the box**
-(`dnf search webkit2gtk` etc.):
-
-```bash
-sudo dnf install webkit2gtk4.1-devel openssl-devel curl wget file \
-  libappindicator-gtk3-devel librsvg2-devel
-sudo dnf group install "C Development Tools and Libraries"
-```
-
-Then:
-- Rust via [rustup](https://rustup.rs/) or mise (`mise use rust@latest`)
-- Node 22 (mise or system)
-- `npm ci`
-- `npm run tauri dev` — runs the desktop app with the HTML5 player
-
-### Debian/Ubuntu (matches CI)
+Node 22 is configured in `mise.toml`; Rust is supplied by rustup. The native
+player dynamically links system libmpv. Ubuntu CI installs these build packages:
 
 ```bash
 sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
-  librsvg2-dev patchelf libssl-dev
+  librsvg2-dev patchelf libssl-dev libmpv-dev
+npm ci
+npm run tauri dev
 ```
 
-### Issue tracker (beads) on a fresh clone
+For Fedora-family machines, install the equivalents providing WebKitGTK 4.1,
+GTK 3, OpenSSL, AppIndicator, librsvg, patchelf, and libmpv development files
+from the repositories enabled on that machine. Package names and libmpv
+availability differ; the Ubuntu command is the configuration used in CI.
 
-Issues live in an embedded Dolt database (`.beads/embeddeddolt/`, gitignored)
-run in-process by `bd` 1.1+ — self-contained, no external dolt server or CLI.
-The canonical sync channel is the Dolt remote riding this repo's git remote as
-`refs/dolt/data` (`bd dolt push` / `bd dolt pull`, remote configured in
-`.beads/config.yaml` `sync.remote`). The tracked `.beads/issues.jsonl` is a
-passive export kept for grep/viewers and as a bootstrap fallback — not the
-source of truth. On a fresh clone:
+Native runtime tests need libmpv client API 2.x. The headless runtime CI uses
+Ubuntu 24.04 for this reason; the compile/link job uses Ubuntu 22.04.
+
+Use `npm run dev` for the browser frontend (HTML5 only). Desktop Settings can
+select HTML5 explicitly; default/auto selects native on Linux. Runtime engine
+failure can remount into HTML5, but a missing dynamically linked `libmpv.so`
+can stop the process before application fallback is available.
+
+## Fresh-clone task tracking
 
 ```bash
-mise install        # provisions bd (the dolt CLI is optional in embedded mode)
-bd bootstrap        # non-destructive setup: pulls from refs/dolt/data on
-                    # origin, falling back to the tracked issues.jsonl
-bd ready            # verify the queue is visible
+mise install
+bd bootstrap
+bd prime
+bd ready
 ```
 
-## Packaging
+Beads uses an embedded Dolt database under `.beads/embeddeddolt/`. The tracked
+`.beads/issues.jsonl` is a passive export, not the live database. Remote sync
+uses `refs/dolt/data`; follow the repository's conservative commit/sync policy.
 
-Tauri's Linux bundler can emit three formats:
+## Validation
 
-| Format | For | Notes |
-|--------|-----|-------|
-| `.deb` | Debian/Ubuntu | not useful on Fedora |
-| `.rpm` | Fedora/RHEL | native install; declares a runtime dep on the system `webkit2gtk4.1`. Building it needs `rpmbuild` on the builder. |
-| `.AppImage` | any glibc Linux | bundles dependencies; runs on Fedora regardless of distro. **Best first target.** |
+```bash
+mise run ci
+npm run test:e2e -- --project=player-chrome
+mise run hw-probe:selftest
+```
 
-Recommendation for the Fedora daily driver: **AppImage first** (portable,
-build-once), add `.rpm` later for a native install. When the Linux release leg
-is re-added to `release.yml`, set the Linux `bundle.targets` explicitly to
-`["appimage", "rpm"]` rather than `"all"` and ensure `rpmbuild` is installed on
-the runner.
+The local gate includes frontend checks, relay and desktop Rust clippy/tests,
+Chromium E2E, and probe self-tests. It does not run the real headless-mpv
+integration test or certify GPU rendering. See [coverage](test-automation-plan.md),
+[hardware scenarios](linux-on-hardware-test-plan.md), and [probe commands](hw-probe-runbook.md).
 
-### glibc baseline
+## Packaging status
 
-CI builds on **ubuntu-22.04** (glibc 2.35). A binary built against an older
-glibc runs on newer distros, so a Fedora target (newer glibc) is forward-
-compatible. Keep the build runner on the oldest distro we want to support.
+`tauri.linux.conf.json` selects AppImage and rpm. The release workflow has a
+Linux Ubuntu 22.04 matrix entry and installs rpm tooling, but still lacks
+libmpv provisioning. The bundle config does not explicitly declare an rpm
+libmpv dependency. CI's native-player build is ahead of release packaging.
 
-## Wayland runtime notes
+`prexu-axj4.7` owns release provisioning, self-contained AppImage verification,
+rpm runtime dependencies, and verification of the chosen libmpv build's
+licensing/provenance. Do not infer portable packaged-app support from a passing
+dev build. `prexu-p020` separately tracks a black webview/minimum-size issue
+with a cargo-built debug binary using bundled frontend assets.
 
-Verified on KDE Plasma Wayland + NVIDIA (prexu-duna.3). Two Wayland-specific
-quirks worth knowing:
+## Wayland and rendering diagnostics
 
-### webkit2gtk DMABUF crash (handled in-app)
+The app requests a transparent WebKitWebView at creation and installs a
+GtkOverlay/GtkGLArea compositor beneath it. The toplevel window remains opaque.
+Do not export `WEBKIT_DISABLE_DMABUF_RENDERER=1` for normal native playback:
+that fallback caused progressive darkening and stale transparent composites on
+the tested stack. The app no longer sets it automatically. An explicit user
+override is respected as a diagnostic escape hatch, with degraded rendering.
 
-On Wayland with many GPUs (notably NVIDIA), webkit2gtk's DMABUF renderer
-crashes at webview creation — `Gdk-Message: Error 71 (Protocol error)
-dispatching to Wayland display` — killing the app before first paint. Prexu
-sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` at startup on Linux (in `run()`, before
-GTK init) to force the stable GL path, so **no user action is needed**
-(prexu-z5mz). To debug the DMABUF path, override it: `WEBKIT_DISABLE_DMABUF_RENDERER=0 npm run tauri dev`
-(expect the crash on affected GPUs).
+Two diagnostic modes exist in `src-tauri/src/lib.rs`:
+
+```bash
+PREXU_STOCK_WEBVIEW=1 npm run tauri dev
+PREXU_NO_COMPOSITOR=1 npm run tauri dev
+```
+
+The first disables both creation-time transparency and the compositor; the
+second retains transparency but skips the compositor. Both disable native
+rendering. These switches are presence-based: unset them to restore normal
+behavior; setting `=0` does not disable the switch. In these modes, the app
+sets `__NV_DISABLE_EXPLICIT_SYNC=1` unless the user supplied a value, addressing
+the recorded NVIDIA/KWin explicit-sync protocol crash. Normal mode is unchanged.
+
+`prexu-41cw` / `prexu-v6pr` record large-resize presentation stalls on the tested
+WebKitGTK/NVIDIA/KWin stack. DOM layout can catch up before visible pixels do;
+the stall also reproduces in stock/no-compositor modes. Remaining investigation
+is WebProcess/presentation profiling and an upstream evidence report, not proof
+that more React resize changes will fix it.
 
 ### Window position is not restored on Wayland — use a KWin rule
 
@@ -130,16 +125,14 @@ also add the property **Ignore requested geometry → Yes** (KWin notes this in
 the rule dialog). "Apply Initially" places the window on open but still lets you
 move it afterward; use **Force** only if you want it locked.
 
-## What still requires a Linux machine
 
-- ~~Confirm WebKitGTK on Fedora decodes the target Plex codecs.~~ **Answered
-  (prexu-duna.3):** the HTML5 path direct-plays only **H.264 + AAC**; HEVC
-  (8- and 10-bit), AV1, and AC3/E-AC3/TrueHD/DTS audio all force a Plex
-  transcode (~17% of the Movies library by video, ~170 titles by audio). So the
-  native render-API player is warranted on Linux — those codecs are its
-  must-cover scope.
-- The native player render-API backend (mpv OpenGL/Vulkan → Wayland/X11
-  surface). Wayland is the modern Fedora default and has no mpv `--wid`
-  embedding, so this is the render-API path (ADR option L2), not the Windows
-  `wid` design.
-- Any `tauri dev` runtime / visual / interaction debugging.
+## Acceptance still requiring hardware
+
+- Remaining playback/transition scenarios and X11 sweep (`prexu-axj4.5`, deferred `prexu-5jxx`).
+- Intel/AMD VAAPI and wider NVIDIA decode coverage (`prexu-axj4.6`).
+- Native per-codec verification against the recorded HTML5 gap (`prexu-axj4.8`).
+- Packaged runtime and final gates (`prexu-axj4.7`, `prexu-axj4.9`).
+
+The old HTML5 H.264/AAC observations describe the app's selected playback path,
+including its codec allow-list; they are not a universal measurement of every
+WebKitGTK codec capability.

@@ -243,63 +243,82 @@ pub fn leave_session(state: &SharedState, username: &str) {
     }
 }
 
-/// Handle an invite: push to target if connected, otherwise store as pending.
-// reason: invite entry point; args map 1:1 to the invite protocol message
-#[allow(clippy::too_many_arguments)]
+/// Handle an invite using only authenticated identity and server-owned metadata.
 pub fn handle_invite(
     state: &SharedState,
     target_username: &str,
     session_id: &str,
-    media_title: &str,
-    media_rating_key: &str,
-    media_type: &str,
     sender_username: &str,
     sender_thumb: &str,
-    relay_url: &str,
 ) {
-    let invite_msg = ServerMessage::InviteReceived {
-        session_id: session_id.to_string(),
-        media_title: media_title.to_string(),
-        media_rating_key: media_rating_key.to_string(),
-        media_type: media_type.to_string(),
-        sender_username: sender_username.to_string(),
-        sender_thumb: sender_thumb.to_string(),
-        sent_at: now_ms(),
-        relay_url: relay_url.to_string(),
+    let reject = |reason: &str| {
+        warn!(user = %sender_username, reason, "Invite rejected");
+        send_to_user(
+            state,
+            sender_username,
+            &ServerMessage::SessionError {
+                reason: reason.into(),
+            },
+        );
     };
-
-    // If user is connected, deliver immediately
+    let Some(relay_url) = state.public_url.as_deref() else {
+        reject("Invitations disabled: relay public URL is not configured");
+        return;
+    };
+    if target_username.is_empty()
+        || target_username.len() > 256
+        || target_username.chars().any(char::is_control)
+    {
+        reject("Invalid invite target");
+        return;
+    }
+    let in_session = state
+        .connections
+        .get(sender_username)
+        .is_some_and(|conn| conn.session_id.as_deref() == Some(session_id));
+    let pending = match state.sessions.get(session_id) {
+        Some(session) if in_session && session.participants.contains_key(sender_username) => {
+            PendingInviteInfo {
+                session_id: session_id.to_string(),
+                media_title: session.media_title.clone(),
+                media_rating_key: session.media_rating_key.clone(),
+                media_type: session.media_type.clone(),
+                sender_username: sender_username.to_string(),
+                sender_thumb: sender_thumb.to_string(),
+                sent_at: now_ms(),
+                relay_url: relay_url.to_string(),
+            }
+        }
+        _ => {
+            reject("Invite sender must belong to the session");
+            return;
+        }
+    };
+    // Bound string storage and delivery payloads, even for online recipients.
+    if !crate::pending_invites::fits_size_limit(&pending) {
+        reject("Invite metadata is too large");
+        return;
+    }
     if state.connections.contains_key(target_username) {
-        send_to_user(state, target_username, &invite_msg);
-        info!(
-            from = %sender_username,
-            to = %target_username,
-            session_id = %session_id,
-            "Invite delivered immediately"
-        );
-    } else {
-        // Store as pending
-        let pending = PendingInviteInfo {
-            session_id: session_id.to_string(),
-            media_title: media_title.to_string(),
-            media_rating_key: media_rating_key.to_string(),
-            media_type: media_type.to_string(),
-            sender_username: sender_username.to_string(),
-            sender_thumb: sender_thumb.to_string(),
-            sent_at: now_ms(),
-            relay_url: relay_url.to_string(),
+        let invite_msg = ServerMessage::InviteReceived {
+            session_id: pending.session_id,
+            media_title: pending.media_title,
+            media_rating_key: pending.media_rating_key,
+            media_type: pending.media_type,
+            sender_username: pending.sender_username,
+            sender_thumb: pending.sender_thumb,
+            sent_at: pending.sent_at,
+            relay_url: pending.relay_url,
         };
-        state
-            .pending_invites
-            .entry(target_username.to_string())
-            .or_default()
-            .push(pending);
-        info!(
-            from = %sender_username,
-            to = %target_username,
-            session_id = %session_id,
-            "Invite stored as pending (user offline)"
-        );
+        send_to_user(state, target_username, &invite_msg);
+        info!(from = %sender_username, to = %target_username, "Invite delivered");
+    } else {
+        match state.pending_invites.insert(target_username, pending) {
+            Ok(()) => {
+                info!(from = %sender_username, to = %target_username, "Invite queued or deduplicated")
+            }
+            Err(reason) => reject(reason),
+        }
     }
 }
 
@@ -390,20 +409,5 @@ pub fn handle_new_media(
 
 /// Clean up expired pending invites (older than 10 minutes).
 pub fn cleanup_expired_invites(state: &SharedState) {
-    let ttl_ms: u64 = 10 * 60 * 1000; // 10 minutes
-    let now = now_ms();
-    let mut empty_keys = Vec::new();
-
-    for mut entry in state.pending_invites.iter_mut() {
-        entry.value_mut().retain(|invite| {
-            now.saturating_sub(invite.sent_at) < ttl_ms
-        });
-        if entry.value().is_empty() {
-            empty_keys.push(entry.key().clone());
-        }
-    }
-
-    for key in empty_keys {
-        state.pending_invites.remove(&key);
-    }
+    state.pending_invites.cleanup();
 }

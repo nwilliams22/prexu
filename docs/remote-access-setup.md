@@ -1,230 +1,103 @@
-# Prexu Remote Access Setup Guide
+# Relay configuration and remote access
 
-How to enable all Prexu features (including Watch Together and TMDb actor info) for friends outside your local network.
+Audited 2026-09-20 against `relay-server/src/main.rs`, `server.rs`, and
+`src/services/storage/server.ts`. These are application configuration examples;
+DNS, firewall, certificates, and service deployment depend on the actual host.
 
----
+## Features and endpoints
 
-## What Works Without the Relay
+Plex browsing and playback communicate with Plex. Watch Together needs the
+relay WebSocket endpoint; TMDb search, actor details, and TMDb-backed request
+search use the relay HTTP proxy. Set `TMDB_API_KEY` in the relay environment
+for TMDb access; the server sends it as a Bearer token.
 
-These features work remotely out of the box — Plex handles the networking:
+| Endpoint | Purpose |
+| --- | --- |
+| `/ws` | Watch Together WebSocket |
+| `/health` | Relay health |
+| `/tmdb/status` | Whether the TMDb key is configured |
+| `/tmdb/*` | TMDb proxy routes used by the client |
 
-- Browsing libraries, search, filtering
-- Viewing item details (ratings, chapters, cast list from Plex)
-- Video playback (direct play and transcoding)
-- Playlists, collections, watch history
-- Mark as watched/unwatched
-- Content requests
+## Start the relay
 
-## What Requires the Relay Server
+The binary defaults to `--host 0.0.0.0 --port 8080`. The desktop client's
+fallback URL uses port **9847**, so explicitly align the port or configure a
+client override. For a local-only development relay matching that fallback:
 
-These features need the relay server to be reachable:
+```bash
+cargo run --manifest-path relay-server/Cargo.toml -- --host 127.0.0.1 --port 9847 \
+  --public-url ws://localhost:9847/ws
+curl http://127.0.0.1:9847/health
+curl http://127.0.0.1:9847/tmdb/status
+```
 
-- **Watch Together** — synchronized group playback via WebSocket
-- **Actor detail pages** — biography, filmography, known-for (TMDb data)
-- **Content request search** — searching TMDb for movies/shows to request
+For another machine to connect, bind the relay to the intended reachable
+interface and allow the chosen port in that host's network policy.
 
----
+The implemented TLS options are `--tls-cert` and `--tls-key`; both are required
+together. The older `--cert` / `--key` examples were invalid.
 
-## Option A: Tailscale (Recommended — Easiest)
+```bash
+prexu-relay --host 0.0.0.0 --port 9847 \
+  --public-url wss://relay.example.com:9847/ws \
+  --tls-cert /path/to/fullchain.pem \
+  --tls-key /path/to/privkey.pem
+```
 
-Since you already have Tailscale installed, this is the simplest path. No domain, no certs, no port forwarding needed. Traffic is encrypted end-to-end.
+The service account must be able to read its certificate and private key.
+The process loads them at startup; restart after replacing them. If a reverse
+proxy or tunnel terminates TLS, the relay can listen on a local HTTP address;
+the public endpoint must forward WebSocket upgrades and the HTTP routes above.
+This guide does not assume a particular proxy provider or an existing firewall.
 
-### Steps
+## Desktop configuration
 
-1. **Ensure Tailscale is running on the relay server**
-   ```bash
-   tailscale status
-   ```
-   Note your Tailscale IP (e.g., `100.x.x.x`).
+In Settings, set the Relay Server URL to the address clients can actually reach:
 
-2. **Have each friend install Tailscale**
-   - They create a Tailscale account and install the client
-   - You share your Tailscale network with them (or they join your tailnet)
+| Deployment | Example |
+| --- | --- |
+| Local development | `ws://localhost:9847/ws` |
+| Existing private network | `ws://relay-private-host:9847/ws` |
+| Relay serving TLS directly | `wss://relay.example.com:9847/ws` |
+| TLS reverse proxy on port 443 | `wss://relay.example.com/ws` |
 
-3. **Friends set the relay URL in Prexu Settings**
-   - Open Prexu > Settings > Relay Server
-   - Enter: `ws://100.x.x.x:9847/ws` (your Tailscale IP)
+URL priority is manual override, then a URL derived from the Plex server URI,
+then `ws://localhost:9847/ws`. Auto-derivation uses the Plex host, port 9847,
+and `ws://`; it does not discover a public relay or configure TLS. TMDb derives
+its HTTP base from this URL (`ws`→`http`, `wss`→`https`, trailing `/ws` removed).
 
-4. **Ensure UFW allows Tailscale traffic** (already done if you have the `wg0` rules)
+Validate health and TMDb status from the client network, then exercise a real
+Watch Together session. A successful HTTP health response alone does not verify
+WebSocket forwarding or synchronization.
 
-### Pros
-- Zero configuration on router/firewall
-- Encrypted end-to-end automatically
-- No domain or certs needed
-- Friends can also access Plex directly via Tailscale IP
+## Invitation trust and limits
 
-### Cons
-- Each friend needs Tailscale installed
-- Relies on Tailscale service availability
+Set `--public-url` to the WebSocket endpoint all recipients should use. It must
+be `ws://host[:port]/ws` or `wss://host[:port]/ws`, without credentials, query,
+or fragment. For TLS termination at a proxy, advertise the public `wss://`
+endpoint even if the relay's own listener uses HTTP. The value is operator
+configuration; it is never taken from an invite or a request Host header.
 
----
+**Deployment change:** without `--public-url`, invitations are disabled and
+return a session error. Authentication, session operations and TMDb proxying
+remain available. Existing service units must add this argument to enable
+invites; the example unit leaves it unset until an operator supplies a real URL.
 
-## Option B: Domain + Let's Encrypt + Port Forwarding
+The relay derives sender identity from Plex authentication and media metadata
+from the session, and checks that the sender belongs to that session. Older
+clients can still send the legacy invite fields, but those fields are ignored.
 
-The "proper" way — friends connect directly over the internet with TLS encryption.
+Offline invites expire after ten minutes and deduplicate by recipient, session
+and sender. Limits are 20 per recipient, 100 per sender, and 10,000 total;
+serialized metadata is limited to 8 KiB per invite and targets to 256 bytes.
+Quota checking, insertion, delivery removal, and expiry share one locked store.
+Idle WebSockets are disconnected after 90 seconds without an inbound frame;
+server-generated keepalives do not extend that deadline.
 
-### Prerequisites
-- A domain name (e.g., `relay.yourdomain.com`) — ~$10/year from Namecheap, Cloudflare, etc.
-- Ability to set DNS records
-- Ability to port forward on your router
+TMDb external-ID lookup accepts only `tt` or `nm` followed by ASCII digits.
+Invalid identifiers return HTTP 400 before an upstream request. TMDb routes
+still have the existing global request-rate limit and are not authenticated.
 
-### Steps
-
-1. **Get a domain and point it to your public IP**
-   ```
-   relay.yourdomain.com → A record → your-public-ip
-   ```
-   If your IP changes, use a dynamic DNS service (e.g., DuckDNS, Cloudflare DDNS).
-
-2. **Port forward 9847 on your router**
-   - Forward external port 9847 TCP → internal 192.168.0.62:9847
-
-3. **Install certbot and get Let's Encrypt certs**
-   ```bash
-   sudo apt install certbot
-   sudo certbot certonly --standalone -d relay.yourdomain.com
-   ```
-   Certs will be at:
-   - `/etc/letsencrypt/live/relay.yourdomain.com/fullchain.pem`
-   - `/etc/letsencrypt/live/relay.yourdomain.com/privkey.pem`
-
-4. **Update the relay service to use TLS**
-   ```bash
-   sudo nano /etc/systemd/system/prexu-relay.service
-   ```
-   Change the ExecStart line:
-   ```
-   ExecStart=/usr/local/bin/prexu-relay --port 9847 \
-     --cert /etc/letsencrypt/live/relay.yourdomain.com/fullchain.pem \
-     --key /etc/letsencrypt/live/relay.yourdomain.com/privkey.pem
-   ```
-   Note: The relay user needs read access to the cert files:
-   ```bash
-   sudo chmod 755 /etc/letsencrypt/live/
-   sudo chmod 755 /etc/letsencrypt/archive/
-   ```
-
-5. **Reload and restart**
-   ```bash
-   sudo systemctl daemon-reload
-   sudo systemctl restart prexu-relay
-   ```
-
-6. **Set up auto-renewal** (certs expire every 90 days)
-   ```bash
-   sudo certbot renew --dry-run
-   ```
-   Certbot installs a systemd timer by default. Add a post-renewal hook to restart the relay:
-   ```bash
-   sudo nano /etc/letsencrypt/renewal-hooks/post/restart-relay.sh
-   ```
-   ```bash
-   #!/bin/bash
-   systemctl restart prexu-relay
-   ```
-   ```bash
-   sudo chmod +x /etc/letsencrypt/renewal-hooks/post/restart-relay.sh
-   ```
-
-7. **Friends set the relay URL in Prexu Settings**
-   - Enter: `wss://relay.yourdomain.com:9847/ws`
-
-### Pros
-- No software needed on friends' machines
-- Standard TLS encryption
-- Works from anywhere
-
-### Cons
-- Requires a domain name
-- Requires port forwarding
-- Cert renewal management
-- Public IP exposure
-
----
-
-## Option C: Cloudflare Tunnel (No Port Forwarding)
-
-Uses Cloudflare's free tunnel service. No port forwarding, automatic TLS.
-
-### Prerequisites
-- A domain name managed by Cloudflare (free plan works)
-- Cloudflare account
-
-### Steps
-
-1. **Install cloudflared on the relay server**
-   ```bash
-   curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -o cloudflared.deb
-   sudo dpkg -i cloudflared.deb
-   ```
-
-2. **Authenticate and create a tunnel**
-   ```bash
-   cloudflared tunnel login
-   cloudflared tunnel create prexu-relay
-   ```
-
-3. **Configure the tunnel** (`~/.cloudflared/config.yml`)
-   ```yaml
-   tunnel: <tunnel-id>
-   credentials-file: /home/bad-dong/.cloudflared/<tunnel-id>.json
-
-   ingress:
-     - hostname: relay.yourdomain.com
-       service: http://localhost:9847
-     - service: http_status:404
-   ```
-
-4. **Add DNS record**
-   ```bash
-   cloudflared tunnel route dns prexu-relay relay.yourdomain.com
-   ```
-
-5. **Run as a service**
-   ```bash
-   sudo cloudflared service install
-   sudo systemctl start cloudflared
-   ```
-
-6. **Friends set the relay URL in Prexu Settings**
-   - Enter: `wss://relay.yourdomain.com/ws`
-   - Note: Cloudflare handles TLS, so use `wss://` with default port 443
-
-### Pros
-- No port forwarding needed
-- Automatic TLS via Cloudflare
-- Hides your public IP
-- Free tier is sufficient
-
-### Cons
-- Requires a domain on Cloudflare
-- Adds latency (traffic routes through Cloudflare)
-- WebSocket support requires proper Cloudflare configuration
-- Dependent on Cloudflare service
-
----
-
-## Client-Side Configuration
-
-Regardless of which option you choose, friends need to set the relay URL in Prexu:
-
-1. Open **Settings** (gear icon or sidebar)
-2. Find **Relay Server** section
-3. Enter the relay URL:
-   - Tailscale: `ws://100.x.x.x:9847/ws`
-   - Domain with TLS: `wss://relay.yourdomain.com:9847/ws`
-   - Cloudflare Tunnel: `wss://relay.yourdomain.com/ws`
-
-If no relay URL is set, the app auto-derives it from the Plex server address, which only works on the local network.
-
----
-
-## Checklist Before Going Remote
-
-- [ ] Relay server running and accessible from outside the network
-- [ ] `TMDB_API_KEY` (v4 read access token) set in relay service environment
-- [ ] UFW/firewall allows the relay port from external sources
-- [ ] Test with `curl https://relay.yourdomain.com:9847/tmdb/status` from outside
-- [ ] Test WebSocket with a Watch Together session from a remote client
-- [ ] Distribute the installer to friends (build with `npm run tauri build`)
-- [ ] Tell friends to set the relay URL in Settings after first login
+These protections implement `prexu-9f4s.4` in the source tree; they take effect
+when the updated relay is deployed. Remaining review work includes client
+socket churn (`9f4s.3`) and relay connection/session lifecycle (`9f4s.5`).

@@ -9,10 +9,13 @@ use tokio_rustls::TlsAcceptor;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
-use prexu_relay::{build_router, AppState, spawn_cleanup_task};
+use prexu_relay::{build_router, spawn_cleanup_task, AppState};
 
 #[derive(Parser, Debug)]
-#[command(name = "prexu-relay", about = "WebSocket relay for Prexu Watch Together")]
+#[command(
+    name = "prexu-relay",
+    about = "WebSocket relay for Prexu Watch Together"
+)]
 struct Args {
     /// Host address to bind to
     #[arg(long, default_value = "0.0.0.0")]
@@ -21,6 +24,11 @@ struct Args {
     /// Port to listen on
     #[arg(long, default_value_t = 8080)]
     port: u16,
+
+    /// Reachable ws(s)://host[:port]/ws URL advertised in invitations.
+    /// Invitations are disabled when omitted.
+    #[arg(long)]
+    public_url: Option<String>,
 
     /// Path to TLS certificate PEM file
     #[arg(long)]
@@ -31,7 +39,10 @@ struct Args {
     tls_key: Option<String>,
 }
 
-fn load_tls_config(cert_path: &str, key_path: &str) -> Result<Arc<rustls::ServerConfig>, Box<dyn std::error::Error>> {
+fn load_tls_config(
+    cert_path: &str,
+    key_path: &str,
+) -> Result<Arc<rustls::ServerConfig>, Box<dyn std::error::Error>> {
     let cert_file = File::open(cert_path)
         .map_err(|e| format!("Failed to open TLS cert file '{}': {}", cert_path, e))?;
     let key_file = File::open(key_path)
@@ -58,13 +69,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
 
     let args = Args::parse();
-    let state = Arc::new(AppState::new());
+    let mut state = AppState::new();
+    if let Some(url) = &args.public_url {
+        state = state.with_public_url(url)?;
+    } else {
+        warn!("Invitations disabled: configure --public-url to advertise a trusted relay endpoint");
+    }
+    let state = Arc::new(state);
 
     // Start background cleanup task
     spawn_cleanup_task(state.clone());
@@ -107,9 +123,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let io = TokioIo::new(tls_stream);
                     let hyper_service = hyper::service::service_fn(move |req| {
                         let mut tower_svc = app.clone();
-                        async move {
-                            tower::Service::call(&mut tower_svc, req).await
-                        }
+                        async move { tower::Service::call(&mut tower_svc, req).await }
                     });
 
                     if let Err(e) = HyperBuilder::new(TokioExecutor::new())

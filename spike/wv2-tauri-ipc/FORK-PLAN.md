@@ -1,5 +1,10 @@
 # Path C3 — fork-vs-bypass decision (prexu-60mz.1 / C3a)
 
+> Historical experiment: results and commands below describe this spike and its
+> recorded environment, not current production setup or a live task queue. See
+> [current player status](../../docs/native-player-status.md) and Beads for
+> implementation progress and remaining acceptance.
+
 **Decision: FORK wry 0.54.2.** Add a composition-controller hosting path; keep
 everything else. Bypass (own the whole WebView2 host + re-implement Tauri's IPC
 bridge, custom protocol, init scripts, navigation, settings) is rejected — it

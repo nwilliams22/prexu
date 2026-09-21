@@ -23,9 +23,11 @@ MinGW import lib (`libmpv.dll.a`), not the MSVC `mpv.lib` the toolchain links.
 
 ## Provenance
 
-Extracted from the same mpv Windows dev kit as the committed
-`src-tauri/bin/libmpv-2.dll` (client API `MPV_CLIENT_API_VERSION` 2.5). The
-import lib and headers match that DLL's ABI.
+The headers declare client API `MPV_CLIENT_API_VERSION` 2.5. The runtime DLL
+is not committed: CI downloads the pinned archive from this repository's
+`libmpv-vendor` release and verifies its SHA-256. Consult
+[ci.yml](../../../.github/workflows/ci.yml) for the current archive and checksum.
+Keep the import library, headers, and runtime ABI compatible when updating it.
 
 ## License
 

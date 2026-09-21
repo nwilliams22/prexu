@@ -1,5 +1,10 @@
 # Spike prexu-axj4.1 — mpv render-API video under a transparent webview (Linux)
 
+> Historical experiment: results and commands below describe this spike and its
+> recorded environment, not current production setup or a live task queue. See
+> [current player status](../../docs/native-player-status.md) and Beads for
+> implementation progress and remaining acceptance.
+
 **Verdict: GO.** mpv's render API (libmpv/render.h, OpenGL backend) composites
 decoded video frames UNDERNEATH the transparent Tauri/wry webview on live
 Wayland — proven on hardware. No `--wid`, no wl_subsurface required. The same

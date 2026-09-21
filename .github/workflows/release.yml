@@ -37,13 +37,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Windows + Linux. The native libmpv player is Windows-only; the player
-        # module is gated off non-Windows (prexu-nesp), so Linux builds the
-        # HTML5 <video> shell and links without libmpv. Linux ships AppImage +
-        # rpm (see tauri.linux.conf.json). macOS is intentionally deferred (10x
-        # CI cost + no Apple notarization yet) — re-add a macos leg when the
-        # native player is ported there. See docs/adr-native-player-cross-platform.md
-        # and docs/linux-dev.md.
+        # Windows + Linux release targets; macOS distribution remains deferred.
+        # Linux now compiles the native libmpv player, but this release job still
+        # lacks Linux libmpv provisioning/bundle verification (prexu-axj4.7).
+        # Do not infer release readiness from the separate linux-build CI job.
         include:
           - os: windows-latest
             target: x86_64-pc-windows-msvc

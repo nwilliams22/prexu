@@ -1,5 +1,10 @@
 # macOS WKWebView codec-decode gap — findings (prexu-ia6w.1)
 
+> Historical experiment: results and commands below describe this spike and its
+> recorded environment, not current production setup or a live task queue. See
+> [current player status](../../docs/native-player-status.md) and Beads for
+> implementation progress and remaining acceptance.
+
 Measures the real codec-decode capability of the WKWebView engine Tauri uses
 on macOS, for the prexu-duna.3 codec set, to decide whether macOS needs a
 native libmpv player by default or whether the HTML5 `<video>` path already
