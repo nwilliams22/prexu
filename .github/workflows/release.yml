@@ -33,7 +33,22 @@ env:
   ANGLE_GLESV2_SHA256: ${{ vars.ANGLE_GLESV2_SHA256 || 'b48565279ebfcc75675e9b88a1835bd9fd94016290641bc98108ae382962b2f3' }}
 
 jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Test release version guard
+        run: node --test scripts/check-release-version.test.mjs
+      - name: Verify tag matches application versions
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node scripts/check-release-version.mjs --tag "$RELEASE_TAG"
+
   build:
+    needs: preflight
     strategy:
       fail-fast: false
       matrix:
@@ -189,9 +204,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: v__VERSION__
-          releaseName: "Prexu v__VERSION__"
-          releaseBody: "See the [changelog](https://github.com/nwilliams22/prexu/blob/main/CHANGELOG.md) for details."
+          tagName: ${{ github.ref_name }}
+          releaseName: "Prexu ${{ github.ref_name }}"
+          releaseBody: "Windows release candidate; Linux support is experimental. See the [changelog](https://github.com/nwilliams22/prexu/blob/main/CHANGELOG.md) for details."
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }}

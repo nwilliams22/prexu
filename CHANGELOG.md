@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 Changes present in the source tree since 0.7.1; this is not a release announcement.
+Application metadata is prepared for 0.8.0, pending Windows installer validation
+and release approval. Linux support is experimental. No 0.8.0 release is declared
+by this version preparation.
 
 ### Added
 

@@ -2,7 +2,9 @@
 
 Audited 2026-09-20 against local `main` at `dfe5d8c` and the local Beads database.
 This describes source implementation, not a fresh hardware certification or a
-claim that the current tree has shipped. Package version remains 0.7.1.
+claim that the current tree has shipped. Application metadata was subsequently
+prepared for 0.8.0; the changes remain unreleased pending Windows acceptance and
+release approval. Linux support is experimental for that milestone.
 
 ## Engines and architecture
 
