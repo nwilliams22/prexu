@@ -67,6 +67,11 @@ native-player children of `prexu-ia6w`. The accepted
 [macOS ADR](adr-native-player-macos.md) describes intended native opt-in,
 not current application support.
 
+The manual [Windows candidate workflow](windows-candidate.md) prepares NSIS/MSI
+artifacts without publishing a release. Its first Windows runner build remains
+unverified; artifact production (`prexu-nrqw`) does not satisfy hardware or
+updater acceptance (`prexu-0828`).
+
 ## Development invariants
 
 - Keep the vendored Wry fork and Tauri's Wry dependency on the same version.

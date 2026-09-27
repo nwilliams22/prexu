@@ -1,0 +1,176 @@
+name: Windows candidate
+
+# Testing only: no tag trigger, release action, publishing token, or signing keys.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Keep the vendor URLs/hashes aligned with release.yml and ci.yml (libmpv),
+# and the ANGLE hashes with src-tauri/src/player/angle_loader.rs.
+env:
+  LIBMPV_URL: ${{ vars.LIBMPV_URL || 'https://github.com/nwilliams22/prexu/releases/download/libmpv-vendor/mpv-dev-x86_64-20260629-git-3f1b23abd0.7z' }}
+  LIBMPV_SHA256: ${{ vars.LIBMPV_SHA256 || 'ea0a4aa3bdb1fc225c5fa4f73f7a705e06fae84f99fc8f9946757e99eb5f5a26' }}
+  # Pinned ANGLE runtime DLLs (libEGL/libGLESv2) for the Windows native-player
+  # render path. Hosted as assets on this repo's non-semver `angle-vendor-1`
+  # release. The SHA256s MUST match the pins in
+  # src-tauri/src/player/angle_loader.rs (EGL_SHA256 / GLESV2_SHA256) or the
+  # player rejects the DLLs at load time. Verified after download; a mismatch
+  # fails the build.
+  ANGLE_EGL_URL: ${{ vars.ANGLE_EGL_URL || 'https://github.com/nwilliams22/prexu/releases/download/angle-vendor-1/libEGL.dll' }}
+  ANGLE_EGL_SHA256: ${{ vars.ANGLE_EGL_SHA256 || 'a86422d6d679dda4c00bb0db813884eb14857924eb391fb48283dfca5be007ef' }}
+  ANGLE_GLESV2_URL: ${{ vars.ANGLE_GLESV2_URL || 'https://github.com/nwilliams22/prexu/releases/download/angle-vendor-1/libGLESv2.dll' }}
+  ANGLE_GLESV2_SHA256: ${{ vars.ANGLE_GLESV2_SHA256 || 'b48565279ebfcc75675e9b88a1835bd9fd94016290641bc98108ae382962b2f3' }}
+
+jobs:
+  bundle:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Setup MSVC dev environment (Windows)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install libmpv (Windows)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path C:\libmpv\64 | Out-Null
+          Write-Host "Downloading libmpv from $env:LIBMPV_URL"
+          Invoke-WebRequest -Uri $env:LIBMPV_URL -OutFile mpv-dev.7z -UseBasicParsing
+          $actual = (Get-FileHash mpv-dev.7z -Algorithm SHA256).Hash.ToLower()
+          if ($actual -ne $env:LIBMPV_SHA256.ToLower()) {
+            Write-Error "SHA256 mismatch: expected $env:LIBMPV_SHA256 got $actual"
+            exit 1
+          }
+          Write-Host "SHA256 verified: $actual"
+          Write-Host "Extracting to C:\libmpv\64"
+          7z x mpv-dev.7z -oC:\libmpv\64 -y | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "7z extraction failed" }
+          if (-not (Test-Path C:\libmpv\64\libmpv-2.dll)) {
+              throw "libmpv-2.dll not found after extraction — archive layout may have changed"
+          }
+          Write-Host "Generating mpv.lib from libmpv-2.dll exports"
+          Push-Location C:\libmpv\64
+          # Parse dumpbin /EXPORTS output: lines with `<ord> <hint> <RVA> <name>`
+          # are exports. Filter to mpv_* symbols and emit a .def file that lib.exe
+          # can turn into an MSVC-format import library.
+          $exports = & dumpbin /EXPORTS libmpv-2.dll
+          if ($LASTEXITCODE -ne 0) { throw "dumpbin failed" }
+          $symbols = $exports `
+              | ForEach-Object {
+                  if ($_ -match '^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(\S+)') {
+                      $matches[1]
+                  }
+              } `
+              | Where-Object { $_ -like 'mpv_*' }
+          if ($symbols.Count -eq 0) {
+              throw "No mpv_* exports found in libmpv-2.dll — dumpbin output format may have changed"
+          }
+          Write-Host "Found $($symbols.Count) mpv_* exports"
+          $defLines = @("LIBRARY libmpv-2", "EXPORTS") + $symbols
+          Set-Content -Path mpv.def -Value $defLines -Encoding ASCII
+          & lib /def:mpv.def /out:mpv.lib /machine:x64
+          if ($LASTEXITCODE -ne 0) { throw "Import library generation failed" }
+          if (-not (Test-Path mpv.lib)) {
+              throw "lib.exe failed to produce mpv.lib"
+          }
+          Pop-Location
+          Write-Host "libmpv install complete"
+
+      - name: Export MPV_SOURCE (Windows)
+        shell: pwsh
+        run: |
+          Add-Content -Path $env:GITHUB_ENV -Value "MPV_SOURCE=C:\libmpv"
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\libmpv\64"
+
+      # ── Windows: ANGLE runtime DLLs ─────────────────────────────────────
+      # The native player's DirectComposition render path loads libEGL.dll +
+      # libGLESv2.dll at runtime, SHA-256-pinned + Authenticode-verified
+      # (src/player/angle_loader.rs). bin/ is gitignored, so fetch the pinned
+      # DLLs into src-tauri/bin/ where tauri.windows.conf.json bundles them and
+      # build.rs copies them next to the dev exe. SHA256 is verified against the
+      # angle_loader pins — a mismatch fails the build (the player would reject
+      # the DLLs anyway).
+      - name: Install ANGLE DLLs (Windows)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $bin = Join-Path $env:GITHUB_WORKSPACE "src-tauri\bin"
+          New-Item -ItemType Directory -Force -Path $bin | Out-Null
+          $dlls = @(
+            @{ Name = "libEGL.dll";    Url = $env:ANGLE_EGL_URL;     Sha = $env:ANGLE_EGL_SHA256 },
+            @{ Name = "libGLESv2.dll"; Url = $env:ANGLE_GLESV2_URL;  Sha = $env:ANGLE_GLESV2_SHA256 }
+          )
+          foreach ($d in $dlls) {
+            $dest = Join-Path $bin $d.Name
+            Write-Host "Downloading $($d.Name) from $($d.Url)"
+            Invoke-WebRequest -Uri $d.Url -OutFile $dest -UseBasicParsing
+            $actual = (Get-FileHash $dest -Algorithm SHA256).Hash.ToLower()
+            if ($actual -ne $d.Sha.ToLower()) {
+              Write-Error "SHA256 mismatch for $($d.Name): expected $($d.Sha) got $actual"
+              exit 1
+            }
+            Write-Host "SHA256 verified for $($d.Name): $actual"
+          }
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build candidate installers (no updater signatures)
+        shell: pwsh
+        run: |
+          # File-based override avoids PowerShell/native JSON argument escaping.
+          '{"bundle":{"createUpdaterArtifacts":false}}' | Set-Content -Path candidate.conf.json -Encoding utf8
+          npm run tauri -- build --target x86_64-pc-windows-msvc --bundles nsis,msi --ci --no-sign --config "$env:GITHUB_WORKSPACE/candidate.conf.json"
+          if ($LASTEXITCODE -ne 0) { throw "Candidate build failed" }
+
+      - name: Collect installers and provenance
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $bundle = "src-tauri/target/x86_64-pc-windows-msvc/release/bundle"
+          New-Item -ItemType Directory -Path candidate | Out-Null
+          foreach ($pattern in @("$bundle/nsis/*.exe", "$bundle/msi/*.msi")) {
+            $files = @(Get-ChildItem -Path $pattern -File)
+            if ($files.Count -eq 0) { throw "Missing installer: $pattern" }
+            $files | Copy-Item -Destination candidate
+          }
+          Get-ChildItem candidate -File | ForEach-Object {
+            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)"
+          } | Set-Content candidate/SHA256SUMS.txt
+          @(
+            "Testing only; not a release or hardware acceptance."
+            "Commit: $env:GITHUB_SHA"
+            "Run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+            "Attempt: $env:GITHUB_RUN_ATTEMPT"
+            "libmpv SHA256: $env:LIBMPV_SHA256"
+            "ANGLE EGL SHA256: $env:ANGLE_EGL_SHA256"
+            "ANGLE GLESv2 SHA256: $env:ANGLE_GLESV2_SHA256"
+            "Updater artifacts disabled; no production signing keys used."
+          ) | Set-Content candidate/BUILD.txt
+
+      - name: Upload candidate installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-candidate-${{ github.sha }}-${{ github.run_attempt }}
+          path: candidate/
+          if-no-files-found: error
+          retention-days: 14

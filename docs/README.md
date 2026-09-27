@@ -8,6 +8,7 @@ work and acceptance. This audit did not fetch the remote or certify hardware.
 | --- | --- |
 | [Native-player status](native-player-status.md) | Current architecture, implemented features, acceptance gaps, and pickup order |
 | [Linux development](linux-dev.md) | Dependencies, launch, diagnostics, and packaging gaps |
+| [Windows candidate installers](windows-candidate.md) | Non-publishing CI artifacts, download steps, and hardware acceptance |
 | [Windows runtime binaries](../src-tauri/bin/README.md) | libmpv/ANGLE staging and verification |
 | [Validation coverage](test-automation-plan.md) | Current local/CI checks and limits |
 | [Linux hardware plan](linux-on-hardware-test-plan.md) | Manual acceptance scenarios |
