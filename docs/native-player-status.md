@@ -116,12 +116,13 @@ teardown (`prexu-9f4s.7`); their relative order has not been selected. The nativ
 visual harness (`prexu-vbb2`, driver `prexu-331f` first) remains a later testing
 investment, not the immediate next task. Beads owns live status and dependencies.
 
-The documentation refresh and relay fixes were prepared on `main`.
-Preserve the pre-existing libmpv lifetime edits in
-`src-tauri/vendor/libmpv2/src/mpv/events.rs` and `protocol.rs`, plus local
-`PLAN.md` and `opencode.json`; they were not part of this work. Inspect the diff
-before making further changes. The current commit/push authorization covers
-this completed work; future work still follows the conservative repository policy.
+The documentation refresh and relay fixes were prepared on `main`. The libmpv
+lifetime edits in `src-tauri/vendor/libmpv2/src/mpv/events.rs` and `protocol.rs`
+are now committed: they apply rustc 1.94.1's own `mismatched_lifetime_syntaxes`
+suggestion, and `cargo check -p libmpv2` reports 0 warnings with them and 2
+without. Local `PLAN.md` and `opencode.json` remain untracked by choice and are
+not part of any work here. Inspect the diff before making further changes;
+future work still follows the conservative repository policy.
 
 Before deploying the relay, configure `--public-url ws(s)://host[:port]/ws`;
 without it, invitations are disabled. See [relay setup](remote-access-setup.md).
