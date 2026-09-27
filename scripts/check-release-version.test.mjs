@@ -9,7 +9,7 @@ const script = resolve("scripts/check-release-version.mjs");
 const files = ["package.json", "package-lock.json", "src-tauri/tauri.conf.json", "src-tauri/Cargo.toml", "src-tauri/Cargo.lock"];
 
 function fixture(t) {
-  const dir = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "prexu-release-"));
+  const dir = mkdtempSync(join(tmpdir(), "prexu-release-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   mkdirSync(join(dir, "src-tauri"));
   for (const file of files) writeFileSync(join(dir, file), readFileSync(file));
