@@ -24,6 +24,7 @@
 //!   the pump only ARMS `linux_compositor`, which emits after the GLArea
 //!   renders the first frame of the load (prexu-91t8).
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -502,14 +503,15 @@ fn end_file_reason_label(reason: u32) -> &'static str {
 pub(crate) fn spawn_event_pump(
     mpv: Arc<Mpv>,
     app: AppHandle,
+    stop: Arc<AtomicBool>,
 ) -> Result<thread::JoinHandle<()>, String> {
     thread::Builder::new()
         .name("mpv-event-pump".into())
-        .spawn(move || run_pump(mpv, app))
+        .spawn(move || run_pump(mpv, app, stop))
         .map_err(|e| format!("Failed to spawn event thread: {}", e))
 }
 
-fn run_pump(mpv: Arc<Mpv>, app: AppHandle) {
+fn run_pump(mpv: Arc<Mpv>, app: AppHandle, stop: Arc<AtomicBool>) {
     // A second EventContext sharing the underlying mpv handle. The one inside
     // Mpv requires &mut Mpv to poll, which we can't get through the Arc; this
     // separate context is `Send` and lives in this thread.
@@ -558,7 +560,6 @@ fn run_pump(mpv: Arc<Mpv>, app: AppHandle) {
         .checked_sub(BUFFERED_THROTTLE)
         .unwrap_or_else(Instant::now);
 
-    let mut loop_iterations: u64 = 0;
     // Reset on each FileLoaded; logged once per file on the first
     // PlaybackRestart so we don't spam on every seek.
     let mut hwdec_logged = false;
@@ -567,41 +568,51 @@ fn run_pump(mpv: Arc<Mpv>, app: AppHandle) {
     // load-bearing checkpoint between loadfile and FileLoaded). Subsequent
     // duration changes (rare on VOD) drop back to debug.
     let mut duration_logged = false;
+    pump_events(&mut ev_ctx, &stop, |event| match event {
+        Ok(event) => dispatch(
+            &app,
+            &mpv,
+            event,
+            &mut last_time_pos,
+            &mut last_buffered,
+            &mut hwdec_logged,
+            &mut duration_logged,
+        ),
+        Err(e) => {
+            log::warn!("[player:events] mpv error: {:?}", e);
+            let _ = app.emit("player://error", format!("{:?}", e));
+            false
+        }
+    });
+}
+
+/// Poll and dispatch until mpv shuts down or teardown requests cancellation.
+/// Check after every result so neither idle timeouts nor a busy queue can
+/// strand teardown. The dispatcher finishes before its borrowed event expires.
+fn pump_events(
+    ev_ctx: &mut EventContext,
+    stop: &AtomicBool,
+    mut dispatch_event: impl FnMut(Result<Event<'_>, libmpv2::Error>) -> bool,
+) {
+    let mut loop_iterations: u64 = 0;
     loop {
         loop_iterations += 1;
         match ev_ctx.wait_event(1.0) {
-            Some(Ok(event)) => {
-                if dispatch(
-                    &app,
-                    &mpv,
-                    event,
-                    &mut last_time_pos,
-                    &mut last_buffered,
-                    &mut hwdec_logged,
-                    &mut duration_logged,
-                ) {
+            Some(event) => {
+                if dispatch_event(event) {
                     log::info!("[player:events] Shutdown received at iter #{}", loop_iterations);
                     break;
                 }
             }
-            Some(Err(e)) => {
-                log::warn!("[player:events] mpv error: {:?}", e);
-                let _ = app.emit("player://error", format!("{:?}", e));
-            }
             None => {
-                // Timeout — kept as a diagnostic for the case where the
-                // pump fails to receive a Shutdown event after `quit` is
-                // sent (the pump would log forever instead of breaking).
-                // Throttled to ~once per minute (60 iters * 1.0s timeout)
-                // so an idle warmup mpv doesn't flood the dev console
-                // with thousands of lines.
                 if loop_iterations % 60 == 0 {
-                    log::debug!(
-                        "[player:events] wait_event timeout (iter #{})",
-                        loop_iterations
-                    );
+                    log::debug!("[player:events] wait_event timeout (iter #{})", loop_iterations);
                 }
             }
+        }
+        if stop.load(Ordering::Acquire) {
+            log::info!("[player:events] teardown requested — exiting pump");
+            break;
         }
     }
     log::info!("[player:events] pump exiting after {} iterations", loop_iterations);
@@ -771,6 +782,98 @@ fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Exercise the production polling loop with real libmpv, without a GUI.
+    // Invalid quit arguments produce a real command error and no Shutdown.
+    #[test]
+    fn rejected_quit_releases_idle_pump_and_final_mpv_reference() {
+        let mpv = Arc::new(super::super::lifecycle::configure_mpv_properties(None, true).unwrap());
+        let weak = Arc::downgrade(&mpv);
+        let stop = Arc::new(AtomicBool::new(false));
+        let pump_stop = Arc::clone(&stop);
+        let pump_mpv = Arc::clone(&mpv);
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let pump = thread::spawn(move || {
+            let mut events = EventContext::new(pump_mpv.ctx);
+            // Disable optional events so this covers the None/timeout path.
+            // Shutdown cannot be disabled and remains available for rescue.
+            // Some numeric IDs are reserved; mpv rejects those.
+            for id in 2..26 {
+                let _ = events.disable_event(id);
+            }
+            // Drain startup events.
+            while events.wait_event(0.0).is_some() {}
+            ready_tx.send(()).unwrap();
+            pump_events(&mut events, &pump_stop, |event| {
+                matches!(event, Ok(Event::Shutdown))
+            });
+            drop(events);
+            drop(pump_mpv);
+        });
+        let teardown = thread::spawn(move || {
+            pump.join().unwrap();
+            done_tx.send(()).unwrap();
+        });
+        ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        super::super::lifecycle::quit_and_stop_pump(&stop, || {
+            let result = mpv.command("quit", &["not-an-integer"]);
+            assert!(result.is_err(), "fault injection must reject quit");
+            result
+        });
+        drop(mpv);
+        let completed = done_rx.recv_timeout(Duration::from_secs(5));
+        // Rescue the old broken loop so a failing regression cannot leak a
+        // live mpv or leave a test thread parked forever.
+        if completed.is_err() {
+            if let Some(mpv) = weak.upgrade() {
+                mpv.command("quit", &[]).unwrap();
+            }
+        }
+        teardown.join().unwrap();
+        assert!(
+            completed.is_ok(),
+            "teardown did not converge after rejected quit"
+        );
+        assert!(weak.upgrade().is_none(), "teardown retained mpv");
+    }
+
+    #[test]
+    fn rejected_quit_stops_pump_after_dispatched_event() {
+        let mpv = super::super::lifecycle::configure_mpv_properties(None, true).unwrap();
+        let mut events = EventContext::new(mpv.ctx);
+        events
+            .observe_property("pause", Format::Flag, REPLY_PAUSE)
+            .unwrap();
+        let stop = AtomicBool::new(false);
+        let mut dispatched = 0;
+        pump_events(&mut events, &stop, |_| {
+            dispatched += 1;
+            assert_eq!(dispatched, 1, "pump dispatched again after cancellation");
+            super::super::lifecycle::quit_and_stop_pump(&stop, || {
+                let result = mpv.command("quit", &["not-an-integer"]);
+                assert!(result.is_err());
+                result
+            });
+            false
+        });
+        assert_eq!(dispatched, 1);
+    }
+
+    #[test]
+    fn successful_quit_still_exits_on_shutdown_without_cancellation() {
+        let mpv = super::super::lifecycle::configure_mpv_properties(None, true).unwrap();
+        let mut events = EventContext::new(mpv.ctx);
+        let stop = AtomicBool::new(false);
+        mpv.command("quit", &[]).unwrap();
+        let mut shutdown_received = false;
+        pump_events(&mut events, &stop, |event| {
+            shutdown_received = matches!(event, Ok(Event::Shutdown));
+            shutdown_received
+        });
+        assert!(shutdown_received);
+        assert!(!stop.load(Ordering::Acquire));
+    }
 
     // ── is_restore_from_maximize (prexu-bgz.23) ──────────────────────────────
 

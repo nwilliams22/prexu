@@ -9,9 +9,9 @@
 //!   releases the final `Arc<Mpv>`.
 //!
 //! Extracting them keeps `mod.rs` focused on `PlayerState` orchestration and
-//! state, and keeps each step independently readable. Behaviour and logging are
-//! preserved byte-for-byte from the inline versions.
+//! state, and keeps each step independently readable.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -130,13 +130,28 @@ pub(super) fn configure_mpv_properties(wid: Option<i64>, composition: bool) -> R
     .map_err(|e| format!("mpv init failed: {:?}", e))
 }
 
+/// Request mpv shutdown, then release the pump even if the command failed.
+/// The closure keeps command failure injectable without a GUI or render context.
+pub(super) fn quit_and_stop_pump(
+    stop: &AtomicBool,
+    quit: impl FnOnce() -> Result<(), libmpv2::Error>,
+) {
+    let result = quit();
+    stop.store(true, Ordering::Release);
+    if let Err(e) = result {
+        log::warn!("[player:lifecycle] destroy: quit failed: {:?}", e);
+    }
+    log::debug!("[player:lifecycle] destroy: event pump stop requested");
+}
+
 /// Spawn the background teardown thread for a taken `Inner`.
 ///
 /// `destroy()` silences mpv synchronously (mute/pause/stop/quit) and then hands
 /// `inner` to this thread so the slow parts run off the caller's await: joining
 /// the event pump (which can take up to ~1s to break out of its
-/// `wait_event(1.0)` loop after Shutdown) and dropping `Inner` — releasing the
-/// final `Arc<Mpv>` and triggering `mpv_terminate_destroy` from the background.
+/// `wait_event(1.0)` loop after Shutdown or cancellation) and dropping `Inner`
+/// — releasing the final `Arc<Mpv>` and triggering `mpv_terminate_destroy`
+/// from the background.
 ///
 /// `app` is retained for call-site symmetry; under composition hosting there is
 /// no native host window to dispatch a teardown for.

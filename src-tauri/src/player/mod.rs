@@ -31,8 +31,9 @@ pub mod video_render;
 #[cfg(target_os = "linux")]
 pub mod linux_compositor;
 
+use std::sync::atomic::AtomicBool;
 #[cfg(target_os = "windows")]
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -347,6 +348,8 @@ struct Inner {
     /// own the HWND, avoiding the race where DestroyWindow ran before
     /// mpv's render thread stopped using it.
     event_pump: Option<JoinHandle<()>>,
+    /// Per-instance cancellation, independent of mpv accepting `quit`.
+    event_pump_stop: Arc<AtomicBool>,
     /// Path C3d: the mpv→DComp render thread, present only in composition mode.
     /// `destroy()` stops+joins it BEFORE the final `Arc<Mpv>` drops so the
     /// libmpv2 `RenderContext` is freed before `mpv_terminate_destroy` runs.
@@ -595,7 +598,12 @@ impl PlayerState {
         log::info!("[player] mpv created");
 
         let mpv = Arc::new(mpv);
-        let event_pump = events::spawn_event_pump(Arc::clone(&mpv), app.clone())?;
+        let event_pump_stop = Arc::new(AtomicBool::new(false));
+        let event_pump = events::spawn_event_pump(
+            Arc::clone(&mpv),
+            app.clone(),
+            Arc::clone(&event_pump_stop),
+        )?;
 
         // Claim the GPU surfaces published by `composition_host::install` and
         // spawn the mpv render thread. If the surfaces are missing (install
@@ -633,6 +641,7 @@ impl PlayerState {
         *guard = Some(Inner {
             mpv,
             event_pump: Some(event_pump),
+            event_pump_stop,
             #[cfg(target_os = "windows")]
             video_render,
         });
@@ -730,11 +739,11 @@ impl PlayerState {
         Ok(())
     }
 
-    /// Synchronously stop playback and destroy the mpv handle.
+    /// Synchronously silence playback and start background mpv teardown.
     ///
-    /// The key invariant: when this function returns, mpv is fully terminated
-    /// (audio silenced, render threads exited). Callers — notably `player_unload`
-    /// from the Tauri frontend — rely on this so audio doesn't keep bleeding
+    /// The key invariant: when this function returns, audio is silenced.
+    /// Callers — notably `player_unload` from the Tauri frontend — rely on
+    /// this so audio doesn't keep bleeding
     /// through after navigation.
     ///
     /// Steps:
@@ -744,8 +753,8 @@ impl PlayerState {
     ///    caller (TS handleExit) navigate away without an audio bleed.
     /// 3. SPAWN a background thread that joins the event pump (which can
     ///    take up to ~1s to break out of its `wait_event(1.0)` loop after
-    ///    Shutdown) and drops Inner — releasing the final Arc<Mpv> and
-    ///    triggering `mpv_terminate_destroy` from the background.
+    ///    Shutdown or cancellation) and drops Inner — releasing the final
+    ///    Arc<Mpv> and triggering `mpv_terminate_destroy` from the background.
     /// 4. Return immediately so the caller's await resolves in <50ms.
     ///
     /// Rationale: previously this function joined the pump synchronously
@@ -836,9 +845,7 @@ impl PlayerState {
             log::warn!("[player] destroy: stop failed: {:?}", e);
         }
         log::info!("[player] destroy: sending quit command");
-        if let Err(e) = inner.mpv.command("quit", &[]) {
-            log::warn!("[player] destroy: quit failed: {:?}", e);
-        }
+        lifecycle::quit_and_stop_pump(&inner.event_pump_stop, || inner.mpv.command("quit", &[]));
 
         // ASYNCHRONOUS teardown — pump join + final Arc release happen on a
         // background thread (see `lifecycle::spawn_teardown_task`). Inner is
