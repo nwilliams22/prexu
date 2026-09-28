@@ -12,16 +12,13 @@ permissions:
 env:
   LIBMPV_URL: ${{ vars.LIBMPV_URL || 'https://github.com/nwilliams22/prexu/releases/download/libmpv-vendor/mpv-dev-x86_64-20260629-git-3f1b23abd0.7z' }}
   LIBMPV_SHA256: ${{ vars.LIBMPV_SHA256 || 'ea0a4aa3bdb1fc225c5fa4f73f7a705e06fae84f99fc8f9946757e99eb5f5a26' }}
-  # Pinned ANGLE runtime DLLs (libEGL/libGLESv2) for the Windows native-player
-  # render path. Hosted as assets on this repo's non-semver `angle-vendor-1`
-  # release. The SHA256s MUST match the pins in
-  # src-tauri/src/player/angle_loader.rs (EGL_SHA256 / GLESV2_SHA256) or the
-  # player rejects the DLLs at load time. Verified after download; a mismatch
-  # fails the build.
-  ANGLE_EGL_URL: ${{ vars.ANGLE_EGL_URL || 'https://github.com/nwilliams22/prexu/releases/download/angle-vendor-1/libEGL.dll' }}
-  ANGLE_EGL_SHA256: ${{ vars.ANGLE_EGL_SHA256 || 'a86422d6d679dda4c00bb0db813884eb14857924eb391fb48283dfca5be007ef' }}
-  ANGLE_GLESV2_URL: ${{ vars.ANGLE_GLESV2_URL || 'https://github.com/nwilliams22/prexu/releases/download/angle-vendor-1/libGLESv2.dll' }}
-  ANGLE_GLESV2_SHA256: ${{ vars.ANGLE_GLESV2_SHA256 || 'b48565279ebfcc75675e9b88a1835bd9fd94016290641bc98108ae382962b2f3' }}
+  # Recover the original pinned ANGLE pair from the existing v0.7.1 installer.
+  # Extract only; never execute the installer. Keep DLL hashes in lockstep with
+  # src-tauri/src/player/angle_loader.rs. No new vendor release is required.
+  ANGLE_ARCHIVE_URL: https://github.com/nwilliams22/prexu/releases/download/v0.7.1/Prexu_0.7.1_x64-setup.exe
+  ANGLE_ARCHIVE_SHA256: 6872d887ac3c7010617f7d743173c7d0438ceb7c85a584d0c0bd805d1c905087
+  ANGLE_EGL_SHA256: a86422d6d679dda4c00bb0db813884eb14857924eb391fb48283dfca5be007ef
+  ANGLE_GLESV2_SHA256: b48565279ebfcc75675e9b88a1835bd9fd94016290641bc98108ae382962b2f3
 
 jobs:
   bundle:
@@ -109,20 +106,29 @@ jobs:
           $ErrorActionPreference = "Stop"
           $bin = Join-Path $env:GITHUB_WORKSPACE "src-tauri\bin"
           New-Item -ItemType Directory -Force -Path $bin | Out-Null
+          $archive = Join-Path $env:RUNNER_TEMP "prexu-angle-source.exe"
+          Invoke-WebRequest -Uri $env:ANGLE_ARCHIVE_URL -OutFile $archive
+          $archiveHash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
+          if ($archiveHash -ne $env:ANGLE_ARCHIVE_SHA256) {
+            throw "ANGLE source archive SHA256 mismatch: $archiveHash"
+          }
+          & 7z e -y $archive "libEGL.dll" "libGLESv2.dll" "-o$bin"
+          if ($LASTEXITCODE -ne 0) { throw "ANGLE extraction failed: $LASTEXITCODE" }
           $dlls = @(
-            @{ Name = "libEGL.dll";    Url = $env:ANGLE_EGL_URL;     Sha = $env:ANGLE_EGL_SHA256 },
-            @{ Name = "libGLESv2.dll"; Url = $env:ANGLE_GLESV2_URL;  Sha = $env:ANGLE_GLESV2_SHA256 }
+            @{ Name = "libEGL.dll"; Sha = $env:ANGLE_EGL_SHA256 },
+            @{ Name = "libGLESv2.dll"; Sha = $env:ANGLE_GLESV2_SHA256 }
           )
           foreach ($d in $dlls) {
             $dest = Join-Path $bin $d.Name
-            Write-Host "Downloading $($d.Name) from $($d.Url)"
-            Invoke-WebRequest -Uri $d.Url -OutFile $dest -UseBasicParsing
             $actual = (Get-FileHash $dest -Algorithm SHA256).Hash.ToLower()
-            if ($actual -ne $d.Sha.ToLower()) {
-              Write-Error "SHA256 mismatch for $($d.Name): expected $($d.Sha) got $actual"
-              exit 1
+            if ($actual -ne $d.Sha) {
+              throw "SHA256 mismatch for $($d.Name): expected $($d.Sha) got $actual"
             }
-            Write-Host "SHA256 verified for $($d.Name): $actual"
+            $signature = Get-AuthenticodeSignature $dest
+            if ($signature.Status -ne 'Valid') {
+              throw "Invalid Authenticode signature for $($d.Name): $($signature.Status)"
+            }
+            Write-Host "Verified $($d.Name): SHA256 $actual; signer $($signature.SignerCertificate.Subject)"
           }
 
       - name: Setup Node
@@ -162,6 +168,8 @@ jobs:
             "Run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
             "Attempt: $env:GITHUB_RUN_ATTEMPT"
             "libmpv SHA256: $env:LIBMPV_SHA256"
+            "ANGLE source: $env:ANGLE_ARCHIVE_URL"
+            "ANGLE source SHA256: $env:ANGLE_ARCHIVE_SHA256"
             "ANGLE EGL SHA256: $env:ANGLE_EGL_SHA256"
             "ANGLE GLESv2 SHA256: $env:ANGLE_GLESV2_SHA256"
             "Updater artifacts disabled; no production signing keys used."

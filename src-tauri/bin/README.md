@@ -28,7 +28,11 @@ Provide the workflow-pinned `libEGL.dll` and `libGLESv2.dll` in this directory.
 `ANGLE_SOURCE` optionally refreshes them from another directory; `build.rs`
 stages them beside the executable. The runtime loader checks both pinned
 SHA-256 and Authenticode; arbitrary replacement builds will fail verification.
-Use the artifact URLs/hashes in the release workflow and checks in
+The workflows download the existing v0.7.1 NSIS installer, verify its archive
+SHA-256, and use `7z e` to extract only these two DLLs without running the
+installer. Both recovered DLL hashes exactly match the existing loader pins.
+Windows CI also requires valid Authenticode signatures before bundling.
+Use the archive URL/hash in the release workflow and DLL checks in
 `src-tauri/src/player/angle_loader.rs` as the authoritative pair.
 
 Headless Windows CI supplies dummy ANGLE files solely to satisfy bundle-resource

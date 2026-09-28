@@ -4,8 +4,11 @@
 non-publishing build for Windows x86_64. It builds NSIS `.exe` and MSI `.msi`
 installers with the real SHA256-checked libmpv and ANGLE DLLs. It uses the same
 vendor pins as `release.yml` (and `ci.yml` for libmpv); keep those values and the
-ANGLE loader hashes aligned when changing dependencies. Repository variable
+ANGLE loader hashes aligned when changing dependencies. libmpv repository variable
 overrides follow the release workflow; record any overrides with test results.
+ANGLE is extracted from the SHA256-pinned existing v0.7.1 installer without
+executing it. The extracted DLLs must match the unchanged runtime pins and pass
+Authenticode verification. No separate ANGLE vendor release is needed.
 
 The workflow has only `contents: read` permission, does not retain checkout
 credentials, and does not create tags, releases, registry packages, updater
@@ -18,8 +21,7 @@ and updater artifact settings.
 
 ## Build and download
 
-1. Obtain the owner's explicit per-push approval before delivering the local
-   commit to `origin`. This workflow must be on the default branch before its
+1. Ensure the workflow is on the default branch so its
    manual trigger is available ([GitHub manual workflow guide](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)).
 2. In GitHub **Actions → Windows candidate → Run workflow**, select the approved
    branch and start the build. Do not tag a release to obtain a candidate.
@@ -34,8 +36,8 @@ and updater artifact settings.
    with the acceptance record if testing will happen later.
 
 A missing NSIS or MSI output fails the job. A green build proves artifact
-production, not installation or GPU playback. The first actual Windows runner
-build has not been executed as part of this local-only change. Linux validation
+production, not installation or GPU playback. The initial Windows runs failed at the now-replaced ANGLE download source.
+A successful run of the repaired workflow is still required. Linux validation
 cannot exercise MSVC import-library generation, WiX/NSIS packaging, Windows DLL
 loading, or the Windows UI. No installer or Windows UI was observed locally.
 
