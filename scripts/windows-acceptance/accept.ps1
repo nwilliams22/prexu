@@ -114,8 +114,14 @@ function Uninstall([string]$Exe, [string]$Label) {
     $deadline = (Get-Date).AddSeconds(30)
     do {
         $remaining = @(Registrations)
-        $binaries = @(Get-ChildItem (Split-Path $Exe) -File -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { $_.Extension -in @('.exe', '.dll') })
+        $binaries = @()
+        $installDirectory = Split-Path $Exe
+        # With -Recurse, a missing literal directory can make PowerShell search
+        # its parent (all of Program Files for MSI). Absence already proves cleanup.
+        if (Test-Path -LiteralPath $installDirectory -PathType Container) {
+            $binaries = @(Get-ChildItem -LiteralPath $installDirectory -File -Recurse |
+                Where-Object { $_.Extension -in @('.exe', '.dll') })
+        }
         if ($remaining.Count -eq 0 -and $binaries.Count -eq 0) { break }
         Start-Sleep -Milliseconds 500
     } while ((Get-Date) -lt $deadline)
