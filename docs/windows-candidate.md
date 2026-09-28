@@ -113,7 +113,19 @@ Retrieve job-level results with `gh run view <run-id> --repo nwilliams22/prexu
 --json status,conclusion,jobs` and logs with `gh run view <run-id> --repo
 nwilliams22/prexu --log`. The older exploratory runs are not the acceptance
 record. Keep artifacts before their 14-day expiry if long-term evidence is
-needed. This result does not authorize a v0.8.0 release.
+needed. The older exploratory runs are not the acceptance record.
+
+## Release decision for 0.8.0 (2026-09-28)
+
+The runs above are the whole of the Windows acceptance performed for 0.8.0. The
+hardware checks in the next section were **waived, not completed**: a hosted
+`windows-latest` runner has no graphics card and no audio device, and the owner
+chose to release 0.8.0 with visible video output, audible playback and
+window/DPI/fullscreen transitions recorded as untested. The changelog's *Known
+untested on Windows* section is the user-facing record.
+
+The waiver applies to the 0.8.0 release only. It does not close the checks below,
+and a shipped release is not evidence that native rendering works on Windows.
 
 ## Acceptance requiring Windows hardware
 

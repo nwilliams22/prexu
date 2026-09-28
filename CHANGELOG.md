@@ -7,10 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Changes present in the source tree since 0.7.1; this is not a release announcement.
-Application metadata is prepared for 0.8.0, pending Windows installer validation
-and release approval. Linux support is experimental. No 0.8.0 release is declared
-by this version preparation.
+No changes since 0.8.0.
+
+## [0.8.0] - 2026-09-28
+
+Windows release. Linux support is **experimental**: the native player compiles and
+runs on Linux, but release packaging does not provision libmpv and AppImage/rpm
+runtime operation is unverified (`prexu-axj4.7`). macOS remains HTML5 only.
+
+Windows installer acceptance for this release was run unattended on hosted GitHub
+runners and is recorded in [docs/windows-candidate.md](docs/windows-candidate.md).
+Read **Known untested on Windows** below before deploying: hosted runners have no
+GPU and no audio device, so video output and audio playback were not verified for
+this release.
 
 ### Added
 
@@ -42,16 +51,58 @@ by this version preparation.
   and an operator-configured endpoint. Offline invite queues are bounded and
   deduplicated; WebSockets expire after 90 seconds without inbound activity.
 - TMDb external-ID lookup rejects path/query injection before proxying.
+- Relay session lifecycle: a reconnecting client is no longer evicted from its own
+  session when the previous socket finally errors, and switching sessions no longer
+  leaves a ghost participant holding the old session open.
+- Watch Together client lifecycle: a healthy socket is no longer torn down on every
+  reconnect-backoff interval, joining no longer gates on the wrong readiness flag,
+  and relay payloads are typed at the boundary.
+- Player teardown converges when mpv does not answer `quit`: the event pump is
+  stopped instead of joined indefinitely, so a failed shutdown no longer leaves the
+  previous player alive underneath a new one.
 
 ### Deployment notes
 
 - The relay now requires `--public-url ws(s)://host[:port]/ws` to send invites.
   If omitted, invites fail closed; other relay features remain available.
 
-### Remaining release acceptance
+### Verified for this release
+
+Unattended Windows acceptance on hosted `windows-latest` runners, harness revision
+`735a2f9` against candidate build `707e865`
+([run 36390510490](https://github.com/nwilliams22/prexu/actions/runs/36390510490)):
+fresh NSIS and MSI install, actionable login screen, native first-paint handshake,
+clean exit, 0.7.1 → 0.8.0 upgrade retaining preferences, and uninstall cleanup.
+The same harness correctly **fails** both formats when a runtime DLL is removed
+([run 36390513402](https://github.com/nwilliams22/prexu/actions/runs/36390513402)).
+
+### Known untested on Windows
+
+A hosted GitHub runner has no graphics card and no audio device, so the checks below
+were not performed for 0.8.0. The repository owner reviewed this and chose to ship
+with the limitation recorded (decision 2026-09-28); acceptance work continues under
+`prexu-0828` and the beads named here.
+
+- **Visible video output.** Native playback frames reaching the screen through
+  libmpv → ANGLE/D3D11 → DirectComposition are unverified on real hardware. This is
+  the code most affected by this release's Tauri 2.11.5 upgrade and the re-vendored
+  composition-hosting fork on Wry 0.55.1.
+- **Audible playback**, including multichannel → stereo downmix behavior
+  (`prexu-wiyy`).
+- **Window, DPI and fullscreen transitions** at real display scale: resize,
+  minimize/restore, mini-player, popout, fullscreen (`prexu-6p8k`).
+- **Authenticated-media and multi-client journeys.** The acceptance run only reached
+  the unauthenticated login screen; no library or Watch Together session was played
+  (`prexu-vbb2.6`).
+- **Updater signature and key matching.** The release workflow signs with the
+  production key, but no signed end-to-end update from 0.7.1 to 0.8.0 has been
+  exercised.
+
+### Remaining acceptance outside Windows
 
 - Linux libmpv release provisioning, AppImage/rpm runtime verification and build
-  provenance (`prexu-axj4.7`), plus remaining hardware/codec checks.
+  provenance (`prexu-axj4.7`), plus remaining hardware/codec checks. The release
+  workflow's Linux leg is expected to be unreliable until `axj4.7` lands.
 - Deploy and verify the relay security fixes; other `prexu-9f4s` review findings
   remain open.
 - macOS platform-aware HTML5 direct-play gate (`prexu-ttz9`).
@@ -113,6 +164,7 @@ the native libmpv engine removes that limit.
 See the [git tags](https://github.com/nwilliams22/prexu/tags) for the history
 prior to 0.7.0 (0.5.x–0.6.x).
 
-[Unreleased]: https://github.com/nwilliams22/prexu/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/nwilliams22/prexu/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/nwilliams22/prexu/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/nwilliams22/prexu/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/nwilliams22/prexu/compare/v0.6.3...v0.7.0

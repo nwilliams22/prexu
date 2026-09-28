@@ -1,10 +1,12 @@
 # Native player — current implementation status
 
 Audited 2026-09-20 against local `main` at `dfe5d8c` and the local Beads database.
-This describes source implementation, not a fresh hardware certification or a
-claim that the current tree has shipped. Application metadata was subsequently
-prepared for 0.8.0; the changes remain unreleased pending Windows acceptance and
-release approval. Linux support is experimental for that milestone.
+This describes source implementation, not a fresh hardware certification.
+Application metadata was subsequently prepared for 0.8.0 and the owner approved a
+0.8.0 Windows release on 2026-09-28 with GPU, audio and display-transition
+acceptance explicitly **not performed** — see the changelog's *Known untested on
+Windows* section. Approval to ship is not evidence of correctness; treat those
+paths as unverified. Linux support is experimental for that milestone.
 
 ## Engines and architecture
 
@@ -74,6 +76,15 @@ readiness, upgrade/settings retention and uninstall. Negative run `36390513402`
 failed both formats for a deliberately removed runtime DLL. See the candidate
 guide for exact revisions and evidence. These checks (`prexu-vbb2.5`) do not
 satisfy GPU/audio, authenticated media or updater acceptance (`prexu-0828`).
+
+Those unsatisfied checks were **waived for the 0.8.0 release, not completed**. A
+hosted runner has no graphics card and no audio device, so visible video output,
+audible playback and window/DPI/fullscreen transitions could not be proven there;
+the owner chose on 2026-09-28 to ship with the gap documented. Verification still
+needs a Windows machine with working GPU acceleration (`prexu-0828`, `prexu-6p8k`,
+`prexu-wiyy`) or the automated composed-screen route (`prexu-vbb2.4`,
+`prexu-vbb2.6`). Do not cite the 0.8.0 release as evidence that native Windows
+rendering works.
 
 ## Development invariants
 
