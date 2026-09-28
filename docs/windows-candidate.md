@@ -82,8 +82,10 @@ The always-uploaded `windows-acceptance-<format>-<fault>-<run>-<attempt>` artifa
 contain transcripts, MSI logs where applicable, registration/version records,
 readiness reports/screenshots and application logs, retained for 14 days.
 Only synthetic settings are used; no Plex credentials or media are needed.
-The CDP endpoint is test-only, enabled through process environment on the
-throwaway runner; production application code is unchanged.
+The CDP endpoint is test-only, enabled through app-specific machine policy on the
+throwaway runner (elevated WebView2 150+ ignores environment overrides). The
+harness removes its policy values on exit; production application code is
+unchanged. See the [WebView2 maintainer diagnosis](https://github.com/MicrosoftEdge/WebView2Feedback/issues/5640).
 
 A green run proves installer and unauthenticated startup behavior on that
 hosted image. It does **not** prove real GPU output, audible playback, login

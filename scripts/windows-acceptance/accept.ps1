@@ -10,6 +10,15 @@ if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows') {
 $logs = New-Item -ItemType Directory -Force acceptance-logs
 Start-Transcript -Path "$logs/transcript.txt"
 $script:app = $null
+# Elevated hosted runners ignore WEBVIEW2_* overrides on Runtime 150+.
+# Use app-specific machine policy only on this disposable machine.
+$webviewPolicy = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge\WebView2'
+function Set-TestProfile([string]$Name) {
+    $profile = Join-Path $env:RUNNER_TEMP "prexu-$Format-$Name"
+    $env:WEBVIEW2_USER_DATA_FOLDER = $profile
+    New-Item -Path "$webviewPolicy/UserDataFolder" -Force | Out-Null
+    New-ItemProperty -Path "$webviewPolicy/UserDataFolder" -Name 'Prexu.exe' -Value $profile -PropertyType String -Force | Out-Null
+}
 $logDir = Join-Path $env:LOCALAPPDATA 'com.prexu.client/logs'
 $registryRoots = @(
     'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
@@ -148,7 +157,9 @@ try {
         'libGLESv2.dll' = 'b48565279ebfcc75675e9b88a1835bd9fd94016290641bc98108ae382962b2f3'
     }
     $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9222 --remote-debugging-address=127.0.0.1'
-    $env:WEBVIEW2_USER_DATA_FOLDER = Join-Path $env:RUNNER_TEMP "prexu-$Format-fresh"
+    New-Item -Path "$webviewPolicy/AdditionalBrowserArguments" -Force | Out-Null
+    New-ItemProperty -Path "$webviewPolicy/AdditionalBrowserArguments" -Name 'Prexu.exe' -Value $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -PropertyType String -Force | Out-Null
+    Set-TestProfile 'fresh'
     $exe = Install $candidate 'candidate-install'
     if ($Fault -eq 'missing-dll') {
         Remove-Item -Force (Join-Path (Split-Path $exe) 'libmpv-2.dll')
@@ -164,7 +175,7 @@ try {
     $previous = Join-Path $env:RUNNER_TEMP $previousName
     Invoke-WebRequest "https://github.com/nwilliams22/prexu/releases/download/v0.7.1/$previousName" -OutFile $previous
     if ((Get-FileHash $previous).Hash.ToLower() -ne $previousHash) { throw 'Previous installer hash mismatch' }
-    $env:WEBVIEW2_USER_DATA_FOLDER = Join-Path $env:RUNNER_TEMP "prexu-$Format-upgrade"
+    Set-TestProfile 'upgrade'
     $exe = Install $previous 'previous-install'
     $previousVersion = [version](Registrations)[0].DisplayVersion
     if ($previousVersion -ne [version]'0.7.1' -or $candidateVersion -le $previousVersion) { throw 'Not a version upgrade' }
@@ -177,6 +188,9 @@ try {
     Uninstall $exe 'upgraded-uninstall'
     Write-Host "PASS ALL $Format install, readiness, clean exit, upgrade, settings and uninstall"
 } finally {
+    foreach ($key in @('AdditionalBrowserArguments', 'UserDataFolder')) {
+        Remove-ItemProperty -Path "$webviewPolicy/$key" -Name 'Prexu.exe' -ErrorAction SilentlyContinue
+    }
     if (Test-Path $logDir) { Copy-Item -Recurse -Force $logDir "$logs/final-app" }
     Stop-Transcript
 }
