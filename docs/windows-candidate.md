@@ -37,11 +37,63 @@ and updater artifact settings.
 
 A missing NSIS or MSI output fails the job. A green build proves artifact
 production, not installation or GPU playback. The initial Windows runs failed at the now-replaced ANGLE download source.
-A successful run of the repaired workflow is still required. Linux validation
+Run [36384566080](https://github.com/nwilliams22/prexu/actions/runs/36384566080)
+succeeded at `707e865` and produced both installers. Linux validation
 cannot exercise MSVC import-library generation, WiX/NSIS packaging, Windows DLL
 loading, or the Windows UI. No installer or Windows UI was observed locally.
 
-## Acceptance once Windows hardware exists
+## Unattended installer acceptance
+
+[Windows acceptance](../.github/workflows/windows-acceptance.yml) consumes a
+successful candidate run, independently of the build. Dispatch on `main`:
+
+```sh
+gh workflow run windows-acceptance.yml --repo nwilliams22/prexu --ref main -f candidate_run=36384566080 -f fault=none
+gh workflow run windows-acceptance.yml --repo nwilliams22/prexu --ref main -f candidate_run=36384566080 -f fault=missing-dll
+```
+
+The NSIS/MSI matrix gives each format a disposable `windows-latest` machine.
+It checks the candidate workflow identity, success, source SHA and artifact
+attempt, verifies both installer checksums, silently installs, and compares
+installed runtime DLLs with the pinned real binaries. libmpv is compared with
+the DLL extracted from its independently hash-verified vendor archive; ANGLE
+uses the production runtime pins. Vendor overrides require an explicit update
+to these acceptance pins, rather than silently accepting different binaries.
+
+The installed app runs with an isolated WebView2 profile and a loopback CDP
+endpoint. Playwright attaches to that actual WebView2 (no downloaded browser or
+mock IPC), requires the visible **Sign in with Plex** button within 60 seconds,
+and checks the native `app_ready` first-paint log on the candidate. The Windows
+close-window request must produce exit code 0 within 30 seconds. The harness
+then installs the SHA256-pinned v0.7.1 release, seeds non-sensitive playback and
+appearance preferences through its localStorage, closes it, and upgrades to
+the candidate without uninstalling or clearing its profile. It requires a
+higher registered version, retained preference values, candidate readiness,
+and clean exit. This certifies storage retention, not every settings control.
+
+Both the fresh and upgraded candidate are uninstalled silently. Cleanup means
+no installed executables/DLLs, uninstall registration, or Prexu shortcuts;
+user data may intentionally remain. Installer operations have 180-second
+limits. The `missing-dll` dispatch removes installed `libmpv-2.dll` before the
+same runtime verification and **must fail** at the acceptance step. It does
+not use `continue-on-error` or convert expected failure into a green run.
+
+The always-uploaded `windows-acceptance-<format>-<fault>-<run>-<attempt>` artifacts
+contain transcripts, MSI logs where applicable, registration/version records,
+readiness reports/screenshots and application logs, retained for 14 days.
+Only synthetic settings are used; no Plex credentials or media are needed.
+The CDP endpoint is test-only, enabled through process environment on the
+throwaway runner; production application code is unchanged.
+
+A green run proves installer and unauthenticated startup behavior on that
+hosted image. It does **not** prove real GPU output, audible playback, login
+against a media server, codecs, DPI/window transitions, or updater signing.
+Those checks still require suitable hardware/services. A visible DOM and
+first-paint handshake are not a native-video rendering assertion. Initial
+hosted verification of this acceptance workflow is pending; record normal and
+negative run IDs before marking `prexu-vbb2.5` complete.
+
+## Acceptance requiring Windows hardware
 
 Beads `prexu-nrqw` owns artifact production; `prexu-0828` owns acceptance.
 Bad Dong coordinates access to a Windows x86_64 machine (or a suitable Windows
