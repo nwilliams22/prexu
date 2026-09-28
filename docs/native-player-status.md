@@ -68,9 +68,12 @@ native-player children of `prexu-ia6w`. The accepted
 not current application support.
 
 The manual [Windows candidate workflow](windows-candidate.md) prepares NSIS/MSI
-artifacts without publishing a release. Its first Windows runner build remains
-unverified; artifact production (`prexu-nrqw`) does not satisfy hardware or
-updater acceptance (`prexu-0828`).
+artifacts without publishing a release. Candidate run `36384566080` succeeded;
+unattended acceptance run `36390510490` passed NSIS/MSI installation, frontend
+readiness, upgrade/settings retention and uninstall. Negative run `36390513402`
+failed both formats for a deliberately removed runtime DLL. See the candidate
+guide for exact revisions and evidence. These checks (`prexu-vbb2.5`) do not
+satisfy GPU/audio, authenticated media or updater acceptance (`prexu-0828`).
 
 ## Development invariants
 

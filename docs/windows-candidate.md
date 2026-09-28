@@ -92,9 +92,28 @@ A green run proves installer and unauthenticated startup behavior on that
 hosted image. It does **not** prove real GPU output, audible playback, login
 against a media server, codecs, DPI/window transitions, or updater signing.
 Those checks still require suitable hardware/services. A visible DOM and
-first-paint handshake are not a native-video rendering assertion. Initial
-hosted verification of this acceptance workflow is pending; record normal and
-negative run IDs before marking `prexu-vbb2.5` complete.
+first-paint handshake are not a native-video rendering assertion.
+
+### Verified runs (2026-09-28)
+
+Harness revision `735a2f9` consumed candidate run `36384566080` (`707e865`):
+
+- [Normal run 36390510490](https://github.com/nwilliams22/prexu/actions/runs/36390510490):
+  **success** for both NSIS and MSI. Logs show fresh install, actionable login,
+  native first-paint handshake, exit code 0, v0.7.1 → v0.8.0 upgrade retaining
+  preferences, and both uninstall cleanup checks passing.
+- [Negative run 36390513402](https://github.com/nwilliams22/prexu/actions/runs/36390513402):
+  **failure** for both formats at **Accept install, readiness, upgrade and
+  uninstall**, with `Missing runtime DLL: libmpv-2.dll` after deliberate removal.
+- Installed runtime: WebView2 `153.0.4234.48`. The uploaded screenshots show the
+  unauthenticated login screen after the splash clears. No media playback or
+  authenticated library was exercised.
+
+Retrieve job-level results with `gh run view <run-id> --repo nwilliams22/prexu
+--json status,conclusion,jobs` and logs with `gh run view <run-id> --repo
+nwilliams22/prexu --log`. The older exploratory runs are not the acceptance
+record. Keep artifacts before their 14-day expiry if long-term evidence is
+needed. This result does not authorize a v0.8.0 release.
 
 ## Acceptance requiring Windows hardware
 
