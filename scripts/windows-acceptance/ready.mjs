@@ -26,6 +26,10 @@ try {
   if (!page) throw new Error('Installed application page did not become available');
   await page.getByRole('button', { name: 'Sign in with Plex', exact: true })
     .waitFor({ state: 'visible', timeout: Math.max(1, deadline - Date.now()) });
+  // Visibility alone accepts a button covered by the startup splash.
+  // Trial click checks hit-testing/actionability without starting Plex auth.
+  await page.getByRole('button', { name: 'Sign in with Plex', exact: true })
+    .click({ trial: true, timeout: Math.max(1, deadline - Date.now()) });
   const result = await page.evaluate((operation) => {
     if (!window.__TAURI_INTERNALS__) throw new Error('Not the real Tauri runtime');
     const key = 'prexu_preferences';
@@ -44,7 +48,7 @@ try {
         throw new Error('Upgrade lost saved preferences');
       }
     }
-    return { operation, origin: location.origin, loginVisible: true, realTauri: true,
+    return { operation, origin: location.origin, loginVisible: true, loginActionable: true, realTauri: true,
       preferencesRetained: operation === 'retain' };
   }, mode);
   await page.screenshot({ path: report.replace(/\.json$/, '.png') });

@@ -62,7 +62,8 @@ to these acceptance pins, rather than silently accepting different binaries.
 
 The installed app runs with an isolated WebView2 profile and a loopback CDP
 endpoint. Playwright attaches to that actual WebView2 (no downloaded browser or
-mock IPC), requires the visible **Sign in with Plex** button within 60 seconds,
+mock IPC), requires a visible, actionable **Sign in with Plex** button within 60 seconds
+(trial click, without authenticating),
 and checks the native `app_ready` first-paint log on the candidate. The Windows
 close-window request must produce exit code 0 within 30 seconds. The harness
 then installs the SHA256-pinned v0.7.1 release, seeds non-sensitive playback and
