@@ -44,23 +44,34 @@ export function useWatchTogetherSession(
           const user = await getPlexUser(authToken);
           watchSync.connect(relayUrl, authToken, user.username, user.thumb);
 
-          // Wait briefly for connection to establish
+          // A socket open is not usable until the relay accepts auth.
           await new Promise<void>((resolve, reject) => {
-            const timeout = setTimeout(
-              () => reject(new Error("Connection timeout")),
-              5000
-            );
-            const unsub = watchSync.on("connected", () => {
+            const cleanup = () => {
               clearTimeout(timeout);
-              unsub();
+              unsubAuth();
+              unsubError();
+            };
+            const timeout = setTimeout(() => {
+              cleanup();
+              reject(new Error("Authentication timeout"));
+            }, 5000);
+            const unsubAuth = watchSync.on("auth_ok", () => {
+              cleanup();
               resolve();
             });
+            const unsubError = watchSync.on("auth_error", (data) => {
+              cleanup();
+              reject(new Error(data.reason));
+            });
+            if (watchSync.isConnected) {
+              cleanup();
+              resolve();
+            }
           });
-        } catch (err) {
+        } catch {
           void logger.error(
-            "ws",
-            "failed to connect via invite relay URL",
-            err
+            "watch:session",
+            "failed to authenticate with invite relay"
           );
           if (!cancelled) setSyncStatus("disconnected");
           return;

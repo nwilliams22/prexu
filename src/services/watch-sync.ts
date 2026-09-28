@@ -4,6 +4,8 @@
  */
 
 import { logger } from "./logger";
+import type { ContentRequestMessage, ContentRequestResponseMessage } from "../types/content-request";
+import type { WatchInvite, WatchParticipant } from "../types/watch-together";
 
 export type SyncEventType =
   | "connected"
@@ -29,8 +31,86 @@ export type SyncEventType =
   | "content_request_response"
   | "pending_content_requests";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type Listener = (data: any) => void;
+export interface InviteReceivedMsg {
+  type: "invite_received";
+  session_id: string;
+  media_title: string;
+  media_rating_key: string;
+  media_type: string;
+  sender_username: string;
+  sender_thumb: string;
+  sent_at: number;
+  relay_url: string;
+}
+
+export function parseInvite(raw: InviteReceivedMsg): WatchInvite {
+  return {
+    sessionId: raw.session_id,
+    mediaTitle: raw.media_title,
+    mediaRatingKey: raw.media_rating_key,
+    mediaType: raw.media_type,
+    senderUsername: raw.sender_username,
+    senderThumb: raw.sender_thumb,
+    sentAt: raw.sent_at,
+    relayUrl: raw.relay_url ?? "",
+  };
+}
+
+interface WireParticipant {
+  plex_username: string;
+  plex_thumb: string;
+  is_host: boolean;
+  state: "buffering" | "ready" | "playing" | "paused";
+}
+
+export function parseParticipant(raw: WireParticipant): WatchParticipant {
+  return {
+    plexUsername: raw.plex_username,
+    plexThumb: raw.plex_thumb,
+    isHost: raw.is_host,
+    state: raw.state,
+  };
+}
+
+export interface SyncEventPayloadMap {
+  connected: null;
+  disconnected: null;
+  auth_ok: { type: "auth_ok"; plex_username: string };
+  auth_error: { type: "auth_error"; reason: string };
+  session_created: { type: "session_created"; session_id: string };
+  session_joined: { type: "session_joined"; session_id: string; participants: WireParticipant[] };
+  session_error: { type: "session_error"; reason: string };
+  participant_joined: { type: "participant_joined"; participant: WireParticipant };
+  participant_left: { type: "participant_left"; plex_username: string };
+  session_destroyed: { type: "session_destroyed" };
+  invite_received: InviteReceivedMsg;
+  pending_invites: { type: "pending_invites"; invites: InviteReceivedMsg[] };
+  remote_play: { type: "play"; current_time: number; timestamp: number; from_user: string };
+  remote_pause: { type: "pause"; current_time: number; timestamp: number; from_user: string };
+  remote_seek: { type: "seek"; current_time: number; timestamp: number; from_user: string };
+  remote_buffering: { type: "buffering"; from_user: string };
+  remote_ready: { type: "ready"; current_time: number; from_user: string };
+  new_media: { type: "new_media"; media_rating_key: string; media_title: string; media_type: string; from_user: string };
+  pong: { type: "pong" };
+  content_request_received: ContentRequestMessage & Record<string, unknown>;
+  content_request_response: ContentRequestResponseMessage & Record<string, unknown>;
+  pending_content_requests: { type: "pending_content_requests"; requests: (ContentRequestMessage & Record<string, unknown>)[] };
+}
+
+type Listener = (data: unknown) => void;
+
+const WIRE_TO_EVENT: Record<string, SyncEventType> = {
+  auth_ok: "auth_ok", auth_error: "auth_error",
+  session_created: "session_created", session_joined: "session_joined",
+  session_error: "session_error", participant_joined: "participant_joined",
+  participant_left: "participant_left", session_destroyed: "session_destroyed",
+  invite_received: "invite_received", pending_invites: "pending_invites",
+  play: "remote_play", pause: "remote_pause", seek: "remote_seek",
+  buffering: "remote_buffering", ready: "remote_ready", new_media: "new_media",
+  pong: "pong", content_request: "content_request_received",
+  content_request_response: "content_request_response",
+  pending_content_requests: "pending_content_requests",
+};
 
 class wsService {
   private ws: WebSocket | null = null;
@@ -55,15 +135,23 @@ class wsService {
     plexUsername: string,
     plexThumb: string,
   ): void {
+    const sameUrl = this.url === url;
     this.url = url;
     this.authPayload = { plexToken, plexUsername, plexThumb };
     this.shouldReconnect = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (sameUrl && this.ws &&
+      (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
     this.authenticated = false;
     this.createConnection();
   }
 
   /** Disconnect from the relay server. Stops auto-reconnect. */
   disconnect(): void {
+    const hadSocket = this.ws !== null;
     this.shouldReconnect = false;
     this.authenticated = false;
     this.authPayload = null;
@@ -76,30 +164,28 @@ class wsService {
       clearInterval(this.pingInterval);
       this.pingInterval = null;
     }
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
-    }
+    this.discardSocket();
+    if (hadSocket) this.emit("disconnected", null);
   }
 
   /** Send a message to the relay server. Accepts any JSON-serialisable
    *  object (typed message shapes with optional fields included). */
   send(message: object): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      logger.warn("ws", "Cannot send — not connected");
+      logger.warn("watch:sync", "Cannot send — not connected");
       return;
     }
     this.ws.send(JSON.stringify(message));
   }
 
   /** Subscribe to an event. Returns an unsubscribe function. */
-  on(event: SyncEventType, listener: Listener): () => void {
+  on<K extends SyncEventType>(event: K, listener: (data: SyncEventPayloadMap[K]) => void): () => void {
     if (!this.listeners.has(event)) {
       this.listeners.set(event, new Set());
     }
-    this.listeners.get(event)!.add(listener);
+    this.listeners.get(event)!.add(listener as Listener);
     return () => {
-      this.listeners.get(event)?.delete(listener);
+      this.listeners.get(event)?.delete(listener as Listener);
     };
   }
 
@@ -115,22 +201,34 @@ class wsService {
 
   // ── Private ──
 
+  private discardSocket(): void {
+    const old = this.ws;
+    this.ws = null;
+    if (old) {
+      old.onopen = old.onmessage = old.onclose = old.onerror = null;
+      old.close();
+    }
+  }
+
   private createConnection(): void {
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
+    this.discardSocket();
+    if (this.pingInterval) {
+      clearInterval(this.pingInterval);
+      this.pingInterval = null;
     }
 
     try {
       this.ws = new WebSocket(this.url);
-    } catch (err) {
-      logger.error("ws", "Failed to create WebSocket", err);
+    } catch {
+      logger.error("watch:sync", "Failed to create WebSocket");
       this.scheduleReconnect();
       return;
     }
 
-    this.ws.onopen = () => {
-      logger.info("ws", "Connected to relay");
+    const socket = this.ws;
+    socket.onopen = () => {
+      if (this.ws !== socket) return;
+      logger.info("watch:sync", "Connected to relay");
       this.reconnectDelay = 1000; // Reset backoff on success
       this.emit("connected", null);
 
@@ -150,12 +248,14 @@ class wsService {
       }, 30000);
     };
 
-    this.ws.onmessage = (event) => {
+    socket.onmessage = (event) => {
+      if (this.ws !== socket) return;
       this.handleMessage(event.data as string);
     };
 
-    this.ws.onclose = () => {
-      logger.info("ws", "Disconnected from relay");
+    socket.onclose = () => {
+      if (this.ws !== socket) return;
+      logger.info("watch:sync", "Disconnected from relay");
       this.authenticated = false;
       if (this.pingInterval) {
         clearInterval(this.pingInterval);
@@ -168,8 +268,9 @@ class wsService {
       }
     };
 
-    this.ws.onerror = (err) => {
-      logger.error("ws", "WebSocket error", err);
+    socket.onerror = () => {
+      if (this.ws !== socket) return;
+      logger.error("watch:sync", "WebSocket error");
     };
   }
 
@@ -178,78 +279,20 @@ class wsService {
     try {
       data = JSON.parse(raw);
     } catch {
-      logger.warn("ws", "Failed to parse message", raw.substring(0, 80));
+      logger.warn("watch:sync", "Failed to parse message");
       return;
     }
 
-    const type = data.type as string;
-
-    switch (type) {
-      case "auth_ok":
-        this.authenticated = true;
-        this.emit("auth_ok", data);
-        break;
-      case "auth_error":
-        this.authenticated = false;
-        this.emit("auth_error", data);
-        break;
-      case "session_created":
-        this.emit("session_created", data);
-        break;
-      case "session_joined":
-        this.emit("session_joined", data);
-        break;
-      case "session_error":
-        this.emit("session_error", data);
-        break;
-      case "participant_joined":
-        this.emit("participant_joined", data);
-        break;
-      case "participant_left":
-        this.emit("participant_left", data);
-        break;
-      case "session_destroyed":
-        this.emit("session_destroyed", data);
-        break;
-      case "invite_received":
-        this.emit("invite_received", data);
-        break;
-      case "pending_invites":
-        this.emit("pending_invites", data);
-        break;
-      case "play":
-        this.emit("remote_play", data);
-        break;
-      case "pause":
-        this.emit("remote_pause", data);
-        break;
-      case "seek":
-        this.emit("remote_seek", data);
-        break;
-      case "buffering":
-        this.emit("remote_buffering", data);
-        break;
-      case "ready":
-        this.emit("remote_ready", data);
-        break;
-      case "new_media":
-        this.emit("new_media", data);
-        break;
-      case "pong":
-        this.emit("pong", data);
-        break;
-      case "content_request":
-        this.emit("content_request_received", data);
-        break;
-      case "content_request_response":
-        this.emit("content_request_response", data);
-        break;
-      case "pending_content_requests":
-        this.emit("pending_content_requests", data);
-        break;
-      default:
-        logger.warn("ws", "Unknown message type", type);
+    const type = data.type;
+    if (typeof type !== "string") {
+      logger.warn("watch:sync", "Message missing type");
+      return;
     }
+    if (type === "auth_ok") this.authenticated = true;
+    if (type === "auth_error") this.authenticated = false;
+    const event = WIRE_TO_EVENT[type];
+    if (event) this.emit(event, data);
+    else logger.warn("watch:sync", "Unknown message type", type);
   }
 
   private emit(event: SyncEventType, data: unknown): void {
@@ -259,7 +302,7 @@ class wsService {
         try {
           listener(data);
         } catch (err) {
-          logger.error("ws", `Error in ${event} listener`, err);
+          logger.error("watch:sync", `Error in ${event} listener`, err);
         }
       }
     }
@@ -268,7 +311,7 @@ class wsService {
   private scheduleReconnect(): void {
     if (this.reconnectTimer) return;
 
-    logger.info("ws", `Reconnecting in ${this.reconnectDelay / 1000}s`);
+    logger.info("watch:sync", `Reconnecting in ${this.reconnectDelay / 1000}s`);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.createConnection();

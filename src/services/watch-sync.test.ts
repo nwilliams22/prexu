@@ -69,11 +69,13 @@ class MockWebSocket {
 
 // Store reference to created MockWebSocket instances
 let mockWsInstance: MockWebSocket | null = null;
+const mockSockets: MockWebSocket[] = [];
 
 vi.stubGlobal("WebSocket", class extends MockWebSocket {
   constructor(url: string) {
     super(url);
     mockWsInstance = this;
+    mockSockets.push(this);
   }
 });
 
@@ -85,6 +87,7 @@ describe("WatchSyncService", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     mockWsInstance = null;
+    mockSockets.length = 0;
     watchSync.disconnect(); // clean state
   });
 
@@ -96,6 +99,55 @@ describe("WatchSyncService", () => {
   // ── connect ──
 
   describe("connect", () => {
+    it("keeps the open socket alive while authentication is in flight", async () => {
+      const disconnected = vi.fn();
+      const unsub = watchSync.on("disconnected", disconnected);
+      watchSync.connect("ws://localhost:9847/ws", "token", "tester", "");
+      await vi.advanceTimersByTimeAsync(0);
+      const socket = mockWsInstance!;
+
+      watchSync.connect("ws://localhost:9847/ws", "token", "tester", "");
+      expect(mockWsInstance).toBe(socket);
+      expect(socket.readyState).toBe(MockWebSocket.OPEN);
+      socket.simulateMessage({ type: "auth_ok" });
+      expect(watchSync.isConnected).toBe(true);
+      expect(disconnected).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(31000);
+      expect(mockSockets).toHaveLength(1);
+      expect(socket.sentMessages.some((message) => JSON.parse(message).type === "ping")).toBe(true);
+      unsub();
+    });
+
+    it("uses the latest auth payload while a socket is still connecting", async () => {
+      watchSync.connect("ws://localhost:9847/ws", "old-token", "old-user", "");
+      const socket = mockWsInstance!;
+      watchSync.connect("ws://localhost:9847/ws", "new-token", "new-user", "");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockSockets).toHaveLength(1);
+      expect(socket.readyState).toBe(MockWebSocket.OPEN);
+      expect(JSON.parse(socket.sentMessages[0]).plex_token).toBe("new-token");
+    });
+
+    it("ignores callbacks from a replaced socket", async () => {
+      const disconnected = vi.fn();
+      const unsub = watchSync.on("disconnected", disconnected);
+      watchSync.connect("ws://first.test/ws", "token", "tester", "");
+      await vi.advanceTimersByTimeAsync(0);
+      const old = mockWsInstance!;
+      const staleClose = old.onclose;
+      watchSync.connect("ws://second.test/ws", "token", "tester", "");
+      await vi.advanceTimersByTimeAsync(0);
+      const current = mockWsInstance!;
+      current.simulateMessage({ type: "auth_ok" });
+      staleClose?.(new CloseEvent("close"));
+      expect(watchSync.isConnected).toBe(true);
+      expect(disconnected).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(31000);
+      expect(mockSockets).toHaveLength(2);
+      expect(current.sentMessages.some((message) => JSON.parse(message).type === "ping")).toBe(true);
+      unsub();
+    });
+
     it("creates a WebSocket connection", () => {
       watchSync.connect("ws://localhost:9847/ws", "test-plex-token", "testuser", "/thumb");
 

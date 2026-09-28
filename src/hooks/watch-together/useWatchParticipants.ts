@@ -3,7 +3,7 @@
  */
 
 import { useState, useEffect } from "react";
-import { watchSync } from "../../services/watch-sync";
+import { parseParticipant, watchSync } from "../../services/watch-sync";
 import type { WatchParticipant } from "../../types/watch-together";
 import type { SyncStatus } from "./useWatchTogetherSession";
 
@@ -24,8 +24,8 @@ export function useWatchParticipants(
 
     const unsubParticipantJoined = watchSync.on(
       "participant_joined",
-      (data: { participant: WatchParticipant }) => {
-        setParticipants((prev) => [...prev, data.participant]);
+      (data) => {
+        setParticipants((prev) => [...prev, parseParticipant(data.participant)]);
       }
     );
 
@@ -40,8 +40,8 @@ export function useWatchParticipants(
 
     const unsubSessionJoined = watchSync.on(
       "session_joined",
-      (data: { participants: WatchParticipant[] }) => {
-        setParticipants(data.participants);
+      (data) => {
+        setParticipants(data.participants.map(parseParticipant));
       }
     );
 

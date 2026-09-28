@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, useMemo } from "react";
-import { watchSync } from "../services/watch-sync";
+import { parseInvite, watchSync } from "../services/watch-sync";
 import { getPlexUser } from "../services/plex-api";
 import { getRelayUrl } from "../services/storage";
 import { playNotificationSound } from "../utils/notificationSound";
@@ -47,8 +47,8 @@ export function useInviteState(
       ]);
 
       watchSync.connect(relayUrl, authToken, user.username, user.thumb);
-    } catch (err) {
-      void logger.error("ws", "failed to connect to relay", err);
+    } catch {
+      void logger.error("watch:invite", "failed to connect to relay");
     }
   }, [authToken, serverUri]);
 
@@ -85,17 +85,8 @@ export function useInviteState(
 
     const unsubInviteReceived = watchSync.on(
       "invite_received",
-      (data: Record<string, unknown>) => {
-        const invite: WatchInvite = {
-          sessionId: data.session_id as string,
-          mediaTitle: data.media_title as string,
-          mediaRatingKey: data.media_rating_key as string,
-          mediaType: data.media_type as string,
-          senderUsername: data.sender_username as string,
-          senderThumb: data.sender_thumb as string,
-          sentAt: data.sent_at as number,
-          relayUrl: (data.relay_url as string) ?? "",
-        };
+      (data) => {
+        const invite = parseInvite(data);
         setInvites((prev) => {
           // Avoid duplicate invites for same session
           if (prev.some((i) => i.sessionId === invite.sessionId)) return prev;
@@ -107,19 +98,8 @@ export function useInviteState(
 
     const unsubPendingInvites = watchSync.on(
       "pending_invites",
-      (data: { invites: Record<string, unknown>[] }) => {
-        const parsed: WatchInvite[] = (data.invites ?? []).map(
-          (inv: Record<string, unknown>) => ({
-            sessionId: inv.session_id as string,
-            mediaTitle: inv.media_title as string,
-            mediaRatingKey: inv.media_rating_key as string,
-            mediaType: inv.media_type as string,
-            senderUsername: inv.sender_username as string,
-            senderThumb: inv.sender_thumb as string,
-            sentAt: inv.sent_at as number,
-            relayUrl: (inv.relay_url as string) ?? "",
-          })
-        );
+      (data) => {
+        const parsed: WatchInvite[] = (data.invites ?? []).map(parseInvite);
         setInvites((prev) => {
           const existingIds = new Set(prev.map((i) => i.sessionId));
           const newInvites = parsed.filter(
