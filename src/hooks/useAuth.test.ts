@@ -24,6 +24,8 @@ vi.mock("../services/plex-api", () => ({
   getPlexUser: vi.fn(),
   onAuthInvalid: vi.fn().mockReturnValue(() => {}),
   discoverServers: vi.fn().mockResolvedValue([]),
+  // useAuth.ts imports this for the boot-time validation timeout (prexu-9f4s.8)
+  CONNECTIVITY_TIMEOUT_MS: 5000,
 }));
 
 // Mock server-reachability so background probe doesn't touch Tauri in tests
@@ -76,7 +78,7 @@ describe("useAuthState", () => {
     mockStorage.getServer.mockResolvedValue(null);
     mockStorage.getActiveUser.mockResolvedValue(null);
     mockStorage.getAdminAuth.mockResolvedValue(null);
-    mockPlexApi.validateToken.mockResolvedValue(false);
+    mockPlexApi.validateToken.mockResolvedValue("invalid");
   });
 
   it("starts loading and resolves to unauthenticated when no stored auth", async () => {
@@ -98,7 +100,7 @@ describe("useAuthState", () => {
       authToken: "stored-token",
       clientIdentifier: "client-id",
     });
-    mockPlexApi.validateToken.mockResolvedValue(true);
+    mockPlexApi.validateToken.mockResolvedValue("valid");
     mockStorage.getServer.mockResolvedValue({
       name: "Server",
       clientIdentifier: "server-id",
@@ -133,7 +135,7 @@ describe("useAuthState", () => {
       authToken: "expired-token",
       clientIdentifier: "client-id",
     });
-    mockPlexApi.validateToken.mockResolvedValue(false);
+    mockPlexApi.validateToken.mockResolvedValue("invalid");
 
     const { result } = renderHook(() => useAuthState());
 
@@ -143,6 +145,118 @@ describe("useAuthState", () => {
 
     expect(result.current.isAuthenticated).toBe(false);
     expect(mockStorage.clearAuth).toHaveBeenCalled();
+  });
+
+  // ── plex.tv unreachable — stored credentials must survive (prexu-9f4s.8) ──
+
+  it("keeps stored credentials when plex.tv returns indeterminate (LAN server is restored)", async () => {
+    const storedToken = "offline-token";
+    mockStorage.getAuth.mockResolvedValue({
+      authToken: storedToken,
+      clientIdentifier: "client-id",
+    });
+    mockStorage.getServer.mockResolvedValue({
+      name: "LAN Server",
+      clientIdentifier: "server-id",
+      accessToken: "server-token",
+      uri: "http://192.168.1.10:32400",
+    });
+    mockStorage.getActiveUser.mockResolvedValue(null);
+    mockPlexApi.validateToken.mockResolvedValue("indeterminate");
+
+    const { result } = renderHook(() => useAuthState());
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    // The token survived the offline plex.tv — the user stays logged in.
+    expect(result.current.isAuthenticated).toBe(true);
+    expect(result.current.authToken).toBe(storedToken);
+    // The LAN server was restored optimistically.
+    expect(result.current.serverSelected).toBe(true);
+    // Critically, auth was NOT wiped.
+    expect(mockStorage.clearAuth).not.toHaveBeenCalled();
+  });
+
+  it("keeps stored credentials when plex.tv is unreachable and no server is stored", async () => {
+    mockStorage.getAuth.mockResolvedValue({
+      authToken: "offline-token",
+      clientIdentifier: "client-id",
+    });
+    mockStorage.getServer.mockResolvedValue(null);
+    mockStorage.getActiveUser.mockResolvedValue(null);
+    mockPlexApi.validateToken.mockResolvedValue("indeterminate");
+
+    const { result } = renderHook(() => useAuthState());
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(result.current.isAuthenticated).toBe(true);
+    expect(result.current.authToken).toBe("offline-token");
+    expect(mockStorage.clearAuth).not.toHaveBeenCalled();
+  });
+
+  it("does not call clearAuth on indeterminate even in the periodic revalidation path", async () => {
+    // Boot with a valid token, then let the 30-minute interval fire while
+    // plex.tv is down (indeterminate) — the stored token must survive.
+    // Fake timers because the interval is 30 minutes; the repo's established
+    // pattern (bootWaterfall.test.tsx) is fake timers + explicit advance.
+    vi.useFakeTimers();
+    try {
+      mockStorage.getAuth.mockResolvedValue({
+        authToken: "stored-token",
+        clientIdentifier: "client-id",
+      });
+      mockStorage.getServer.mockResolvedValue(null);
+      mockStorage.getActiveUser.mockResolvedValue(null);
+      mockPlexApi.validateToken
+        .mockResolvedValueOnce("valid") // boot
+        .mockResolvedValue("indeterminate"); // later 30-min tick
+
+      const { result } = renderHook(() => useAuthState());
+
+      // Boot settles on the microtask queue (awaited promises are not gated
+      // by the mocked setTimeout).
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(result.current.isLoading).toBe(false);
+      expect(result.current.isAuthenticated).toBe(true);
+      expect(result.current.authToken).toBe("stored-token");
+
+      // Advance the 30-minute interval; flush the async callback.
+      await act(async () => {
+        vi.advanceTimersByTime(30 * 60 * 1000);
+        await Promise.resolve();
+      });
+
+      expect(result.current.isAuthenticated).toBe(true);
+      expect(result.current.authToken).toBe("stored-token");
+      expect(mockStorage.clearAuth).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("passes the short boot-time timeout to validateToken (not the 15s default)", async () => {
+    mockStorage.getAuth.mockResolvedValue({
+      authToken: "boot-token",
+      clientIdentifier: "client-id",
+    });
+    mockPlexApi.validateToken.mockResolvedValue("valid");
+
+    const { result } = renderHook(() => useAuthState());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    // An unreachable plex.tv must not hold the splash for 30s (prexu-9f4s.8):
+    // boot validation runs with the 5s connectivity timeout instead.
+    expect(mockPlexApi.validateToken).toHaveBeenCalledWith("boot-token", {
+      timeoutMs: plexApi.CONNECTIVITY_TIMEOUT_MS,
+    });
   });
 
   it("discards the optimistic prefetch and leaks no state when validation fails, even though the server read raced ahead of it", async () => {
@@ -169,7 +283,7 @@ describe("useAuthState", () => {
       isAdmin: true,
       isHomeUser: false,
     });
-    mockPlexApi.validateToken.mockResolvedValue(false);
+    mockPlexApi.validateToken.mockResolvedValue("invalid");
 
     const { result } = renderHook(() => useAuthState());
 
@@ -201,7 +315,7 @@ describe("useAuthState", () => {
     mockStorage.getServer.mockResolvedValue(storedServer);
 
     // Slow validateToken so we can assert prefetch already fired before it settles.
-    let resolveValidate!: (v: boolean) => void;
+    let resolveValidate!: (v: "valid" | "invalid" | "indeterminate") => void;
     mockPlexApi.validateToken.mockReturnValue(
       new Promise((res) => (resolveValidate = res)),
     );
@@ -216,7 +330,7 @@ describe("useAuthState", () => {
     expect(result.current.isLoading).toBe(true);
 
     await act(async () => {
-      resolveValidate(true);
+      resolveValidate("valid");
       await Promise.resolve();
     });
 
@@ -325,7 +439,7 @@ describe("useAuthState", () => {
       authToken: "admin-token",
       clientIdentifier: "client-id",
     });
-    mockPlexApi.validateToken.mockResolvedValue(true);
+    mockPlexApi.validateToken.mockResolvedValue("valid");
 
     apiCache.cacheSet(
       "dashboard:https://server:32400:deck",
@@ -386,7 +500,7 @@ describe("useAuthState", () => {
       authToken: "admin-token",
       clientIdentifier: "client-id",
     });
-    mockPlexApi.validateToken.mockResolvedValue(true);
+    mockPlexApi.validateToken.mockResolvedValue("valid");
 
     const { result } = renderHook(() => useAuthState());
 

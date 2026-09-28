@@ -15,7 +15,7 @@ import {
   getActiveUser,
   migrateToSecureStorage,
 } from "../services/storage";
-import { validateToken, getPlexUser, onAuthInvalid, discoverServers } from "../services/plex-api";
+import { validateToken, getPlexUser, onAuthInvalid, discoverServers, CONNECTIVITY_TIMEOUT_MS } from "../services/plex-api";
 import {
   probeServerReachability,
   resolveServerFromDiscovery,
@@ -79,7 +79,15 @@ export function useAuthState(): AuthContextValue {
           // independent of each other and of the validation result, so
           // serializing them behind the network hop (the old behavior) just
           // wasted time on every cold boot (prexu-0szx.9).
-          const validateTokenPromise = validateToken(stored.authToken);
+          //
+          // Boot-time validation gets a shorter, explicit timeout: if plex.tv
+          // is unreachable, an "indeterminate" result is expected and the
+          // stored credentials must survive — the LAN server is reachable
+          // separately and the onAuthInvalid 401 bus catches a truly dead
+          // token on the first real API call (prexu-9f4s.8).
+          const validateTokenPromise = validateToken(stored.authToken, {
+            timeoutMs: CONNECTIVITY_TIMEOUT_MS,
+          });
           const serverPromise = getServer();
           const userPromise = getActiveUser();
 
@@ -93,7 +101,7 @@ export function useAuthState(): AuthContextValue {
             if (storedServer) prefetchDashboardData(storedServer);
           });
 
-          const [valid, storedServer, storedUser] = await Promise.all([
+          const [validation, storedServer, storedUser] = await Promise.all([
             validateTokenPromise,
             serverPromise,
             userPromise,
@@ -101,12 +109,23 @@ export function useAuthState(): AuthContextValue {
 
           logger.debug("auth", "boot waterfall settled", {
             elapsedMs: Math.round(performance.now() - bootStart),
-            valid,
+            validation,
             hasServer: storedServer != null,
             hasUser: storedUser != null,
           });
 
-          if (valid) {
+          if (validation === "indeterminate") {
+            // plex.tv was unreachable or answered 5xx — we know nothing about
+            // the token. Do NOT clear auth: the LAN server is probed separately
+            // and a genuinely dead token is caught on the first real API call
+            // via the onAuthInvalid 401 event bus (prexu-9f4s.8).
+            logger.warn(
+              "auth",
+              "plex.tv validation indeterminate at boot; keeping stored credentials"
+            );
+          }
+
+          if (validation !== "invalid") {
             setAuthToken(stored.authToken);
 
             if (storedServer) {
@@ -206,12 +225,15 @@ export function useAuthState(): AuthContextValue {
     if (!authToken) return;
 
     const interval = setInterval(async () => {
-      const valid = await validateToken(authToken);
-      if (!valid) {
+      const validation = await validateToken(authToken);
+      if (validation === "invalid") {
         await clearAuth();
         setAuthToken(null);
         setServer(null);
         setActiveUser(null);
+      } else if (validation === "indeterminate") {
+        // plex.tv unreachable mid-session — keep the token (prexu-9f4s.8).
+        logger.warn("auth", "periodic revalidation indeterminate; keeping credentials");
       }
     }, TOKEN_REVALIDATION_INTERVAL_MS);
 

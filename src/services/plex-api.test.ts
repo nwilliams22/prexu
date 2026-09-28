@@ -45,19 +45,43 @@ describe("plex-api", () => {
   // ── validateToken ──
 
   describe("validateToken", () => {
-    it("returns true when response is ok", async () => {
+    it('returns "valid" when response is ok', async () => {
       mockFetch.mockResolvedValueOnce(jsonResponse({ id: 1 }));
-      expect(await validateToken("valid-token")).toBe(true);
+      expect(await validateToken("valid-token")).toBe("valid");
     });
 
-    it("returns false when response is not ok", async () => {
+    it('returns "invalid" when response is 401', async () => {
       mockFetch.mockResolvedValueOnce(jsonResponse({}, 401));
-      expect(await validateToken("invalid-token")).toBe(false);
+      expect(await validateToken("invalid-token")).toBe("invalid");
     });
 
-    it("returns false when fetch throws", async () => {
+    it('returns "invalid" when response is 403', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({}, 403));
+      expect(await validateToken("forbidden-token")).toBe("invalid");
+    });
+
+    it('returns "indeterminate" when fetch throws (network error)', async () => {
       mockFetch.mockRejectedValueOnce(new Error("Network error"));
-      expect(await validateToken("any-token")).toBe(false);
+      expect(await validateToken("any-token")).toBe("indeterminate");
+    });
+
+    it('returns "indeterminate" when plex.tv answers 5xx', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({}, 503));
+      expect(await validateToken("any-token")).toBe("indeterminate");
+    });
+
+    it('returns "indeterminate" on timeout', async () => {
+      // Hang until abort, then reject with the abort reason (TimeoutError).
+      mockFetch.mockImplementation((_url: string, opts: { signal: AbortSignal }) =>
+        new Promise<Response>((_resolve, reject) => {
+          opts.signal.addEventListener("abort", () => {
+            reject(opts.signal.reason ?? new Error("aborted"));
+          });
+        }),
+      );
+      const url = `https://example.test/vt-timeout-${Date.now()}`;
+      const result = await validateToken("timeout-token", { timeoutMs: 10 });
+      expect(result).toBe("indeterminate");
     });
 
     it("calls the correct endpoint with auth headers", async () => {

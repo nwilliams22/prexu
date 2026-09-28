@@ -75,12 +75,14 @@ vi.mock("../../services/storage", () => ({
   migrateToSecureStorage: vi.fn().mockResolvedValue(undefined),
 }));
 
-// plex.tv token validation — the boolean that gates authenticated boot.
+// plex.tv token validation — the tri-state result gating authenticated boot.
 vi.mock("../../services/plex-api", () => ({
   validateToken: vi.fn(),
   getPlexUser: vi.fn(),
   onAuthInvalid: vi.fn().mockReturnValue(() => {}),
   discoverServers: vi.fn().mockResolvedValue([]),
+  // useAuth.ts imports this for the boot-time validation timeout (prexu-9f4s.8)
+  CONNECTIVITY_TIMEOUT_MS: 5000,
 }));
 
 // Background reachability probe — kept off Tauri; controls the offline path.
@@ -230,7 +232,7 @@ function splashVisible() {
 function setupValidAuth() {
   mockStorage.getAuth.mockResolvedValue(STORED_AUTH);
   mockStorage.getServer.mockResolvedValue(SERVER);
-  mockPlexApi.validateToken.mockResolvedValue(true);
+  mockPlexApi.validateToken.mockResolvedValue("valid");
 }
 
 describe("boot/auth waterfall (W4 · pd1x.4)", () => {
@@ -246,7 +248,7 @@ describe("boot/auth waterfall (W4 · pd1x.4)", () => {
     mockStorage.clearAuth.mockResolvedValue(undefined);
     mockStorage.getClientIdentifier.mockResolvedValue("test-client-id");
     mockStorage.migrateToSecureStorage.mockResolvedValue(undefined);
-    mockPlexApi.validateToken.mockResolvedValue(false);
+    mockPlexApi.validateToken.mockResolvedValue("invalid");
     mockPlexApi.onAuthInvalid.mockReturnValue(() => {});
     mockPlexApi.discoverServers.mockResolvedValue([]);
     mockReach.probeServerReachability.mockResolvedValue(true);
@@ -416,7 +418,7 @@ describe("boot/auth waterfall (W4 · pd1x.4)", () => {
       vi.useRealTimers();
       mockStorage.getAuth.mockResolvedValue(STORED_AUTH);
       mockStorage.getServer.mockResolvedValue(SERVER);
-      mockPlexApi.validateToken.mockResolvedValue(false); // revoked
+      mockPlexApi.validateToken.mockResolvedValue("invalid"); // revoked
 
       renderApp();
 

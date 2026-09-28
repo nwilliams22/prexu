@@ -15,7 +15,7 @@ import {
 
 const PLEX_TV_API = "https://clients.plex.tv/api/v2";
 const APP_NAME = "Prexu";
-const CONNECTIVITY_TIMEOUT_MS = 5000;
+export const CONNECTIVITY_TIMEOUT_MS = 5000;
 export const REQUEST_TIMEOUT_MS = 15000;
 const RETRY_ON_TIMEOUT = 1;
 
@@ -404,19 +404,42 @@ export async function discoverServers(
   return servers;
 }
 
+/**
+ * Result of validating an auth token against plex.tv.
+ *
+ * "indeterminate" is the crucial third state (prexu-9f4s.8): it means
+ * plex.tv could not be reached (network error, timeout) or answered 5xx —
+ * we know nothing about the token. The ONLY result that may justify
+ * clearing stored auth is "invalid" (plex.tv explicitly rejected it). A
+ * genuinely dead token is still caught on the first real API call via the
+ * 401 → onAuthInvalid event bus.
+ */
+export type TokenValidation = "valid" | "invalid" | "indeterminate";
+
 /** Validate that an auth token is still valid */
-export async function validateToken(authToken: string): Promise<boolean> {
+export async function validateToken(
+  authToken: string,
+  options?: { timeoutMs?: number },
+): Promise<TokenValidation> {
   try {
     const headers = await getAuthHeaders(authToken);
-    const response = await timedFetch(`${PLEX_TV_API}/user`, { headers });
+    const response = await timedFetch(`${PLEX_TV_API}/user`, {
+      headers,
+      ...(options?.timeoutMs != null ? { timeoutMs: options.timeoutMs } : {}),
+    });
 
-    if (response.status === 401) {
+    if (response.status === 401 || response.status === 403) {
       emitAuthInvalid();
+      return "invalid";
     }
 
-    return response.ok;
+    if (response.ok) return "valid";
+
+    // 5xx / other: plex.tv responded but could not confirm the token.
+    return "indeterminate";
   } catch {
-    return false;
+    // Network error or timeout — plex.tv was unreachable.
+    return "indeterminate";
   }
 }
 

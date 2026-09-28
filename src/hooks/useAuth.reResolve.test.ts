@@ -35,6 +35,8 @@ vi.mock("../services/plex-api", () => ({
   getPlexUser: vi.fn(),
   onAuthInvalid: vi.fn().mockReturnValue(() => {}),
   discoverServers: vi.fn(),
+  // useAuth.ts imports this for the boot-time validation timeout (prexu-9f4s.8)
+  CONNECTIVITY_TIMEOUT_MS: 5000,
 }));
 
 vi.mock("../services/server-reachability", () => ({
@@ -84,7 +86,7 @@ function setupValidAuth() {
     authToken: "user-auth-token",
     clientIdentifier: "client-id",
   });
-  mockPlexApi.validateToken.mockResolvedValue(true);
+  mockPlexApi.validateToken.mockResolvedValue("valid");
   mockStorage.getServer.mockResolvedValue(storedServer);
   mockStorage.getActiveUser.mockResolvedValue(null);
 }
@@ -98,7 +100,7 @@ describe("useAuthState — server re-resolve", () => {
     mockStorage.getServer.mockResolvedValue(null);
     mockStorage.getActiveUser.mockResolvedValue(null);
     mockStorage.getAdminAuth.mockResolvedValue(null);
-    mockPlexApi.validateToken.mockResolvedValue(false);
+    mockPlexApi.validateToken.mockResolvedValue("invalid");
   });
 
   it("keeps serverUnreachable false when probe succeeds", async () => {
@@ -230,7 +232,7 @@ describe("useAuthState — server re-resolve", () => {
       authToken: "user-auth-token",
       clientIdentifier: "client-id",
     });
-    mockPlexApi.validateToken.mockResolvedValue(true);
+    mockPlexApi.validateToken.mockResolvedValue("valid");
     mockStorage.getServer.mockResolvedValue(null);
 
     const { result } = renderHook(() => useAuthState());
