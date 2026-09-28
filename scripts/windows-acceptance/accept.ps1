@@ -76,6 +76,9 @@ function Start-And-Check([string]$Exe, [string]$Mode, [string]$Label, [bool]$Req
         if ($script:app.ExitCode -ne 0) { throw "$Label unclean exit: $($script:app.ExitCode)" }
         Write-Host "PASS $Label clean exit (exit 0)"
     } finally {
+        Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('Prexu.exe', 'msedgewebview2.exe') } |
+            Select-Object Name, ProcessId, ParentProcessId, CommandLine |
+            ConvertTo-Json -Depth 3 | Set-Content "$logs/$Label-processes.json"
         if (Test-Path $logDir) { Copy-Item -Recurse -Force $logDir "$logs/$Label-app" }
         if ($script:app -and -not $script:app.HasExited) { Stop-Process -Id $script:app.Id -Force }
     }

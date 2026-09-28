@@ -6,14 +6,16 @@ const [mode, report] = process.argv.slice(2);
 if (!['seed', 'retain', 'fresh'].includes(mode) || !report) throw new Error('Invalid arguments');
 const deadline = Date.now() + 60_000;
 let browser;
+let connectionError;
 while (!browser && Date.now() < deadline) {
   try {
-    browser = await chromium.connectOverCDP('http://127.0.0.1:9222', { timeout: 1000 });
-  } catch {
+    browser = await chromium.connectOverCDP('http://127.0.0.1:9222', { timeout: Math.max(1, Math.min(10_000, deadline - Date.now())) });
+  } catch (error) {
+    connectionError = error;
     await new Promise(resolve => setTimeout(resolve, 500));
   }
 }
-if (!browser) throw new Error('WebView2 did not become available within 60 seconds');
+if (!browser) throw new Error('WebView2 connection failed within 60 seconds', { cause: connectionError });
 try {
   let page;
   while (!page && Date.now() < deadline) {
