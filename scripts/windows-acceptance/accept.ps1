@@ -70,8 +70,15 @@ function Start-And-Check([string]$Exe, [string]$Mode, [string]$Label, [bool]$Req
     if (Test-Path "$logDir/Prexu.log") { Remove-Item -Force "$logDir/Prexu.log" }
     $script:app = Start-Process -FilePath $Exe -PassThru
     try {
-        node scripts/windows-acceptance/ready.mjs $Mode "$logs/$Label-ready.json"
-        if ($LASTEXITCODE -ne 0) { throw "$Label frontend readiness failed" }
+        # Bound the entire CDP helper too, including attachment cleanup. A browser
+        # transport that stalls must fail here and still upload diagnostics.
+        $helper = Start-Process node -ArgumentList "scripts/windows-acceptance/ready.mjs $Mode `"$logs/$Label-ready.json`"" -PassThru -NoNewWindow -RedirectStandardOutput "$logs/$Label-cdp.out" -RedirectStandardError "$logs/$Label-cdp.err"
+        if (-not $helper.WaitForExit(90000)) {
+            $helper.Kill()
+            throw "$Label CDP helper timed out after 90 seconds"
+        }
+        Get-Content "$logs/$Label-cdp.out", "$logs/$Label-cdp.err" | ForEach-Object { Write-Host $_ }
+        if ($helper.ExitCode -ne 0) { throw "$Label frontend readiness failed" }
         if ($script:app.HasExited) { throw "$Label exited before readiness check" }
         if ($RequireHandshake) {
             if (-not (Test-Path "$logDir/Prexu.log") -or
