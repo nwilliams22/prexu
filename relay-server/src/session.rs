@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tracing::{info, warn};
 
 use crate::messages::{ParticipantInfo, PendingInviteInfo, ServerMessage};
-use crate::state::{now_ms, Participant, Session, SharedState};
+use crate::state::{now_ms, ConnectionHandle, Participant, Session, SharedState};
 
 /// Send a serialized ServerMessage to a single connection by username.
 fn send_to_user(state: &SharedState, username: &str, msg: &ServerMessage) {
@@ -68,6 +68,8 @@ pub fn create_session(
         );
         return;
     }
+
+    leave_session(state, username);
 
     let session = Session {
         id: session_id.clone(),
@@ -141,6 +143,11 @@ pub fn join_session(
         );
         return;
     }
+    drop(session);
+    leave_session(state, username);
+    let Some(session) = state.sessions.get(session_id) else {
+        return;
+    };
 
     // Collect existing participants for the join response
     let existing_participants: Vec<ParticipantInfo> = session
@@ -204,43 +211,84 @@ pub fn join_session(
 
 /// Remove a user from their current session. Destroys session if empty.
 pub fn leave_session(state: &SharedState, username: &str) {
-    // Find the session this user is in
-    let session_id = match state.connections.get(username) {
-        Some(conn) => match &conn.session_id {
-            Some(id) => id.clone(),
-            None => return,
-        },
-        None => return,
+    let Some(conn) = state.connections.get(username) else {
+        return;
     };
-
-    // Remove from session participants
-    let should_destroy = if let Some(session) = state.sessions.get(&session_id) {
-        session.participants.remove(username);
-        session.participants.is_empty()
-    } else {
-        false
-    };
-
-    // Clear session from connection
-    if let Some(mut conn) = state.connections.get_mut(username) {
-        conn.session_id = None;
+    let session_id = conn.session_id.clone();
+    let sender = conn.sender.clone();
+    drop(conn);
+    if let Some(session_id) = session_id {
+        leave_session_inner(state, username, &session_id, &sender);
+        if let Some(mut conn) = state.connections.get_mut(username) {
+            if conn.sender.same_channel(&sender) {
+                conn.session_id = None;
+            }
+        }
     }
+}
 
-    if should_destroy {
-        state.sessions.remove(&session_id);
-        info!(session_id = %session_id, "Session destroyed (empty)");
+/// The disconnected handle has already been removed from the connection map.
+pub fn leave_session_for_disconnect(
+    state: &SharedState,
+    username: &str,
+    handle: &ConnectionHandle,
+) {
+    if let Some(session_id) = &handle.session_id {
+        leave_session_inner(state, username, session_id, &handle.sender);
+    }
+}
+
+fn leave_session_inner(
+    state: &SharedState,
+    username: &str,
+    session_id: &str,
+    sender: &tokio::sync::mpsc::Sender<Arc<String>>,
+) {
+    let Some(session) = state.sessions.get(session_id) else {
+        return;
+    };
+    let removed = session.participants.remove_if(username, |_, participant| {
+        participant.sender.same_channel(sender)
+    });
+    if removed.is_none() {
+        return;
+    }
+    let was_host = session.host_username == username;
+    let remaining: Vec<String> = if was_host {
+        session
+            .participants
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect()
     } else {
-        // Notify remaining participants
+        Vec::new()
+    };
+    let empty = session.participants.is_empty();
+    drop(session);
+
+    if was_host && !empty {
+        broadcast_to_session(state, session_id, &ServerMessage::SessionDestroyed, None);
+        for participant in remaining {
+            if let Some(mut conn) = state.connections.get_mut(&participant) {
+                if conn.session_id.as_deref() == Some(session_id) {
+                    conn.session_id = None;
+                }
+            }
+        }
+    } else if !empty {
         broadcast_to_session(
             state,
-            &session_id,
+            session_id,
             &ServerMessage::ParticipantLeft {
                 plex_username: username.to_string(),
             },
             None,
         );
-        info!(session_id = %session_id, user = %username, "User left session");
+        info!(session_id, user = %username, "User left session");
+        return;
     }
+    state.sessions.remove(session_id);
+    info!(session_id, "Session destroyed");
 }
 
 /// Handle an invite using only authenticated identity and server-owned metadata.

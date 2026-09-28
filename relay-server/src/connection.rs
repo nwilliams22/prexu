@@ -70,7 +70,7 @@ pub async fn handle_connection(ws: WebSocket, state: SharedState) {
     info!(user = %username, "User authenticated via Plex token");
 
     // Register connection
-    state.connections.insert(
+    let old = state.connections.insert(
         username.clone(),
         ConnectionHandle {
             plex_username: username.clone(),
@@ -79,6 +79,21 @@ pub async fn handle_connection(ws: WebSocket, state: SharedState) {
             sender: tx.clone(),
         },
     );
+    if let Some(old) = old {
+        if let Some(session_id) = old.session_id {
+            if let Some(session) = state.sessions.get(&session_id) {
+                if let Some(mut participant) = session.participants.get_mut(&username) {
+                    if participant.sender.same_channel(&old.sender) {
+                        participant.sender = tx.clone();
+                        if let Some(mut conn) = state.connections.get_mut(&username) {
+                            conn.session_id = Some(session_id);
+                        }
+                    }
+                }
+            }
+        }
+        info!(user = %username, "Superseded previous connection");
+    }
 
     // Send auth_ok
     let auth_ok = ServerMessage::AuthOk {
@@ -135,6 +150,11 @@ pub async fn handle_connection(ws: WebSocket, state: SharedState) {
                 }
                 match msg {
                     Some(Ok(Message::Text(text))) => {
+                        // A replaced socket must not mutate the live connection's session.
+                        if !state_clone.connections.get(&username_clone)
+                            .is_some_and(|conn| conn.sender.same_channel(&tx)) {
+                            break;
+                        }
                         // Rate limiting: sliding window
                         let now = Instant::now();
                         while msg_timestamps.front().is_some_and(|t| now.duration_since(*t) > RATE_LIMIT_WINDOW) {
@@ -181,8 +201,14 @@ pub async fn handle_connection(ws: WebSocket, state: SharedState) {
 
     // Cleanup on disconnect
     info!(user = %username, "User disconnected");
-    session::leave_session(&state, &username);
-    state.connections.remove(&username);
+    if let Some((_, handle)) = state
+        .connections
+        .remove_if(&username, |_, conn| conn.sender.same_channel(&tx))
+    {
+        session::leave_session_for_disconnect(&state, &username, &handle);
+    } else {
+        info!(user = %username, "Skipping cleanup of superseded connection");
+    }
     writer_handle.abort();
 }
 

@@ -348,6 +348,90 @@ async fn test_join_session_already_in() {
 }
 
 #[tokio::test]
+async fn test_switch_session_removes_old_membership() {
+    let addr = start_test_server().await;
+    let mut host = ws_connect(addr).await;
+    authenticate(&mut host, "switch_host").await;
+    create_test_session(&mut host, "switch-a").await;
+    let mut guest = ws_connect(addr).await;
+    authenticate(&mut guest, "switch_guest").await;
+    ws_send(
+        &mut guest,
+        &serde_json::json!({"type":"join_session","session_id":"switch-a"}),
+    )
+    .await;
+    assert_eq!(ws_recv(&mut guest).await["type"], "session_joined");
+    assert_eq!(ws_recv(&mut host).await["type"], "participant_joined");
+
+    create_test_session(&mut guest, "switch-b").await;
+    let left = ws_recv(&mut host).await;
+    assert_eq!(left["type"], "participant_left");
+    assert_eq!(left["plex_username"], "switch_guest");
+    ws_send(
+        &mut host,
+        &serde_json::json!({"type":"play","current_time":1.0,"timestamp":1}),
+    )
+    .await;
+    assert!(ws_try_recv(&mut guest, Duration::from_millis(150))
+        .await
+        .is_none());
+
+    ws_send(
+        &mut guest,
+        &serde_json::json!({"type":"join_session","session_id":"switch-a"}),
+    )
+    .await;
+    assert_eq!(ws_recv(&mut guest).await["type"], "session_joined");
+    assert_eq!(ws_recv(&mut host).await["type"], "participant_joined");
+    let mut observer = ws_connect(addr).await;
+    authenticate(&mut observer, "switch_observer").await;
+    ws_send(
+        &mut observer,
+        &serde_json::json!({"type":"join_session","session_id":"switch-b"}),
+    )
+    .await;
+    assert_eq!(ws_recv(&mut observer).await["type"], "session_error");
+    ws_send(&mut host, &serde_json::json!({"type":"leave_session"})).await;
+    assert_eq!(ws_recv(&mut guest).await["type"], "session_destroyed");
+}
+
+#[tokio::test]
+async fn test_reconnected_socket_survives_old_socket_cleanup() {
+    let addr = start_test_server().await;
+    let mut host = ws_connect(addr).await;
+    authenticate(&mut host, "reconnect_host").await;
+    create_test_session(&mut host, "reconnect-session").await;
+    let mut old = ws_connect(addr).await;
+    authenticate(&mut old, "reconnect_guest").await;
+    ws_send(
+        &mut old,
+        &serde_json::json!({"type":"join_session","session_id":"reconnect-session"}),
+    )
+    .await;
+    assert_eq!(ws_recv(&mut old).await["type"], "session_joined");
+    assert_eq!(ws_recv(&mut host).await["type"], "participant_joined");
+    let mut fresh = ws_connect(addr).await;
+    authenticate(&mut fresh, "reconnect_guest").await;
+    ws_send(&mut old, &serde_json::json!({"type":"leave_session"})).await;
+    old.close(None).await.ok();
+    drop(old);
+    ws_send(
+        &mut host,
+        &serde_json::json!({"type":"play","current_time":4.0,"timestamp":1}),
+    )
+    .await;
+    let play = ws_recv(&mut fresh).await;
+    assert_eq!(play["type"], "play");
+    assert_eq!(play["current_time"], 4.0);
+    ws_send(
+        &mut fresh,
+        &serde_json::json!({"type":"pause","current_time":5.0,"timestamp":2}),
+    )
+    .await;
+    assert_eq!(ws_recv(&mut host).await["type"], "pause");
+}
+
+#[tokio::test]
 async fn test_leave_session() {
     let addr = start_test_server().await;
 
