@@ -111,10 +111,20 @@ dir = "src-tauri"
 run = "cargo clippy --all-targets -- -D warnings"
 
 [tasks."test-tauri"]
-description = "src-tauri library unit tests (excludes the libmpv headless_mpv integration test)"
+description = "src-tauri library unit tests (excludes real-libmpv tests and headless_mpv)"
 depends = ["build"]
 dir = "src-tauri"
 run = "cargo test --lib"
+
+# The real-libmpv teardown tests in player::events are #[ignore]d: they create a
+# real mpv handle and abort with VersionMismatch against libmpv API 1.x, which
+# is what ubuntu-22.04 (the CI linux-build and release runner) ships. Kept out
+# of the `ci` gate for the same reason; run this on a box with libmpv 2.x.
+[tasks."test-tauri-mpv"]
+description = "src-tauri real-libmpv tests (#[ignore]d set); needs libmpv API 2.x"
+depends = ["build"]
+dir = "src-tauri"
+run = "cargo test --lib -- --ignored --nocapture"
 
 [tasks.e2e]
 description = "Install Playwright browsers and run E2E tests"

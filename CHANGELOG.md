@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-No changes since 0.8.0.
+### Fixed
+
+- CI: the `player::events` mpv-teardown tests are now `#[ignore]`d and run in
+  the libmpv 2.x jobs instead of the Ubuntu 22.04 `linux-build` job, whose
+  system libmpv is API 1.x and aborted them with `VersionMismatch`. `main` had
+  been red since 2026-09-28.
+- Release: the Linux release build installs `libmpv-dev`, fixing the
+  `unable to find library -lmpv` link failure that broke the 0.8.0 Linux
+  artifacts. Linux runtime libmpv provisioning is still unverified
+  (`prexu-axj4.7`).
 
 ## [0.8.0] - 2026-09-28
 

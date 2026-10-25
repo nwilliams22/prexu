@@ -200,6 +200,17 @@ jobs:
           MPV_SOURCE: ${{ github.workspace }}\src-tauri\ci\mpv
         run: cargo test --lib -- --skip angle_dlls_match_sha256_pins --skip angle_dlls_authenticode_valid
 
+      # The real-libmpv teardown tests in player::events are #[ignore]d so the
+      # ubuntu-22.04 linux-build job (system libmpv 1.x) does not run them and
+      # fail with VersionMismatch (BAD-282). They need API 2.x, which this job
+      # has via the vendored libmpv-2.dll copied beside the test binary above.
+      - name: Run real-libmpv lib tests (ignored set)
+        working-directory: src-tauri
+        env:
+          MPV_SOURCE: ${{ github.workspace }}\src-tauri\ci\mpv
+          RUST_LOG: debug
+        run: cargo test --lib -- --ignored --nocapture
+
   headless-mpv-linux:
     name: Headless mpv integration (Linux, libmpv 2.x)
     runs-on: ubuntu-24.04
@@ -239,6 +250,17 @@ jobs:
         env:
           RUST_LOG: debug
         run: cargo test --test headless_mpv -- --nocapture --ignored
+
+      # The real-libmpv teardown tests in player::events (BAD-39) create a real
+      # mpv handle, so they are #[ignore]d and excluded from the ubuntu-22.04
+      # linux-build job, whose system libmpv is API 1.x and aborts them with
+      # VersionMismatch (BAD-282). ubuntu-24.04 ships libmpv.so.2, so this is
+      # where they actually run on Linux.
+      - name: Run real-libmpv lib tests (ignored set)
+        working-directory: src-tauri
+        env:
+          RUST_LOG: debug
+        run: cargo test --lib -- --ignored --nocapture
 
   linux-build:
     name: Linux src-tauri build (native player + libmpv)

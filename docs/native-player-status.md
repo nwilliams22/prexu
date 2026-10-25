@@ -54,9 +54,12 @@ merged fixes; read notes and current code before treating a title as missing
 implementation. X11 verification (`prexu-5jxx`) is deferred.
 
 Linux CI provisions libmpv and compiles/tests the native player. The release
-workflow still lacks Linux libmpv provisioning; the Linux bundle config selects
-AppImage/rpm but has no explicit rpm libmpv dependency. Self-contained AppImage
-operation and LGPL build provenance remain acceptance work under `axj4.7`.
+workflow installs `libmpv-dev` so the Linux target links (`-lmpv`); before that
+was added, the 0.8.0 Linux release build failed at link time (`BAD-282`). That
+covers build-time linking only — it is **not** runtime provisioning: the Linux
+bundle config selects AppImage/rpm but has no explicit rpm libmpv dependency,
+and the release runner's libmpv is API 1.x. Self-contained AppImage operation
+and LGPL build provenance remain acceptance work under `axj4.7`.
 
 Known follow-ups include Windows IME (`prexu-x2bt`) and fullscreen transition
 verification (`prexu-6p8k`), Linux packaged/dist black-webview investigation

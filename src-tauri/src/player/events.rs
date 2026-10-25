@@ -783,9 +783,29 @@ fn dispatch(
 mod tests {
     use super::*;
 
+    // ── Real-libmpv teardown tests (prexu BAD-39 / BAD-282) ──────────────────
+    //
+    // The three tests below call `lifecycle::configure_mpv_properties`, which
+    // creates a REAL mpv handle. libmpv2 is compiled against API 2.x, so they
+    // abort with `VersionMismatch { linked: 131074, loaded: 65645 }` wherever
+    // the loaded libmpv is 1.x — which is every ubuntu-22.04 runner (mpv 0.35).
+    // They therefore carry the same gating as `tests/headless_mpv.rs`:
+    //
+    //   #[ignore] — kept out of the default `cargo test` run, so the
+    //               `Linux src-tauri build (native player + libmpv)` job
+    //               (ubuntu-22.04, libmpv 1.x) compiles and links them without
+    //               executing them. Run explicitly with `-- --ignored` in the
+    //               jobs that provision libmpv 2.x:
+    //                 - Headless mpv integration (Linux, libmpv 2.x) — ubuntu-24.04
+    //                 - Headless mpv integration (Windows) — vendored libmpv-2.dll
+    //
+    // Running locally (needs libmpv.so.2 / libmpv-2.dll on the loader path):
+    //   cd src-tauri && cargo test --lib -- --ignored --nocapture
+
     // Exercise the production polling loop with real libmpv, without a GUI.
     // Invalid quit arguments produce a real command error and no Shutdown.
     #[test]
+    #[ignore = "creates a real mpv handle; requires libmpv API 2.x"]
     fn rejected_quit_releases_idle_pump_and_final_mpv_reference() {
         let mpv = Arc::new(super::super::lifecycle::configure_mpv_properties(None, true).unwrap());
         let weak = Arc::downgrade(&mpv);
@@ -839,6 +859,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "creates a real mpv handle; requires libmpv API 2.x"]
     fn rejected_quit_stops_pump_after_dispatched_event() {
         let mpv = super::super::lifecycle::configure_mpv_properties(None, true).unwrap();
         let mut events = EventContext::new(mpv.ctx);
@@ -861,6 +882,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "creates a real mpv handle; requires libmpv API 2.x"]
     fn successful_quit_still_exits_on_shutdown_without_cancellation() {
         let mpv = super::super::lifecycle::configure_mpv_properties(None, true).unwrap();
         let mut events = EventContext::new(mpv.ctx);

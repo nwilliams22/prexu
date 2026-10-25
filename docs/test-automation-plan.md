@@ -18,7 +18,8 @@ Beads. The original `prexu-pd1x` automation epic is **closed**; its
 | `mise run ci` | Lint, TypeScript, Vitest, relay and src-tauri clippy/tests, frontend build, Chromium E2E, probe self-test |
 
 The local `ci` task runs `cargo test --lib` for src-tauri; it does not include
-headless-mpv integration, the player-chrome Playwright project, GitHub's Xvfb
+headless-mpv integration, the `#[ignore]`d real-libmpv lib tests
+(`mise run test-tauri-mpv`), the player-chrome Playwright project, GitHub's Xvfb
 smoke job, or `mise run scan`. Run those relevant checks separately. `mise run scan` fails on High/Critical;
 the GitHub security workflow currently does not. Local
 E2E provisioning invokes Playwright browser/system dependency installation.
@@ -33,8 +34,8 @@ point-in-time local result, not a permanent expected count or current CI claim.
 | --- | --- |
 | `ci` | Frontend checks, probe self-tests, relay clippy/tests, Chromium and player-chrome E2E |
 | `headless-mpv` (Windows) | Desktop clippy/lib tests and real mpv signal-chain integration; ANGLE runtime DLL integrity tests skipped because this job uses stubs |
-| `headless-mpv-linux` (Ubuntu 24.04) | Real libmpv API 2.x signal-chain integration |
-| `linux-build` (Ubuntu 22.04) | Frontend production build, desktop clippy/build/tests with system libmpv, check that the player-chrome stub is absent from production assets |
+| `headless-mpv-linux` (Ubuntu 24.04) | Real libmpv API 2.x signal-chain integration, plus the `#[ignore]`d real-libmpv lib tests |
+| `linux-build` (Ubuntu 22.04) | Frontend production build, desktop clippy/build/tests with system libmpv, check that the player-chrome stub is absent from production assets; its libmpv is API 1.x, so the real-libmpv lib tests are `#[ignore]`d here |
 | `desktop-smoke-linux` | Advisory Xvfb process launch/liveness/exit/zombie check; not authenticated dashboard or visual validation |
 | Separate security workflow | Report-only SBOM/Grype scanning; findings do not fail this workflow |
 
@@ -43,6 +44,17 @@ For headless runtime tests after provisioning libmpv and frontend assets:
 ```bash
 cd src-tauri
 cargo test --test headless_mpv -- --nocapture --ignored
+```
+
+The `player::events` teardown tests create a real mpv handle, so they are
+`#[ignore]`d too and are not in `cargo test --lib` or the local `ci` task. They
+need libmpv API 2.x; against API 1.x they abort with
+`VersionMismatch { linked: 131074, loaded: 65645 }`. Run them with
+`mise run test-tauri-mpv`, or:
+
+```bash
+cd src-tauri
+cargo test --lib -- --ignored --nocapture
 ```
 
 Windows additionally needs the DLL beside the test executable; see
