@@ -337,8 +337,8 @@ jobs:
     runs-on: ubuntu-22.04
     # Advisory only (prexu-510g, spike prexu-pd1x.12): launches the actual
     # built binary headlessly under Xvfb and asserts launch + liveness + clean
-    # exit + no zombie child. Reaching a painted dashboard needs Plex auth —
-    # OUT of scope; this is process-lifecycle only. webkit2gtk under Xvfb can
+    # exit + no zombie child + React startup via the app_ready IPC handshake.
+    # Login renders without Plex credentials. webkit2gtk under Xvfb can
     # be flaky (no real GPU/DRM device), so this job retries and never blocks
     # merges (continue-on-error). Runner mirrors linux-build/release.yml
     # (ubuntu-22.04 is what the Linux release actually ships on), so the smoke
@@ -375,28 +375,20 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # generate_context!() embeds the frontend dist at compile time, so the
-      # bundle must exist before cargo build (same requirement as linux-build).
+      # Plain cargo build uses devUrl, even when dist exists. Enable Tauri
+      # custom-protocol explicitly to embed and exercise production assets.
       - name: Build frontend
         run: npm run build
 
       - name: Build src-tauri (debug)
         working-directory: src-tauri
-        run: cargo build
+        run: cargo build --features tauri/custom-protocol
 
-      # Launch the real binary under Xvfb and assert it launches, stays alive
-      # for a liveness window, exits cleanly on SIGTERM, and leaves no defunct
-      # child process. Scope is strictly launch/liveness/exit — a painted
-      # dashboard needs a reachable Plex server + auth, which stays out of
-      # scope for this smoke (prexu-pd1x.12 spike). Retries once: webkit2gtk
-      # under Xvfb is known-flaky with no real GPU/DRM device.
-      - name: Xvfb desktop smoke (launch, liveness, clean exit)
+      # React must mount and invoke app_ready; process liveness alone also
+      # passes when devUrl is unreachable or the frontend bundle is broken.
+      - name: Xvfb desktop smoke (frontend, liveness, clean exit)
         env:
-          # Xvfb has no DRM/GPU device: steer WebKit/GL off hardware-backed
-          # paths so a missing DMABUF/GPU codepath degrades fail-soft (see
-          # player::linux_compositor's HTML5-fallback contract) instead of
-          # taking the whole webview down with it.
-          WEBKIT_DISABLE_DMABUF_RENDERER: "1"
+          # Keep DMABUF enabled: disabling it breaks transparent compositing.
           LIBGL_ALWAYS_SOFTWARE: "1"
         run: |
           set -uo pipefail
@@ -418,7 +410,14 @@ jobs:
             echo "=== Xvfb smoke attempt ${attempt}/${MAX_ATTEMPTS} ==="
             LOGFILE="smoke-attempt-${attempt}.log"
 
-            xvfb-run -a "$BINARY" > "$LOGFILE" 2>&1 &
+            # Each attempt gets empty state and logs, so a prior successful
+            # run cannot satisfy the frontend assertion or restore geometry.
+            ATTEMPT_DIR="$PWD/smoke-state-${attempt}"
+            export XDG_CONFIG_HOME="$ATTEMPT_DIR/config"
+            export XDG_DATA_HOME="$ATTEMPT_DIR/data"
+            mkdir -p "$XDG_CONFIG_HOME" "$XDG_DATA_HOME"
+            APP_LOG="$XDG_DATA_HOME/com.prexu.client/logs/Prexu.log"
+            xvfb-run -a -s "-screen 0 1600x1000x24" "$BINARY" > "$LOGFILE" 2>&1 &
             XVFB_RUN_PID=$!
 
             # Give the wrapper time to start Xvfb and exec the binary.
@@ -481,6 +480,16 @@ jobs:
               echo "WARN: startup marker '${STARTUP_MARKER}' not found in captured log (non-fatal)"
             fi
 
+            # Emitted only by the command invoked after React mounts, never
+            # by the Rust safety-net show. This proves frontend JS and IPC
+            # ran, not pixel correctness or authenticated playback.
+            if ! grep -qF '[setup] app_ready — frontend signalled first paint' "$APP_LOG"; then
+              echo "FAIL: frontend did not complete the app_ready handshake"
+              cat "$LOGFILE" || true
+              continue
+            fi
+            echo "PASS: React startup handshake recorded in Prexu.log"
+
             overall_status=0
             break
           done
@@ -492,7 +501,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: xvfb-desktop-smoke-logs
-          path: smoke-attempt-*.log
+          path: |
+            smoke-attempt-*.log
+            smoke-state-*/data/com.prexu.client/logs/*.log
           if-no-files-found: ignore
           retention-days: 7
 
