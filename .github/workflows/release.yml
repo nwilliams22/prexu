@@ -1,7 +1,13 @@
 name: Release
 
 on:
+  # Build inspectable Linux candidates without creating a tag or release.
+  workflow_dispatch:
   push:
+    branches: [main]
+    paths:
+      - .github/workflows/release.yml
+      - src-tauri/tauri.linux.conf.json
     tags:
       - "v*"
 
@@ -40,6 +46,7 @@ jobs:
       - name: Test release version guard
         run: node --test scripts/check-release-version.test.mjs
       - name: Verify tag matches application versions
+        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: node scripts/check-release-version.mjs --tag "$RELEASE_TAG"
@@ -50,14 +57,9 @@ jobs:
       fail-fast: false
       matrix:
         # Windows + Linux release targets; macOS distribution remains deferred.
-        # Linux now compiles the native libmpv player, but this release job still
-        # lacks Linux libmpv provisioning/bundle verification (prexu-axj4.7).
-        # Do not infer release readiness from the separate linux-build CI job.
-        include:
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-          - os: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
+        # Ubuntu 24.04 sets a glibc 2.39 compatibility floor. Linux uses
+        # pinned LGPL-mode shared libraries, not the distro GPL mpv build.
+        include: ${{ fromJSON((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) && '[{"os":"windows-latest","target":"x86_64-pc-windows-msvc"},{"os":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"}]' || '[{"os":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"}]') }}
 
     runs-on: ${{ matrix.os }}
 
@@ -79,19 +81,67 @@ jobs:
             librsvg2-dev \
             patchelf \
             libssl-dev \
-            libmpv-dev \
-            rpm
-          # `rpm` provides rpmbuild, required by Tauri's rpm bundler. AppImage
-          # bundling is handled by tauri-action's own tooling.
-          # `libmpv-dev` provides the -lmpv the native player links against.
-          # Without it the v0.8.0 release build failed at link time with
-          # `rust-lld: error: unable to find library -lmpv` (BAD-282) — the
-          # Linux player module has linked system libmpv since prexu-axj4.3,
-          # but this job's dep list was never updated to match linux-build's.
-          # NOTE: this fixes LINKING only. ubuntu-22.04 ships libmpv API 1.x,
-          # so the shipped Linux bundles still require the end user to have a
-          # compatible libmpv installed — Linux runtime libmpv provisioning and
-          # bundle verification remain open (prexu-axj4.7).
+            rpm xvfb xauth mesa-utils \
+            meson ninja-build nasm pkg-config \
+            libass-dev libplacebo-dev libpulse-dev libasound2-dev \
+            libegl1-mesa-dev libgl1-mesa-dev libdrm-dev libva-dev \
+            zlib1g-dev
+          # Never install distro libmpv here: API 1.x cannot initialize, and
+          # an API 2.x distro package alone does not establish LGPL provenance.
+
+      - name: Build pinned LGPL shared media libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -euxo pipefail
+          MEDIA_PREFIX="$RUNNER_TEMP/prexu-media"
+          mkdir -p "$MEDIA_PREFIX" "$RUNNER_TEMP/media-sources"
+          cd "$RUNNER_TEMP/media-sources"
+          curl --fail --location --retry 3 https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz -o ffmpeg.tar.xz
+          curl --fail --location --retry 3 https://codeload.github.com/mpv-player/mpv/tar.gz/refs/tags/v0.39.0 -o mpv.tar.gz
+          echo 'de668509caf9e35e3cd162473441fdb29538c6d96ed080292b3cf9e6fc5d558f  ffmpeg.tar.xz' | sha256sum -c -
+          echo '2ca92437affb62c2b559b4419ea4785c70d023590500e8a52e95ea3ab4554683  mpv.tar.gz' | sha256sum -c -
+          tar -xf ffmpeg.tar.xz
+          tar -xf mpv.tar.gz
+          export PKG_CONFIG_PATH="$MEDIA_PREFIX/lib/pkgconfig"
+          export LD_LIBRARY_PATH="$MEDIA_PREFIX/lib"
+          cd ffmpeg-7.1.5
+          ./configure --prefix="$MEDIA_PREFIX" --libdir="$MEDIA_PREFIX/lib" \
+            --enable-shared --disable-static --disable-gpl --disable-nonfree \
+            --disable-version3 --disable-autodetect --disable-programs --disable-doc \
+            --enable-openssl --enable-zlib --enable-vaapi
+          make -j"$(nproc)"
+          make install
+          cd ../mpv-0.39.0
+          meson setup build --prefix="$MEDIA_PREFIX" --libdir=lib \
+            --buildtype=release --wrap-mode=nofallback \
+            -Dgpl=false -Dlibmpv=true -Dcplayer=false \
+            -Dlibarchive=disabled -Dlibbluray=disabled -Ddvdnav=disabled \
+            -Dcdda=disabled -Djavascript=disabled -Dlua=disabled
+          meson compile -C build
+          meson install -C build
+          test -f "$MEDIA_PREFIX/lib/libmpv.so.2"
+          readelf -d "$MEDIA_PREFIX/lib/libmpv.so.2" | grep SONAME
+          # Keep exact source, configure output and license texts in the bundle.
+          # The rpm uses distro libraries at runtime; it does not carry this set.
+          mkdir -p "$GITHUB_WORKSPACE/src-tauri/media-provenance"
+          cp -f ../ffmpeg.tar.xz ../mpv.tar.gz "$GITHUB_WORKSPACE/src-tauri/media-provenance/"
+          cp -f ../ffmpeg-7.1.5/ffbuild/config.log "$GITHUB_WORKSPACE/src-tauri/media-provenance/ffmpeg-config.log"
+          cp -f build/meson-logs/meson-log.txt "$GITHUB_WORKSPACE/src-tauri/media-provenance/mpv-meson-log.txt"
+          cp -f LICENSE.LGPL "$GITHUB_WORKSPACE/src-tauri/media-provenance/mpv-LICENSE.LGPL"
+          cp -f ../ffmpeg-7.1.5/COPYING.LGPLv2.1 "$GITHUB_WORKSPACE/src-tauri/media-provenance/ffmpeg-COPYING.LGPLv2.1"
+          cp -f "$GITHUB_WORKSPACE/docs/linux-bundles.md" "$GITHUB_WORKSPACE/src-tauri/media-provenance/BUILD.md"
+          python3 - <<'PYCODE'
+          import json, os
+          from pathlib import Path
+          config = {"bundle": {"linux": {"appimage": {"files": {
+              "usr/share/doc/prexu/media": os.environ['GITHUB_WORKSPACE'] + '/src-tauri/media-provenance'
+          }}}}}
+          Path(os.environ['GITHUB_WORKSPACE'], 'src-tauri/bundle-media.conf.json').write_text(json.dumps(config))
+          PYCODE
+          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+          echo "LIBRARY_PATH=$MEDIA_PREFIX/lib" >> "$GITHUB_ENV"
+          echo "RUSTFLAGS=-L native=$MEDIA_PREFIX/lib" >> "$GITHUB_ENV"
 
       # ── Windows: libmpv dev files ───────────────────────────────────────
       # The libmpv2 crate's `build_libmpv` feature on Windows expects a layout
@@ -213,7 +263,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Build Linux candidate (no release)
+        if: ${{ !(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) }}
+        run: npm run tauri build -- --target ${{ matrix.target }} --config src-tauri/bundle-media.conf.json
+
       - name: Build Tauri app
+        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -227,12 +282,12 @@ jobs:
           releaseBody: |
             **Windows** — the NSIS `.exe` and the MSI are the supported download.
 
-            **Linux — experimental.** The AppImage and rpm link system libmpv and
-            do not provision it, and the rpm declares no libmpv dependency, so the
-            native player can fail to start on a machine without libmpv API 2.x
-            (mpv 0.35 or newer). No Linux release artifact has been installed or
-            launched from a published release (`prexu-axj4.7`). macOS is not
-            distributed.
+            **Linux — experimental.** The AppImage targets glibc 2.39 or newer
+            and bundles LGPL-mode libmpv API 2.x and FFmpeg shared libraries,
+            with their exact source archives and build records. The rpm requires
+            distro libmpv.so.2, OpenSSL 3 and the GTK/WebKit runtime libraries.
+            See [Linux bundle acceptance](https://github.com/nwilliams22/prexu/blob/main/docs/linux-bundles.md)
+            for artifact checks and remaining hardware acceptance. macOS is not distributed.
 
             GPU, audio and window/DPI/fullscreen acceptance on Windows was
             **waived, not performed** — hosted runners have no graphics card and no
@@ -241,9 +296,90 @@ jobs:
             before deploying.
           releaseDraft: true
           prerelease: false
-          args: --target ${{ matrix.target }}
+          args: --target ${{ matrix.target }} ${{ runner.os == 'Linux' && '--config src-tauri/bundle-media.conf.json' || '' }}
+
+      - name: Inspect Linux artifacts
+        if: runner.os == 'Linux'
+        run: |
+          set -euxo pipefail
+          bundle="$GITHUB_WORKSPACE/src-tauri/target/${{ matrix.target }}/release/bundle"
+          appimage=$(find "$bundle/appimage" -maxdepth 1 -name '*.AppImage' -print -quit)
+          package=$(find "$bundle/rpm" -maxdepth 1 -name '*.rpm' -print -quit)
+          mkdir -p "$RUNNER_TEMP/bundle-check"
+          cd "$RUNNER_TEMP/bundle-check"
+          "$appimage" --appimage-extract > extraction.log
+          readelf -d squashfs-root/usr/bin/prexu | tee needed.log
+          grep -F 'Shared library: [libmpv.so.2]' needed.log
+          test -f squashfs-root/usr/lib/libmpv.so.2
+          test -z "$(find squashfs-root -name 'libmpv.so.1*' -print -quit)"
+          find squashfs-root -name 'libmpv*' | tee bundled-mpv.log
+          rpm -qp --requires "$package" | tee rpm-requires.log
+          # Every direct ELF dependency needs an rpm provider, including the
+          # non-media libraries linuxdeploy includes only in the AppImage.
+          while read -r soname; do
+            grep -Fx "$soname()(64bit)" rpm-requires.log
+          done < <(sed -n 's/.*Shared library: \[\(.*\)\].*/\1/p' needed.log)
+          # Inspect the bundled media libraries, never the build-host copy.
+          env -u LD_LIBRARY_PATH python3 - <<'PYCODE'
+          import ctypes, os
+          from pathlib import Path
+          root = Path('squashfs-root/usr/lib').resolve()
+          for name in ['avutil', 'swresample', 'swscale', 'avcodec', 'avformat', 'avfilter']:
+              path = next(root.glob(f'lib{name}.so.*'))
+              lib = ctypes.CDLL(str(path), mode=os.RTLD_GLOBAL)
+              license_fn = getattr(lib, f'{name}_license')
+              license_fn.restype = ctypes.c_char_p
+              license_text = license_fn().decode()
+              print(f'{path.name}: {license_text}', flush=True)
+              assert 'LGPL' in license_text
+          mpv = ctypes.CDLL(str(root / 'libmpv.so.2'))
+          mpv.mpv_client_api_version.restype = ctypes.c_ulong
+          api = mpv.mpv_client_api_version()
+          print(f'Bundled mpv client API: {api >> 16}.{api & 65535}', flush=True)
+          assert api >> 16 == 2
+          mpv.mpv_create.restype = ctypes.c_void_p
+          handle = mpv.mpv_create()
+          assert handle
+          print('Bundled mpv handle created', flush=True)
+          mpv.mpv_terminate_destroy.argtypes = [ctypes.c_void_p]
+          mpv.mpv_terminate_destroy(handle)
+          PYCODE
+
+      - name: Launch Linux AppImage under Xvfb
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/bundle-check"
+          # Use AppRun to exercise the shipped library search path. Do not
+          # disable DMABUF: the native compositor needs WebKit's renderer.
+          set +e
+          env -u LD_LIBRARY_PATH -u WEBKIT_DISABLE_DMABUF_RENDERER \
+            -u PREXU_STOCK_WEBVIEW -u PREXU_NO_COMPOSITOR \
+            LIBGL_ALWAYS_SOFTWARE=1 RUST_LOG=info \
+            timeout 30s xvfb-run -a ./squashfs-root/AppRun > native-startup.log 2>&1
+          result=$?
+          set -e
+          cat native-startup.log
+          test "$result" -eq 124
+          grep -F '[player] mpv created' native-startup.log
+          grep -F '[player:linux] compositor installed' native-startup.log
+          ! grep -Ei 'VersionMismatch|falling back|fallback to HTML5' native-startup.log
+
+      - name: Upload Linux candidates and evidence
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-bundles-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+            src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm
+            ${{ runner.temp }}/bundle-check/*.log
+            src-tauri/media-provenance/
 
   cleanup:
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))
     needs: build
     runs-on: ubuntu-latest
     steps:

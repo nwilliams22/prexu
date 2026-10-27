@@ -57,16 +57,16 @@ integration test or certify GPU rendering. See [coverage](test-automation-plan.m
 
 ## Packaging status
 
-`tauri.linux.conf.json` selects AppImage and rpm. The release workflow has a
-Linux Ubuntu 22.04 matrix entry and installs rpm tooling, but still lacks
-libmpv provisioning. The bundle config does not explicitly declare an rpm
-libmpv dependency. CI's native-player build is ahead of release packaging.
+`tauri.linux.conf.json` selects AppImage and rpm and declares rpm runtime
+capabilities, including libmpv API 2 and OpenSSL 3. The release workflow uses
+Ubuntu 24.04 and pinned LGPL-mode shared media libraries. This sets a glibc 2.39
+compatibility floor. Manual workflow runs build Linux candidates without a
+release; see [bundle construction and acceptance](linux-bundles.md).
 
-`prexu-axj4.7` owns release provisioning, self-contained AppImage verification,
-rpm runtime dependencies, and verification of the chosen libmpv build's
-licensing/provenance. Do not infer portable packaged-app support from a passing
-dev build. `prexu-p020` separately tracks a black webview/minimum-size issue
-with a cargo-built debug binary using bundled frontend assets.
+`prexu-axj4.7` remains open until commit-specific artifacts pass bundle and native
+startup verification. Do not infer packaged-app support from a passing dev
+build. `prexu-p020` separately tracks a black webview/minimum-size issue with a
+cargo-built debug binary using bundled frontend assets.
 
 ## Wayland and rendering diagnostics
 
