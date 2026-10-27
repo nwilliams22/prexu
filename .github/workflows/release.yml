@@ -136,6 +136,8 @@ jobs:
           config = {"bundle": {"linux": {"appimage": {"files": {
               "usr/share/doc/prexu/media": os.environ['GITHUB_WORKSPACE'] + '/src-tauri/media-provenance'
           }}}}}
+          if not (os.environ['GITHUB_EVENT_NAME'] == 'push' and os.environ['GITHUB_REF'].startswith('refs/tags/')):
+              config['bundle']['createUpdaterArtifacts'] = False
           Path(os.environ['GITHUB_WORKSPACE'], 'src-tauri/bundle-media.conf.json').write_text(json.dumps(config))
           PYCODE
           echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
@@ -320,7 +322,7 @@ jobs:
             grep -Fx "$soname()(64bit)" rpm-requires.log
           done < <(sed -n 's/.*Shared library: \[\(.*\)\].*/\1/p' needed.log)
           # Inspect the bundled media libraries, never the build-host copy.
-          env -u LD_LIBRARY_PATH python3 - <<'PYCODE'
+          env -u LD_LIBRARY_PATH python3 - <<'PYCODE' | tee media-runtime.log
           import ctypes, os
           from pathlib import Path
           root = Path('squashfs-root/usr/lib').resolve()
