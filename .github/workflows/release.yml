@@ -81,7 +81,7 @@ jobs:
             librsvg2-dev \
             patchelf \
             libssl-dev \
-            rpm xvfb xauth mesa-utils \
+            rpm xvfb xauth mesa-utils dbus \
             meson ninja-build nasm pkg-config \
             libass-dev libplacebo-dev libpulse-dev libasound2-dev \
             libegl1-mesa-dev libgl1-mesa-dev libdrm-dev libva-dev \
@@ -358,10 +358,11 @@ jobs:
           env -u LD_LIBRARY_PATH -u WEBKIT_DISABLE_DMABUF_RENDERER \
             -u PREXU_STOCK_WEBVIEW -u PREXU_NO_COMPOSITOR \
             LIBGL_ALWAYS_SOFTWARE=1 RUST_LOG=info \
-            timeout 30s xvfb-run -a ./squashfs-root/AppRun > native-startup.log 2>&1
+            dbus-run-session -- timeout 30s xvfb-run -a ./squashfs-root/AppRun > native-startup.log 2>&1
           result=$?
           set -e
           cat native-startup.log
+          printf 'AppImage launch exit status: %s (expected 124)\n' "$result"
           test "$result" -eq 124
           grep -F '[player] mpv created' native-startup.log
           grep -F '[player:linux] compositor installed' native-startup.log
