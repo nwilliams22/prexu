@@ -45,12 +45,38 @@ loading, or the Windows UI. No installer or Windows UI was observed locally.
 ## Unattended installer acceptance
 
 [Windows acceptance](../.github/workflows/windows-acceptance.yml) consumes a
-successful candidate run, independently of the build. Dispatch on `main`:
+successful candidate run or a published release tag, independently of the build.
+Supply exactly one of `candidate_run` and `release_tag`; neither has a default.
+Dispatch on `main`:
 
 ```sh
 gh workflow run windows-acceptance.yml --repo nwilliams22/prexu --ref main -f candidate_run=36384566080 -f fault=none
 gh workflow run windows-acceptance.yml --repo nwilliams22/prexu --ref main -f candidate_run=36384566080 -f fault=missing-dll
 ```
+
+For a published release, use the same positive and negative controls:
+
+```sh
+gh workflow run windows-acceptance.yml --repo nwilliams22/prexu --ref main -f release_tag=v0.8.1 -f fault=none
+gh workflow run windows-acceptance.yml --repo nwilliams22/prexu --ref main -f release_tag=v0.8.1 -f fault=missing-dll
+```
+
+The release path accepts only `vMAJOR.MINOR.PATCH` tags from this repository,
+requires a published non-draft release, and selects exactly one Windows x64
+NSIS and MSI asset with the matching version. It downloads by asset ID and
+verifies both files against the release API's SHA256 digests. Missing digests
+fail closed. This uses the release-digest provenance fallback; it does not
+verify minisign signatures or certify the updater key. No arbitrary URL is
+accepted. `release-provenance.json` in the diagnostics records the release ID,
+asset IDs, tag, publication time and digests.
+
+The downloader supplies the existing `candidate/BUILD.txt` and
+`candidate/SHA256SUMS.txt` interface, so `accept.ps1` and its `missing-dll`
+fault injection are unchanged. Release signing/updater artifacts do not waive
+any installed runtime, startup, upgrade or cleanup checks. Local validation:
+`node --test scripts/windows-acceptance/release.test.mjs`. Published-release
+acceptance remains unverified until both matrix legs pass the normal run and
+fail specifically on the removed DLL in the negative run.
 
 The NSIS/MSI matrix gives each format a disposable `windows-latest` machine.
 It checks the candidate workflow identity, success, source SHA and artifact

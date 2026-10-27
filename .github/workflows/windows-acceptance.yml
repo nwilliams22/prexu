@@ -6,8 +6,10 @@ on:
     inputs:
       candidate_run:
         description: Successful Windows candidate run containing both installers
-        required: true
-        default: '36384566080'
+        required: false
+      release_tag:
+        description: Published release tag (exactly one of release_tag or candidate_run)
+        required: false
       fault:
         description: Negative control (must make acceptance fail)
         type: choice
@@ -28,6 +30,15 @@ jobs:
       matrix:
         format: [nsis, msi]
     steps:
+      - name: Validate source selection
+        shell: pwsh
+        env:
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if ([bool]$env:CANDIDATE_RUN -eq [bool]$env:RELEASE_TAG) {
+            throw 'Specify exactly one of candidate_run or release_tag'
+          }
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
@@ -37,6 +48,7 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Download successful candidate
+        if: inputs.candidate_run != ''
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -58,6 +70,14 @@ jobs:
             throw 'Candidate provenance does not match run'
           }
           Write-Host "Candidate source $($run.head_sha), run $env:CANDIDATE_RUN, artifact $($match[0].name)"
+      - name: Test release provenance validation
+        run: node --test scripts/windows-acceptance/release.test.mjs
+      - name: Download verified published release
+        if: inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: node scripts/windows-acceptance/release.mjs
       - name: Accept install, readiness, upgrade and uninstall
         shell: pwsh
         env:
