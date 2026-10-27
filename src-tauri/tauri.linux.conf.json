@@ -40,6 +40,7 @@
           "libgobject-2.0.so.0()(64bit)",
           "libgmodule-2.0.so.0()(64bit)",
           "libglib-2.0.so.0()(64bit)",
+          "libdbus-1.so.3()(64bit)",
           "libgcc_s.so.1()(64bit)",
           "libm.so.6()(64bit)",
           "libc.so.6()(64bit)",
