@@ -75,8 +75,7 @@ The downloader supplies the existing `candidate/BUILD.txt` and
 fault injection are unchanged. Release signing/updater artifacts do not waive
 any installed runtime, startup, upgrade or cleanup checks. Local validation:
 `node --test scripts/windows-acceptance/release.test.mjs`. Published-release
-acceptance remains unverified until both matrix legs pass the normal run and
-fail specifically on the removed DLL in the negative run.
+acceptance results for v0.8.1 are recorded below.
 
 The NSIS/MSI matrix gives each format a disposable `windows-latest` machine.
 It checks the candidate workflow identity, success, source SHA and artifact
@@ -104,6 +103,10 @@ user data may intentionally remain. Installer operations have 180-second
 limits. The `missing-dll` dispatch removes installed `libmpv-2.dll` before the
 same runtime verification and **must fail** at the acceptance step. It does
 not use `continue-on-error` or convert expected failure into a green run.
+This exercises only the static pre-launch runtime guard: installation has
+completed, but the app has not launched. It does not validate detection of a
+launch failure or exercise the readiness, clean-exit, upgrade or uninstall
+assertions; those checks are exercised by the normal run.
 
 The always-uploaded `windows-acceptance-<format>-<fault>-<run>-<attempt>` artifacts
 contain transcripts, MSI logs where applicable, registration/version records,
@@ -141,10 +144,24 @@ nwilliams22/prexu --log`. The older exploratory runs are not the acceptance
 record. Keep artifacts before their 14-day expiry if long-term evidence is
 needed. The older exploratory runs are not the acceptance record.
 
+### Published v0.8.1 acceptance (2026-10-27)
+
+Harness revision `d6c44c8` consumed the published `v0.8.1` release assets:
+
+- [Normal run 40561094786](https://github.com/nwilliams22/prexu/actions/runs/40561094786):
+  **success** for both NSIS and MSI, including release asset digest verification,
+  fresh install, actionable login, native first-paint handshake, clean exit,
+  v0.7.1 → v0.8.1 upgrade retaining preferences, and uninstall cleanup.
+- [Negative run 40561120923](https://github.com/nwilliams22/prexu/actions/runs/40561120923):
+  **failure** for both formats. The recorded error is
+  `Missing runtime DLL: libmpv-2.dll` from `Check-Runtime`, after installation
+  and deliberate DLL removal, before launch. This validates the static guard
+  only, as described above.
+
 ## Release decisions for 0.8.0 and 0.8.1
 
-The runs above are the whole of the Windows acceptance performed for either
-release. The hardware checks in the next section were **waived, not completed**: a
+The runs above record candidate acceptance and subsequent published v0.8.1
+installer acceptance. The hardware checks in the next section were **waived, not completed**: a
 hosted `windows-latest` runner has no graphics card and no audio device, and the
 owner chose to release with visible video output, audible playback and
 window/DPI/fullscreen transitions recorded as untested. The changelog's *Known
@@ -157,8 +174,9 @@ untested on Windows* section is the user-facing record.
 - **0.8.1 (decision 2026-10-27)** — cut from `main` after the offline-login fix,
   the QA session script and the CI/release repairs, and published as the first
   installable release since 0.7.1. The owner re-affirmed the waiver for it. The
-  acceptance runs above were executed against candidate `707e865` and were **not**
-  re-run against the 0.8.1 tree, so they are evidence about `707e865` only. Linux
+  original acceptance runs tested candidate `707e865` only. Subsequent published
+  v0.8.1 acceptance is recorded separately above and does not lift the hardware
+  waiver. Linux
   bundles ship marked experimental and unverified (`prexu-axj4.7`).
 
 The waiver applies to the 0.8.x releases named above. It does not close the checks
