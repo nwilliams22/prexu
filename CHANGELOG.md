@@ -13,9 +13,10 @@ Windows release, and the first installable Prexu build since 0.7.1. **0.8.0 was
 tagged but never published**, so everything listed under 0.8.0 below reaches users
 here for the first time, together with the fixes in this section.
 
-Linux **AppImage and rpm bundles are published for the first time since 0.7.1 and
-are experimental** — read *Linux bundles are experimental* below before installing
-one. macOS remains HTML5 only and is not distributed.
+Linux **AppImage and rpm bundles are published for the first time since 0.7.1,
+and the files in this release are broken — do not expect the native player
+from them**. Read *Linux bundles are broken* below before installing one.
+macOS remains HTML5 only and is not distributed.
 
 ### Fixed
 
@@ -24,9 +25,9 @@ one. macOS remains HTML5 only and is not distributed.
   answers, so an offline start no longer forces a re-login that itself requires
   the internet (`prexu-9f4s.8`).
 - Release builds for Linux produce artifacts again: the release job installs
-  `libmpv-dev`, fixing the `unable to find library -lmpv` link failure that left
-  0.8.0 with no Linux bundles. This fixes build-time linking only — see *Linux
-  bundles are experimental*.
+   `libmpv-dev`, fixing the `unable to find library -lmpv` link failure that left
+   0.8.0 with no Linux bundles. This fixes build-time linking only — see *Linux
+   bundles are broken*.
 - CI: the `player::events` mpv-teardown tests are `#[ignore]`d and run in the
   libmpv 2.x jobs instead of the Ubuntu 22.04 `linux-build` job, whose system
   libmpv is API 1.x and aborted them with `VersionMismatch`. `main` had been red
@@ -43,10 +44,23 @@ one. macOS remains HTML5 only and is not distributed.
 is green at `8e0432b`, the last source change before this release; the release cut
 itself adds only version metadata and documentation on top of it.
 
-The unattended Windows installer acceptance recorded under 0.8.0 ran against
-candidate build `707e865`. 0.8.1 adds three commits on top of that candidate and
-**that acceptance harness has not been re-run against the 0.8.1 tree**. Treat the
-0.8.0 evidence as evidence about `707e865`, not about this release.
+The unattended Windows installer acceptance was re-run against the **published
+0.8.1 assets** on 2026-10-27, with the scope limits below. The 0.8.0-era
+evidence under candidate build `707e865` stands as recorded there.
+
+- [Run 40561094786](https://github.com/nwilliams22/prexu/actions/runs/40561094786)
+  **passed** both the NSIS and the MSI installers. Scope: the release asset
+  bytes matched the GitHub release API digests, install succeeded, a real login
+  screen appeared, an upgrade from 0.7.1 retained preferences, and uninstall
+  left nothing behind. It proves **installation and launch** only — it is not
+  evidence of a frame on screen.
+- [Run 40561120923](https://github.com/nwilliams22/prexu/actions/runs/40561120923)
+  **failed** both installers under fault injection. This is the correct result
+  for a negative control: it proves the harness notices a missing runtime DLL,
+  and it throws at the static runtime-DLL presence check **before** install and
+  launch, so it is not evidence that a failing launch would be caught.
+
+Read the full scope discussion in [docs/windows-candidate.md](docs/windows-candidate.md).
 
 ### Known untested on Windows
 
@@ -72,20 +86,33 @@ limitation recorded (decisions 2026-09-28 and 2026-10-27).
 
 Do not read a shipped 0.8.x release as evidence that any of the above works.
 
-### Linux bundles are experimental
+### Linux bundles are broken
 
-The Linux AppImage and rpm in this release build and link, and nothing more has
-been proven about them:
+Both Linux assets were inspected after publication. They are left available on
+purpose, with the faults stated here rather than hidden behind a softer word.
 
-- **They do not ship libmpv.** The native player links system libmpv and the
-  bundle does not provision it; the rpm declares no libmpv dependency. On a
-  machine without a compatible libmpv (API 2.x, mpv 0.35 or newer) the native
-  player can fail to start, and the in-app HTML5 fallback only helps once the
-  process is running.
-- **No Linux release artifact has been installed or launched** from a published
-  release. Self-contained AppImage operation, rpm dependency metadata and LGPL
-  build provenance are open acceptance work (`prexu-axj4.7`).
-- Linux development prerequisites are in [docs/linux-dev.md](docs/linux-dev.md).
+- **The AppImage can never start the native player, on any machine.** The
+  bundle ships `usr/lib/libmpv.so.1` — mpv client API 1.x — inside itself,
+  while the application is built against API 2.x, which refuses a 1.x handle.
+  Because the wrong library travels inside the AppImage, a correct `libmpv.so.2`
+  already installed on your machine is never used. The app then falls back to
+  HTML5 playback without saying so — you will see video and will not be told
+  that the native player failed. Native libmpv playback, the headline Linux
+  feature of 0.8.x, is absent from this file.
+- **The rpm installs cleanly and then launches nothing on a current Fedora.**
+  It declares no libmpv dependency, and no OpenSSL 3 (`libssl.so.3` /
+  `libcrypto.so.3`) either, although the binary requires all three libraries.
+  On a distribution that ships only `libmpv.so.2` — current Fedora, for
+  example — the application does not launch at all.
+- **No Linux artifact from this release has been installed or launched**
+  successfully (`prexu-axj4.7`). A repair — building against libmpv API 2.x
+  and declaring the real runtime dependencies — is in progress and will be
+  verified against the built artifacts before any further release. Until then,
+  Linux users should build from source: prerequisites are in
+  [docs/linux-dev.md](docs/linux-dev.md).
+
+Cause: the Linux leg of the release build ran on Ubuntu 22.04, whose
+`libmpv-dev` is API 1.x.
 
 Use the Windows installers if you want the supported path.
 
