@@ -115,17 +115,29 @@ nwilliams22/prexu --log`. The older exploratory runs are not the acceptance
 record. Keep artifacts before their 14-day expiry if long-term evidence is
 needed. The older exploratory runs are not the acceptance record.
 
-## Release decision for 0.8.0 (2026-09-28)
+## Release decisions for 0.8.0 and 0.8.1
 
-The runs above are the whole of the Windows acceptance performed for 0.8.0. The
-hardware checks in the next section were **waived, not completed**: a hosted
-`windows-latest` runner has no graphics card and no audio device, and the owner
-chose to release 0.8.0 with visible video output, audible playback and
+The runs above are the whole of the Windows acceptance performed for either
+release. The hardware checks in the next section were **waived, not completed**: a
+hosted `windows-latest` runner has no graphics card and no audio device, and the
+owner chose to release with visible video output, audible playback and
 window/DPI/fullscreen transitions recorded as untested. The changelog's *Known
 untested on Windows* section is the user-facing record.
 
-The waiver applies to the 0.8.0 release only. It does not close the checks below,
-and a shipped release is not evidence that native rendering works on Windows.
+- **0.8.0 (decision 2026-09-28)** — tagged at `39ce2a7` and built, then held as a
+  draft so the offline-login fix could ride in the first installable build. It was
+  never published; the draft was deleted on 2026-10-27 and the tag kept for
+  provenance. No user received 0.8.0.
+- **0.8.1 (decision 2026-10-27)** — cut from `main` after the offline-login fix,
+  the QA session script and the CI/release repairs, and published as the first
+  installable release since 0.7.1. The owner re-affirmed the waiver for it. The
+  acceptance runs above were executed against candidate `707e865` and were **not**
+  re-run against the 0.8.1 tree, so they are evidence about `707e865` only. Linux
+  bundles ship marked experimental and unverified (`prexu-axj4.7`).
+
+The waiver applies to the 0.8.x releases named above. It does not close the checks
+below, and a shipped release is not evidence that native rendering works on
+Windows.
 
 ## Acceptance requiring Windows hardware
 

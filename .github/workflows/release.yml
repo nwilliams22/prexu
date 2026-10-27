@@ -222,7 +222,23 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Prexu ${{ github.ref_name }}"
-          releaseBody: "Windows release candidate; Linux support is experimental. See the [changelog](https://github.com/nwilliams22/prexu/blob/main/CHANGELOG.md) for details."
+          # Both matrix jobs write the same body, so the text must stay accurate
+          # for every asset in the release, Windows and Linux alike.
+          releaseBody: |
+            **Windows** — the NSIS `.exe` and the MSI are the supported download.
+
+            **Linux — experimental.** The AppImage and rpm link system libmpv and
+            do not provision it, and the rpm declares no libmpv dependency, so the
+            native player can fail to start on a machine without libmpv API 2.x
+            (mpv 0.35 or newer). No Linux release artifact has been installed or
+            launched from a published release (`prexu-axj4.7`). macOS is not
+            distributed.
+
+            GPU, audio and window/DPI/fullscreen acceptance on Windows was
+            **waived, not performed** — hosted runners have no graphics card and no
+            audio device. Read **Known untested on Windows** in the
+            [changelog](https://github.com/nwilliams22/prexu/blob/main/CHANGELOG.md)
+            before deploying.
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }}

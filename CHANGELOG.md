@@ -7,18 +7,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-27
+
+Windows release, and the first installable Prexu build since 0.7.1. **0.8.0 was
+tagged but never published**, so everything listed under 0.8.0 below reaches users
+here for the first time, together with the fixes in this section.
+
+Linux **AppImage and rpm bundles are published for the first time since 0.7.1 and
+are experimental** — read *Linux bundles are experimental* below before installing
+one. macOS remains HTML5 only and is not distributed.
+
 ### Fixed
 
-- CI: the `player::events` mpv-teardown tests are now `#[ignore]`d and run in
-  the libmpv 2.x jobs instead of the Ubuntu 22.04 `linux-build` job, whose
-  system libmpv is API 1.x and aborted them with `VersionMismatch`. `main` had
-  been red since 2026-09-28.
-- Release: the Linux release build installs `libmpv-dev`, fixing the
-  `unable to find library -lmpv` link failure that broke the 0.8.0 Linux
-  artifacts. Linux runtime libmpv provisioning is still unverified
-  (`prexu-axj4.7`).
+- Starting Prexu without internet access no longer signs you out. Stored
+  credentials now survive an unreachable `plex.tv` when the local Plex server
+  answers, so an offline start no longer forces a re-login that itself requires
+  the internet (`prexu-9f4s.8`).
+- Release builds for Linux produce artifacts again: the release job installs
+  `libmpv-dev`, fixing the `unable to find library -lmpv` link failure that left
+  0.8.0 with no Linux bundles. This fixes build-time linking only — see *Linux
+  bundles are experimental*.
+- CI: the `player::events` mpv-teardown tests are `#[ignore]`d and run in the
+  libmpv 2.x jobs instead of the Ubuntu 22.04 `linux-build` job, whose system
+  libmpv is API 1.x and aborted them with `VersionMismatch`. `main` had been red
+  since 2026-09-28.
+
+### Added
+
+- `scripts/qa-desktop-session.sh`, a desktop QA session runner (Xephyr inside a
+  desktop session, Xvfb when headless).
+
+### Verified for this release
+
+[CI run 40180154034](https://github.com/nwilliams22/prexu/actions/runs/40180154034)
+is green at `8e0432b`, the last source change before this release; the release cut
+itself adds only version metadata and documentation on top of it.
+
+The unattended Windows installer acceptance recorded under 0.8.0 ran against
+candidate build `707e865`. 0.8.1 adds three commits on top of that candidate and
+**that acceptance harness has not been re-run against the 0.8.1 tree**. Treat the
+0.8.0 evidence as evidence about `707e865`, not about this release.
+
+### Known untested on Windows
+
+Carried forward from 0.8.0 and still true here. A hosted GitHub runner has no
+graphics card and no audio device, so the checks below were not performed for
+0.8.1 either. The repository owner reviewed this and chose to ship with the
+limitation recorded (decisions 2026-09-28 and 2026-10-27).
+
+- **Visible video output.** Native playback frames reaching the screen through
+  libmpv → ANGLE/D3D11 → DirectComposition are unverified on real hardware. This
+  is the code most affected by the Tauri 2.11.5 upgrade and the re-vendored
+  composition-hosting fork on Wry 0.55.1 that ship in this release.
+- **Audible playback**, including multichannel → stereo downmix behavior
+  (`prexu-wiyy`).
+- **Window, DPI and fullscreen transitions** at real display scale: resize,
+  minimize/restore, mini-player, popout, fullscreen (`prexu-6p8k`).
+- **Authenticated-media and multi-client journeys.** The acceptance run only
+  reached the unauthenticated login screen; no library playback or Watch Together
+  session was exercised (`prexu-vbb2.6`).
+- **The signed update path.** The release workflow signs with the production key
+  and the update manifest is checked by hand, but no signed end-to-end update
+  from 0.7.1 to 0.8.1 has been applied on a real machine (`prexu-0qqd`).
+
+Do not read a shipped 0.8.x release as evidence that any of the above works.
+
+### Linux bundles are experimental
+
+The Linux AppImage and rpm in this release build and link, and nothing more has
+been proven about them:
+
+- **They do not ship libmpv.** The native player links system libmpv and the
+  bundle does not provision it; the rpm declares no libmpv dependency. On a
+  machine without a compatible libmpv (API 2.x, mpv 0.35 or newer) the native
+  player can fail to start, and the in-app HTML5 fallback only helps once the
+  process is running.
+- **No Linux release artifact has been installed or launched** from a published
+  release. Self-contained AppImage operation, rpm dependency metadata and LGPL
+  build provenance are open acceptance work (`prexu-axj4.7`).
+- Linux development prerequisites are in [docs/linux-dev.md](docs/linux-dev.md).
+
+Use the Windows installers if you want the supported path.
 
 ## [0.8.0] - 2026-09-28
+
+**Tagged at `39ce2a7` on 2026-09-28 and never published.** The release was held as
+a draft so the offline-login fix could ride in the first build a user could
+install; GitHub does not serve a draft, so no user ever received 0.8.0. The draft
+was removed on 2026-10-27 and the annotated tag is kept for provenance. Everything
+below ships in 0.8.1.
 
 Windows release. Linux support is **experimental**: the native player compiles and
 runs on Linux, but release packaging does not provision libmpv and AppImage/rpm
@@ -173,7 +250,8 @@ the native libmpv engine removes that limit.
 See the [git tags](https://github.com/nwilliams22/prexu/tags) for the history
 prior to 0.7.0 (0.5.x–0.6.x).
 
-[Unreleased]: https://github.com/nwilliams22/prexu/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/nwilliams22/prexu/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/nwilliams22/prexu/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/nwilliams22/prexu/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/nwilliams22/prexu/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/nwilliams22/prexu/compare/v0.6.3...v0.7.0

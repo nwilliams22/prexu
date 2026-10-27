@@ -6,9 +6,12 @@ Rust/Axum relay for Watch Together and TMDb requests.
 
 ## Current platform support
 
-This table describes the current source tree, audited 2026-09-20. Application
-metadata is prepared for 0.8.0; the changes remain unreleased pending Windows
-acceptance and release approval. Linux support is experimental for that milestone.
+This table describes the current source tree, audited 2026-09-20. It ships as
+**0.8.1** (2026-10-27), the first installable release since 0.7.1 — 0.8.0 was
+tagged but never published. Linux AppImage/rpm bundles in that release are
+**experimental** and do not provision libmpv. Windows GPU, audio and
+display-transition acceptance was **waived, not performed**; read the changelog's
+*Known untested on Windows* before deploying.
 
 | Platform | Player | Status |
 | --- | --- | --- |

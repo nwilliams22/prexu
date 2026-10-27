@@ -2,11 +2,13 @@
 
 Audited 2026-09-20 against local `main` at `dfe5d8c` and the local Beads database.
 This describes source implementation, not a fresh hardware certification.
-Application metadata was subsequently prepared for 0.8.0 and the owner approved a
-0.8.0 Windows release on 2026-09-28 with GPU, audio and display-transition
-acceptance explicitly **not performed** — see the changelog's *Known untested on
-Windows* section. Approval to ship is not evidence of correctness; treat those
-paths as unverified. Linux support is experimental for that milestone.
+Application metadata was prepared for 0.8.0, which was tagged on 2026-09-28 but
+never published, and **0.8.1 was released on 2026-10-27** — in both cases with GPU,
+audio and display-transition acceptance explicitly **not performed**; see the
+changelog's *Known untested on Windows* section. Approval to ship is not evidence
+of correctness; treat those paths as unverified. Linux support is experimental in
+0.8.1: it is the first release since 0.7.1 to publish AppImage/rpm bundles, and
+those bundles link system libmpv without provisioning it (`prexu-axj4.7`).
 
 ## Engines and architecture
 
@@ -59,7 +61,10 @@ was added, the 0.8.0 Linux release build failed at link time (`BAD-282`). That
 covers build-time linking only — it is **not** runtime provisioning: the Linux
 bundle config selects AppImage/rpm but has no explicit rpm libmpv dependency,
 and the release runner's libmpv is API 1.x. Self-contained AppImage operation
-and LGPL build provenance remain acceptance work under `axj4.7`.
+and LGPL build provenance remain acceptance work under `axj4.7`. The 0.8.1
+release publishes those bundles anyway, labelled experimental in the changelog
+and in the release notes: no Linux release artifact has been installed or
+launched from a published release.
 
 Known follow-ups include Windows IME (`prexu-x2bt`) and fullscreen transition
 verification (`prexu-6p8k`), Linux packaged/dist black-webview investigation
@@ -80,14 +85,16 @@ failed both formats for a deliberately removed runtime DLL. See the candidate
 guide for exact revisions and evidence. These checks (`prexu-vbb2.5`) do not
 satisfy GPU/audio, authenticated media or updater acceptance (`prexu-0828`).
 
-Those unsatisfied checks were **waived for the 0.8.0 release, not completed**. A
+Those unsatisfied checks were **waived for the 0.8.x releases, not completed**. A
 hosted runner has no graphics card and no audio device, so visible video output,
 audible playback and window/DPI/fullscreen transitions could not be proven there;
-the owner chose on 2026-09-28 to ship with the gap documented. Verification still
-needs a Windows machine with working GPU acceleration (`prexu-0828`, `prexu-6p8k`,
-`prexu-wiyy`) or the automated composed-screen route (`prexu-vbb2.4`,
-`prexu-vbb2.6`). Do not cite the 0.8.0 release as evidence that native Windows
-rendering works.
+the owner chose on 2026-09-28 to ship with the gap documented and re-affirmed that
+for the published 0.8.1 release on 2026-10-27. The acceptance runs named above
+were executed against candidate `707e865` and were not re-run against the 0.8.1
+tree. Verification still needs a Windows machine with working GPU acceleration
+(`prexu-0828`, `prexu-6p8k`, `prexu-wiyy`) or the automated composed-screen route
+(`prexu-vbb2.4`, `prexu-vbb2.6`). Do not cite a 0.8.x release as evidence that
+native Windows rendering works.
 
 ## Development invariants
 
