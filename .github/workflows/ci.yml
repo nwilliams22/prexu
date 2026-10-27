@@ -364,7 +364,8 @@ jobs:
             patchelf \
             libssl-dev \
             libmpv-dev \
-            xvfb
+            xvfb \
+            dbus
 
       - name: Setup Node
         uses: actions/setup-node@v5
@@ -417,15 +418,18 @@ jobs:
             export XDG_DATA_HOME="$ATTEMPT_DIR/data"
             mkdir -p "$XDG_CONFIG_HOME" "$XDG_DATA_HOME"
             APP_LOG="$XDG_DATA_HOME/com.prexu.client/logs/Prexu.log"
-            xvfb-run -a -s "-screen 0 1600x1000x24" "$BINARY" > "$LOGFILE" 2>&1 &
+            # Xvfb supplies a display, not a desktop session bus. Give GTK
+            # and the single-instance plugin a fresh, reachable bus per run.
+            dbus-run-session -- xvfb-run -a -s "-screen 0 1600x1000x24" \
+              sh -c 'echo "$$" > "$1"; exec "$2"' sh "$ATTEMPT_DIR/app.pid" "$BINARY" > "$LOGFILE" 2>&1 &
             XVFB_RUN_PID=$!
 
             # Give the wrapper time to start Xvfb and exec the binary.
             sleep "$INITIAL_WAIT"
-            APP_PID="$(pgrep -x prexu | head -1 || true)"
+            APP_PID="$(cat "$ATTEMPT_DIR/app.pid" 2>/dev/null || true)"
 
             if [ -z "$APP_PID" ]; then
-              echo "FAIL: app did not start (no 'prexu' process found)"
+              echo "FAIL: app did not start (launcher did not record a PID)"
               cat "$LOGFILE" || true
               kill -KILL "$XVFB_RUN_PID" 2>/dev/null || true
               continue
@@ -439,6 +443,18 @@ jobs:
               continue
             fi
             echo "PASS: app alive after ${ALIVE_SECS}s"
+
+            # Capture startup diagnostics while the process still exists.
+            # List filenames only: WebKit state can contain private data.
+            if ! grep -qF '[setup] app_ready — frontend signalled first paint' "$APP_LOG" 2>/dev/null; then
+              {
+                echo "Startup data files:"
+                find "$XDG_DATA_HOME" -type f -print
+                echo "App thread wait channels:"
+                ps -L -p "$APP_PID" -o pid,tid,stat,wchan:32,comm
+              } > "smoke-diagnostics-${attempt}.log" 2>&1
+              cat "smoke-diagnostics-${attempt}.log"
+            fi
 
             kill -TERM "$APP_PID"
             exited=0
@@ -471,9 +487,8 @@ jobs:
             fi
             echo "PASS: no defunct prexu/mpv processes"
 
-            # Informational only: startup-log capture under xvfb-run can be
-            # unreliable, so this never fails the smoke (prexu-510g decision)
-            # — the process-lifecycle assertions above already satisfy scope.
+            # Backend marker is informational; the frontend handshake below
+            # remains required even when the process stayed alive.
             if grep -qF "$STARTUP_MARKER" "$LOGFILE"; then
               echo "INFO: startup marker '${STARTUP_MARKER}' found in captured log"
             else
@@ -483,6 +498,11 @@ jobs:
             # Emitted only by the command invoked after React mounts, never
             # by the Rust safety-net show. This proves frontend JS and IPC
             # ran, not pixel correctness or authenticated playback.
+            if [ ! -f "$APP_LOG" ]; then
+              echo "FAIL: application log missing at $APP_LOG (startup/logger initialization unresolved)"
+              cat "$LOGFILE" || true
+              continue
+            fi
             if ! grep -qF '[setup] app_ready — frontend signalled first paint' "$APP_LOG"; then
               echo "FAIL: frontend did not complete the app_ready handshake"
               cat "$LOGFILE" || true
@@ -503,6 +523,7 @@ jobs:
           name: xvfb-desktop-smoke-logs
           path: |
             smoke-attempt-*.log
+            smoke-diagnostics-*.log
             smoke-state-*/data/com.prexu.client/logs/*.log
           if-no-files-found: ignore
           retention-days: 7
