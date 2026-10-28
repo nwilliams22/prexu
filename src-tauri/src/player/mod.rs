@@ -10,6 +10,7 @@
 pub mod commands;
 pub mod events;
 pub(crate) mod lifecycle;
+pub(crate) mod loadfile;
 pub(crate) mod timeline;
 
 // Win32 geometry-sync math (host inset / throttle / dedup) — only the Windows

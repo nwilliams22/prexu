@@ -30,6 +30,10 @@
 //! copied to target\debug\deps\ at build time (see CI job for details).
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
+#[path = "../src/player/loadfile.rs"]
+mod loadfile;
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 mod inner {
     use libmpv2::{
         events::{Event, EventContext, PropertyData},
@@ -80,6 +84,37 @@ mod inner {
 
     #[test]
     #[ignore]
+    fn production_loadfile_preserves_resume_and_resets_next_file() {
+        let mpv = headless_mpv();
+        mpv.set_property("pause", true).unwrap();
+        let mut events = EventContext::new(mpv.ctx);
+        // A second load at zero must not inherit the preceding resume offset.
+        for offset_ms in [800, 0] {
+            crate::loadfile::loadfile(
+                &mpv,
+                "av://lavfi:testsrc=duration=2:size=32x24:rate=25",
+                offset_ms,
+            )
+            .expect("production loadfile rejected by runtime");
+            let deadline = Instant::now() + MAX_WALL;
+            let mut restarted = false;
+            while Instant::now() < deadline {
+                if matches!(events.wait_event(0.1), Some(Ok(Event::PlaybackRestart))) {
+                    restarted = true;
+                    break;
+                }
+            }
+            assert!(restarted, "no playback restart for offset {offset_ms}");
+            let position = mpv.get_property::<f64>("time-pos").unwrap();
+            assert!(
+                (position - offset_ms as f64 / 1000.0).abs() < 0.15,
+                "offset {offset_ms}: actual position {position}"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore]
     fn signal_chain_init_fileloaded_duration_eof() {
         let mpv = headless_mpv();
 
@@ -94,8 +129,7 @@ mod inner {
 
         // Issue loadfile — this is the equivalent of the production
         // player_load_file Tauri command
-        mpv.command("loadfile", &[LAVFI_URL, "replace"])
-            .expect("loadfile command failed");
+        crate::loadfile::loadfile(&mpv, LAVFI_URL, 0).expect("loadfile command failed");
 
         // ── Event loop ───────────────────────────────────────────────────────
         // Poll with a 0.5s wait_event timeout.  The loop exits early as soon as
@@ -179,8 +213,7 @@ mod inner {
             "SIGNAL 4 MISSING: eof-reached true-edge was never observed \
              (keep-open=always requires eof-reached, not EndFile) — \
              ran {} iters / {:.1?} wall time",
-            iters,
-            MAX_WALL
+            iters, MAX_WALL
         );
 
         eprintln!(

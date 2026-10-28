@@ -109,11 +109,8 @@ pub async fn player_load_url(
             mpv.set_property("mute", true)?;
             log::debug!("[player:cmd] load_url: reveal-mute armed (linux)");
         }
-        // 4th arg is comma-separated per-file options. `start=<seconds>` seeks
-        // mpv to that offset on load (avoids a separate seek round-trip).
-        let start_secs = start_offset_ms.map(|ms| ms as f64 / 1000.0).unwrap_or(0.0);
-        let opts = format!("start={}", start_secs);
-        mpv.command("loadfile", &[mpv_quote(&url).as_str(), "replace", "0", opts.as_str()])?;
+        // Preserve per-file resume options across old and new mpv signatures.
+        crate::player::loadfile::loadfile(mpv, &mpv_quote(&url), start_offset_ms.unwrap_or(0))?;
         // Belt-and-braces unpause (prexu-7fe.1). stop_playback ALSO sets
         // pause=false before its `stop` command, but in retest logs the
         // first post-EOF handoff sometimes left mpv paused — the pre-stop
