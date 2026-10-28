@@ -64,7 +64,8 @@ def "main timing" [--logfile: string = "", --max-ms: int = 3000] {
     let lines = (open $log | lines)
     # Pair each arm with the next fire and compute the delta.
     mut deltas = []
-    mut arm_ts = null
+    # The pending timestamp alternates between datetime and null.
+    mut arm_ts: any = null
     for line in $lines {
         if ($line | str contains "first-frame reveal armed") {
             $arm_ts = (parse-log-ts $line)

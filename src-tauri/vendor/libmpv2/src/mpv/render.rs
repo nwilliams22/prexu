@@ -165,7 +165,15 @@ impl<C> From<RenderParam<C>> for libmpv2_sys::mpv_render_param {
                 Box::into_raw(Box::new(libmpv2_sys::mpv_opengl_init_params::from(params)))
                     as *mut c_void
             }
-            RenderParam::FBO(fbo) => Box::into_raw(Box::new(fbo)) as *mut c_void,
+            // The public Rust FBO is not the C ABI struct: libmpv also reads
+            // internal_format. Allocate the generated repr(C) type so that
+            // field offsets, allocation size, and deallocation all agree.
+            RenderParam::FBO(fbo) => Box::into_raw(Box::new(libmpv2_sys::mpv_opengl_fbo {
+                fbo: fbo.fbo,
+                w: fbo.width,
+                h: fbo.height,
+                internal_format: 0,
+            })) as *mut c_void,
             RenderParam::FlipY(flip) => Box::into_raw(Box::new(flip as c_int)) as *mut c_void,
             RenderParam::Depth(depth) => Box::into_raw(Box::new(depth)) as *mut c_void,
             RenderParam::ICCProfile(bytes) => {
@@ -217,7 +225,7 @@ impl RenderContext {
             // know their real types, so we keep a deleter here.
             let deleter: Option<DeleterFn> = match p {
                 RenderParam::InitParams(_) => Some(free_init_params::<C>),
-                RenderParam::FBO(_) => Some(free_void_data::<FBO>),
+                RenderParam::FBO(_) => Some(free_void_data::<libmpv2_sys::mpv_opengl_fbo>),
                 RenderParam::FlipY(_) => Some(free_void_data::<i32>),
                 RenderParam::Depth(_) => Some(free_void_data::<i32>),
                 RenderParam::ICCProfile(_) => Some(free_void_data::<Box<[u8]>>),
@@ -329,7 +337,10 @@ impl RenderContext {
 
         let raw_param: libmpv2_sys::mpv_render_param =
             RenderParam::<GLContext>::FBO(FBO { fbo, width, height }).into();
-        raw_ptrs.insert(raw_param.data, free_void_data::<FBO>);
+        raw_ptrs.insert(
+            raw_param.data,
+            free_void_data::<libmpv2_sys::mpv_opengl_fbo>,
+        );
         raw_params.push(raw_param);
         let raw_param: libmpv2_sys::mpv_render_param = RenderParam::<GLContext>::FlipY(flip).into();
         raw_ptrs.insert(raw_param.data, free_void_data::<i32>);
@@ -382,7 +393,10 @@ impl RenderContext {
 
         let raw_param: libmpv2_sys::mpv_render_param =
             RenderParam::<GLContext>::FBO(FBO { fbo, width, height }).into();
-        raw_ptrs.insert(raw_param.data, free_void_data::<FBO>);
+        raw_ptrs.insert(
+            raw_param.data,
+            free_void_data::<libmpv2_sys::mpv_opengl_fbo>,
+        );
         raw_params.push(raw_param);
         let raw_param: libmpv2_sys::mpv_render_param = RenderParam::<GLContext>::FlipY(flip).into();
         raw_ptrs.insert(raw_param.data, free_void_data::<i32>);
@@ -485,5 +499,27 @@ impl Drop for RenderContext {
         unsafe {
             libmpv2_sys::mpv_render_context_free(self.ctx);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn framebuffer_parameter_uses_complete_c_layout() {
+        let param: libmpv2_sys::mpv_render_param = RenderParam::<()>::FBO(FBO {
+            fbo: 7,
+            width: 1280,
+            height: 720,
+        })
+        .into();
+        assert_eq!(param.type_, 3);
+        // This is the exact layout libmpv reads from MPV_RENDER_PARAM_OPENGL_FBO.
+        let fbo = unsafe { Box::from_raw(param.data as *mut libmpv2_sys::mpv_opengl_fbo) };
+        assert_eq!(
+            (fbo.fbo, fbo.w, fbo.h, fbo.internal_format),
+            (7, 1280, 720, 0)
+        );
     }
 }

@@ -21,10 +21,11 @@ def row [name: string, section: string, v: record]: nothing -> record {
 }
 
 # First-play timing from arm->fire pairs in a log.
-def timing-from-log [log: string]: nothing -> record {
+export def timing-from-log [log: string]: nothing -> record {
     let lines = (open $log | lines)
     mut deltas = []
-    mut arm_ts = null
+    # The pending timestamp alternates between datetime and null.
+    mut arm_ts: any = null
     for line in $lines {
         if ($line | str contains "first-frame reveal armed") {
             $arm_ts = (parse-log-ts $line)

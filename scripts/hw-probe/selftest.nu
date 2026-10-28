@@ -12,6 +12,7 @@
 # otherwise.
 
 use verdict.nu *
+use run.nu [timing-from-log]
 
 const HERE = path self
 const FIX = ($HERE | path dirname | path join "fixtures" "logs")
@@ -28,6 +29,13 @@ def load-log [name: string]: nothing -> list<string> {
 
 def main [] {
     mut t = []
+
+    # Exercise real timestamp assignment, not just the numeric verdict.
+    let timing = (timing-from-log ($FIX | path join "good-timing.log"))
+    $t = ($t | append (expect "runtime timing accepts datetime after null" $timing.status "pass"))
+    $t = ($t | append (expect "runtime timing pairs repeated loads" $timing.detail "worst=2000ms over 2 loads ±1s"))
+    let timing_cli = (do { ^nu ($HERE | path dirname | path join "probes.nu") timing --logfile ($FIX | path join "good-timing.log") } | complete)
+    $t = ($t | append (expect "standalone timing accepts datetime after null" $timing_cli.exit_code 0))
 
     # --- Log invariant checks against fixtures ---
     let good = (load-log "good-load-cycle.log")

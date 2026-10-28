@@ -69,6 +69,7 @@ const GL_FRAMEBUFFER_BINDING: u32 = 0x8CA6;
 const GL_FRAMEBUFFER: u32 = 0x8D40;
 const GL_COLOR_BUFFER_BIT: u32 = 0x0000_4000;
 const GL_SCISSOR_TEST: u32 = 0x0C11;
+const GL_BLEND: u32 = 0x0BE2;
 
 type GlGetIntegervFn = unsafe extern "C" fn(u32, *mut i32);
 type GlClearColorFn = unsafe extern "C" fn(f32, f32, f32, f32);
@@ -1098,6 +1099,11 @@ fn wire_gl_area(comp: &Rc<Compositor>) {
                 // reset it by reallocating the buffer) and resize shows stale
                 // bands from the old allocation.
                 (fns.disable)(GL_SCISSOR_TEST);
+                // GTK can leave blending enabled between paints. libmpv's
+                // render API requires default GL state: blending its YUV
+                // conversion passes can produce near-black output even when
+                // render() succeeds. Reset before every draw (including seeks).
+                (fns.disable)(GL_BLEND);
                 (fns.clear_color)(0.0, 0.0, 0.0, 1.0);
                 (fns.clear)(GL_COLOR_BUFFER_BIT);
             }

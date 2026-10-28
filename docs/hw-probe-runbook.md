@@ -198,3 +198,17 @@ ceilings still need build-profile calibration (`prexu-xxct`), and capture
 cold-start retry is tracked in `prexu-s83x`. The saved report is not full release
 acceptance. DOM/allocation timing does not establish when WebKit presents the
 correct pixels (`prexu-41cw` / `prexu-v6pr`).
+
+### Black pixels despite first-frame log pairing
+
+An arm/render pair proves the render callback succeeded, not that visible video
+reached the screen. Capture the playing synthetic pattern and measure luminance;
+repeat the load before accepting the result. The Linux compositor resets
+`GL_BLEND` before each mpv draw because GTK can leave blending enabled and mpv
+requires default GL state. Without this reset, the Xvfb/Mesa reproduction produced
+black or near-black YUV video despite advancing playback and successful render
+callbacks. A driver switch alone did not repair the application reproduction.
+
+The probe self-test includes timestamped repeated loads for both the orchestrator
+and standalone timing command. Both pending timestamps must accept datetime and
+null; an untyped null variable can fail at runtime on newer Nushell versions.
