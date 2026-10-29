@@ -76,12 +76,44 @@ and [Release run 40792871700](https://github.com/nwilliams22/prexu/actions/runs/
 are both green at `04d98c6`, the last source change before this cut; the cut
 itself adds only version metadata and this changelog entry.
 
-The artifact checks that 0.8.1 failed are re-run against the **files downloaded
-from this release's page**, not against CI artifacts, and the results are
-appended to this entry once they exist. A green CI leg is not evidence about a
-published asset — treating it as evidence is what shipped 0.8.1's broken
-bundles. The checks themselves are listed in
-[docs/linux-bundles.md](docs/linux-bundles.md).
+The release build is [Release run 40801392023](https://github.com/nwilliams22/prexu/actions/runs/40801392023),
+green on both the Windows and the Linux leg at tag `v0.8.2`.
+
+The checks that 0.8.1 failed were then re-run on the **files downloaded from
+this release's page**, not on CI artifacts. A green CI leg is not evidence about
+a published asset — treating it as evidence is what shipped 0.8.1's broken
+bundles. The checks are listed in [docs/linux-bundles.md](docs/linux-bundles.md).
+Published-asset results, 2026-10-29:
+
+- **The published AppImage links and carries mpv API 2.x.** `readelf -d
+  squashfs-root/usr/bin/prexu` names `libmpv.so.2`; `usr/lib/libmpv.so.2` ships
+  beside it and reports client API **2.3**; no `libmpv.so.1*` exists anywhere in
+  the file; all six bundled FFmpeg libraries report *LGPL version 2.1 or later*.
+  SHA-256 `7746ba75…9ce449`.
+- **The published AppImage starts the native player on a machine that is not a
+  CI runner.** Launched from `AppRun` under `dbus-run-session` and `xvfb-run`
+  with software GL, it logged `[player] mpv created`, `[player:linux] compositor
+  installed`, `[player:linux] WebKit DMABUF renderer enabled (default)` and
+  `[player:linux] mpv render context created (OpenGL backend); starting 60 Hz
+  frame pump`, with no `VersionMismatch`, no HTML5 fallback and no ERROR or WARN
+  line from the application.
+- **The published rpm declares every library the published binary links.** Its
+  29 `REQUIRENAME` entries cover all 18 `NEEDED` sonames, including
+  `libmpv.so.2`, `libssl.so.3`, `libcrypto.so.3` and `libdbus-1.so.3`.
+  SHA-256 `514dd3a4…e08bc4`.
+- **Windows installers.** [Run 40802628345](https://github.com/nwilliams22/prexu/actions/runs/40802628345)
+  **passed** both NSIS and MSI against the published 0.8.2 assets: byte digests
+  matched the release API, install succeeded, a real WebView2 login screen
+  appeared, the pinned ANGLE and libmpv runtime DLL hashes matched, an upgrade
+  from 0.7.1 retained preferences, and uninstall left nothing behind.
+  [Run 40802644915](https://github.com/nwilliams22/prexu/actions/runs/40802644915)
+  **failed** both installers under fault injection, the correct result for a
+  negative control. The scope limits recorded for 0.8.1 are unchanged: this is
+  evidence of installation and launch, not of a frame on screen.
+- **Updater payload.** `releases/latest/download/latest.json` returns 200 with
+  version `0.8.2` and all six platform keys, every signature made by key id
+  `b196a2228423f32a` — the same key id as the `plugins.updater.pubkey` the
+  shipped application verifies against.
 
 ## [0.8.1] - 2026-10-27
 
