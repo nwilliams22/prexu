@@ -66,9 +66,12 @@ syft relay-server/Cargo.lock -o syft-json=.sbom/relay.json -q
 description = "Scan SBOMs with grype; fails on High/Critical vulnerabilities"
 depends = ["sbom"]
 run = """
-grype sbom:.sbom/npm.json --fail-on high
-grype sbom:.sbom/tauri.json --fail-on high
-grype sbom:.sbom/relay.json --fail-on high
+status=0
+for eco in npm tauri relay; do
+  echo "Scanning $eco"
+  grype "sbom:.sbom/$eco.json" -o table --fail-on high || status=1
+done
+exit $status
 """
 
 [tasks.lint]

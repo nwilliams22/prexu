@@ -1,23 +1,17 @@
 name: Security scan
 
-# SBOM generation + vulnerability scan (prexu-7x8q.6). Mirrors the local
-# `mise run scan` task. REPORT-ONLY for now: it prints findings but does not
-# fail the build, so it never blocks unrelated PRs on a newly-published CVE
-# or on the known backlog (react-router High -> prexu-7x8q.1; tauri/glib
-# Medium -> prexu-7x8q.4/.5). Once that backlog clears, flip to a gate by
-# uncommenting the `--fail-on high` lines below and adding this job to the
-# required checks in branch protection.
+# Scan every main push and PR so this can be a required check without path-filter
+# skips. The schedule also catches advisories published while dependencies stand
+# still; push/PR runs do not depend on the scheduled workflow remaining enabled.
+# Require the `scan` check in the main branch protection/ruleset (owner setting).
 
 on:
   schedule:
-    - cron: "0 6 * * 1" # Mondays 06:00 UTC — catch newly-disclosed CVEs weekly
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
-    paths:
-      - "package-lock.json"
-      - "src-tauri/Cargo.lock"
-      - "relay-server/Cargo.lock"
-      - ".github/workflows/security-scan.yml"
   workflow_dispatch: {}
 
 jobs:
@@ -46,14 +40,12 @@ jobs:
           syft src-tauri/Cargo.lock       -o syft-json=.sbom/tauri.json -q
           syft relay-server/Cargo.lock    -o syft-json=.sbom/relay.json -q
 
-      - name: Scan (report-only)
+      - name: Scan (fail on High/Critical)
         run: |
           status=0
           for eco in npm tauri relay; do
             echo "::group::grype $eco"
-            # To gate the build, replace the next line with:
-            #   grype "sbom:.sbom/$eco.json" --fail-on high || status=1
-            grype "sbom:.sbom/$eco.json" -o table || true
+            grype "sbom:.sbom/$eco.json" -o table --fail-on high || status=1
             echo "::endgroup::"
           done
           exit $status
