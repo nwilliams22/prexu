@@ -24,6 +24,18 @@ availability differ; the Ubuntu command is the configuration used in CI.
 Native runtime tests need libmpv client API 2.x. The headless runtime CI uses
 Ubuntu 24.04 for this reason; the compile/link job uses Ubuntu 22.04.
 
+Visible playback also needs mpv's [scaler LUT padding fix](https://github.com/mpv-player/mpv/commit/72d43dc9c999a21d867cdc0f934f3e4cd2195aa9).
+Ubuntu 24.04's mpv 0.37.0 can return successful frame events while rendering
+black: uninitialized padding in a six-tap scaler's lookup texture can contain
+NaNs. The Linux bundle recipe backports the fix; a development build still uses
+the host library. Rebuild the host's mpv source with
+`scripts/patches/mpv-scaler-lut-padding.patch`, or use a distro build containing
+the upstream fix. For an isolated retest, put the patched `libmpv.so.2` in a
+private directory and launch with `LD_LIBRARY_PATH=/absolute/path/to/lib`.
+Verify the mapped library in `/proc/<app-pid>/maps`; rebuilding Prexu alone does
+not change this dependency. Do not substitute a lower-quality scaler or treat
+first-frame event logs as proof of visible video.
+
 Use `npm run dev` for the browser frontend (HTML5 only). Desktop Settings can
 select HTML5 explicitly; default/auto selects native on Linux. Runtime engine
 failure can remount into HTML5, but a missing dynamically linked `libmpv.so`

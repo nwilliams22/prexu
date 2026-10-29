@@ -8,6 +8,7 @@ on:
     paths:
       - .github/workflows/release.yml
       - src-tauri/tauri.linux.conf.json
+      - scripts/patches/mpv-scaler-lut-padding.patch
     tags:
       - "v*"
 
@@ -112,6 +113,8 @@ jobs:
           make -j"$(nproc)"
           make install
           cd ../mpv-0.39.0
+          # Backport upstream 72d43dc: initialize scaler LUT padding (NaNs can render black).
+          patch --batch --fuzz=0 -p1 < "$GITHUB_WORKSPACE/scripts/patches/mpv-scaler-lut-padding.patch"
           meson setup build --prefix="$MEDIA_PREFIX" --libdir=lib \
             --buildtype=release --wrap-mode=nofallback \
             -Dgpl=false -Dlibmpv=true -Dcplayer=false \
@@ -125,6 +128,7 @@ jobs:
           # The rpm uses distro libraries at runtime; it does not carry this set.
           mkdir -p "$GITHUB_WORKSPACE/src-tauri/media-provenance"
           cp -f ../ffmpeg.tar.xz ../mpv.tar.gz "$GITHUB_WORKSPACE/src-tauri/media-provenance/"
+          cp -f "$GITHUB_WORKSPACE/scripts/patches/mpv-scaler-lut-padding.patch" "$GITHUB_WORKSPACE/src-tauri/media-provenance/"
           cp -f ../ffmpeg-7.1.5/ffbuild/config.log "$GITHUB_WORKSPACE/src-tauri/media-provenance/ffmpeg-config.log"
           cp -f build/meson-logs/meson-log.txt "$GITHUB_WORKSPACE/src-tauri/media-provenance/mpv-meson-log.txt"
           cp -f LICENSE.LGPL "$GITHUB_WORKSPACE/src-tauri/media-provenance/mpv-LICENSE.LGPL"

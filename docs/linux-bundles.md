@@ -13,8 +13,12 @@ Do not substitute Ubuntu's `libmpv-dev` in this workflow. The old Ubuntu 22.04
 build embedded `libmpv.so.1`, which cannot satisfy the Rust binding's API 2
 check. Merely moving to an API 2 distro package does not establish an LGPL build.
 
-The workflow builds unmodified mpv 0.39.0 and FFmpeg 7.1.5 source archives,
-verifies SHA-256 pins, and installs shared libraries into an isolated prefix.
+The workflow verifies SHA-256 pins for mpv 0.39.0 and FFmpeg 7.1.5 source
+archives, then backports mpv [72d43dc](https://github.com/mpv-player/mpv/commit/72d43dc9c999a21d867cdc0f934f3e4cd2195aa9)
+using `scripts/patches/mpv-scaler-lut-padding.patch` before building shared
+libraries into an isolated prefix. The patch initializes unused scaler lookup
+texture lanes. Without it, heap NaNs can turn valid decoded video black despite
+successful render calls; this reproduced with Mesa llvmpipe and distro mpv 0.37.0.
 mpv uses `-Dgpl=false -Dlibmpv=true -Dcplayer=false`; FFmpeg uses
 `--enable-shared --disable-static --disable-gpl --disable-nonfree
 --disable-version3 --disable-autodetect`. OpenSSL, zlib and VAAPI are explicitly
@@ -24,11 +28,13 @@ All configure commands and pins are in `.github/workflows/release.yml`.
 
 These choices follow [mpv's LGPL build instructions](https://github.com/mpv-player/mpv/blob/v0.39.0/Copyright)
 and [FFmpeg's shared-library build guidance](https://ffmpeg.org/legal.html).
-The AppImage carries the exact source archives, license texts and configuration
+The AppImage carries the exact source archives, the applied patch, license texts and configuration
 logs under `usr/share/doc/prexu/media`. Candidate artifacts include the same
 records separately. FFmpeg library license strings and the bundled mpv client
 API are checked after extraction. The rpm links the distro's `libmpv.so.2` at
 runtime; distro package maintainers control its build and license choices.
+The rpm therefore also needs a distro libmpv containing the scaler-padding fix;
+API 2 compatibility alone does not establish correct visible playback.
 
 LGPL mode disables some mpv backends, including standalone X11 video output
 and VDPAU. Prexu uses the OpenGL render API instead. These packaging changes do
