@@ -28,14 +28,23 @@ fn prexu_raw_and_zip_installer_payloads() {
             let path = match &extracted {
                 WindowsUpdaterType::Nsis { path, .. } => {
                     assert!(name.ends_with(".exe"));
-                    path
+                    path.clone()
                 }
                 WindowsUpdaterType::Msi { path, .. } => {
                     assert!(name.ends_with(".msi"));
-                    path
+                    // The updater stores MSI paths quoted for msiexec /i.
+                    // Check that contract, then read the underlying file.
+                    let argument = path.to_str().unwrap();
+                    PathBuf::from(
+                        argument
+                            .strip_prefix('"')
+                            .unwrap()
+                            .strip_suffix('"')
+                            .unwrap(),
+                    )
                 }
             };
-            assert_eq!(std::fs::read(path).unwrap(), bytes);
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
             let directory = path.parent().unwrap().to_path_buf();
             drop(extracted);
             std::fs::remove_dir_all(directory).unwrap();
