@@ -12,10 +12,10 @@ permissions:
 env:
   LIBMPV_URL: ${{ vars.LIBMPV_URL || 'https://github.com/nwilliams22/prexu/releases/download/libmpv-vendor/mpv-dev-x86_64-20260629-git-3f1b23abd0.7z' }}
   LIBMPV_SHA256: ${{ vars.LIBMPV_SHA256 || 'ea0a4aa3bdb1fc225c5fa4f73f7a705e06fae84f99fc8f9946757e99eb5f5a26' }}
-  # Recover the original pinned ANGLE pair from the existing v0.7.1 installer.
+  # Recover the pinned ANGLE pair from the mirrored v0.7.1 installer.
   # Extract only; never execute the installer. Keep DLL hashes in lockstep with
-  # src-tauri/src/player/angle_loader.rs. No new vendor release is required.
-  ANGLE_ARCHIVE_URL: https://github.com/nwilliams22/prexu/releases/download/v0.7.1/Prexu_0.7.1_x64-setup.exe
+  # src-tauri/src/player/angle_loader.rs. The vendor tag survives release cleanup.
+  ANGLE_ARCHIVE_URL: https://github.com/nwilliams22/prexu/releases/download/libmpv-vendor/Prexu_0.7.1_x64-setup.exe
   ANGLE_ARCHIVE_SHA256: 6872d887ac3c7010617f7d743173c7d0438ceb7c85a584d0c0bd805d1c905087
   ANGLE_EGL_SHA256: a86422d6d679dda4c00bb0db813884eb14857924eb391fb48283dfca5be007ef
   ANGLE_GLESV2_SHA256: b48565279ebfcc75675e9b88a1835bd9fd94016290641bc98108ae382962b2f3

@@ -183,10 +183,11 @@ try {
     Start-And-Check $exe 'fresh' 'candidate-fresh' $true
     Uninstall $exe 'candidate-uninstall'
 
+    # The vendor mirror survives semver release cleanup; keep the original pins.
     $previousName = if ($Format -eq 'nsis') { 'Prexu_0.7.1_x64-setup.exe' } else { 'Prexu_0.7.1_x64_en-US.msi' }
     $previousHash = if ($Format -eq 'nsis') { '6872d887ac3c7010617f7d743173c7d0438ceb7c85a584d0c0bd805d1c905087' } else { '9cf91a1281438e93bff17c0057b614ebc8e7528ae2c955d8781c6568a9a152b1' }
     $previous = Join-Path $env:RUNNER_TEMP $previousName
-    Invoke-WebRequest "https://github.com/nwilliams22/prexu/releases/download/v0.7.1/$previousName" -OutFile $previous
+    Invoke-WebRequest "https://github.com/nwilliams22/prexu/releases/download/libmpv-vendor/$previousName" -OutFile $previous
     if ((Get-FileHash $previous).Hash.ToLower() -ne $previousHash) { throw 'Previous installer hash mismatch' }
     Set-TestProfile 'upgrade'
     $exe = Install $previous 'previous-install'
