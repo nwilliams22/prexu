@@ -69,9 +69,64 @@ alive through the 30-second window and log both `[player] mpv created` and
 `[player:linux] compositor installed`, with no version mismatch or fallback.
 Startup alone does not prove playback, audio output or hardware acceleration.
 
+## Published release-page gate
+
+After publishing a stable tag, run the gate against the assets on that tag's
+GitHub release page. Candidate CI artifacts do not substitute for this check:
+
+```sh
+python3 scripts/check-published-linux.py v0.8.2 --output /tmp/prexu-v0.8.2-check
+```
+
+Use a new output directory each time (existing directories are rejected). Without
+`--output`, the script creates and prints a temporary directory. Assets and
+`release.json`, `extract.log`, `needed.log`, `rpm-requires.log`,
+`media-runtime.log`, and `native-startup.log` remain there for inspection, even
+on failure. Capture stdout/stderr with the exit status in the release ticket.
+The command exits non-zero on a failed check or missing prerequisite.
+
+Run on x86_64 Linux with glibc 2.39+, Python 3.11+, curl, binutils (`readelf`),
+coreutils (`timeout`), Xvfb, `xvfb-run`, xauth, `dbus-run-session`, and the
+AppImage's host graphics/runtime dependencies. An Ubuntu 24.04 desktop or the
+Linux release workflow's provisioned host is suitable. No `rpm` binary, rpm
+Python module, FUSE mount, GitHub login, or live Plex account is required. Public
+GitHub API rate limits apply. Only run released binaries you intend to trust.
+
+The script downloads the x86_64 AppImage, rpm and `latest.json`, requires HTTP
+200, and compares each SHA-256 with its GitHub release API digest before
+extracting or executing anything. It requires `libmpv.so.2` in the executable's
+NEEDED entries and the extracted bundle, rejects bundled `libmpv.so.1*`, probes
+the bundled mpv client API for major version 2, and checks every direct NEEDED
+soname against the rpm's REQUIRENAME capabilities. The narrow rpm parser reads
+the [v4 package headers](https://rpm.org/docs/6.0.x/manual/format_v4.html) directly;
+it does not resolve or install packages on the host.
+
+Native startup runs extracted `AppRun` under Xvfb with software GL, fresh HOME
+and XDG directories, and the same 30-second survival/marker/fallback conditions
+as the candidate workflow. It does not read saved Plex credentials or change
+local app preferences. This tests startup, not visible playback, audio, hardware
+decode, or a real display session.
+
+Updater metadata must name the requested version, exactly the six Linux/Windows
+x86_64 platform keys, release-asset URLs, and minisign signature packets carrying
+the key ID from `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`.
+`--config PATH` selects another trusted configuration for a historical release
+whose signing key differs. This checks signature **key IDs**, not cryptographic
+signature validity or an end-to-end updater installation; Windows assets are
+not downloaded by this Linux gate.
+
+The parser and failure conditions have offline negative controls:
+
+```sh
+python3 -m unittest discover -s scripts -p 'test_check_published_linux.py' -v
+```
+
 ## Acceptance status
 
-The implementation has not yet passed a commit-specific candidate run. Do not
-infer that the bundles work from workflow syntax checks or an unrelated green
-CI build. `prexu-axj4.7` remains open until the actual AppImage/rpm inspection,
-native-startup logs and the implementation commit's Actions result are recorded.
+The published `v0.8.2` gate passed on 2026-10-29: all three release API digests
+matched, all 18 direct ELF dependencies had rpm requirement capabilities,
+bundled mpv reported client API 2.3, and native startup passed the 30-second Xvfb
+check. All six updater entries carried key ID `2AF3238422A296B1`.
+This evidence is specific to that release and host. Broader distribution and
+hardware acceptance remains tracked by `prexu-axj4.7`; rerun this gate for every
+published release.
