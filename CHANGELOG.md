@@ -7,6 +7,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-10-29
+
+**A Linux repair release, and nothing else.** 0.8.2 exists because the Linux
+AppImage and rpm published in 0.8.1 could not run the native player at all —
+*Linux bundles are broken* under 0.8.1 states both faults. No feature waited for
+this release; Windows is unchanged from 0.8.1 apart from the version number, and
+macOS remains HTML5 only and is not distributed.
+
+**If you downloaded a 0.8.1 AppImage or rpm, replace it with this one.** Nothing
+you could install or configure repaired the 0.8.1 files: the wrong libmpv
+travelled inside the AppImage, so a correct `libmpv.so.2` on your machine was
+never consulted, and the rpm named none of the libraries the binary links.
+
+### Fixed
+
+- **The AppImage runs the native player.** The Linux leg of the release build no
+  longer uses Ubuntu's `libmpv-dev`. It builds LGPL-mode mpv 0.39.0 and FFmpeg
+  7.1.5 from SHA-256-pinned sources into the bundle, so the executable links
+  `libmpv.so.2` and the matching API 2.x library ships beside it; no
+  `libmpv.so.1` is present anywhere in the file. The silent fall back to HTML5
+  playback on Linux is gone because the native player now initialises
+  (`prexu-axj4.7`).
+- **The rpm declares the libraries it actually needs.** `libmpv.so.2`,
+  `libssl.so.3`, `libcrypto.so.3`, `libdbus-1.so.3` and the GTK/WebKit runtime
+  sonames are now listed, so a distribution that cannot satisfy them refuses the
+  install instead of installing cleanly and then launching nothing. The release
+  build fails if any direct ELF dependency of the binary lacks an rpm provider.
+- **Playback starts against system mpv builds older than 0.38.** `loadfile` is
+  issued with or without the insertion-index argument according to mpv's own
+  `command-list` metadata, instead of assuming the newer signature. This matters
+  for the rpm, which links the distribution's libmpv rather than a bundled one.
+- **Linux video is no longer near-black on a valid frame.** Two separate causes:
+  GTK could leave GL blending enabled between paints, which corrupted libmpv's
+  YUV conversion passes even when `render()` reported success — blending is now
+  reset before every draw, including across seeks; and mpv's scaler lookup
+  texture left unused lanes uninitialised, so heap NaNs could blacken correct
+  decoded video. Prexu's bundled mpv backports the upstream fix
+  ([72d43dc](https://github.com/mpv-player/mpv/commit/72d43dc9c999a21d867cdc0f934f3e4cd2195aa9))
+  via `scripts/patches/mpv-scaler-lut-padding.patch`. **The rpm path depends on
+  the distribution's libmpv carrying that fix**; API 2 compatibility alone does
+  not guarantee it.
+
+### Changed
+
+- The release workflow extracts and launches the built AppImage on every push
+  that touches Linux packaging, and fails the build unless the bundle links
+  API 2.x, reaches mpv initialisation and starts the compositor. 0.8.1's Linux
+  leg was green without ever opening the file it published; that is the gap this
+  closes.
+
+### Linux is still experimental — but not in the sense 0.8.1 meant it
+
+0.8.1 called Linux experimental while shipping files that could not work. That
+is no longer the case: the published AppImage and rpm in this release are
+inspected and launched after publication, and the results are recorded in
+*Verified for this release* below. What remains unverified for Linux is the same
+class of thing that remains unverified for Windows — **visible frames, audio and
+window behaviour on real graphics hardware**. Hosted runners have no GPU and no
+audio device, so the Linux checks run under Xvfb with software rendering and
+prove initialisation, not picture quality. Read *Known untested on Windows*
+under 0.8.1; every item there applies to Linux too.
+
+### Verified for this release
+
+Source state: [CI run 40792871651](https://github.com/nwilliams22/prexu/actions/runs/40792871651)
+and [Release run 40792871700](https://github.com/nwilliams22/prexu/actions/runs/40792871700)
+are both green at `04d98c6`, the last source change before this cut; the cut
+itself adds only version metadata and this changelog entry.
+
+The artifact checks that 0.8.1 failed are re-run against the **files downloaded
+from this release's page**, not against CI artifacts, and the results are
+appended to this entry once they exist. A green CI leg is not evidence about a
+published asset — treating it as evidence is what shipped 0.8.1's broken
+bundles. The checks themselves are listed in
+[docs/linux-bundles.md](docs/linux-bundles.md).
+
 ## [0.8.1] - 2026-10-27
 
 Windows release, and the first installable Prexu build since 0.7.1. **0.8.0 was
@@ -277,7 +353,8 @@ the native libmpv engine removes that limit.
 See the [git tags](https://github.com/nwilliams22/prexu/tags) for the history
 prior to 0.7.0 (0.5.x–0.6.x).
 
-[Unreleased]: https://github.com/nwilliams22/prexu/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/nwilliams22/prexu/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/nwilliams22/prexu/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/nwilliams22/prexu/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/nwilliams22/prexu/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/nwilliams22/prexu/compare/v0.7.0...v0.7.1
