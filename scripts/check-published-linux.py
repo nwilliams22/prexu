@@ -13,6 +13,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 
 REPO = 'nwilliams22/prexu'
 PLATFORMS = {'linux-x86_64', 'linux-x86_64-appimage', 'linux-x86_64-rpm',
@@ -109,22 +110,47 @@ def check_updater(manifest, version, pubkey, assets):
     platforms = manifest.get('platforms', {})
     require(set(platforms) == PLATFORMS, 'latest.json platform keys mismatch')
     key_id = packet(pubkey, 42)[2:10]
+    formats = {
+        'linux-x86_64': f'Prexu_{version}_amd64.AppImage',
+        'linux-x86_64-appimage': f'Prexu_{version}_amd64.AppImage',
+        'linux-x86_64-rpm': f'Prexu-{version}-1.x86_64.rpm',
+        'windows-x86_64': f'Prexu_{version}_x64_en-US.msi',
+        'windows-x86_64-nsis': f'Prexu_{version}_x64-setup.exe',
+        'windows-x86_64-msi': f'Prexu_{version}_x64_en-US.msi',
+    }
     for platform, entry in sorted(platforms.items()):
-        require(entry.get('url') in assets, f'{platform}: URL is not a release asset')
+        expected = f'https://github.com/{REPO}/releases/download/v{version}/{formats[platform]}'
+        require(entry.get('url') == expected and expected in assets,
+                f'{platform}: URL does not match its release architecture/format')
         require(packet(entry.get('signature', ''), 74)[2:10] == key_id,
                 f'{platform}: updater signature key ID mismatch')
         passed(f'{platform}: signature key ID {key_id[::-1].hex().upper()}')
     passed(f'latest.json: version {version}, exact six platform keys')
 
 
-def check_startup(code, log):
+def check_startup(code, log, elapsed):
     require(code == 124, f'AppImage exited early (status {code}; expected timeout 124)')
+    require(elapsed >= 30, f'AppImage exited before 30 seconds ({elapsed:.3f}s)')
     for marker in ('[player] mpv created', '[player:linux] compositor installed'):
         require(marker in log, f'Missing startup marker: {marker}')
         passed(marker)
     require(not re.search(r'VersionMismatch|falling back|fallback to HTML5', log, re.I),
             'Native startup reported version mismatch or fallback')
     passed('30-second native startup: no VersionMismatch or fallback')
+
+
+def launch_startup(command, log_path, **kwargs):
+    started = time.monotonic()
+    with log_path.open('w') as log:
+        result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT,
+                                timeout=45, **kwargs)
+    elapsed = time.monotonic() - started
+    check_startup(result.returncode, log_path.read_text(errors='replace'), elapsed)
+
+
+def check_release_metadata(release, tag):
+    require(release.get('tag_name') == tag and release.get('draft') is False
+            and release.get('prerelease') is False, 'Wrong/unpublished/prerelease release')
 
 
 def probe_api(root):
@@ -148,7 +174,7 @@ def check_release(tag, work, config):
     metadata = work / 'release.json'
     download(f'https://api.github.com/repos/{REPO}/releases/tags/{tag}', metadata)
     release = json.loads(metadata.read_text())
-    require(release.get('tag_name') == tag and not release.get('draft'), 'Wrong/unpublished release')
+    check_release_metadata(release, tag)
     assets = release['assets']
     selected = []
     for pattern in (r'.*_amd64\.AppImage', r'.*\.x86_64\.rpm', r'latest\.json'):
@@ -191,12 +217,9 @@ def check_release(tag, work, config):
         path.mkdir(mode=0o700)
         env[key] = str(path)
     env.update(LIBGL_ALWAYS_SOFTWARE='1', RUST_LOG='info', GDK_BACKEND='x11')
-    with (work / 'native-startup.log').open('w') as log:
-        result = subprocess.run(['dbus-run-session', '--', 'timeout', '--kill-after=5s',
-                                 '30s', 'xvfb-run', '-a', str(root / 'AppRun')],
-                                cwd=work, env=env, stdout=log, stderr=subprocess.STDOUT,
-                                timeout=45)
-    check_startup(result.returncode, (work / 'native-startup.log').read_text(errors='replace'))
+    launch_startup(['dbus-run-session', '--', 'timeout', '--kill-after=5s',
+                    '30s', 'xvfb-run', '-a', str(root / 'AppRun')],
+                   work / 'native-startup.log', cwd=work, env=env)
     passed(f'{tag}: published Linux release gate')
 
 

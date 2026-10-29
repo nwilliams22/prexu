@@ -102,18 +102,20 @@ the [v4 package headers](https://rpm.org/docs/6.0.x/manual/format_v4.html) direc
 it does not resolve or install packages on the host.
 
 Native startup runs extracted `AppRun` under Xvfb with software GL, fresh HOME
-and XDG directories, and the same 30-second survival/marker/fallback conditions
-as the candidate workflow. It does not read saved Plex credentials or change
+and XDG directories. It measures a 30-second survival window and applies the
+same marker/fallback conditions as the candidate workflow. It does not read saved Plex credentials or change
 local app preferences. This tests startup, not visible playback, audio, hardware
 decode, or a real display session.
 
 Updater metadata must name the requested version, exactly the six Linux/Windows
-x86_64 platform keys, release-asset URLs, and minisign signature packets carrying
-the key ID from `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`.
+x86_64 platform keys, matching architecture/format release-asset URLs, and
+minisign signature packets carrying the key ID from `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`.
 `--config PATH` selects another trusted configuration for a historical release
 whose signing key differs. This checks signature **key IDs**, not cryptographic
 signature validity or an end-to-end updater installation; Windows assets are
-not downloaded by this Linux gate.
+not downloaded by this Linux gate. The generic Linux alias targets AppImage;
+the generic Windows alias targets MSI. Draft and prerelease releases are rejected
+even when their tags have the stable version format.
 
 The parser and failure conditions have offline negative controls:
 
