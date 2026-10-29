@@ -605,7 +605,7 @@ fn pump_events(
                 }
             }
             None => {
-                if loop_iterations % 60 == 0 {
+                if loop_iterations.is_multiple_of(60) {
                     log::debug!("[player:events] wait_event timeout (iter #{})", loop_iterations);
                 }
             }

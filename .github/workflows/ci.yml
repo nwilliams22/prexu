@@ -170,6 +170,9 @@ jobs:
           MPV_SOURCE: ${{ github.workspace }}\src-tauri\ci\mpv
         run: cargo clippy --all-targets -- -D warnings
 
+      - name: Updater signature and payload compatibility
+        run: python scripts/check-updater-compatibility.py
+
       - name: Build headless_mpv test binary
         working-directory: src-tauri
         env:
@@ -307,6 +310,9 @@ jobs:
       # bundle must exist before cargo build.
       - name: Build frontend
         run: npm run build
+
+      - name: Updater signature and payload compatibility
+        run: python3 scripts/check-updater-compatibility.py
 
       - name: Lint src-tauri (clippy)
         working-directory: src-tauri

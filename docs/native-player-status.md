@@ -99,7 +99,7 @@ native Windows rendering works.
 ## Development invariants
 
 - Keep the vendored Wry fork and Tauri's Wry dependency on the same version.
-  Current fork: Wry 0.55.1; Tauri lockfile version: 2.11.5. An unpatched second Wry
+  Current fork: Wry 0.57.1; Tauri lockfile version: 2.12.5. An unpatched second Wry
   version can compile successfully while silently breaking composition hosting.
 - Linux webview transparency must be requested at creation. The toplevel stays
   opaque; the webview widget composites transparently over video.
@@ -112,6 +112,22 @@ native Windows rendering works.
   pump join back on the frontend's exit path.
 - Keep `AppLayout` hidden with `visibility:hidden`, not `display:none`, during
   full playback so observer-driven grids retain their layout.
+
+## Framework updater compatibility
+
+The desktop lockfile resolves Tauri 2.12.5, updater 2.14.1 and zip 9.1.3.
+The Wry 0.57.1 fork retains Windows composition hosting and Linux creation-time
+transparency. Windows bindings match Wry: windows 0.62 and webview2-com 0.39.
+The updater requires Rust 1.90 or newer; archive support remains enabled.
+
+Run `python3 scripts/check-updater-compatibility.py` (Windows: `python`). It
+copies the resolved updater source into a temporary directory, verifies matching
+framework/archive/signature versions, and runs its signature and payload tests.
+Linux tests cover raw and tar.gz AppImage replacement in temporary directories;
+Windows probes cover raw EXE/MSI and ZIP extraction without launching installers.
+The harness also rejects duplicate Wry versions or bypassing the local fork.
+Both native CI jobs run this check. It does not prove installed-app upgrading,
+GPU composition, audio, or display transitions on physical hardware.
 
 ## Source map
 

@@ -6,7 +6,7 @@ authors = ["you"]
 license = ""
 repository = ""
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.90"
 
 [lib]
 name = "app_lib"
@@ -19,7 +19,7 @@ tauri-build = { version = "2.5.4", features = [] }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
-tauri = { version = "2.11", features = ["devtools"] }
+tauri = { version = "2.12.5", features = ["devtools"] }
 tauri-plugin-http = "2"
 reqwest = { version = "0.12", features = ["rustls-tls", "blocking", "stream"] }
 tokio = { version = "1", features = ["fs", "rt-multi-thread", "macros", "sync"] }
@@ -31,7 +31,7 @@ tauri-plugin-shell = "2"
 tauri-plugin-window-state = "2"
 tauri-plugin-single-instance = "2.4.0"
 tauri-plugin-store = "2"
-tauri-plugin-updater = "2"
+tauri-plugin-updater = "2.14.1"
 url = "2"
 
 # libmpv2 backs the native player, which is compiled on Windows AND Linux
@@ -57,7 +57,7 @@ libmpv2 = { version = "4", features = ["build_libmpv"] }
 libmpv2-sys = "4"
 # Pin to the same major.minor as Tauri's transitive `windows` dep so HWND
 # types are interchangeable. Bumping requires Tauri to bump too.
-windows = { version = "0.61", features = [
+windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
@@ -84,12 +84,12 @@ khronos-egl = { version = "6", features = ["dynamic"] }
 libloading = "0.8"
 sha2 = "0.10"
 # Path C3c: ICoreWebView2CompositionController + SetRootVisualTarget, matching
-# the version Tauri 2.10 resolves so the controller handed back by
+# the version Tauri 2.12 resolves so the controller handed back by
 # tauri PlatformWebview::controller() casts cleanly.
-webview2-com = "0.38"
+webview2-com = "0.39"
 # Direct dep purely for `wry::set_pending_composition_hosting` (the composition
 # opt-in added to the vendored fork); resolves to vendor/wry via [patch].
-wry = "0.55"
+wry = "0.57.1"
 
 # ── Linux native player (prexu-axj4.3): render-API compositing ──
 # libmpv render context composited under the transparent WebKitWebView via a
@@ -113,13 +113,13 @@ libloading = "0.8"
 # creation-time webview-transparency opt-in added to the vendored fork —
 # mirror of the Windows composition-hosting entry above); resolves to
 # vendor/wry via [patch].
-wry = "0.55"
+wry = "0.57.1"
 
 # Path C3c (prexu-60mz.3): vendored fork of wry to add a WebView2 composition-
 # controller hosting path (CreateCoreWebView2CompositionController +
 # SetRootVisualTarget) so the React webview can live as a transparent
 # DirectComposition visual above the mpv video visual on the main Tauri HWND.
-# Pinned to the exact version Tauri 2.11 resolves (0.55.1); the patch must stay
+# Pinned to the exact version Tauri 2.12 resolves (0.57.1); the patch must stay
 # API-compatible with what Tauri calls. Re-base on wry bumps when Tauri bumps.
 [patch.crates-io]
 wry = { path = "vendor/wry" }
