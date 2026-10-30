@@ -150,7 +150,7 @@ export function useDashboard(): UseDashboardResult {
         const sorted = items.sort((a, b) => b.addedAt - a.addedAt);
         setRecentMoviesIfChanged(sorted);
         setErrors((prev) => (prev.movies === null ? prev : { ...prev, movies: null }));
-        cacheSet(moviesKey(uri), sorted, CACHE_TTL);
+        cacheSet(moviesKey(uri), sorted, CACHE_TTL, true);
         logger.trace("api", "dashboard movies fetch complete", {
           ms: Math.round(performance.now() - startedAt),
           count: sorted.length,
@@ -176,7 +176,7 @@ export function useDashboard(): UseDashboardResult {
         const grouped = groupRecentlyAdded(items.sort((a, b) => b.addedAt - a.addedAt));
         setRecentShowsIfChanged(grouped);
         setErrors((prev) => (prev.shows === null ? prev : { ...prev, shows: null }));
-        cacheSet(showsKey(uri), grouped, CACHE_TTL);
+        cacheSet(showsKey(uri), grouped, CACHE_TTL, true);
         logger.trace("api", "dashboard shows fetch complete", {
           ms: Math.round(performance.now() - startedAt),
           count: grouped.length,
@@ -208,7 +208,7 @@ export function useDashboard(): UseDashboardResult {
         const items = applyOffsetFloors(fetched);
         setOnDeckIfChanged(items);
         setErrors((prev) => (prev.deck === null ? prev : { ...prev, deck: null }));
-        cacheSet(deckKey(uri), items, CACHE_TTL);
+        cacheSet(deckKey(uri), items, CACHE_TTL, true);
         logger.trace("api", "dashboard deck fetch complete", {
           ms: Math.round(performance.now() - startedAt),
           count: items.length,

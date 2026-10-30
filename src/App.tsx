@@ -10,6 +10,7 @@ import { useAuth, useAuthState, AuthProvider } from "./hooks/useAuth";
 import AppProviders from "./contexts/AppProviders";
 import { prefetchDashboardData } from "./utils/dashboardPrefetch";
 import { logger } from "./services/logger";
+import { cacheGet } from "./services/api-cache";
 
 // Lazy-loaded page components
 const Login = lazy(() => import("./pages/Login"));
@@ -156,6 +157,18 @@ function AppRoutes() {
     if (!isAuthenticated || !serverSelected || !server) {
       // No server — show login/server select immediately
       setAppReady(true);
+      return;
+    }
+
+    // Restore persisted payloads before waiting on the network quorum. Keep
+    // prefetching in the background; cacheGet preserves the original age so
+    // useDashboard can still revalidate stale data.
+    const hasDashboardCache = ["movies", "shows", "deck"].every(
+      (section) => cacheGet(`dashboard:${server.uri}:${section}`) !== null,
+    );
+    if (hasDashboardCache) {
+      setAppReady(true);
+      prefetchDashboardData(server);
       return;
     }
 

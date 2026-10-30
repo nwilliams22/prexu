@@ -71,16 +71,19 @@ describe("prefetchDashboardData", () => {
       `dashboard:${server.uri}:movies`,
       [],
       60 * 60 * 1000,
+      true,
     );
     expect(mockCacheSet).toHaveBeenCalledWith(
       `dashboard:${server.uri}:shows`,
       [],
       60 * 60 * 1000,
+      true,
     );
     expect(mockCacheSet).toHaveBeenCalledWith(
       `dashboard:${server.uri}:deck`,
       [],
       60 * 60 * 1000,
+      true,
     );
     expect(await handle.sectionsSettled).toBe(true);
   });

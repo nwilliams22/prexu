@@ -107,6 +107,11 @@ describe("useDashboard", () => {
       30,
     );
     expect(mockGetOnDeck).toHaveBeenCalledWith("https://plex.test", "token");
+    for (const section of ["movies", "shows", "deck"]) {
+      expect(mockCacheSet).toHaveBeenCalledWith(
+        `dashboard:https://plex.test:${section}`, [], 60 * 60 * 1000, true,
+      );
+    }
   });
 
   it("returns movies from movie sections only", async () => {

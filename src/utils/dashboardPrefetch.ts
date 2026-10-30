@@ -74,7 +74,7 @@ export function prefetchDashboardData(server: ServerData): DashboardPrefetchHand
       getRecentlyAddedBySection(uri, accessToken, movieSections, 30)
         .then((items) => {
           const sorted = items.sort((a, b) => b.addedAt - a.addedAt);
-          cacheSet(`dashboard:${uri}:movies`, sorted, 60 * 60 * 1000);
+          cacheSet(`dashboard:${uri}:movies`, sorted, 60 * 60 * 1000, true);
         })
         .catch((err) => {
           logger.warn("splash", "movies prefetch failed", String(err));
@@ -84,7 +84,7 @@ export function prefetchDashboardData(server: ServerData): DashboardPrefetchHand
       getRecentlyAddedBySection(uri, accessToken, tvSections, 30)
         .then((items) => {
           const grouped = groupRecentlyAdded(items.sort((a, b) => b.addedAt - a.addedAt));
-          cacheSet(`dashboard:${uri}:shows`, grouped, 60 * 60 * 1000);
+          cacheSet(`dashboard:${uri}:shows`, grouped, 60 * 60 * 1000, true);
         })
         .catch((err) => {
           logger.warn("splash", "shows prefetch failed", String(err));
@@ -93,7 +93,7 @@ export function prefetchDashboardData(server: ServerData): DashboardPrefetchHand
 
       getOnDeck(uri, accessToken)
         .then((items) => {
-          cacheSet(`dashboard:${uri}:deck`, items, 60 * 60 * 1000);
+          cacheSet(`dashboard:${uri}:deck`, items, 60 * 60 * 1000, true);
         })
         .catch((err) => {
           logger.warn("splash", "deck prefetch failed", String(err));

@@ -243,7 +243,7 @@ function PosterCard({
         )}
 
         {/* Blur-up placeholder: tiny image with CSS blur */}
-        {placeholderUrl && !loaded && (
+        {placeholderUrl && shouldLoad && !loaded && (
           <img
             src={placeholderUrl}
             alt=""

@@ -168,6 +168,7 @@ vi.mock("../../pages/Dashboard", () => ({
 }));
 
 import App from "../../App";
+import { cacheClear, cacheGetAge } from "../../services/api-cache";
 import * as storage from "../../services/storage";
 import * as plexApi from "../../services/plex-api";
 import * as reachability from "../../services/server-reachability";
@@ -238,6 +239,7 @@ function setupValidAuth() {
 describe("boot/auth waterfall (W4 · pd1x.4)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    cacheClear();
     vi.useFakeTimers();
 
     // Defaults: no stored auth, token invalid, server reachable, no update.
@@ -261,6 +263,46 @@ describe("boot/auth waterfall (W4 · pd1x.4)", () => {
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
+  });
+
+  it("restores disk-only dashboard data and dismisses while network requests hang", async () => {
+    setupValidAuth();
+    const timestamp = Date.now() - 180_000;
+    for (const section of ["movies", "shows", "deck"]) {
+      const key = `dashboard:${SERVER.uri}:${section}`;
+      localStorage.setItem(`prexu_cache:${key}`, JSON.stringify({
+        data: [], timestamp, ttlMs: 3_600_000,
+      }));
+      expect(cacheGetAge(key)).toBeNull(); // no surviving in-memory cache
+    }
+
+    renderApp();
+    await settleBoot();
+    expect(mockPrefetch).toHaveBeenCalledWith(SERVER);
+    await advance(699);
+    expect(splashVisible()).toBe(true);
+    await advance(401);
+    expect(splashVisible()).toBe(false);
+    expect(cacheGetAge(`dashboard:${SERVER.uri}:deck`)).toBe(181_100);
+    await advance(20_000);
+    expect(mockLogger.warn).not.toHaveBeenCalledWith(
+      "splash", "hard cap reached, dismissing", expect.anything(),
+    );
+  });
+
+  it.each(["missing", "expired"])("keeps the network gate with a %s disk entry", async (state) => {
+    setupValidAuth();
+    for (const section of ["movies", "shows", "deck"]) {
+      if (section === "deck" && state === "missing") continue;
+      localStorage.setItem(`prexu_cache:dashboard:${SERVER.uri}:${section}`, JSON.stringify({
+        data: [], timestamp: Date.now() - (section === "deck" ? 3_600_001 : 0),
+        ttlMs: 3_600_000,
+      }));
+    }
+    renderApp();
+    await settleBoot();
+    await advance(1100);
+    expect(splashVisible()).toBe(true);
   });
 
   // ── Splash quorum ────────────────────────────────────────────────────────
