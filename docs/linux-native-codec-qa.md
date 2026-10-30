@@ -106,3 +106,17 @@ record all per-title log decisions or explicit missing-item requirements, and
 obtain Duncan's review. The outstanding `prexu-axj4.5` Beads prerequisite must
 also be resolved before its gated children can close. Xvfb results do not
 establish real-GPU rendering or audible playback.
+
+## Retry on 2026-10-30
+
+The resource check was repeated with the XML `<resource>` element name and
+returned `HTTP 200`, `resource_count 1`, and `Prexu QA Test Server` (`owned=1`).
+A fresh local debug session was started on Xvfb `:97` with a session D-Bus and
+an isolated profile. The app displayed “Waiting for you to sign in…” after the
+sign-in action. The configured run could not complete the Plex PIN handoff, so
+the library and titles remained inaccessible from the app. No playback
+decision or codec verdict was captured; all eight rows above remain unproven
+or untestable as stated. The exact unblock is a browser-enabled runner or an
+authenticated desktop profile for this app session. This remains an access
+setup limitation, not evidence of a player defect. No visible-video, audible-
+audio, or real-GPU claim is made.
