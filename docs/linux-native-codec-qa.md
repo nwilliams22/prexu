@@ -2,37 +2,47 @@
 
 ## Result for 2026-10-30
 
-**Codec verdicts: unproven.** The configured Plex account can now discover the
-dedicated QA server, and the board supplied a map of synthetic media for seven
-codec gaps. I launched the local native-player debug build under Xvfb and
-confirmed the Linux compositor installed, but the isolated QA profile remained
-at the Plex sign-in screen. This runner has no browser for the sign-in handoff,
-so I could not open the library or capture playback-decision logs. A reachable
-server, a compositor startup, and synthetic media descriptions do not establish
-direct-play or transcode behavior.
+**Seven supplied codec cases direct-played through the Linux native player.**
+The run used local debug build revision `8059c02` on Linux/X11 under Xvfb
+`:97`, Mesa software rendering, with a session D-Bus. The selected Plex server
+was **Prexu QA Test Server**. The board supplied the synthetic title map; I
+independently inspected the AC3 item's Plex metadata and played each available
+codec case. These results establish the app's runtime source decision. They do
+not establish GPU rendering or audible output.
 
-Plex visibility was checked against
-`https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1` using the
-configured `PREXU_QA_PLEX_AUTH` credential. The XML response was HTTP 200 with
-one `<resource>` entry named **Prexu QA Test Server**. The earlier zero-resource
-result was a false negative: the checker searched for the old `<Device>` element
-name. No credential or token-bearing URL is recorded here.
+The corrected Plex resources check returned HTTP 200 and one `<resource>` named
+**Prexu QA Test Server**. The initial sign-in attempt left no sanitized opener
+trace, so it did not establish that the shell opener ran. I used the board's
+isolated-profile seeding option instead: the run's protected credential was
+written only to the temporary profile's Tauri `secure-store.json` with mode
+0600, and the app validated it against Plex. The app then discovered and showed
+the QA server. The credential, PIN, and token-bearing URLs were not printed or
+recorded.
 
-The QA server's board-provided synthetic title map is below. These title and
-stream descriptions have not been independently inspected or played in this
-run. The DTS-HD MA fixture is unavailable because the board reports that its
-ffmpeg build has no encoder for that codec.
+| duna.3 gap | QA title as displayed | Runtime log evidence from `runtime/prexu-qa/app.log` | Native verdict |
+| --- | --- | --- | --- |
+| HEVC 8-bit | Prexu QA HEVC8 (2023) | `18:44:37 [player] prepareSource {"ratingKey":"12","directPlayFailed":false,"skipCodecCheck":true}`<br>`18:44:37 [player] URL chosen: direct play {"container":"mkv","videoCodec":"hevc","audioCodec":"aac"}`<br>`18:44:37 [player] URL chosen {"kind":"direct","url":"https://<QA_SERVER>.plex.direct:32500/library/parts/10/1793380084/"}` | **Direct-play** |
+| HEVC 10-bit | Prexu QA (2022) | `18:45:16 [player] prepareSource {"ratingKey":"1","directPlayFailed":false,"skipCodecCheck":true}`<br>`18:45:16 [player] URL chosen: direct play {"container":"mkv","videoCodec":"hevc","audioCodec":"eac3"}`<br>`18:45:16 [player] URL chosen {"kind":"direct","url":"https://<QA_SERVER>.plex.direct:32500/library/parts/1/1793168362/f"}` | **Direct-play** |
+| AV1 | Prexu QA AV1 (2024) | `18:45:39 [player] prepareSource {"ratingKey":"11","directPlayFailed":false,"skipCodecCheck":true}`<br>`18:45:39 [player] URL chosen: direct play {"container":"mkv","videoCodec":"av1","audioCodec":"aac"}`<br>`18:45:39 [player] URL chosen {"kind":"direct","url":"https://<QA_SERVER>.plex.direct:32500/library/parts/9/1793380096/f"}` | **Direct-play** |
+| AC3 | Prexu QA Surround | `18:46:44 [player] prepareSource {"ratingKey":"3","directPlayFailed":false,"skipCodecCheck":true}`<br>`18:46:44 [player] URL chosen: direct play {"container":"mkv","videoCodec":"h264","audioCodec":"ac3"}`<br>`18:46:44 [player] URL chosen {"kind":"direct","url":"https://<QA_SERVER>.plex.direct:32500/library/parts/3/1793168347/f"}` | **Direct-play** |
+| E-AC3 | Prexu QA (2022), same file as HEVC 10-bit | Same playback as HEVC 10-bit: `18:45:16 [player] URL chosen: direct play {"container":"mkv","videoCodec":"hevc","audioCodec":"eac3"}`; direct URL `/library/parts/1/1793168362/f` | **Direct-play** |
+| TrueHD | Prexu QA (2025) | `18:45:51 [player] prepareSource {"ratingKey":"10","directPlayFailed":false,"skipCodecCheck":true}`<br>`18:45:51 [player] URL chosen: direct play {"container":"mkv","videoCodec":"h264","audioCodec":"truehd"}`<br>`18:45:51 [player] URL chosen {"kind":"direct","url":"https://<QA_SERVER>.plex.direct:32500/library/parts/8/1793380108/f"}` | **Direct-play** |
+| DTS | Prexu QA (2019) | `18:46:03 [player] prepareSource {"ratingKey":"9","directPlayFailed":false,"skipCodecCheck":true}`<br>`18:46:03 [player] URL chosen: direct play {"container":"mkv","videoCodec":"h264","audioCodec":"dca"}`<br>`18:46:03 [player] URL chosen {"kind":"direct","url":"https://<QA_SERVER>.plex.direct:32500/library/parts/7/1793380119/f"}` | **Direct-play** |
+| DTS-HD MA | Not available | No fixture. The board reports its ffmpeg build has no DTS-HD MA encoder. | **Untestable with supplied synthetic media**; needs a source item with a DTS-HD MA audio stream. |
 
-| Gap | QA server title (board-provided) | Board-reported streams | Native verdict | Evidence still required |
-| --- | --- | --- | --- | --- |
-| HEVC 8-bit | Prexu QA HEVC8 | HEVC Main, yuv420p + AAC | Unproven | Play the selected item and capture the runtime decision and chosen URL. |
-| HEVC 10-bit | Prexu QA (HEVC 2022) | HEVC Main 10 + E-AC3 5.1 | Unproven | Play the selected item and capture the runtime decision and chosen URL. |
-| AV1 | Prexu QA AV1 | AV1 Main 10-bit + AAC | Unproven | Play the selected item and capture the runtime decision and chosen URL. |
-| AC3 | Prexu QA Surround | H.264 + AC3 5.1 | Unproven | Play the selected item and capture the runtime decision and chosen URL. |
-| E-AC3 | Prexu QA (HEVC 2022) | Same file as HEVC 10-bit | Unproven | Play the selected item and capture the runtime decision and chosen URL. |
-| TrueHD | Prexu QA (2025) | H.264 + TrueHD 5.1 | Unproven | Play the selected item and capture the runtime decision and chosen URL. |
-| DTS | Prexu QA (2019) | H.264 + DTS core 5.1 | Unproven | Play the selected item and capture the runtime decision and chosen URL. |
-| DTS-HD MA | Not available | No synthetic fixture; board reports no ffmpeg encoder | Untestable with the supplied synthetic media | Provide a source item containing DTS-HD MA and then capture the runtime decision and chosen URL. |
+For every available playback the preceding app log included
+`[player] prepareSource` with `skipCodecCheck:true`, followed by the quoted
+`URL chosen: direct play` decision and a `kind:"direct"` `/library/parts/…`
+URL. No `[playback] canDirectPlay` or `buildTranscodeUrl` decision was emitted
+for these native-player loads: the native path deliberately skips the HTML5
+codec whitelist. The direct part URLs establish that Prexu did not select the
+Plex `/video/:/transcode/…` route. Plex's transcode-session endpoint was not
+usable from this runner, so there is no independent server-session assertion.
+
+The original duna.3 titles remain unavailable in the QA library. The synthetic
+items are substitutes, not line-for-line title matches. Plex displayed the
+HEVC 10-bit, TrueHD, and DTS items as `Prexu QA` with years 2022, 2025, and
+2019; the selected streams and app logs identify the codecs shown above.
 
 The original duna.3 comparison titles remain: The Abyss (HEVC 8-bit), 2 Fast 2
 Furious (4K HEVC 10-bit), 21 Jump Street (AC3), and Air (E-AC3). The synthetic
@@ -41,16 +51,18 @@ in any later comparison. Plex may display the board-noted release years instead
 of codec names for the HEVC 10-bit, TrueHD, and DTS rows.
 
 The source of truth for each codec verdict is the running app's log for that
-specific playback: the `[playback] canDirectPlay` decision, whether
-`buildTranscodeUrl` ran, and the `[player]` URL selected. Quote those real lines
-verbatim in the table before marking a row **direct-play** or **transcode**.
-Redact URL credentials while retaining enough structure to identify a source
-URL versus a transcode URL. Source inspection, media metadata, server visibility,
-or successful app startup is not a codec verdict.
+specific playback. On this native path the app logged
+`skipCodecCheck:true` and `[player] URL chosen: direct play`, then selected a
+Plex `/library/parts/…` URL. It did not call the HTML5-only
+`[playback] canDirectPlay` helper or `buildTranscodeUrl`. The URLs above redact
+the server's unique hostname while retaining the direct source path. Source
+inspection, media metadata, server visibility, or successful app startup alone
+is not a codec verdict.
 
-This run did not establish visible video or audible sound. The GPU and audio
-acceptance waiver remains in force: Xvfb uses software rendering and has no
-audio sink. No 0.8.x release is evidence that native rendering works on real
+An Xvfb screenshot during HEVC 8-bit playback showed the fixture's color bars,
+but this matrix did not measure visible pixels for every codec. The GPU and
+audio acceptance waiver remains in force: Xvfb uses software rendering and has
+no audio sink. No 0.8.x release is evidence that native rendering works on real
 hardware. Name the display/GPU or sound device and test host if those checks are
 later run; leave them unproven until then.
 
@@ -65,10 +77,55 @@ later run; leave them unproven until then.
 3. Launch Prexu with the native player enabled. Follow
    [the Linux Xvfb playback QA runbook](linux-xvfb-qa-runbook.md). It supplies a
    session D-Bus as well as Xvfb (`dbus-run-session -- xvfb-run …` when invoking
-   the app directly); Xvfb alone does not supply a session bus.
-4. Complete the Plex sign-in handoff, open the named server and library, and
-   play one item at a time. Capture the app log from before the playback
-   decision through URL selection. Preserve the relevant real log lines.
+   the app directly); Xvfb alone does not supply a session bus. If its temporary
+   `xdg-open` shim is used, keep only sanitized invocation metadata in its trace;
+   never record argv values, because the auth URL contains the PIN.
+4. Complete Plex sign-in. If no browser is available, seed the isolated profile
+   with the app's normal storage shape. This command fetches the active user
+   from Plex and writes only to the isolated profile; it does not print the
+   credential or response body:
+
+   ```bash
+   python3 - <<'PY'
+   import json, os, pathlib, urllib.request, uuid
+
+   token = os.environ["PREXU_QA_PLEX_AUTH"]
+   client_id = str(uuid.uuid4())
+   request = urllib.request.Request(
+       "https://clients.plex.tv/api/v2/user",
+       headers={
+           "X-Plex-Token": token,
+           "X-Plex-Client-Identifier": client_id,
+           "X-Plex-Product": "Prexu QA",
+           "Accept": "application/json",
+       },
+   )
+   with urllib.request.urlopen(request, timeout=20) as response:
+       user = json.load(response)
+   profile = {
+       "auth_data": {"authToken": token, "clientIdentifier": client_id},
+       "active_user": {
+           "id": user["id"],
+           "title": user.get("friendlyName") or user.get("username"),
+           "username": user.get("username"),
+           "thumb": user.get("thumb") or "",
+           "isAdmin": True,
+           "isHomeUser": False,
+       },
+   }
+   store = pathlib.Path(os.environ["XDG_DATA_HOME"]) / "com.prexu.client" / "secure-store.json"
+   store.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+   store.write_text(json.dumps(profile), encoding="utf-8")
+   store.chmod(0o600)
+   print("seeded isolated Plex profile")
+   PY
+   ```
+
+   Omit `server_data`; the app will discover the shared QA server. Never print
+   or attach the credential. Open the named server and library, and play one
+   item at a time. Capture the app log from before the playback decision through
+   URL selection. Preserve the relevant real log lines, redacting server
+   hostnames and any URL credentials.
 5. Mark a row **direct-play** only when the runtime decision and selected URL
    establish that the server transcode path was not selected. Mark it
    **transcode** when the runtime logs show that path. If the logs are absent or
@@ -76,7 +133,7 @@ later run; leave them unproven until then.
 6. Separately record whether a frame was visible and audio was audible, naming
    the hardware used. A headless result must say these were not tested.
 
-## Validation gates on local revision `1836066`
+## Validation gates on local build `1836066` (checkout `8059c02`)
 
 Commands run on 2026-10-30:
 
@@ -101,22 +158,9 @@ tasks, and `ldd` found no missing headless-shell libraries. The default-worker
 E2E failure remains an observed issue despite the four-worker pass; do not
 describe the unqualified default command as green.
 
-Codec closure remains pending: complete the authenticated playback matrix,
-record all per-title log decisions or explicit missing-item requirements, and
-obtain Duncan's review. The outstanding `prexu-axj4.5` Beads prerequisite must
-also be resolved before its gated children can close. Xvfb results do not
+The validation output was recorded earlier on this checkout, not rerun during
+the codec playback attempt. The default-worker E2E failure remains observed
+even though the four-worker command passed. The DTS-HD MA row still needs a
+source item with that audio stream, Duncan's review is pending, and the
+`prexu-axj4.5` Beads prerequisite remains explicit. Xvfb results do not
 establish real-GPU rendering or audible playback.
-
-## Retry on 2026-10-30
-
-The resource check was repeated with the XML `<resource>` element name and
-returned `HTTP 200`, `resource_count 1`, and `Prexu QA Test Server` (`owned=1`).
-A fresh local debug session was started on Xvfb `:97` with a session D-Bus and
-an isolated profile. The app displayed “Waiting for you to sign in…” after the
-sign-in action. The configured run could not complete the Plex PIN handoff, so
-the library and titles remained inaccessible from the app. No playback
-decision or codec verdict was captured; all eight rows above remain unproven
-or untestable as stated. The exact unblock is a browser-enabled runner or an
-authenticated desktop profile for this app session. This remains an access
-setup limitation, not evidence of a player defect. No visible-video, audible-
-audio, or real-GPU claim is made.
