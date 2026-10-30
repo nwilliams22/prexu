@@ -2,13 +2,14 @@
 
 ## Result for 2026-10-30
 
-**Seven supplied codec cases direct-played through the Linux native player.**
-The run used local debug build revision `8059c02` on Linux/X11 under Xvfb
+**All eight supplied codec cases selected direct play through the Linux native player.**
+The initial seven-case run used local debug build revision `8059c02` on Linux/X11 under Xvfb
 `:97`, Mesa software rendering, with a session D-Bus. The selected Plex server
 was **Prexu QA Test Server**. The board supplied the synthetic title map; I
 independently inspected the AC3 item's Plex metadata and played each available
 codec case. These results establish the app's runtime source decision. They do
-not establish GPU rendering or audible output.
+not establish GPU rendering or audible output. The eighth case was added in
+the separately identified DTS-HD MA follow-up below.
 
 The corrected Plex resources check returned HTTP 200 and one `<resource>` named
 **Prexu QA Test Server**. The initial sign-in attempt left no sanitized opener
@@ -28,7 +29,7 @@ recorded.
 | E-AC3 | Prexu QA (2022), same file as HEVC 10-bit | Same playback as HEVC 10-bit: `18:45:16 [player] URL chosen: direct play {"container":"mkv","videoCodec":"hevc","audioCodec":"eac3"}`; direct URL `/library/parts/1/1793168362/f` | **Direct-play** |
 | TrueHD | Prexu QA (2025) | `18:45:51 [player] prepareSource {"ratingKey":"10","directPlayFailed":false,"skipCodecCheck":true}`<br>`18:45:51 [player] URL chosen: direct play {"container":"mkv","videoCodec":"h264","audioCodec":"truehd"}`<br>`18:45:51 [player] URL chosen {"kind":"direct","url":"https://<QA_SERVER>.plex.direct:32500/library/parts/8/1793380108/f"}` | **Direct-play** |
 | DTS | Prexu QA (2019) | `18:46:03 [player] prepareSource {"ratingKey":"9","directPlayFailed":false,"skipCodecCheck":true}`<br>`18:46:03 [player] URL chosen: direct play {"container":"mkv","videoCodec":"h264","audioCodec":"dca"}`<br>`18:46:03 [player] URL chosen {"kind":"direct","url":"https://<QA_SERVER>.plex.direct:32500/library/parts/7/1793380119/f"}` | **Direct-play** |
-| DTS-HD MA | Not available | No fixture. The board reports its ffmpeg build has no DTS-HD MA encoder. | **Untestable with supplied synthetic media**; needs a source item with a DTS-HD MA audio stream. |
+| DTS-HD MA | Prexu QA Lossless Surround (2018) | `19:37:05 [player] prepareSource {"ratingKey":"13","directPlayFailed":false,"skipCodecCheck":true}`<br>`19:37:05 [player] URL chosen: direct play {"container":"mkv","videoCodec":"h264","audioCodec":"dca-ma"}`<br>`19:37:05 [player] URL chosen {"kind":"direct","url":"https://<QA_SERVER>/library/parts/11/1793387220/"}` | **Direct-play** |
 
 For every available playback the preceding app log included
 `[player] prepareSource` with `skipCodecCheck:true`, followed by the quoted
@@ -65,6 +66,38 @@ audio acceptance waiver remains in force: Xvfb uses software rendering and has
 no audio sink. No 0.8.x release is evidence that native rendering works on real
 hardware. Name the display/GPU or sound device and test host if those checks are
 later run; leave them unproven until then.
+
+## DTS-HD MA follow-up, 2026-10-30
+
+At 19:37:05 UTC, the existing local native debug binary selected direct play
+for ratingKey 13 on the same QA server. This follow-up used checkout `6d7abb3`
+for the Vite frontend, Xvfb `:98` at 1280×800, and a session D-Bus. The binary
+was not rebuilt; its SHA-256 was
+`b81ff0c61c93b9ebb033d1f34464ebb2a7d938dd0e5cb5a85410aa5180b4c62a`.
+The earlier seven-row build record above is unchanged.
+
+The board supplied this fixture as a bit-exact `-c copy` clip of an owned
+Blu-ray rip, not synthetic media: H.264 High 8-bit plus six-channel DTS-HD MA,
+61.8 seconds. The previous authenticated metadata check returned HTTP 200,
+media audio `dca-ma`, profile `ma`, and stream audio `dca`, profile `ma`,
+6 channels. The app detail page displayed `DCA-MA · 5.1`; the quoted runtime
+lines, rather than that metadata, establish the source-selection verdict.
+
+Launch used the isolated-profile seed above and:
+
+```bash
+dbus-run-session -- bash -c 'export QA_DISPLAY=:98 QA_GEOMETRY=1280x800 QA_XSERVER=xvfb QA_FIT_WINDOW=1 VITE_PORT=1420 XDG_RUNTIME_DIR=/tmp/prexu-dts-qa/runtime XDG_CONFIG_HOME=/tmp/prexu-dts-qa/config XDG_DATA_HOME=/tmp/prexu-dts-qa/data; scripts/qa-desktop-session.sh start; exec sleep 1800'
+```
+
+Search for `Lossless`, open **Prexu QA Lossless Surround (2018)**, and click
+Play on its detail page. Avoid using the rotating home carousel: an initial
+click in this run opened ratingKey 11 (AV1), which is excluded from the
+DTS-HD MA verdict. Confirm `ratingKey:"13"` in the log. The follow-up did not
+measure rendered frames, audible output, lossless passthrough, or Plex server
+transcode sessions. Those limits and the real-hardware waiver still apply.
+The run-owned app, Xvfb, Vite and session holder were stopped; the temporary
+credential store was removed. Sanitized decision lines are attached to the
+tracking issue; temporary runtime paths are not the durable evidence store.
 
 ## Repeat procedure
 
@@ -160,7 +193,8 @@ describe the unqualified default command as green.
 
 The validation output was recorded earlier on this checkout, not rerun during
 the codec playback attempt. The default-worker E2E failure remains observed
-even though the four-worker command passed. The DTS-HD MA row still needs a
-source item with that audio stream, Duncan's review is pending, and the
-`prexu-axj4.5` Beads prerequisite remains explicit. Xvfb results do not
+even though the four-worker command passed. The original seven-row report was
+reviewed; the DTS-HD MA follow-up needs its own review. Worker-count remediation
+is tracked separately from this report. The `prexu-axj4.5` Beads prerequisite
+remains explicit. Xvfb results do not
 establish real-GPU rendering or audible playback.
