@@ -20,7 +20,11 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  // Bound local concurrency independently of CPU count. On the 32-thread
+  // bd-server, 16 workers failed 34/820 tests across five runs (prexu-yg1b),
+  // including blank startup pages; four workers passed 820/820 (zero retries).
+  // Keep --workers available for explicit concurrency stress runs.
+  workers: process.env.CI ? 1 : 4,
   reporter: "list",
   use: {
     baseURL: "http://localhost:1420",
