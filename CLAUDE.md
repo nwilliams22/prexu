@@ -135,6 +135,15 @@ are evidence, not current branch or task instructions.
 - Keep documentation aligned with code/configuration. Separate implemented
   behavior, historical measurements, intended designs, and unverified acceptance.
 
+## Windows test VM
+
+A throwaway Windows 11 VM on bd-server for testing Windows builds (WebView2 is
+installed; rendering is software only, no GPU). Read
+`/usr/local/share/win11-eval/AGENTS.md` before using it. In short:
+`sudo win11-vm start`, then `ssh win11-test` (PowerShell, local admin), and
+always `sudo win11-vm reset` when done so the next test starts clean. It is
+rebuilt automatically before the evaluation expires, so keep nothing in it.
+
 ## Logging conventions
 
 Use Rust `log` macros and the TypeScript logger in `src/services/logger.ts`.
