@@ -67,8 +67,8 @@ and in the release notes: no Linux release artifact has been installed or
 launched from a published release.
 
 Known follow-ups include Windows IME (`prexu-x2bt`) and fullscreen transition
-verification (`prexu-6p8k`), Linux packaged/dist black-webview investigation
-(`prexu-p020`), and WebKitGTK large-resize presentation lag (`prexu-41cw`,
+verification (`prexu-6p8k`), as well as WebKitGTK large-resize presentation
+lag (`prexu-41cw`,
 `prexu-v6pr`). The latter reproduces without the app compositor; further work
 is presentation-layer profiling and an upstream evidence report.
 

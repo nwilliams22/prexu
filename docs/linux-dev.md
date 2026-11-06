@@ -77,8 +77,7 @@ release; see [bundle construction and acceptance](linux-bundles.md).
 
 `prexu-axj4.7` remains open until commit-specific artifacts pass bundle and native
 startup verification. Do not infer packaged-app support from a passing dev
-build. `prexu-p020` separately tracks a black webview/minimum-size issue with a
-cargo-built debug binary using bundled frontend assets.
+build.
 
 ## Wayland and rendering diagnostics
 
