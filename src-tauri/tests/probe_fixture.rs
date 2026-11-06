@@ -51,6 +51,15 @@ mod tests {
         let mut events = EventContext::new(mpv.ctx);
         mpv.command("loadfile", &[&path]).unwrap();
         wait_for(&mut events, |e| matches!(e, Event::PlaybackRestart));
+        // mpv can normalize Windows separators. Verify file identity before
+        // using its spelling for the snapshot's exact transport-path check.
+        let loaded_path = mpv.get_property::<String>("path").unwrap();
+        assert_eq!(
+            std::fs::canonicalize(&loaded_path).unwrap(),
+            std::fs::canonicalize(&path).unwrap(),
+            "mpv loaded a different fixture"
+        );
+        let path = loaded_path;
         let snapshot = super::probe_snapshot::sample(&mpv, &path);
         assert!(!serde_json::to_string(&snapshot).unwrap().contains(&path));
         assert!(snapshot.initialized && snapshot.fixture_matches && !snapshot.idle);
