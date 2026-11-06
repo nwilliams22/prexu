@@ -19,7 +19,14 @@ Release builds reject any probe variable (even empty) with `probe_disabled` and
 exit code 2 before normal initialization; parsing and filesystem preparation are
 compiled out. With no probe variables, normal startup is unchanged.
 
-The marker writer, handshake, loopback fixture service and serial UI runner are
+The debug-only `probe_driver` IPC accepts a one-shot `ready` handshake from the
+main webview, then ordered `begin`, `end`, `fail`, `cleanup`, and `finish`
+requests. Rust validates action-specific observations, assigns sequence/time,
+flushes each JSONL marker, and logs the same JSON. Invalid observations emit a
+fixed failure code without recording their payload. Write/flush failure poisons
+the writer. Finishing exits the app after flushing the terminal marker.
+
+The frontend handshake caller, loopback fixture service and serial UI runner are
 not implemented yet: a valid probe startup opens an isolated app but does not
 execute the script. Its empty event file must fail verification. Passing these
 selftests is not an end-to-end run or proof of runtime storage isolation.

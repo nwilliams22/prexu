@@ -94,3 +94,191 @@ fn isolated_preflight() {
 
 #[path = "../src/probe_environment.rs"]
 mod probe_environment;
+
+#[path = "../src/probe_events.rs"]
+mod probe_events;
+
+#[test]
+fn marker_order_and_redaction() {
+    use serde_json::json;
+    let script = json!({"schema":"prexu.probe.script","version":1,"runId":"test","fixture":"av-cues-v1","timeoutMs":10000,"steps":[{"id":"quit","action":"quit","timeoutMs":1000}]});
+    let mut bytes = Vec::new();
+    {
+        let mut events = probe_events::Events::new(script.clone(), &mut bytes).unwrap();
+        assert!(events.begin("quit").is_err());
+        assert_eq!(events.ready().unwrap(), script);
+        assert!(events.ready().is_err());
+        assert!(events.cleanup().is_err());
+        assert!(events.begin("wrong").is_err());
+        events.begin("quit").unwrap();
+        assert!(events.begin("quit").is_err());
+        events.end("quit", json!({"ready":true})).unwrap();
+        events.cleanup().unwrap();
+        events.finish(true).unwrap();
+        assert!(events.finish(true).is_err());
+    }
+    let lines: Vec<serde_json::Value> = String::from_utf8(bytes)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 6);
+    for (i, line) in lines.iter().enumerate() {
+        assert_eq!(line["seq"], i + 1);
+    }
+    assert_eq!(lines[5]["status"], "pass");
+    let mut bytes = Vec::new();
+    {
+        let mut events = probe_events::Events::new(script, &mut bytes).unwrap();
+        events.ready().unwrap();
+        events.begin("quit").unwrap();
+        assert!(events.fail("SECRET").is_err());
+        assert_eq!(
+            events.end("quit", json!({"ready":true,"url":"SECRET"})),
+            Err("predicate_failed")
+        );
+        assert!(events.end("quit", json!({"ready":true})).is_err());
+        events.cleanup().unwrap();
+        events.finish(true).unwrap();
+    }
+    let text = String::from_utf8(bytes).unwrap();
+    assert!(!text.contains("SECRET"));
+    assert!(text.contains("step.error"));
+    assert!(text.contains("\"status\":\"fail\""));
+}
+
+#[test]
+fn broken_marker_sink_cannot_resume() {
+    struct Broken;
+    impl std::io::Write for Broken {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("private detail"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let script = probe_script::parse(br#"{"schema":"prexu.probe.script","version":1,"runId":"test","fixture":"av-cues-v1","timeoutMs":1000,"steps":[{"id":"quit","action":"quit","timeoutMs":1000}]}"#).unwrap();
+    let mut events = probe_events::Events::new(script, Broken).unwrap();
+    assert_eq!(events.ready(), Err("marker_io"));
+    assert_eq!(events.ready(), Err("invalid_sequence"));
+    assert!(events.cleanup().is_err());
+}
+
+#[test]
+fn observation_allowlists_and_predicates() {
+    use serde_json::json;
+    let cases = [
+        (
+            "play",
+            json!({}),
+            json!({"loaded":true,"positionMs":1}),
+            json!({"loaded":true,"positionMs":0}),
+        ),
+        (
+            "seek",
+            json!({"positionMs":2000,"toleranceMs":500}),
+            json!({"positionMs":2001}),
+            json!({"positionMs":0}),
+        ),
+        (
+            "pause",
+            json!({}),
+            json!({"paused":true}),
+            json!({"paused":false}),
+        ),
+        (
+            "resume",
+            json!({}),
+            json!({"paused":false}),
+            json!({"paused":true}),
+        ),
+        (
+            "selectAudio",
+            json!({"trackId":2}),
+            json!({"trackId":2}),
+            json!({"trackId":1}),
+        ),
+        (
+            "selectSubtitle",
+            json!({"trackId":0}),
+            json!({"trackId":0}),
+            json!({"trackId":1}),
+        ),
+        (
+            "fullscreen",
+            json!({"enabled":true}),
+            json!({"enabled":true}),
+            json!({"enabled":false}),
+        ),
+        (
+            "miniPlayer",
+            json!({"enabled":false}),
+            json!({"enabled":false}),
+            json!({"enabled":true}),
+        ),
+        (
+            "popout",
+            json!({"enabled":true}),
+            json!({"enabled":true}),
+            json!({"enabled":false}),
+        ),
+        (
+            "windowMinimize",
+            json!({}),
+            json!({"minimized":true}),
+            json!({"minimized":false}),
+        ),
+        (
+            "windowRestore",
+            json!({}),
+            json!({"minimized":false}),
+            json!({"minimized":true}),
+        ),
+        (
+            "stop",
+            json!({}),
+            json!({"sessionCleared":true,"idle":true}),
+            json!({"sessionCleared":true,"idle":false}),
+        ),
+        (
+            "wait",
+            json!({"durationMs":5}),
+            json!({"durationMs":6}),
+            json!({"durationMs":4}),
+        ),
+        (
+            "navigate",
+            json!({"route":"/settings"}),
+            json!({"route":"/settings"}),
+            json!({"route":"/"}),
+        ),
+        (
+            "setSetting",
+            json!({"name":"volume","value":50}),
+            json!({"name":"volume","value":50}),
+            json!({"name":"volume","value":51}),
+        ),
+        (
+            "quit",
+            json!({}),
+            json!({"ready":true}),
+            json!({"ready":false}),
+        ),
+    ];
+    for (action, args, good, bad) in cases {
+        let step = json!({"action":action,"args":args,"timeoutMs":1000});
+        assert_eq!(probe_events::observation(&step, &good), Ok(()), "{action}");
+        assert!(probe_events::observation(&step, &bad).is_err(), "{action}");
+        let mut extra = good.clone();
+        extra["url"] = json!("private");
+        assert!(
+            probe_events::observation(&step, &extra).is_err(),
+            "{action}"
+        );
+        assert!(
+            probe_events::observation(&step, &json!({})).is_err(),
+            "{action}"
+        );
+    }
+}

@@ -4,6 +4,10 @@ mod probe_environment;
 mod probe_script;
 #[cfg(debug_assertions)]
 mod probe_bootstrap;
+#[cfg(debug_assertions)]
+mod probe_events;
+#[cfg(debug_assertions)]
+mod probe_commands;
 // The native libmpv player compiles on Windows (wid/HWND + DirectComposition)
 // and Linux (render API + GtkGLArea under the transparent WebKitWebView — see
 // docs/adr-native-player-render-api.md, prexu-axj4.3). macOS and any other
@@ -627,8 +631,11 @@ pub fn run() {
         .manage(downloads::DownloadManager::new());
     #[cfg(debug_assertions)]
     let builder = if let Some(probe) = probe {
-        // Retain the validated script and exclusive event handle for the runner.
-        builder.manage(Mutex::new((probe.script, probe.events)))
+        let events = probe_events::Events::new(probe.script, probe.events).unwrap_or_else(|code| {
+            eprintln!("{code}");
+            std::process::exit(2);
+        });
+        builder.manage(Mutex::new(events))
     } else {
         builder
     };
@@ -680,6 +687,8 @@ pub fn run() {
     // never call these.
     #[cfg(target_os = "windows")]
     let builder = builder.invoke_handler(tauri::generate_handler![
+        #[cfg(debug_assertions)]
+        probe_commands::probe_driver,
         start_proxy,
         app_ready,
         downloads::get_downloads_dir,
@@ -724,6 +733,8 @@ pub fn run() {
     // HTML5-fallback probe contract with the TS side.
     #[cfg(target_os = "linux")]
     let builder = builder.invoke_handler(tauri::generate_handler![
+        #[cfg(debug_assertions)]
+        probe_commands::probe_driver,
         start_proxy,
         app_ready,
         downloads::get_downloads_dir,
@@ -758,6 +769,8 @@ pub fn run() {
     ]);
     #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     let builder = builder.invoke_handler(tauri::generate_handler![
+        #[cfg(debug_assertions)]
+        probe_commands::probe_driver,
         start_proxy,
         app_ready,
         downloads::get_downloads_dir,
