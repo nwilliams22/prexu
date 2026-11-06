@@ -22,14 +22,15 @@ export function useVideoClickHandling(
 
   return useCallback(() => {
     if (clickTimerRef.current !== null) {
-      // Double click detected
+      // Restore the optimistic first click before entering fullscreen.
       clearTimeout(clickTimerRef.current);
       clickTimerRef.current = null;
+      togglePlay();
       toggleFullscreen();
     } else {
+      togglePlay();
       clickTimerRef.current = setTimeout(() => {
         clickTimerRef.current = null;
-        togglePlay();
       }, DOUBLE_CLICK_MS);
     }
     resetHideTimer();

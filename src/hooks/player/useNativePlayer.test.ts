@@ -581,6 +581,21 @@ describe("useNativePlayer dispatch contract (prexu-ve9)", () => {
       expect(result.current.chrome.isPlaying).toBe(true);
     });
 
+    it.each([true, false])("reverses rapid toggles before native events arrive (playing=%s)", async (playing) => {
+      const { result } = renderHook(() => useNativePlayer("123"));
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      act(() => fire("player://paused", !playing));
+      vi.mocked(invoke).mockClear();
+      act(() => {
+        result.current.togglePlay();
+        result.current.togglePlay();
+      });
+      const commands = vi.mocked(invoke).mock.calls.map(([command]) => command)
+        .filter((command) => command === "player_play" || command === "player_pause");
+      expect(commands).toEqual(playing ? ["player_pause", "player_play"] : ["player_play", "player_pause"]);
+      expect(result.current.isPlaying).toBe(playing);
+    });
+
     it("keeps action callbacks identity-stable across ticks and play state changes", async () => {
       const { result } = renderHook(() => useNativePlayer("123"));
 

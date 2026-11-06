@@ -730,6 +730,9 @@ export function useNativePlayer(
   isPlayingRef.current = isPlaying;
   const togglePlay = useCallback(() => {
     const playing = isPlayingRef.current;
+    // A second click can arrive before mpv reports the first pause change.
+    isPlayingRef.current = !playing;
+    setIsPlaying(!playing);
     logger.debug("player", playing ? "pause" : "play");
     invoke(playing ? "player_pause" : "player_play").catch(() => {});
   }, []);
