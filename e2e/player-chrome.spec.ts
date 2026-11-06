@@ -77,6 +77,21 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe("Player chrome — play/pause", () => {
+  test("video clicks toggle immediately and double-click restores playback", async ({ page }) => {
+    await gotoPlayer(page);
+    const video = playerRoot(page).locator("video");
+    await expect(video).toBeVisible();
+    // Freeze only after startup: a single click must not need the 250ms timer.
+    await page.clock.install();
+    await page.clock.pauseAt(new Date());
+    await video.click({ position: { x: 100, y: 100 } });
+    await expect.poll(async () => (await page.evaluate(() => window.__playerChromeStub__!.getState())).isPlaying).toBe(true);
+    await page.clock.runFor(300);
+    await video.dblclick({ position: { x: 100, y: 100 }, delay: 50 });
+    await expect.poll(async () => (await page.evaluate(() => window.__playerChromeStub__!.getState())).isPlaying).toBe(true);
+    await expect(playerRoot(page).getByRole("button", { name: /exit fullscreen/i })).toBeVisible();
+  });
+
   test("toggles play/pause via the transport button and reflects state", async ({ page }) => {
     await gotoPlayer(page);
 
