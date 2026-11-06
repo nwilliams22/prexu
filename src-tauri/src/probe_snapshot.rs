@@ -28,7 +28,7 @@ impl Snapshot {
     }
 }
 
-/// Call while holding the player lock, so a command cannot replace the handle.
+/// Caller retains the sampled handle for the duration of these property reads.
 /// Missing properties stay unknown; they must never become successful defaults.
 /// The caller must observe an absent player before dispatching a new play. This
 /// is a live sample, not a load acknowledgement or proof of visible output.

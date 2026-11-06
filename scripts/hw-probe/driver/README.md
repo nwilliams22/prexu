@@ -45,10 +45,18 @@ skip ordinary stored-auth migration, plex.tv validation and server discovery.
 Bootstrap errors and timeouts fail closed; normal browser/debug startup and
 release builds without the command retain ordinary authentication.
 
-The real UI adapter and runner invocation are not connected yet: a valid
-probe startup opens the isolated fixture app but does not execute the script.
-Its empty event file must fail verification. Passing these
-selftests is not an end-to-end run or proof of runtime storage isolation.
+The fixture-only React bridge invokes the one-shot runner and uses the same
+session, transport, track, fullscreen, mini-player, popout, router and volume
+handlers as the UI. Window minimize/restore use the native window API. Each play
+requires an absent native handle before dispatch and two matching fixture samples
+with advancing time afterwards; normal startup warmup is skipped in probe mode.
+Stop requires the session to clear and the native handle to disappear. Polling is
+cancellable, including hung IPC; unsupported capabilities fail explicitly.
+Passing selftests is not an end-to-end run or proof of runtime storage isolation.
+Live desktop playback acceptance remains open: initial Xvfb runs loaded the
+fixture but timed out awaiting advancing snapshots. Native sampling completed
+quickly while the frontend received a sample only after playback ended. The
+harness correctly reported failure; no passing desktop run is claimed.
 
 Test the production-compiled environment policy separately without linking the
 GUI (this tests the gate, not a packaged release):
@@ -108,9 +116,12 @@ members are killed even after normal app exit. The fixture listener is closed
 on success and failure. Windows is explicitly unsupported until equivalent
 process-tree cleanup is implemented.
 
-The live UI adapter is still unconnected, so a real app run currently fails
-without terminal markers. Launcher tests use synthetic executables to prove
-process handling and verdict generation; they are not desktop acceptance.
+Launcher tests use synthetic executables to prove process handling and verdict
+generation; they are not desktop acceptance. For desktop runs, serve a built
+frontend on the debug binary's configured dev URL to avoid development compilation
+or HMR consuming step deadlines. The fixture server permits browser CORS only
+from the known application origins. An audio-track step requires an available
+audio output; a headless machine without one must fail that step.
 
 ## Scripts
 

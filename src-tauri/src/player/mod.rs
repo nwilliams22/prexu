@@ -1208,11 +1208,25 @@ impl PlayerState {
         &self,
         expected_path: &str,
     ) -> Result<crate::probe_snapshot::Snapshot, &'static str> {
-        let guard = self.inner.lock().map_err(|_| "player_error")?;
-        Ok(match guard.as_ref() {
-            Some(inner) => crate::probe_snapshot::sample(&inner.mpv, expected_path),
+        // Keep this handle alive, but do not hold the session mutex across
+        // mpv property reads: initialization may wait for the main-thread
+        // render callback, whose UI commands also need the session mutex.
+        let mpv = self
+            .inner
+            .lock()
+            .map_err(|_| "player_error")?
+            .as_ref()
+            .map(|inner| Arc::clone(&inner.mpv));
+        let start = std::time::Instant::now();
+        let snapshot = match mpv {
+            Some(mpv) => crate::probe_snapshot::sample(&mpv, expected_path),
             None => crate::probe_snapshot::Snapshot::absent(),
-        })
+        };
+        log::debug!(
+            "[probe] snapshot completed in {} ms",
+            start.elapsed().as_millis()
+        );
+        Ok(snapshot)
     }
 
     pub(crate) fn with_mpv<R>(

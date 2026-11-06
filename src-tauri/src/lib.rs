@@ -75,6 +75,13 @@ fn app_ready(app: AppHandle) -> Result<(), String> {
         let _ = window.set_focus();
     }
 
+    // Probe play requires an absent handle before each new session. Preserve
+    // that boundary; ordinary startup retains its cold-start optimization.
+    #[cfg(debug_assertions)]
+    if app.try_state::<probe_commands::FixturePort>().is_some() {
+        return Ok(());
+    }
+
     // Warmup: pre-create the libmpv handle on a background thread so the
     // user's first Play skips the hwdec probe + VO selection (~12 s
     // observed on a cold Win11 boot). The handle stays parked in

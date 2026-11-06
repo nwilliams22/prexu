@@ -54,6 +54,7 @@ import {
   derivePostPlayDetailProps,
   deriveUpNextSlice,
 } from "./player-postplay-props";
+import { probeLive } from "../services/probe-live";
 import { playerStyles as styles } from "./Player.styles";
 
 interface PlayerProps {
@@ -607,6 +608,21 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     togglePiP,
     onToggleShortcuts: toggleShortcuts,
   });
+
+  // Publish the same committed handlers used by the visible controls. The
+  // bridge is mounted only in a native-authorized probe run.
+  useEffect(() => {
+    const live = {
+      player, stop: lifecycle.exit, toggleFullscreen: toggleFullscreenWithTransition,
+      togglePopout: togglePiP, minimize: handleMinimize,
+      restore: playerMinimize.restoreFromMinimize, mini: playerMinimize.isMinimized,
+      popout: isPopOut, supportsMini: SUPPORTS_PLAYER_MINIMIZE,
+      supportsPopout: SUPPORTS_PLAYER_POPOUT,
+    };
+    probeLive.player = live;
+    return () => { if (probeLive.player === live) probeLive.player = null; };
+  }, [player, lifecycle.exit, toggleFullscreenWithTransition, togglePiP,
+    handleMinimize, playerMinimize.restoreFromMinimize, playerMinimize.isMinimized, isPopOut]);
 
   // Set document title
   useEffect(() => {

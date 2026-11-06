@@ -54,6 +54,19 @@ class FixtureServiceTests(unittest.TestCase):
         with self.assertRaises(OSError):
             socket.create_connection((parsed.hostname, parsed.port), timeout=1)
 
+    def test_browser_cors_is_scoped_to_app_origins(self):
+        with serve(self.root) as service:
+            status, headers, body = self.request(service['url'], METADATA_PATH, 'OPTIONS',
+                {'Origin': 'http://localhost:1420', 'Access-Control-Request-Method': 'GET',
+                 'Access-Control-Request-Headers': 'x-plex-token'})
+            self.assertEqual((status, body), (204, b''))
+            self.assertEqual(headers['Access-Control-Allow-Origin'], 'http://localhost:1420')
+            self.assertIn('x-plex-token', headers['Access-Control-Allow-Headers'])
+            self.assertEqual(self.request(service['url'], METADATA_PATH,
+                headers={'Origin': 'https://untrusted.example'})[1].get('Access-Control-Allow-Origin'), None)
+            self.assertEqual(self.request(service['url'], METADATA_PATH,
+                headers={'Origin': 'tauri://localhost'})[1]['Access-Control-Allow-Origin'], 'tauri://localhost')
+
     def test_seek_ranges(self):
         with serve(self.root) as service:
             for value, start, end in [('bytes=20-39', 20, 39), ('bytes=2000-', 2000, 2047),

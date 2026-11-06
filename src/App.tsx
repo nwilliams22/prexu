@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import AppLayout from "./components/AppLayout";
 import PlayerOverlay from "./components/PlayerOverlay";
 import PlayBridge from "./components/PlayBridge";
+import ProbeBridge from "./components/ProbeBridge";
 import SplashScreen from "./components/SplashScreen";
 import { useAutoUpdate } from "./hooks/useAutoUpdate";
 import { useAuth, useAuthState, AuthProvider, type AuthContextValue } from "./hooks/useAuth";
@@ -300,10 +301,10 @@ function NormalApp() {
 }
 
 function App({ probeAuth = null }: { probeAuth?: AuthContextValue | null }) {
-  return probeAuth ? <AppWithAuth auth={probeAuth} /> : <NormalApp />;
+  return probeAuth ? <AppWithAuth auth={probeAuth} probe /> : <NormalApp />;
 }
 
-function AppWithAuth({ auth }: { auth: AuthContextValue }) {
+function AppWithAuth({ auth, probe = false }: { auth: AuthContextValue; probe?: boolean }) {
 
   // Signal the Tauri shell that React has painted its first frame so it
   // can show the main window. The window is created with `visible: false`
@@ -321,6 +322,7 @@ function AppWithAuth({ auth }: { auth: AuthContextValue }) {
     <AuthProvider value={auth}>
       <AppProviders>
         <AppRoutes />
+        {probe && <ProbeBridge />}
       </AppProviders>
     </AuthProvider>
   );

@@ -82,6 +82,16 @@ def serve(directory):
             self.send_header('Content-Type', content_type)
             self.send_header('Content-Length', str(len(data)))
             self.send_header('Connection', 'close')
+            origin = self.headers.get('Origin')
+            if origin in ('http://localhost:1420', 'http://127.0.0.1:1420',
+                          'http://tauri.localhost', 'https://tauri.localhost', 'tauri://localhost'):
+                self.send_header('Access-Control-Allow-Origin', origin)
+                self.send_header('Vary', 'Origin')
+                self.send_header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS')
+                self.send_header('Access-Control-Allow-Headers',
+                                 'accept, content-type, range, x-plex-product, x-plex-version, '
+                                 'x-plex-client-identifier, x-plex-token')
+                self.send_header('Access-Control-Expose-Headers', 'Content-Range, Accept-Ranges')
             for key, value in (headers or {}).items():
                 self.send_header(key, value)
             self.end_headers()
@@ -90,6 +100,9 @@ def serve(directory):
                     self.wfile.write(data)
                 except (BrokenPipeError, ConnectionResetError):
                     pass  # Media clients close an old range when seeking.
+
+        def do_OPTIONS(self):
+            self.reply(204)
 
         def do_HEAD(self):
             self.do_GET()
