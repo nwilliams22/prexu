@@ -2,6 +2,7 @@
 import copy
 import json
 import unittest
+from pathlib import Path
 
 from contract import Invalid, decode, validate_script, verdict
 
@@ -40,6 +41,16 @@ def check(script, events, exit_code=0):
 class ContractTests(unittest.TestCase):
     def setUp(self):
         self.script, self.events = script_and_trace()
+
+    def test_shared_native_script_corpus(self):
+        cases = json.loads(Path(__file__).with_name("script-corpus.json").read_text())
+        for case in cases:
+            with self.subTest(name=case["name"]):
+                if case["valid"]:
+                    validate_script(decode(case["raw"]))
+                else:
+                    with self.assertRaises(Invalid):
+                        validate_script(decode(case["raw"]))
 
     def test_complete_trace(self):
         self.assertEqual(check(self.script, self.events)["status"], "pass")

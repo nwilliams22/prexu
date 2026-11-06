@@ -234,7 +234,9 @@ jobs:
         env:
           MPV_SOURCE: ${{ github.workspace }}\src-tauri\ci\mpv
           PREXU_TEST_FIXTURE: ${{ github.workspace }}/probe-fixtures/av-cues-v1.mkv
-        run: cargo test --test probe_fixture -- --ignored --nocapture
+        run: |
+          cargo test --test probe_script
+          cargo test --test probe_fixture -- --ignored --nocapture
 
       # This job stubs the ANGLE DLLs (see the stub step above), so the two
       # DLL-integrity tests (SHA-256 pin + Authenticode) can never pass here
@@ -311,7 +313,9 @@ jobs:
         timeout-minutes: 3
         env:
           PREXU_TEST_FIXTURE: ${{ github.workspace }}/probe-fixtures/av-cues-v1.mkv
-        run: cargo test --test probe_fixture -- --ignored --nocapture
+        run: |
+          cargo test --test probe_script
+          cargo test --test probe_fixture -- --ignored --nocapture
 
       # The real-libmpv teardown tests in player::events (BAD-39) create a real
       # mpv handle, so they are #[ignore]d and excluded from the ubuntu-22.04

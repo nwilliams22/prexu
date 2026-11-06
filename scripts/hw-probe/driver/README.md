@@ -1,6 +1,10 @@
 # Scripted probe contract v1
 
 This directory currently implements **offline script/trace verification only**.
+A native preflight parser is implemented in `src-tauri/src/probe_script.rs`,
+with 64 shared positive/negative cases checked by both languages. It is not yet
+connected to application startup. Run its checks with
+`cargo test --manifest-path src-tauri/Cargo.toml --test probe_script`.
 The desktop bootstrap, loopback fixture service, Rust marker writer and serial UI runner
 are not implemented yet. Passing these selftests is not an end-to-end run.
 

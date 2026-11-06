@@ -1,0 +1,322 @@
+[
+  {
+    "name": "minimal",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": true
+  },
+  {
+    "name": "bad-version-1.0",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1.0, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "bad-version-True",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": true, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "bad-version-2",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 2, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "bad-runId-",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "bad-runId-\u00e9",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"\\u00e9\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "bad-runId-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "bad-fixture-other",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"other\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "bad-timeoutMs-True",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": true, \"steps\": [{\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "bad-timeoutMs-0",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 0, \"steps\": [{\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "bad-timeoutMs-900001",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 900001, \"steps\": [{\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "bad-steps-[]",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": []}",
+    "valid": false
+  },
+  {
+    "name": "bad-extra-1",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}], \"extra\": 1}",
+    "valid": false
+  },
+  {
+    "name": "missing-schema",
+    "raw": "{\"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "missing-version",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "missing-runId",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "missing-fixture",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "missing-timeoutMs",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"steps\": [{\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "missing-steps",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000}",
+    "valid": false
+  },
+  {
+    "name": "seek",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"seek\", \"timeoutMs\": 5000, \"args\": {\"positionMs\": 2000, \"toleranceMs\": 500}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": true
+  },
+  {
+    "name": "seek-unknown-arg",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"seek\", \"timeoutMs\": 5000, \"args\": {\"positionMs\": 2000, \"toleranceMs\": 500, \"extra\": true}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "seek-null-positionMs",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"seek\", \"timeoutMs\": 5000, \"args\": {\"positionMs\": null, \"toleranceMs\": 500}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "seek-null-toleranceMs",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"seek\", \"timeoutMs\": 5000, \"args\": {\"positionMs\": 2000, \"toleranceMs\": null}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "pause",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"pause\", \"timeoutMs\": 5000, \"args\": {}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": true
+  },
+  {
+    "name": "pause-unknown-arg",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"pause\", \"timeoutMs\": 5000, \"args\": {\"extra\": true}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "selectAudio",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"selectAudio\", \"timeoutMs\": 5000, \"args\": {\"trackId\": 2}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": true
+  },
+  {
+    "name": "selectAudio-unknown-arg",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"selectAudio\", \"timeoutMs\": 5000, \"args\": {\"trackId\": 2, \"extra\": true}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "selectAudio-null-trackId",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"selectAudio\", \"timeoutMs\": 5000, \"args\": {\"trackId\": null}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "selectSubtitle",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"selectSubtitle\", \"timeoutMs\": 5000, \"args\": {\"trackId\": 0}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": true
+  },
+  {
+    "name": "selectSubtitle-unknown-arg",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"selectSubtitle\", \"timeoutMs\": 5000, \"args\": {\"trackId\": 0, \"extra\": true}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "selectSubtitle-null-trackId",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"selectSubtitle\", \"timeoutMs\": 5000, \"args\": {\"trackId\": null}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "fullscreen",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"fullscreen\", \"timeoutMs\": 5000, \"args\": {\"enabled\": true}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": true
+  },
+  {
+    "name": "fullscreen-unknown-arg",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"fullscreen\", \"timeoutMs\": 5000, \"args\": {\"enabled\": true, \"extra\": true}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "fullscreen-null-enabled",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"fullscreen\", \"timeoutMs\": 5000, \"args\": {\"enabled\": null}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "miniPlayer",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"miniPlayer\", \"timeoutMs\": 5000, \"args\": {\"enabled\": false}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": true
+  },
+  {
+    "name": "miniPlayer-unknown-arg",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"miniPlayer\", \"timeoutMs\": 5000, \"args\": {\"enabled\": false, \"extra\": true}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "miniPlayer-null-enabled",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"miniPlayer\", \"timeoutMs\": 5000, \"args\": {\"enabled\": null}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "popout",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"popout\", \"timeoutMs\": 5000, \"args\": {\"enabled\": true}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": true
+  },
+  {
+    "name": "popout-unknown-arg",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"popout\", \"timeoutMs\": 5000, \"args\": {\"enabled\": true, \"extra\": true}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "popout-null-enabled",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"popout\", \"timeoutMs\": 5000, \"args\": {\"enabled\": null}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "wait",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"wait\", \"timeoutMs\": 5000, \"args\": {\"durationMs\": 2}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": true
+  },
+  {
+    "name": "wait-unknown-arg",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"wait\", \"timeoutMs\": 5000, \"args\": {\"durationMs\": 2, \"extra\": true}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "wait-null-durationMs",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"wait\", \"timeoutMs\": 5000, \"args\": {\"durationMs\": null}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "navigate",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"navigate\", \"timeoutMs\": 5000, \"args\": {\"route\": \"/settings\"}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": true
+  },
+  {
+    "name": "navigate-unknown-arg",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"navigate\", \"timeoutMs\": 5000, \"args\": {\"route\": \"/settings\", \"extra\": true}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "navigate-null-route",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"navigate\", \"timeoutMs\": 5000, \"args\": {\"route\": null}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "setSetting",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"setSetting\", \"timeoutMs\": 5000, \"args\": {\"name\": \"volume\", \"value\": 40}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": true
+  },
+  {
+    "name": "setSetting-unknown-arg",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"setSetting\", \"timeoutMs\": 5000, \"args\": {\"name\": \"volume\", \"value\": 40, \"extra\": true}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "setSetting-null-name",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"setSetting\", \"timeoutMs\": 5000, \"args\": {\"name\": null, \"value\": 40}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "setSetting-null-value",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"setSetting\", \"timeoutMs\": 5000, \"args\": {\"name\": \"volume\", \"value\": null}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "windowMinimize",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"windowMinimize\", \"timeoutMs\": 5000, \"args\": {}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": true
+  },
+  {
+    "name": "windowMinimize-unknown-arg",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"windowMinimize\", \"timeoutMs\": 5000, \"args\": {\"extra\": true}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "windowRestore",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"windowRestore\", \"timeoutMs\": 5000, \"args\": {}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": true
+  },
+  {
+    "name": "windowRestore-unknown-arg",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"action\", \"action\": \"windowRestore\", \"timeoutMs\": 5000, \"args\": {\"extra\": true}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "bad-sequence-54",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "bad-sequence-55",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "bad-sequence-56",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "bad-sequence-57",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"resume\", \"action\": \"resume\", \"timeoutMs\": 10}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "bad-sequence-58",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "pause-resume",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"play\", \"action\": \"play\", \"timeoutMs\": 5000, \"args\": {\"mediaId\": \"av-cues-v1\"}}, {\"id\": \"pause\", \"action\": \"pause\", \"timeoutMs\": 10}, {\"id\": \"resume\", \"action\": \"resume\", \"timeoutMs\": 10}, {\"id\": \"stop\", \"action\": \"stop\", \"timeoutMs\": 5000}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": true
+  },
+  {
+    "name": "duplicate-root",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "duplicate-nested",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"quit\", \"action\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "nonfinite",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": NaN, \"steps\": [{\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  },
+  {
+    "name": "duplicate-valid-waits",
+    "raw": "{\"schema\": \"prexu.probe.script\", \"version\": 1, \"runId\": \"native-001\", \"fixture\": \"av-cues-v1\", \"timeoutMs\": 90000, \"steps\": [{\"id\": \"duplicate\", \"action\": \"wait\", \"timeoutMs\": 10, \"args\": {\"durationMs\": 1}}, {\"id\": \"duplicate\", \"action\": \"wait\", \"timeoutMs\": 10, \"args\": {\"durationMs\": 1}}, {\"id\": \"quit\", \"action\": \"quit\", \"timeoutMs\": 5000}]}",
+    "valid": false
+  }
+]
