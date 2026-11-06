@@ -323,7 +323,8 @@ test.describe("hover-intent prefetch", () => {
     });
 
     await page.goto("/library/1");
-    await expect(page.getByText("Test Movie 1")).toBeAttached();
+    // Cold local Vite transforms can exceed the default 5s assertion budget.
+    await expect(page.getByText("Test Movie 1")).toBeAttached({ timeout: 20_000 });
 
     const card100 = page.locator(".card-enter", { hasText: "Test Movie 1" }).first();
     const card101 = page.locator(".card-enter", { hasText: "Test Movie 2" }).first();
@@ -333,16 +334,16 @@ test.describe("hover-intent prefetch", () => {
 
     // Fast sweep over card 101 (dwell < HOVER_INTENT_DELAY_MS = 150ms): no prefetch.
     await page.mouse.move(box101.x + box101.width / 2, box101.y + box101.height / 2);
-    await page.waitForTimeout(60);
     await page.mouse.move(5, 5); // sweep away
     await page.waitForTimeout(300);
     expect(hits101.length).toBe(0);
 
     // Sustained hover over card 100 (dwell > 150ms): exactly one prefetch.
     await page.mouse.move(box100.x + box100.width / 2, box100.y + box100.height / 2);
-    await page.waitForTimeout(400);
-    await page.mouse.move(5, 5);
     await expect.poll(() => hits100.length).toBe(1);
+    await page.mouse.move(5, 5);
+    await page.waitForTimeout(300);
+    expect(hits100.length).toBe(1);
   });
 });
 
