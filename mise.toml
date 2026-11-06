@@ -117,7 +117,11 @@ run = "cargo clippy --all-targets -- -D warnings"
 description = "src-tauri library unit tests (excludes real-libmpv tests and headless_mpv)"
 depends = ["build"]
 dir = "src-tauri"
-run = "cargo test --lib --test probe_script"
+run = """
+cargo test --lib --test probe_script
+rustc --test -C debug-assertions=no src/probe_environment.rs -o target/probe-release-gate-tests
+./target/probe-release-gate-tests
+"""
 
 # The real-libmpv teardown tests in player::events are #[ignore]d: they create a
 # real mpv handle and abort with VersionMismatch against libmpv API 1.x, which

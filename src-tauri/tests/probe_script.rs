@@ -91,3 +91,6 @@ fn isolated_preflight() {
     assert!(!unused.exists());
     fs::remove_dir_all(root).unwrap();
 }
+
+#[path = "../src/probe_environment.rs"]
+mod probe_environment;

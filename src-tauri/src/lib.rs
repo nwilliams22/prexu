@@ -1,4 +1,9 @@
 mod downloads;
+mod probe_environment;
+#[cfg(debug_assertions)]
+mod probe_script;
+#[cfg(debug_assertions)]
+mod probe_bootstrap;
 // The native libmpv player compiles on Windows (wid/HWND + DirectComposition)
 // and Linux (render API + GtkGLArea under the transparent WebKitWebView — see
 // docs/adr-native-player-render-api.md, prexu-axj4.3). macOS and any other
@@ -490,6 +495,26 @@ fn write_error(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let probe_paths = probe_environment::paths(probe_environment::KEYS.map(std::env::var_os))
+        .unwrap_or_else(|code| {
+            eprintln!("{code}");
+            std::process::exit(2);
+        });
+    let probe_active = probe_paths.is_some();
+    #[cfg(debug_assertions)]
+    let probe = probe_paths.map(|[script, state, output]| {
+        // WKWebView isolation has not been established. Refuse before stores
+        // or webviews exist rather than risk opening the user's profile.
+        if !cfg!(any(target_os = "linux", target_os = "windows")) {
+            eprintln!("unsupported_action");
+            std::process::exit(2);
+        }
+        probe_bootstrap::prepare(&script, &state, &output).unwrap_or_else(|code| {
+            eprintln!("{code}");
+            std::process::exit(2);
+        })
+    });
+
     // Linux/Wayland: we previously force-set WEBKIT_DISABLE_DMABUF_RENDERER=1
     // here (prexu-z5mz: webkit2gtk's DMABUF renderer crashed at webview creation
     // on Wayland/NVIDIA — "Error 71 (Protocol error)"). That force is REMOVED
@@ -572,7 +597,19 @@ pub fn run() {
     // the running instance keeps writing to the renamed file, so nothing is
     // lost, but current/prev swap roles until the next clean start.
     let context = tauri::generate_context!();
-    let session_log_note = {
+    #[cfg(debug_assertions)]
+    let context = {
+        let mut context = context;
+        if let Some(probe) = &probe {
+            context.config_mut().app.app_directories_override = Some(
+                tauri::utils::config::AppDirectoriesOverride::Root(probe.state_dir.clone()),
+            );
+        }
+        context
+    };
+    let session_log_note = if probe_active {
+        "[setup] isolated probe session — default log rotation skipped".to_string()
+    } else {
         let name = context
             .config()
             .product_name
@@ -587,15 +624,26 @@ pub fn run() {
 
     let builder = tauri::Builder::default()
         .manage(ProxyState::new())
-        .manage(downloads::DownloadManager::new())
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .manage(downloads::DownloadManager::new());
+    #[cfg(debug_assertions)]
+    let builder = if let Some(probe) = probe {
+        // Retain the validated script and exclusive event handle for the runner.
+        builder.manage(Mutex::new((probe.script, probe.events)))
+    } else {
+        builder
+    };
+    let builder = if probe_active {
+        builder
+    } else {
+        builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // If a second instance is launched, focus the existing window
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_focus();
                 let _ = window.unminimize();
             }
         }))
-        .plugin(tauri_plugin_http::init())
+    };
+    let builder = builder.plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(
             tauri_plugin_log::Builder::default()

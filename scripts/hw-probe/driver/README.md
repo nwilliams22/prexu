@@ -1,18 +1,36 @@
 # Scripted probe contract v1
 
-This directory currently implements **offline script/trace verification only**.
-A native preflight parser is implemented in `src-tauri/src/probe_script.rs`,
-with 64 shared positive/negative cases checked by both languages. It is not yet
-connected to application startup. Run its checks with
+This directory implements offline script/trace verification and isolated native
+startup. The native parser has 64 shared positive/negative cases checked by Rust
+and Python. Run its checks with
 `cargo test --manifest-path src-tauri/Cargo.toml --test probe_script`.
-The filesystem preflight in `src-tauri/src/probe_bootstrap.rs` validates the
-script before creating state, rejects existing or overlapping directories, and
-reserves an exclusive event file. The caller must create the parent directory;
-state and output directories must not exist. Failed preflight can leave its new
-directories behind; retry with fresh paths. Its isolation tests run in the same
-Rust target. This helper is also not yet connected to startup.
-The desktop integration, loopback fixture service, Rust marker writer and serial UI runner
-are not implemented yet. Passing these selftests is not an end-to-end run.
+
+Debug Linux/Windows builds accept `PREXU_PROBE_SCRIPT`, `PREXU_PROBE_STATE_DIR`,
+and `PREXU_PROBE_OUTPUT_DIR` together, all absolute paths. Before application
+initialization, the bootstrap validates the script, rejects existing or
+overlapping directories, and reserves an exclusive `events.jsonl`. The caller
+must create the parent directory; state and output must not exist. A failed
+preflight can consume fresh directories; retry with new paths.
+
+Tauri config/data/cache/log and default webview storage use the fresh state
+root. Probe startup skips normal log rotation and the single-instance plugin.
+Other platforms reject probe startup until their webview isolation is verified.
+Release builds reject any probe variable (even empty) with `probe_disabled` and
+exit code 2 before normal initialization; parsing and filesystem preparation are
+compiled out. With no probe variables, normal startup is unchanged.
+
+The marker writer, handshake, loopback fixture service and serial UI runner are
+not implemented yet: a valid probe startup opens an isolated app but does not
+execute the script. Its empty event file must fail verification. Passing these
+selftests is not an end-to-end run or proof of runtime storage isolation.
+
+Test the production-compiled environment policy separately without linking the
+GUI (this tests the gate, not a packaged release):
+
+```sh
+rustc --test -C debug-assertions=no src-tauri/src/probe_environment.rs -o /tmp/probe-gate-tests
+/tmp/probe-gate-tests
+```
 
 Run the negative controls with:
 

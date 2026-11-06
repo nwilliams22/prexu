@@ -315,6 +315,8 @@ jobs:
           PREXU_TEST_FIXTURE: ${{ github.workspace }}/probe-fixtures/av-cues-v1.mkv
         run: |
           cargo test --test probe_script
+          rustc --test -C debug-assertions=no src/probe_environment.rs -o target/probe-release-gate-tests
+          ./target/probe-release-gate-tests
           cargo test --test probe_fixture -- --ignored --nocapture
 
       # The real-libmpv teardown tests in player::events (BAD-39) create a real
