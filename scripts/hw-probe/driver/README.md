@@ -53,10 +53,12 @@ with advancing time afterwards; normal startup warmup is skipped in probe mode.
 Stop requires the session to clear and the native handle to disappear. Polling is
 cancellable, including hung IPC; unsupported capabilities fail explicitly.
 Passing selftests is not an end-to-end run or proof of runtime storage isolation.
-Live desktop playback acceptance remains open: initial Xvfb runs loaded the
-fixture but timed out awaiting advancing snapshots. Native sampling completed
-quickly while the frontend received a sample only after playback ended. The
-harness correctly reported failure; no passing desktop run is claimed.
+The transport regression scenario is `scenarios/transport.json`: play, pause,
+seek, audio/subtitle selection, resume, stop, replay, stop and quit. Run it through
+the launcher on a debug desktop with the generated fixtures. On Linux, the mpv
+frame pump redraws on frame notifications; unconditional redraws during playback
+can delay WebKit IPC replies until EOF under software rendering. A passing
+transport verdict establishes control/state only, not visible or audible output.
 
 Test the production-compiled environment policy separately without linking the
 GUI (this tests the gate, not a packaged release):
@@ -241,8 +243,9 @@ means off). Unknown properties remain null. Paths, query strings, and mpv errors
 are never returned. Calls run off the UI thread.
 
 The endpoint is read-only and does not emit markers. A snapshot alone is not a
-new-load acknowledgement: the forthcoming UI adapter must observe an absent
-native player before dispatching play, then observe the fixture and advancing
+new-load acknowledgement: the live UI adapter observes an absent
+native player before dispatching play, then observes the fixture and advancing
 time on the fresh handle. Do not use queued `player://ready` or `time-pos` events
 as new-load evidence. Real-mpv tests cover snapshot seek/track/idle values and
-wrong-fixture rejection with null outputs; the UI adapter remains unconnected.
+wrong-fixture rejection with null outputs. The transport scenario exercises the
+connected UI adapter and native observations together.

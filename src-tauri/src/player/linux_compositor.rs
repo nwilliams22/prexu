@@ -310,36 +310,6 @@ fn consume_first_frame_ready() -> bool {
     FIRST_FRAME_READY_ARMED.swap(false, Ordering::AcqRel)
 }
 
-// ── Pump gate (prexu-0szx.11) ───────────────────────────────────────────────
-//
-// The 60 Hz pump used to call `mpv.get_property("pause"/"idle-active")` on
-// every tick — up to ~120 synchronous libmpv FFI core-lock round trips per
-// second for the whole lifetime of an attached mpv, even while paused. The
-// event pump already observes both properties (events.rs), so it mirrors
-// them into these atomics and the pump's gate becomes two relaxed loads.
-// Defaults are the "don't pump" values; mpv delivers current values
-// immediately on observe, so the atomics sync as soon as the event pump
-// starts. Reset on detach so a torn-down player returns to quiescent.
-
-static PUMP_PAUSED: AtomicBool = AtomicBool::new(true);
-static PUMP_IDLE: AtomicBool = AtomicBool::new(true);
-
-/// Mirror of mpv's `pause` property. Called from the event-pump thread.
-pub(crate) fn set_pump_paused(paused: bool) {
-    PUMP_PAUSED.store(paused, Ordering::Relaxed);
-}
-
-/// Mirror of mpv's `idle-active` property. Called from the event-pump thread.
-pub(crate) fn set_pump_idle(idle: bool) {
-    PUMP_IDLE.store(idle, Ordering::Relaxed);
-}
-
-/// Reset both mirrors to the quiescent "don't pump" defaults.
-fn reset_pump_gate() {
-    PUMP_PAUSED.store(true, Ordering::Relaxed);
-    PUMP_IDLE.store(true, Ordering::Relaxed);
-}
-
 // ── Overlay quiescence (prexu-ertt Phase 1) ─────────────────────────────────
 //
 // The prexu-41cw cost-isolation matrix showed the overlay stack owns a share
@@ -376,13 +346,6 @@ fn overlay_flag_transition(active: bool) -> bool {
 /// (the mpv render API rebuilds its target when the size changes). (ADR)
 pub(crate) fn fbo_dimensions(allocated_width: i32, allocated_height: i32, scale_factor: i32) -> (i32, i32) {
     (allocated_width * scale_factor, allocated_height * scale_factor)
-}
-
-/// Frame-driver decision: the 60 Hz pump should `queue_render` only while a file
-/// is actively playing. Paused / idle (no file) frames are driven solely by
-/// mpv's update-callback so we do not re-render the same frame 60×/s. (re-review)
-pub(crate) fn should_pump(paused: bool, idle_active: bool) -> bool {
-    !paused && !idle_active
 }
 
 /// Subtitle compensation for the margin-based mini mode (prexu-91k4).
@@ -475,20 +438,6 @@ struct Compositor {
     /// The composited webview widget (`None` under PREXU_NO_WEBVIEW). Held for
     /// the overlay wake/sleep opaque-region policy (prexu-ertt Phase 1).
     webview: Option<gtk::Widget>,
-}
-
-impl Compositor {
-    /// Whether the pump should drive a redraw this tick. Two relaxed atomic
-    /// loads — the mirrors are maintained by the event pump's property
-    /// observations (prexu-0szx.11; this used to be two synchronous mpv FFI
-    /// property reads per 16 ms tick). Defaults are "don't pump" until mpv
-    /// reports real state.
-    fn should_pump_now(&self) -> bool {
-        should_pump(
-            PUMP_PAUSED.load(Ordering::Relaxed),
-            PUMP_IDLE.load(Ordering::Relaxed),
-        )
-    }
 }
 
 // ── Public entry points ────────────────────────────────────────────────────────
@@ -852,10 +801,8 @@ pub(crate) fn set_overlay_active(app: &AppHandle, active: bool) {
 pub fn detach_mpv(app: &AppHandle) {
     log::info!("[player:linux] detach_mpv — freeing render context on main thread (blocking)");
     // No renders will follow — an un-consumed reveal arm must not leak into
-    // the next session's first (pre-PlaybackRestart) frame, and the pump
-    // gate returns to its quiescent defaults until the next mpv attaches.
+    // the next session's first (pre-PlaybackRestart) frame.
     disarm_first_frame_ready();
-    reset_pump_gate();
     let (tx, rx) = std::sync::mpsc::channel::<()>();
     let dispatched = app.run_on_main_thread(move || {
         let comp = COMPOSITOR.with(|c| c.try_borrow().ok().and_then(|g| g.clone()));
@@ -1299,15 +1246,17 @@ fn try_create_render_context(comp: &Rc<Compositor>) {
     }
     log::info!("[player:linux] mpv render context created (OpenGL backend); starting 60 Hz frame pump");
 
-    // 60 Hz pump: redraw when mpv signalled a frame OR while actively playing.
-    // Paused/idle → skip (mpv's callback still drives seek repaints etc).
+    // Poll frame notifications at 60 Hz, but only redraw when mpv requests it.
+    // Unconditional redraws while playing can saturate GTK/WebKit dispatch on
+    // software rendering and delay IPC replies until EOF. Seek/subtitle changes
+    // also signal this callback; GTK resize/damage still triggers its own draws.
     let weak = Rc::downgrade(comp);
     let source = glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
         let Some(c) = weak.upgrade() else {
             return glib::ControlFlow::Break;
         };
         let signalled = needs_render.swap(false, Ordering::Relaxed);
-        if signalled || c.should_pump_now() {
+        if signalled {
             c.gl_area.queue_render();
         }
         glib::ControlFlow::Continue
@@ -1329,7 +1278,7 @@ fn try_create_render_context(comp: &Rc<Compositor>) {
 mod tests {
     use super::{
         engine_failure_reason, fbo_dimensions, overlay_active, overlay_flag_transition,
-        should_pump, sub_compensation,
+        sub_compensation,
     };
 
     #[test]
@@ -1372,27 +1321,6 @@ mod tests {
     }
 
     #[test]
-    fn should_pump_true_only_when_playing() {
-        // playing: not paused, not idle.
-        assert!(should_pump(false, false));
-    }
-
-    #[test]
-    fn should_pump_false_when_paused() {
-        assert!(!should_pump(true, false));
-    }
-
-    #[test]
-    fn should_pump_false_when_idle_no_file() {
-        assert!(!should_pump(false, true));
-    }
-
-    #[test]
-    fn should_pump_false_when_paused_and_idle() {
-        assert!(!should_pump(true, true));
-    }
-
-    #[test]
     fn sub_compensation_defaults_when_not_minimized() {
         // Zero ratios = not minimized (or margins just cleared): mpv defaults.
         assert_eq!(sub_compensation((0.0, 0.0, 0.0, 0.0)), (1.0, true));
@@ -1423,23 +1351,6 @@ mod tests {
         let (scale, use_margins) = sub_compensation((0.0, 0.0, 0.7, 0.7));
         assert!((scale - 0.01).abs() < 1e-9);
         assert!(!use_margins);
-    }
-
-    #[test]
-    fn pump_gate_mirrors_setters_and_resets_to_quiescent() {
-        use std::sync::atomic::Ordering;
-        // Whole sequence in ONE test — the gate is process-global statics.
-        super::set_pump_paused(false);
-        super::set_pump_idle(false);
-        assert!(super::should_pump(
-            super::PUMP_PAUSED.load(Ordering::Relaxed),
-            super::PUMP_IDLE.load(Ordering::Relaxed),
-        ));
-        super::reset_pump_gate();
-        assert!(!super::should_pump(
-            super::PUMP_PAUSED.load(Ordering::Relaxed),
-            super::PUMP_IDLE.load(Ordering::Relaxed),
-        ));
     }
 
     #[test]

@@ -1,0 +1,75 @@
+{
+  "schema": "prexu.probe.script",
+  "version": 1,
+  "runId": "live-test",
+  "fixture": "av-cues-v1",
+  "timeoutMs": 90000,
+  "steps": [
+    {
+      "id": "play",
+      "action": "play",
+      "args": {
+        "mediaId": "av-cues-v1"
+      },
+      "timeoutMs": 30000
+    },
+    {
+      "id": "pause",
+      "action": "pause",
+      "timeoutMs": 5000
+    },
+    {
+      "id": "seek",
+      "action": "seek",
+      "args": {
+        "positionMs": 4000,
+        "toleranceMs": 500
+      },
+      "timeoutMs": 5000
+    },
+    {
+      "id": "audio",
+      "action": "selectAudio",
+      "args": {
+        "trackId": 2
+      },
+      "timeoutMs": 5000
+    },
+    {
+      "id": "subs",
+      "action": "selectSubtitle",
+      "args": {
+        "trackId": 1
+      },
+      "timeoutMs": 5000
+    },
+    {
+      "id": "resume",
+      "action": "resume",
+      "timeoutMs": 5000
+    },
+    {
+      "id": "stop",
+      "action": "stop",
+      "timeoutMs": 10000
+    },
+    {
+      "id": "replay",
+      "action": "play",
+      "args": {
+        "mediaId": "av-cues-v1"
+      },
+      "timeoutMs": 15000
+    },
+    {
+      "id": "stop-again",
+      "action": "stop",
+      "timeoutMs": 10000
+    },
+    {
+      "id": "quit",
+      "action": "quit",
+      "timeoutMs": 5000
+    }
+  ]
+}
