@@ -46,7 +46,8 @@ sudo dnf install -y grim slurp xdotool wtype   # + optional: ydotool
 - **Capture backend** is chosen by *trying* each one, not by presence: `grim`
   fails on KDE (KWin has no `wlr-screencopy`), so on KDE Plasma the suite falls
   through to `spectacle`. On wlroots (sway/Hyprland) or X11, `grim`/`import` are
-  faster and used first.
+  faster and used first. An exit-0 capture with missing/unreadable output is
+  retried once after 500 ms; a nonzero exit falls through immediately.
 - **Geometry probes are X11-only.** On Wayland the native mpv surface has no
   addressable per-window geometry API, so `geometry-x11.nu` and the orchestrator's
   geometry row `skip`. This matches the plan: *"Wayland runs get log+luminance
@@ -121,6 +122,40 @@ nu scripts/hw-probe/luminance.nu ground-truth --src /path/movie.mkv --at 120
 nu scripts/hw-probe/probes.nu stress --duration 30sec --watchdog-ms 5000
 ```
 
+### CPU/RSS build profile and calibration
+
+Use a **release build** (`npm run tauri build`) or a packaged app with known
+release provenance for CPU/RSS comparisons. `npm run tauri dev` is unoptimized:
+the 2026-07-12 debug run measured **28.3% average CPU**, above the provisional
+15.0% ceiling, while playing 4K with subtitles in a 1920×2112 window. That is
+not a release baseline or evidence of a pump-gate regression.
+
+Both commands annotate the verdict detail with a `/proc/<pid>/exe` path hint:
+`debug`, `release`, or `unknown`. Conventional `target/[triple/]debug` and
+`target/[triple/]release` paths are recognized; installed packages and custom
+`CARGO_TARGET_DIR` paths can be unknown. Confirm the actual build provenance;
+a directory name is only a hint. Debug results retain their numeric verdict
+for diagnostics, but must not be used as a release gate. No relaxed debug
+preset or calibrated debug ceiling is provided.
+
+The existing 15.0% average CPU and 50 MiB RSS-growth limits are **provisional**;
+there is no measured window/content envelope that validates them. For the
+pending comparable baseline, use a 1920×2112 window, 4K video with subtitles,
+steady playback for CPU and repeated seeks for RSS (20 samples, 500 ms interval).
+Record codec, frame rate, subtitle format, hardware decode state, GPU/driver,
+build commit/profile, window size and sample count with the output. Smaller
+windows, idle playback, software decoding and different content are separate
+workloads; do not compare them as equivalent. CPU samples cover only the selected
+app PID, not the WebKit child-process tree; RSS measures growth, not total memory.
+
+**Release baseline: not measured.** On 2026-11-06 the execution environment had
+no `/dev/dri`, no graphical session (`DISPLAY`/`WAYLAND_DISPLAY` unset), and no
+release executable in either normal target directory. Software-rendered Xvfb
+would not calibrate this hardware workload. Calibration follow-up `prexu-ed30` must
+run both commands above on the GPU dev box, preserve their actual output, and only
+then justify retaining or changing the ceilings. Until then these thresholds
+are diagnostic defaults, not acceptance limits.
+
 ### X11-only (run on an X11 session)
 
 ```bash
@@ -152,8 +187,11 @@ nu scripts/hw-probe/probes.nu click-sweep
 
 - **PASS/FAIL** — a verified invariant. FAIL exits non-zero.
 - **SKIP** — not exercised (no sub-scale lines because subs never shown; no
-  minimize→popout in the log for inset-clear; geometry on Wayland). A skip is a
-  gap in coverage for that run, not a defect.
+  geometry on Wayland). A skip is a gap in coverage for that run, not a defect.
+  E.5 `popout-inset-clear` is specifically a **defensive-path marker**:
+  `clearing leftover minimize inset on enter` logs only when a leftover inset
+  exists at popout entry. A healthy mini→popout→exit cycle clears mini state
+  first and SKIPs this marker by design; a normal popout cycle need not emit it.
 
 ## What it would have caught
 
@@ -194,9 +232,9 @@ differently across the events/compositor sides and across build history.
 
 `prexu-vbb2` / `prexu-331f` track the future in-app driver, screen recording,
 and step-based verdict pipeline; that driver is not implemented. Resource
-ceilings still need build-profile calibration (`prexu-xxct`), and capture
-cold-start retry is tracked in `prexu-s83x`. The saved report is not full release
-acceptance. DOM/allocation timing does not establish when WebKit presents the
+ceilings still need release hardware calibration (see the CPU/RSS section above);
+build-profile hints and capture cold-start retry are implemented. The saved
+report is not full release acceptance. DOM/allocation timing does not establish when WebKit presents the
 correct pixels (`prexu-41cw` / `prexu-v6pr`).
 
 ### Black pixels despite first-frame log pairing

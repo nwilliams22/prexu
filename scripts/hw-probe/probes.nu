@@ -22,6 +22,19 @@ def resolve-pid [pid: int]: nothing -> int {
     $found | first
 }
 
+# /proc executable paths identify conventional Cargo profiles, not arbitrary
+# packaged/custom builds. Never guess that an unknown binary is optimized.
+def build-profile [pid: int]: nothing -> string {
+    let exe = (try { ^readlink $"/proc/($pid)/exe" | str trim } catch { "" })
+    if $exe =~ '/target/([^/]+/)?debug/' {
+        "debug (path hint; ceilings are not calibrated for debug)"
+    } else if $exe =~ '/target/([^/]+/)?release/' {
+        "release (path hint; confirm build provenance)"
+    } else {
+        "unknown (packaged/custom build; confirm build provenance)"
+    }
+}
+
 def main [] {
     print "usage: probes.nu (rss | cpu | timing | zombie | stress | click-sweep) [flags]"
     exit 2
@@ -31,6 +44,7 @@ def main [] {
 def "main rss" [--pid: int = 0, --samples: int = 20, --interval: duration = 500ms, --max-growth-mb: float = 50.0] {
     let p = (resolve-pid $pid)
     if $p == 0 { print $"(ansi yellow)SKIP(ansi reset) rss: app not running — no prexu pid"; return }
+    let profile = (build-profile $p)
     print $"Sampling RSS of pid ($p) — drive a seek loop now..."
     mut acc = []
     for i in 1..$samples {
@@ -38,7 +52,7 @@ def "main rss" [--pid: int = 0, --samples: int = 20, --interval: duration = 500m
         sleep $interval
     }
     let v = (rss-verdict $acc --max-growth-mb $max_growth_mb)
-    print $"rss: (fmt-status $v.status) — ($v.detail)"
+    print $"rss: (fmt-status $v.status) — ($v.detail); profile=($profile)"
     if $v.status == "fail" { exit 1 }
 }
 
@@ -46,6 +60,7 @@ def "main rss" [--pid: int = 0, --samples: int = 20, --interval: duration = 500m
 def "main cpu" [--pid: int = 0, --samples: int = 20, --interval: duration = 500ms, --max-avg-pct: float = 15.0] {
     let p = (resolve-pid $pid)
     if $p == 0 { print $"(ansi yellow)SKIP(ansi reset) cpu: app not running — no prexu pid"; return }
+    let profile = (build-profile $p)
     print $"Sampling CPU of pid ($p) during steady playback..."
     mut acc = []
     for i in 1..$samples {
@@ -53,7 +68,7 @@ def "main cpu" [--pid: int = 0, --samples: int = 20, --interval: duration = 500m
         sleep $interval
     }
     let v = (cpu-verdict $acc --max-avg-pct $max_avg_pct)
-    print $"cpu: (fmt-status $v.status) — ($v.detail)"
+    print $"cpu: (fmt-status $v.status) — ($v.detail); profile=($profile)"
     if $v.status == "fail" { exit 1 }
 }
 

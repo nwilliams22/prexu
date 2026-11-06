@@ -44,19 +44,30 @@ export def discover-log []: nothing -> string {
 # the first that yields a readable, non-empty PNG — presence alone is not enough.
 
 def try-capture [backend: string, out: string]: nothing -> bool {
-    # `do {..} | complete` captures stdout/stderr/exit_code without throwing or
-    # leaking a failing backend's stderr (grim on KDE prints a protocol error).
-    let res = (match $backend {
-        "grim" => (do { ^grim $out } | complete)
-        "spectacle" => (do { ^spectacle -b -n -f -o $out } | complete)
-        "import" => (do { ^import -window root $out } | complete)
-        _ => null
-    })
-    if $res == null { return false }
-    if $res.exit_code != 0 { return false }
-    # Valid iff ImageMagick can read a non-zero-area image.
-    if not ($out | path exists) { return false }
-    (try { (^identify -format '%w' $out | into int) > 0 } catch { false })
+    # 2026-07-12 KDE/Wayland incident (prexu-s83x): spectacle returned 0
+    # with an unreadable first PNG; the next 5 captures succeeded. Retry only
+    # successful commands with invalid output, once, before backend fall-through.
+    for attempt in 0..1 {
+        # Remove stale output so a previous backend cannot supply a false pass.
+        if ($out | path exists) { rm -f $out }
+        let res = (match $backend {
+            "grim" => (do { ^grim $out } | complete)
+            "spectacle" => (do { ^spectacle -b -n -f -o $out } | complete)
+            "import" => (do { ^import -window root $out } | complete)
+            _ => null
+        })
+        if $res == null { return false }
+        if $res.exit_code != 0 { return false }
+        if ($out | path exists) {
+            let valid = (try {
+                let identified = (do { ^identify -format '%w' $out } | complete)
+                ($identified.exit_code == 0) and (($identified.stdout | into int) > 0)
+            } catch { false })
+            if $valid { return true }
+        }
+        if $attempt == 0 { sleep 500ms }
+    }
+    false
 }
 
 # Capture the full screen to `out`. Returns the backend used, or null on failure.
