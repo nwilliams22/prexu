@@ -6,7 +6,7 @@ import PlayerOverlay from "./components/PlayerOverlay";
 import PlayBridge from "./components/PlayBridge";
 import SplashScreen from "./components/SplashScreen";
 import { useAutoUpdate } from "./hooks/useAutoUpdate";
-import { useAuth, useAuthState, AuthProvider } from "./hooks/useAuth";
+import { useAuth, useAuthState, AuthProvider, type AuthContextValue } from "./hooks/useAuth";
 import AppProviders from "./contexts/AppProviders";
 import { prefetchDashboardData } from "./utils/dashboardPrefetch";
 import { logger } from "./services/logger";
@@ -294,8 +294,16 @@ function AppRoutes() {
   );
 }
 
-function App() {
+function NormalApp() {
   const auth = useAuthState();
+  return <AppWithAuth auth={auth} />;
+}
+
+function App({ probeAuth = null }: { probeAuth?: AuthContextValue | null }) {
+  return probeAuth ? <AppWithAuth auth={probeAuth} /> : <NormalApp />;
+}
+
+function AppWithAuth({ auth }: { auth: AuthContextValue }) {
 
   // Signal the Tauri shell that React has painted its first frame so it
   // can show the main window. The window is created with `visible: false`

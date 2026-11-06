@@ -39,8 +39,15 @@ failure codes, and bounded cleanup. Its adapter must subscribe before dispatch
 and honor cancellation; native Rust remains the observation validator. Unit
 checks cover late replies, failure short-circuiting and hung IPC/cleanup.
 
-The app bootstrap caller and real UI adapters are not connected yet: a valid
-probe startup opens an isolated app but does not execute the script. Its empty event file must fail verification. Passing these
+`src/main.tsx` reads native bootstrap before mounting React. Fixture runs use
+an in-memory synthetic auth provider and do not mount `useAuthState`, so they
+skip ordinary stored-auth migration, plex.tv validation and server discovery.
+Bootstrap errors and timeouts fail closed; normal browser/debug startup and
+release builds without the command retain ordinary authentication.
+
+The real UI adapter and runner invocation are not connected yet: a valid
+probe startup opens the isolated fixture app but does not execute the script.
+Its empty event file must fail verification. Passing these
 selftests is not an end-to-end run or proof of runtime storage isolation.
 
 Test the production-compiled environment policy separately without linking the
