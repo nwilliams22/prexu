@@ -145,6 +145,10 @@ run = "nu scripts/hw-probe/run.nu"
 description = "Mutation-checked self-tests for the hw-probe verdict core (CI-safe: nushell only)"
 run = "nu scripts/hw-probe/selftest.nu"
 
+[tasks."probe-driver:selftest"]
+description = "Strict scripted-session contract and trace negative controls (no desktop needed)"
+run = "python3 -m unittest discover -s scripts/hw-probe/driver -v"
+
 [tasks."hw-probe:log"]
 description = "Structured-log assertion runner over the newest app log"
 run = "nu scripts/hw-probe/log-assert.nu"
@@ -155,4 +159,4 @@ run = "nu scripts/hw-probe/luminance.nu sample"
 
 [tasks.ci]
 description = "Full local gate: lint, tsc, unit tests, relay + src-tauri clippy/test, E2E, hw-probe selftest"
-depends = ["lint", "tsc", "test", "clippy-relay", "test-relay", "clippy-tauri", "test-tauri", "e2e", "hw-probe:selftest"]
+depends = ["lint", "tsc", "test", "clippy-relay", "test-relay", "clippy-tauri", "test-tauri", "e2e", "hw-probe:selftest", "probe-driver:selftest"]
