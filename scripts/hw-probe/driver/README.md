@@ -26,8 +26,14 @@ flushes each JSONL marker, and logs the same JSON. Invalid observations emit a
 fixed failure code without recording their payload. Write/flush failure poisons
 the writer. Finishing exits the app after flushing the terminal marker.
 
-The frontend handshake caller and serial UI runner are not implemented yet: a valid probe startup opens an isolated app but does not
-execute the script. Its empty event file must fail verification. Passing these
+`src/services/probe-runner.ts` implements the frontend execution core: one-shot
+startup, serial begin/action/end calls, run/step deadlines, cancellation, fixed
+failure codes, and bounded cleanup. Its adapter must subscribe before dispatch
+and honor cancellation; native Rust remains the observation validator. Unit
+checks cover late replies, failure short-circuiting and hung IPC/cleanup.
+
+The app bootstrap caller and real UI adapters are not connected yet: a valid
+probe startup opens an isolated app but does not execute the script. Its empty event file must fail verification. Passing these
 selftests is not an end-to-end run or proof of runtime storage isolation.
 
 Test the production-compiled environment policy separately without linking the
