@@ -15,6 +15,7 @@ Beads. The original `prexu-pd1x` automation epic is **closed**; its
 | `npm run test:e2e -- --project=chromium` | Browser application flows against mocked service boundaries |
 | `npm run test:e2e -- --project=player-chrome` | Actual player UI with a test-mode player hook; not native graphics |
 | `mise run hw-probe:selftest` | Pure hardware-probe verdict tests and known-bad fixtures |
+| `mise run probe-driver:selftest` | Strict scripted-session schema/trace validation, failing CLI controls and fixture hash checks; no desktop |
 | `mise run ci` | Lint, TypeScript, Vitest, relay and src-tauri clippy/tests, frontend build, Chromium E2E, probe self-test |
 
 The local `ci` task runs `cargo test --lib` for src-tauri; it does not include
@@ -33,8 +34,9 @@ point-in-time local result, not a permanent expected count or current CI claim.
 | Job | Coverage and limits |
 | --- | --- |
 | `ci` | Frontend checks, probe self-tests, relay clippy/tests, Chromium and player-chrome E2E |
-| `headless-mpv` (Windows) | Desktop clippy/lib tests and real mpv signal-chain integration; ANGLE runtime DLL integrity tests skipped because this job uses stubs |
-| `headless-mpv-linux` (Ubuntu 24.04) | Real libmpv API 2.x signal-chain integration, plus the `#[ignore]`d real-libmpv lib tests |
+| `probe-fixtures` | Generate the credential-free 15-second video, dual-tone audio and subtitle corpus with SHA256 manifest |
+| `headless-mpv` (Windows) | Desktop clippy/lib tests and real mpv signal-chain plus generated-fixture seek/track/error/teardown integration; ANGLE runtime DLL integrity tests skipped because this job uses stubs |
+| `headless-mpv-linux` (Ubuntu 24.04) | Real libmpv API 2.x signal-chain and generated-fixture seek/track/error/teardown integration, plus the `#[ignore]`d real-libmpv lib tests |
 | `linux-build` (Ubuntu 22.04) | Frontend production build, desktop clippy/build/tests with system libmpv, check that the player-chrome stub is absent from production assets; its libmpv is API 1.x, so the real-libmpv lib tests are `#[ignore]`d here |
 | `desktop-smoke-linux` | Advisory Xvfb process launch/liveness/exit/zombie check; not authenticated dashboard or visual validation |
 | Separate security workflow | Report-only SBOM/Grype scanning; findings do not fail this workflow |
@@ -89,3 +91,13 @@ per-step verdicts. The proposed `PREXU_PROBE_SCRIPT` variable is not a current
 launch option. Performance ceiling calibration (`prexu-xxct`), capture retry
 hardening (`prexu-s83x`), and the hover-prefetch E2E flake (`prexu-xnbl`) remain
 tracked separately. Use Beads for live status and dependencies.
+
+## Scripted-driver foundation
+
+The [v1 contract verifier and fixture recipe](../scripts/hw-probe/driver/README.md)
+are implemented. The fixture tests use real libmpv with null video/audio outputs;
+their success does not prove display or speaker output. The pure verifier runs
+in both `mise run ci` and hosted CI. Generated-fixture native tests are explicit
+ignored tests in the Windows/Linux hosted jobs, with an external step timeout.
+The in-app driver, isolated bootstrap and actual desktop harness verdict remain
+under implementation in `prexu-331f`; offline synthetic traces are not that evidence.

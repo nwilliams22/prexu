@@ -232,6 +232,7 @@ jobs:
         working-directory: src-tauri
         timeout-minutes: 3
         env:
+          MPV_SOURCE: ${{ github.workspace }}\src-tauri\ci\mpv
           PREXU_TEST_FIXTURE: ${{ github.workspace }}/probe-fixtures/av-cues-v1.mkv
         run: cargo test --test probe_fixture -- --ignored --nocapture
 
