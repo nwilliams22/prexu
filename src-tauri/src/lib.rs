@@ -506,17 +506,19 @@ pub fn run() {
         });
     let probe_active = probe_paths.is_some();
     #[cfg(debug_assertions)]
-    let probe = probe_paths.map(|[script, state, output]| {
+    let probe = probe_paths.map(|startup| {
+        let [script, state, output] = startup.paths;
         // WKWebView isolation has not been established. Refuse before stores
         // or webviews exist rather than risk opening the user's profile.
         if !cfg!(any(target_os = "linux", target_os = "windows")) {
             eprintln!("unsupported_action");
             std::process::exit(2);
         }
-        probe_bootstrap::prepare(&script, &state, &output).unwrap_or_else(|code| {
+        let prepared = probe_bootstrap::prepare(&script, &state, &output).unwrap_or_else(|code| {
             eprintln!("{code}");
             std::process::exit(2);
-        })
+        });
+        (prepared, startup.fixture_port)
     });
 
     // Linux/Wayland: we previously force-set WEBKIT_DISABLE_DMABUF_RENDERER=1
@@ -604,7 +606,7 @@ pub fn run() {
     #[cfg(debug_assertions)]
     let context = {
         let mut context = context;
-        if let Some(probe) = &probe {
+        if let Some((probe, _)) = &probe {
             context.config_mut().app.app_directories_override = Some(
                 tauri::utils::config::AppDirectoriesOverride::Root(probe.state_dir.clone()),
             );
@@ -630,12 +632,14 @@ pub fn run() {
         .manage(ProxyState::new())
         .manage(downloads::DownloadManager::new());
     #[cfg(debug_assertions)]
-    let builder = if let Some(probe) = probe {
+    let builder = if let Some((probe, fixture_port)) = probe {
         let events = probe_events::Events::new(probe.script, probe.events).unwrap_or_else(|code| {
             eprintln!("{code}");
             std::process::exit(2);
         });
-        builder.manage(Mutex::new(events))
+        builder
+            .manage(Mutex::new(events))
+            .manage(probe_commands::FixturePort(fixture_port))
     } else {
         builder
     };

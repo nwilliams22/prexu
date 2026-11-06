@@ -6,7 +6,11 @@ and Python. Run its checks with
 `cargo test --manifest-path src-tauri/Cargo.toml --test probe_script`.
 
 Debug Linux/Windows builds accept `PREXU_PROBE_SCRIPT`, `PREXU_PROBE_STATE_DIR`,
-and `PREXU_PROBE_OUTPUT_DIR` together, all absolute paths. Before application
+`PREXU_PROBE_OUTPUT_DIR`, and `PREXU_PROBE_FIXTURE_PORT` together. The three
+paths must be absolute. The port must be decimal in 1–65535; native startup
+constructs `http://127.0.0.1:<port>`, so it cannot select a remote host, URL path,
+credentials or alternate scheme. The launcher must supply the port of its
+verified fixture service. Before application
 initialization, the bootstrap validates the script, rejects existing or
 overlapping directories, and reserves an exclusive `events.jsonl`. The caller
 must create the parent directory; state and output must not exist. A failed
@@ -19,9 +23,12 @@ Release builds reject any probe variable (even empty) with `probe_disabled` and
 exit code 2 before normal initialization; parsing and filesystem preparation are
 compiled out. With no probe variables, normal startup is unchanged.
 
-The debug-only `probe_driver` IPC accepts a one-shot `ready` handshake from the
-main webview, then ordered `begin`, `end`, `fail`, `cleanup`, and `finish`
-requests. Rust validates action-specific observations, assigns sequence/time,
+The debug-only `probe_driver` IPC provides a read-only `bootstrap` request
+before React/auth initialization. It returns the native fixture URL only in a
+preflight-enabled run, otherwise null. The URL is not part of scripts or markers.
+A one-shot `ready` handshake from the main webview starts execution; ordered
+`begin`, `end`, `fail`, `cleanup`, and `finish` requests use the same IPC.
+Rust validates action-specific observations, assigns sequence/time,
 flushes each JSONL marker, and logs the same JSON. Invalid observations emit a
 fixed failure code without recording their payload. Write/flush failure poisons
 the writer. Finishing exits the app after flushing the terminal marker.
