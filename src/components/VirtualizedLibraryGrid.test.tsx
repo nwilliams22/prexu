@@ -709,6 +709,33 @@ describe("scrollToIndex convergence wiring (prexu-k2mv)", () => {
     delete HTMLElement.prototype.clientHeight;
   });
 
+  it.each([true, false])("highlights only a clamped letter landing (clamped=%s)", (clamped) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const ref = createRef<LibraryGridHandle>();
+    containerScrollHeight = 5000;
+    containerClientHeight = 800;
+    const offset = clamped ? 4800 : 3600;
+    virtualItemsToReturn = [{ index: 24, start: offset }];
+    fakeGetOffsetForIndex.mockReturnValue([Math.min(offset, 4200), "start"]);
+    fakeScrollToIndex.mockImplementation(() => { containerScrollTop = Math.min(offset, 4200); });
+    const { container, unmount } = render(
+      <VirtualizedLibraryGrid ref={ref} items={Array.from({ length: 100 }, (_, i) => makeItem(i))}
+        renderItem={renderItem} getKey={getKey} />,
+    );
+    const target = container.querySelector<HTMLElement>('[data-grid-index="96"]')!;
+    vi.spyOn(target, "getBoundingClientRect").mockImplementation(() => ({
+      top: offset - containerScrollTop, bottom: 800, left: 0, right: 200,
+      width: 200, height: 200, x: 0, y: offset - containerScrollTop, toJSON: () => ({}),
+    }));
+    act(() => { ref.current?.scrollToIndex(96); flushRaf(); });
+    expect(target.classList.contains("library-jump-highlight")).toBe(clamped);
+    expect(container.querySelectorAll(".library-jump-highlight")).toHaveLength(clamped ? 1 : 0);
+    act(() => vi.advanceTimersByTime(1600));
+    expect(target).not.toHaveClass("library-jump-highlight");
+    unmount();
+    vi.useRealTimers();
+  });
+
   it("keeps re-issuing scrollToIndex across multiple frames as the estimated offset drifts, then stops once it converges", () => {
     const ref = createRef<LibraryGridHandle>();
     let currentEstimate = 4000;

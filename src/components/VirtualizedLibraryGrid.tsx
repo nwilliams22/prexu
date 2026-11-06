@@ -139,6 +139,7 @@ export interface ScrollConvergenceCallbacks {
    *  meaningless: it only reflects agreement between two estimates, not
    *  real measured geometry. */
   isTargetPopulated: () => boolean;
+  onSettled?: () => void;
 }
 
 /** ~2px — small enough to be visually exact, large enough to tolerate
@@ -198,6 +199,7 @@ export function runScrollConvergence(
           // prexu-b2dz doc comment on this function.
           clampedAtMax: scrollTop >= maxScroll - CONVERGENCE_EPSILON_PX,
         });
+        callbacks.onSettled?.();
         return;
       }
     }
@@ -209,6 +211,7 @@ export function runScrollConvergence(
         finalTarget,
       });
       callbacks.scrollTo(finalTarget);
+      callbacks.onSettled?.();
       return;
     }
 
@@ -313,6 +316,24 @@ function VirtualizedLibraryGrid<T>({
   const minWidth = GRID_MIN_WIDTH_PX[bp];
   const parentRef = useRef<HTMLDivElement>(null);
   const [cols, setCols] = useState(4);
+  const [highlightedIndex, setHighlightedIndex] = useState<number | null>(null);
+  const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearHighlight = useCallback(() => {
+    if (highlightTimer.current !== null) clearTimeout(highlightTimer.current);
+    highlightTimer.current = null;
+    setHighlightedIndex(null);
+  }, []);
+  const highlightLanding = useCallback((index: number) => {
+    const target = parentRef.current?.querySelector<HTMLElement>(`[data-grid-index="${index}"]`);
+    const scroll = findScrollAncestor(parentRef.current);
+    if (!target || scroll.scrollTop < scroll.scrollHeight - scroll.clientHeight - CONVERGENCE_EPSILON_PX) return;
+    const top = scroll === document.documentElement ? 0 : scroll.getBoundingClientRect().top + scroll.clientTop;
+    // Read the rendered position: the virtualizer's offset API already clamps
+    // to max scroll, so it cannot distinguish a top-aligned row from this case.
+    if (target.getBoundingClientRect().top <= top + CONVERGENCE_EPSILON_PX) return;
+    setHighlightedIndex(index);
+    highlightTimer.current = setTimeout(clearHighlight, 1600);
+  }, [clearHighlight]);
   const totalCount = itemCount ?? items.length;
   const virtualize = totalCount >= virtualizeThreshold;
 
@@ -407,6 +428,7 @@ function VirtualizedLibraryGrid<T>({
   useEffect(() => {
     return () => {
       convergenceCancelRef.current?.();
+      if (highlightTimer.current !== null) clearTimeout(highlightTimer.current);
     };
   }, []);
 
@@ -451,6 +473,7 @@ function VirtualizedLibraryGrid<T>({
         // targets and neither would ever land.
         convergenceCancelRef.current?.();
         convergenceCancelRef.current = null;
+        clearHighlight();
 
         if (virtualize) {
           const rowIndex = Math.floor(index / Math.max(1, cols));
@@ -469,6 +492,7 @@ function VirtualizedLibraryGrid<T>({
 
           const scrollElement = getScrollElement();
           convergenceCancelRef.current = runScrollConvergence({
+            onSettled: () => highlightLanding(index),
             getExpectedStart: () => {
               const offsetInfo = virtualizerRef.current.getOffsetForIndex(rowIndex, "start");
               return offsetInfo?.[0];
@@ -507,9 +531,14 @@ function VirtualizedLibraryGrid<T>({
           `[data-grid-index="${index}"]`,
         );
         target?.scrollIntoView({ behavior: "auto", block: "start" });
+        let cancelled = false;
+        requestAnimationFrame(() => {
+          if (!cancelled) highlightLanding(index);
+        });
+        convergenceCancelRef.current = () => { cancelled = true; };
       },
     }),
-    [virtualize, cols, getScrollElement],
+    [virtualize, cols, getScrollElement, clearHighlight, highlightLanding],
   );
 
   // For small item counts, use a simple CSS grid (no virtualization overhead).
@@ -529,7 +558,7 @@ function VirtualizedLibraryGrid<T>({
           {Array.from({ length: totalCount }, (_, i) => {
             const item = items[i];
             return (
-              <div key={item ? getKey(item, i) : `placeholder-${i}`} data-grid-index={i}>
+              <div key={item ? getKey(item, i) : `placeholder-${i}`} data-grid-index={i} className={highlightedIndex === i ? "library-jump-highlight" : undefined}>
                 {item !== undefined ? renderItem(item, i) : renderPlaceholder?.(i) ?? null}
               </div>
             );
@@ -606,7 +635,7 @@ function VirtualizedLibraryGrid<T>({
               {row.items.map((item, colIndex) => {
                 const index = row.startIndex + colIndex;
                 return (
-                  <div key={item !== undefined ? getKey(item, index) : `placeholder-${index}`}>
+                  <div key={item !== undefined ? getKey(item, index) : `placeholder-${index}`} data-grid-index={index} className={highlightedIndex === index ? "library-jump-highlight" : undefined}>
                     {item !== undefined ? renderItem(item, index) : renderPlaceholder?.(index) ?? null}
                   </div>
                 );

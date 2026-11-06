@@ -467,3 +467,17 @@ select option {
     background: #90949c;
   }
 }
+
+/* Locate an alphabet jump whose row cannot align at the end of the library. */
+.library-jump-highlight {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 8px;
+  animation: library-jump-fade 1.6s ease-out forwards;
+}
+@keyframes library-jump-fade {
+  to { outline-color: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .library-jump-highlight { animation: none; }
+}
