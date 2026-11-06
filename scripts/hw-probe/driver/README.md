@@ -26,8 +26,7 @@ flushes each JSONL marker, and logs the same JSON. Invalid observations emit a
 fixed failure code without recording their payload. Write/flush failure poisons
 the writer. Finishing exits the app after flushing the terminal marker.
 
-The frontend handshake caller, loopback fixture service and serial UI runner are
-not implemented yet: a valid probe startup opens an isolated app but does not
+The frontend handshake caller and serial UI runner are not implemented yet: a valid probe startup opens an isolated app but does not
 execute the script. Its empty event file must fail verification. Passing these
 selftests is not an end-to-end run or proof of runtime storage isolation.
 
@@ -110,7 +109,7 @@ mismatched markers fail. Error markers always fail; their allowed codes are
 the verdict. This verifier does not certify a failure trace's cleanup: failure
 remains failure regardless of subsequent markers.
 
-The future Rust writer owns sequence/time assignment and validates observations;
+The Rust writer owns sequence/time assignment and validates observations;
 frontend completion must establish new-load correlation and register listeners
 before dispatch. Marker observations establish control/state only. They cannot
 prove visible video, audible sound, GPU correctness or display transitions.
@@ -147,3 +146,20 @@ and the bundled libmpv DLL beside the test binary. Wrap execution in a process
 timeout on every platform: event waits have ten-second deadlines, but a stuck
 native destructor needs an external watchdog. These tests cover signal/state
 only and cannot prove the cue colors or tones reached a display or speaker.
+
+## Loopback fixture service
+
+`fixture_service.serve(directory)` is a context manager for harness integration.
+It verifies the manifest, snapshots and rechecks bounded fixture bytes, then
+binds an ephemeral port on `127.0.0.1`. The yielded `url` and `manifest` describe
+that server instance. Exiting the context stops the listener and joins its
+request handlers, including on exceptions. No independent background service
+is installed.
+
+It implements synthetic metadata/library/identity responses and the media part
+route, with GET/HEAD and single byte ranges for native seeking. Timeline and
+watched-state requests are acknowledged without persistence. Unknown routes
+return 404; there is no filesystem route, proxy, Plex account login, or
+transcoding endpoint. Requests and query strings are not logged. The service
+is not yet wired into an app launcher; its HTTP tests and ffprobe reads establish
+fixture transport, not a desktop playback verdict.
