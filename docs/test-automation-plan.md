@@ -24,6 +24,10 @@ headless-mpv integration, the `#[ignore]`d real-libmpv lib tests
 smoke job, or `mise run scan`. Run those relevant checks separately. `mise run scan` fails on High/Critical;
 the GitHub security workflow currently does not. Local
 E2E provisioning invokes Playwright browser/system dependency installation.
+On a machine whose Playwright system libraries are already provisioned, run
+`PREXU_E2E_SYSTEM_DEPS_INSTALLED=1 mise run ci` to avoid privileged system
+package installation. This still installs the required Chromium browser and runs
+all checks; missing runtime libraries still fail the browser tests.
 
 Review snapshot on 2026-09-20: 198 Vitest files / 2,314 tests passed;
 TypeScript passed; oxlint completed with two warnings. These numbers are a
@@ -82,13 +86,12 @@ scenario catalog. The [probe runbook](hw-probe-runbook.md) automates log,
 luminance, timing, resource and some X11 checks. Several transitions still
 need an operator; Wayland cannot use the X11 input/geometry probes.
 
-The immediate pickup is relay lifecycle `prexu-9f4s.5`, then client lifecycle
-`prexu-9f4s.3`; work is currently paused. The later testing investment is
-`prexu-vbb2`: full-app visual regression on the real
-native app. Its first child, `prexu-331f`, is **not implemented**: a debug-only
-in-app script driver with cue markers, followed by screen recording and
-per-step verdicts. The proposed `PREXU_PROBE_SCRIPT` variable is not a current
-launch option. Performance ceiling calibration (`prexu-xxct`), capture retry
+The `prexu-vbb2` harness work builds on the debug-only scripted driver in
+`prexu-331f`. `PREXU_PROBE_SCRIPT` is now implemented with isolated startup,
+serial real-handler execution, native observations and Rust-written markers.
+The Linux launcher generates a verdict from the trace and process exit.
+Screen recording and per-step visual/audio verdicts remain follow-up work.
+Performance ceiling calibration (`prexu-xxct`), capture retry
 hardening (`prexu-s83x`), and the hover-prefetch E2E flake (`prexu-xnbl`) remain
 tracked separately. Use Beads for live status and dependencies.
 
@@ -99,5 +102,8 @@ are implemented. The fixture tests use real libmpv with null video/audio outputs
 their success does not prove display or speaker output. The pure verifier runs
 in both `mise run ci` and hosted CI. Generated-fixture native tests are explicit
 ignored tests in the Windows/Linux hosted jobs, with an external step timeout.
-The in-app driver, isolated bootstrap and actual desktop harness verdict remain
-under implementation in `prexu-331f`; offline synthetic traces are not that evidence.
+A real Linux desktop transport scenario and a deliberate timeout have produced
+passing and failing harness verdicts respectively. These establish control/state
+and fail-closed behavior only: software GL and null audio do not establish visible
+video or audible sound. See the driver README for launcher commands and limits;
+Beads records acceptance and links to the run evidence.

@@ -135,7 +135,14 @@ run = "cargo test --lib -- --ignored --nocapture"
 
 [tasks.e2e]
 description = "Install Playwright browsers and run E2E tests"
-run = "npx playwright install --with-deps chromium && npm run test:e2e -- --project=chromium"
+run = """
+if [ "${PREXU_E2E_SYSTEM_DEPS_INSTALLED:-0}" = "1" ]; then
+  npx playwright install chromium
+else
+  npx playwright install --with-deps chromium
+fi
+npm run test:e2e -- --project=chromium
+"""
 
 # On-hardware probe suite (prexu-pd1x.2). `hw-probe` runs the auto checks +
 # writes a report on the Linux dev box; the sub-tasks are the individual
