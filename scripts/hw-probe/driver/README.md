@@ -216,5 +216,22 @@ route, with GET/HEAD and single byte ranges for native seeking. Timeline and
 watched-state requests are acknowledged without persistence. Unknown routes
 return 404; there is no filesystem route, proxy, Plex account login, or
 transcoding endpoint. Requests and query strings are not logged. The service
-is not yet wired into an app launcher; its HTTP tests and ffprobe reads establish
+is wired into the Linux launcher above; HTTP tests and ffprobe reads establish
 fixture transport, not a desktop playback verdict.
+
+
+## Native observations
+
+The debug-only `probe_driver` operation `snapshot` samples the active mpv handle
+under the player lock. It requires the native probe state and main webview. It
+returns initialized/idle flags, a boolean for the fixed fixture path, optional
+position/pause state, and optional selected audio/subtitle IDs (subtitle `0`
+means off). Unknown properties remain null. Paths, query strings, and mpv errors
+are never returned. Calls run off the UI thread.
+
+The endpoint is read-only and does not emit markers. A snapshot alone is not a
+new-load acknowledgement: the forthcoming UI adapter must observe an absent
+native player before dispatching play, then observe the fixture and advancing
+time on the fresh handle. Do not use queued `player://ready` or `time-pos` events
+as new-load evidence. Real-mpv tests cover snapshot seek/track/idle values and
+wrong-fixture rejection with null outputs; the UI adapter remains unconnected.

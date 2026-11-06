@@ -3,6 +3,10 @@
 //! PREXU_TEST_FIXTURE to its av-cues-v1.mkv absolute path. Null outputs do
 //! not establish visible frames, audible tones, or hardware correctness.
 
+#[path = "../src/probe_snapshot.rs"]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+mod probe_snapshot;
+
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod tests {
     use libmpv2::{
@@ -47,6 +51,12 @@ mod tests {
         let mut events = EventContext::new(mpv.ctx);
         mpv.command("loadfile", &[&path]).unwrap();
         wait_for(&mut events, |e| matches!(e, Event::PlaybackRestart));
+        let snapshot = super::probe_snapshot::sample(&mpv, &path);
+        assert!(!serde_json::to_string(&snapshot).unwrap().contains(&path));
+        assert!(snapshot.initialized && snapshot.fixture_matches && !snapshot.idle);
+        assert_eq!(snapshot.paused, Some(true));
+        assert!(!super::probe_snapshot::sample(&mpv, "wrong-fixture").fixture_matches);
+        assert!(!super::probe_snapshot::Snapshot::absent().initialized);
         assert!((mpv.get_property::<f64>("duration").unwrap() - 15.0).abs() < 0.05);
         assert_eq!(mpv.get_property::<i64>("track-list/count").unwrap(), 4);
         for (index, kind) in [(0, "video"), (1, "audio"), (2, "audio"), (3, "sub")] {
@@ -60,7 +70,10 @@ mod tests {
             mpv.command("seek", &[&position.to_string(), "absolute+exact"])
                 .unwrap();
             wait_for(&mut events, |e| matches!(e, Event::PlaybackRestart));
-            let actual = mpv.get_property::<f64>("time-pos").unwrap();
+            let actual = super::probe_snapshot::sample(&mpv, &path)
+                .position_ms
+                .unwrap()
+                / 1000.0;
             assert!(
                 (actual - position).abs() <= 0.15,
                 "seek: expected {position}, got {actual}"
@@ -68,12 +81,26 @@ mod tests {
         }
         for track in [2_i64, 1] {
             mpv.set_property("aid", track).unwrap();
-            assert_eq!(mpv.get_property::<i64>("aid").unwrap(), track);
+            assert_eq!(
+                super::probe_snapshot::sample(&mpv, &path).audio_track,
+                Some(track)
+            );
         }
         mpv.set_property("sid", 1_i64).unwrap();
-        assert_eq!(mpv.get_property::<i64>("sid").unwrap(), 1);
+        assert_eq!(
+            super::probe_snapshot::sample(&mpv, &path).subtitle_track,
+            Some(1)
+        );
         mpv.set_property("sid", "no").unwrap();
-        assert_eq!(mpv.get_property::<String>("sid").unwrap(), "no");
+        assert_eq!(
+            super::probe_snapshot::sample(&mpv, &path).subtitle_track,
+            Some(0)
+        );
+        mpv.set_property("pause", false).unwrap();
+        assert_eq!(
+            super::probe_snapshot::sample(&mpv, &path).paused,
+            Some(false)
+        );
         events
             .observe_property("idle-active", Format::Flag, 9)
             .unwrap();
@@ -88,7 +115,10 @@ mod tests {
                 }
             )
         });
-        assert!(mpv.get_property::<bool>("idle-active").unwrap());
+        let stopped = super::probe_snapshot::sample(&mpv, &path);
+        assert!(stopped.idle && !stopped.fixture_matches);
+        let serialized = serde_json::to_string(&stopped).unwrap();
+        assert!(!serialized.contains(&path));
         drop(events);
         let start = Instant::now();
         drop(mpv);

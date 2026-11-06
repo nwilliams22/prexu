@@ -14,6 +14,7 @@ pub type ProbeState = Mutex<Events<File>>;
 pub enum Request {
     Bootstrap,
     Ready,
+    Snapshot,
     Begin { id: String },
     End { id: String, observed: Value },
     Fail { code: String },
@@ -22,7 +23,7 @@ pub enum Request {
 }
 
 #[tauri::command]
-pub fn probe_driver(
+pub async fn probe_driver(
     window: tauri::WebviewWindow,
     request: Request,
 ) -> Result<Option<Value>, &'static str> {
@@ -37,9 +38,24 @@ pub fn probe_driver(
         ));
     }
     let state = window.try_state::<ProbeState>().ok_or("probe_disabled")?;
+    if matches!(request, Request::Snapshot) {
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        {
+            let port = window.try_state::<FixturePort>().ok_or("probe_disabled")?;
+            let player = window
+                .try_state::<crate::player::PlayerState>()
+                .ok_or("player_error")?;
+            let path = format!("http://127.0.0.1:{}/library/parts/1/file.mkv", port.0);
+            return serde_json::to_value(player.probe_snapshot(&path)?)
+                .map(Some)
+                .map_err(|_| "player_error");
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        return Err("unsupported_action");
+    }
     let mut events = state.lock().map_err(|_| "marker_io")?;
     match request {
-        Request::Bootstrap => unreachable!(),
+        Request::Bootstrap | Request::Snapshot => unreachable!(),
         Request::Ready => return events.ready().map(Some),
         Request::Begin { id } => events.begin(&id)?,
         Request::End { id, observed } => events.end(&id, observed)?,

@@ -1203,6 +1203,18 @@ impl PlayerState {
         self.apply_host_geometry(x, y, width, height);
     }
 
+    #[cfg(debug_assertions)]
+    pub(crate) fn probe_snapshot(
+        &self,
+        expected_path: &str,
+    ) -> Result<crate::probe_snapshot::Snapshot, &'static str> {
+        let guard = self.inner.lock().map_err(|_| "player_error")?;
+        Ok(match guard.as_ref() {
+            Some(inner) => crate::probe_snapshot::sample(&inner.mpv, expected_path),
+            None => crate::probe_snapshot::Snapshot::absent(),
+        })
+    }
+
     pub(crate) fn with_mpv<R>(
         &self,
         f: impl FnOnce(&Mpv) -> Result<R, libmpv2::Error>,

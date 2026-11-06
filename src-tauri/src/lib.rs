@@ -8,6 +8,8 @@ mod probe_bootstrap;
 mod probe_events;
 #[cfg(debug_assertions)]
 mod probe_commands;
+#[cfg(all(debug_assertions, any(target_os = "windows", target_os = "linux")))]
+mod probe_snapshot;
 // The native libmpv player compiles on Windows (wid/HWND + DirectComposition)
 // and Linux (render API + GtkGLArea under the transparent WebKitWebView — see
 // docs/adr-native-player-render-api.md, prexu-axj4.3). macOS and any other
