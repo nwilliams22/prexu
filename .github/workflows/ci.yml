@@ -10,6 +10,23 @@ on:
       - feature/**
 
 jobs:
+  probe-fixtures:
+    name: Generate deterministic probe fixtures
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install fixture tools
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Generate and verify fixtures
+        run: |
+          python3 scripts/hw-probe/driver/fixtures.py probe-fixtures
+          python3 scripts/hw-probe/driver/fixtures.py probe-fixtures --verify
+      - uses: actions/upload-artifact@v4
+        with:
+          name: probe-fixtures
+          path: probe-fixtures/
+          retention-days: 7
+
   ci:
     # Pinned: ubuntu-latest moved to 26.04 (Nov 2026) and Playwright's chromium
     # install refuses it ("does not support chromium on ubuntu26.04-x64").
@@ -59,6 +76,9 @@ jobs:
         with:
           version: "*"
 
+      - name: Probe driver contract negative controls
+        run: python3 -B -m unittest discover -s scripts/hw-probe/driver -v
+
       - name: hw-probe selftest
         run: nu scripts/hw-probe/selftest.nu
 
@@ -92,6 +112,7 @@ jobs:
 
   headless-mpv:
     name: Headless mpv integration (Windows)
+    needs: probe-fixtures
     runs-on: windows-latest
     # Exercises the signal chain (init → FileLoaded → duration → eof-reached)
     # that production queue advancement (prexu-0cs / prexu-ta9) depends on.
@@ -199,6 +220,21 @@ jobs:
           RUST_LOG: debug
         run: cargo test --test headless_mpv -- --nocapture --ignored
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: probe-fixtures
+          path: probe-fixtures
+
+      - name: Verify generated fixture hashes
+        run: python scripts/hw-probe/driver/fixtures.py probe-fixtures --verify
+
+      - name: Generated fixture signal tests (null outputs)
+        working-directory: src-tauri
+        timeout-minutes: 3
+        env:
+          PREXU_TEST_FIXTURE: ${{ github.workspace }}/probe-fixtures/av-cues-v1.mkv
+        run: cargo test --test probe_fixture -- --ignored --nocapture
+
       # This job stubs the ANGLE DLLs (see the stub step above), so the two
       # DLL-integrity tests (SHA-256 pin + Authenticode) can never pass here
       # and are skipped. They validate real artifacts on real Windows boxes
@@ -222,6 +258,7 @@ jobs:
 
   headless-mpv-linux:
     name: Headless mpv integration (Linux, libmpv 2.x)
+    needs: probe-fixtures
     runs-on: ubuntu-24.04
     # Validates the signal chain on Linux using system libmpv with API 2.x.
     # ubuntu-24.04 ships libmpv.so.2 (mpv 2.x), whereas ubuntu-22.04 has only
@@ -259,6 +296,21 @@ jobs:
         env:
           RUST_LOG: debug
         run: cargo test --test headless_mpv -- --nocapture --ignored
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: probe-fixtures
+          path: probe-fixtures
+
+      - name: Verify generated fixture hashes
+        run: python scripts/hw-probe/driver/fixtures.py probe-fixtures --verify
+
+      - name: Generated fixture signal tests (null outputs)
+        working-directory: src-tauri
+        timeout-minutes: 3
+        env:
+          PREXU_TEST_FIXTURE: ${{ github.workspace }}/probe-fixtures/av-cues-v1.mkv
+        run: cargo test --test probe_fixture -- --ignored --nocapture
 
       # The real-libmpv teardown tests in player::events (BAD-39) create a real
       # mpv handle, so they are #[ignore]d and excluded from the ubuntu-22.04

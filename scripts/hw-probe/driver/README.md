@@ -1,7 +1,7 @@
 # Scripted probe contract v1
 
 This directory currently implements **offline script/trace verification only**.
-The desktop bootstrap, fixture service, Rust marker writer and serial UI runner
+The desktop bootstrap, loopback fixture service, Rust marker writer and serial UI runner
 are not implemented yet. Passing these selftests is not an end-to-end run.
 
 Run the negative controls with:
@@ -50,7 +50,7 @@ requires the previous session to be stopped. Pause/resume must alternate.
 | setSetting | name: volume, value: 0–100 | matching name and value |
 | quit | none | ready: true |
 
-The fixture-specific track IDs and duration are the planned v1 fixture contract.
+The fixture-specific track IDs and duration match the generated v1 fixture contract.
 The app must fail explicitly when an action is unsupported on its platform.
 
 ## Markers
@@ -79,3 +79,36 @@ The future Rust writer owns sequence/time assignment and validates observations;
 frontend completion must establish new-load correlation and register listeners
 before dispatch. Marker observations establish control/state only. They cannot
 prove visible video, audible sound, GPU correctness or display transitions.
+
+## Generated media
+
+Generate into a new directory (requires `ffmpeg` and `ffprobe` on PATH):
+
+```sh
+python3 scripts/hw-probe/driver/fixtures.py /absolute/path/to/fixtures
+python3 scripts/hw-probe/driver/fixtures.py /absolute/path/to/fixtures --verify
+```
+
+The recipe generates 15 seconds of 320×180 MPEG-4 video (red, green, blue in
+five-second intervals), two mono 48 kHz PCM audio tracks (440 and 880 Hz), and
+three SubRip cues. No downloaded assets or user library are used. The generated
+content is dedicated under CC0-1.0. The manifest records the tool version,
+SHA256 of each file, stream indices, mpv track IDs, and cue intervals. Bitexact
+flags and one video encoder thread make repeat runs with the same tool build
+byte-identical; different FFmpeg builds can produce different hashes. Consumers
+must verify the hashes from their run manifest before use.
+
+The independent real-mpv tests accept the generated file via
+`PREXU_TEST_FIXTURE` and use null video/audio outputs. On Linux:
+
+```sh
+PREXU_TEST_FIXTURE=/absolute/path/to/fixtures/av-cues-v1.mkv \
+  timeout 120 cargo test --manifest-path src-tauri/Cargo.toml \
+  --test probe_fixture -- --ignored --nocapture
+```
+
+Windows uses the same Rust test target with the fixture path set in PowerShell
+and the bundled libmpv DLL beside the test binary. Wrap execution in a process
+timeout on every platform: event waits have ten-second deadlines, but a stuck
+native destructor needs an external watchdog. These tests cover signal/state
+only and cannot prove the cue colors or tones reached a display or speaker.
