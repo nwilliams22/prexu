@@ -5,7 +5,13 @@ A native preflight parser is implemented in `src-tauri/src/probe_script.rs`,
 with 64 shared positive/negative cases checked by both languages. It is not yet
 connected to application startup. Run its checks with
 `cargo test --manifest-path src-tauri/Cargo.toml --test probe_script`.
-The desktop bootstrap, loopback fixture service, Rust marker writer and serial UI runner
+The filesystem preflight in `src-tauri/src/probe_bootstrap.rs` validates the
+script before creating state, rejects existing or overlapping directories, and
+reserves an exclusive event file. The caller must create the parent directory;
+state and output directories must not exist. Failed preflight can leave its new
+directories behind; retry with fresh paths. Its isolation tests run in the same
+Rust target. This helper is also not yet connected to startup.
+The desktop integration, loopback fixture service, Rust marker writer and serial UI runner
 are not implemented yet. Passing these selftests is not an end-to-end run.
 
 Run the negative controls with:
