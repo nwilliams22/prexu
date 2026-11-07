@@ -202,6 +202,30 @@ function fireEof() {
 }
 
 describe("useNativePlayer dispatch contract (prexu-ve9)", () => {
+  it("pauses a warm player even when pause=false was emitted before mount", async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd) =>
+      cmd === "player_engine_status" ? { available: true } : undefined,
+    );
+    vi.mocked(prepareSource).mockResolvedValueOnce({
+      item: { type: "movie", title: "Pattern" },
+      playable: { Marker: [], duration: 60000 },
+      part: { id: 1, Chapter: [] },
+      categorized: { audio: [], subtitles: [] },
+      isLocal: false,
+      sourceKind: "direct",
+      url: "https://server/pattern.mp4",
+      viewOffset: 0,
+    } as unknown as Awaited<ReturnType<typeof prepareSource>>);
+    const { result } = renderHook(() => useNativePlayer("123"));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("player_load_url", expect.anything());
+    });
+    // No new pause property event: warmup already set mpv pause=false.
+    await waitFor(() => expect(result.current.isPlaying).toBe(true));
+    act(() => result.current.togglePlay());
+    expect(invoke).toHaveBeenCalledWith("player_pause");
+  });
+
   describe("subscribeToEof", () => {
     it("attaches a handler that fires when player://eof is emitted", async () => {
       const { result } = renderHook(() => useNativePlayer("123"));

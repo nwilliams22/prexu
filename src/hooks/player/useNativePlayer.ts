@@ -548,6 +548,10 @@ export function useNativePlayer(
         logger.debug("player", "initPlayback superseded", { gen });
         return;
       }
+      // load_url explicitly unpauses mpv. On a warm engine, pause=false may
+      // have been emitted before this hook subscribed and will not change
+      // again on load. Initialize the UI so the first toggle can pause.
+      setIsPlaying(true);
       logger.info("player", "load_url returned OK, waiting for ready event");
 
       // Apply saved volume + mute now that mpv exists. mpv volume is 0..200
