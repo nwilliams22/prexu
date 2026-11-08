@@ -20,7 +20,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Cache scanner binaries
+        id: scanner-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/prexu-tools/scanners
+          key: scanners-${{ runner.os }}-${{ runner.arch }}-syft-1.57.0-grype-0.121.2-v1
+
       - name: Install syft + grype
+        if: steps.scanner-cache.outputs.cache-hit != 'true'
         run: |
           # Direct, versioned assets avoid runtime release discovery and mutable
           # installer scripts. Retry transient failures; never skip a failed install.
@@ -43,12 +51,17 @@ jobs:
             test "$(wc -l < selected.sha256)" -eq 1
             sha256sum --check selected.sha256
             tar -xzf "$archive" "$tool"
-            install -Dm755 "$tool" "$HOME/.local/bin/$tool"
-            "$HOME/.local/bin/$tool" version
+            install -Dm755 "$tool" "$HOME/.cache/prexu-tools/scanners/$tool"
+            "$HOME/.cache/prexu-tools/scanners/$tool" version
           )
           install_tool syft 1.57.0
           install_tool grype 0.121.2
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Set up scanners
+        run: |
+          "$HOME/.cache/prexu-tools/scanners/syft" version
+          "$HOME/.cache/prexu-tools/scanners/grype" version
+          echo "$HOME/.cache/prexu-tools/scanners" >> "$GITHUB_PATH"
 
       - name: Cache grype DB
         uses: actions/cache@v4

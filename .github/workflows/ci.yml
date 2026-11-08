@@ -71,11 +71,53 @@ jobs:
       # the on-hardware probe suite. Pure nushell — no app/GPU/compositor — so it
       # enforces the log-invariant/luminance/probe verdicts on every PR. The
       # optional end-to-end luminance leg self-skips when ImageMagick v7 is absent.
-      - name: Set up Nushell
+      - name: Cache Nushell
+        id: nu-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/prexu-tools/nu
+          key: nu-${{ runner.os }}-${{ runner.arch }}-0.116.1-v1
+
+      - name: Install Nushell (attempt 1)
+        if: steps.nu-cache.outputs.cache-hit != 'true'
+        id: nu-first
+        continue-on-error: true
         uses: hustcer/setup-nu@v3
         with:
-          # Keep release discovery out of the gate. Update deliberately.
           version: "0.116.1"
+
+      - name: Back off before Nushell retry
+        if: steps.nu-first.outcome == 'failure'
+        run: sleep 30
+
+      - name: Install Nushell (attempt 2)
+        if: steps.nu-first.outcome == 'failure'
+        id: nu-second
+        continue-on-error: true
+        uses: hustcer/setup-nu@v3
+        with:
+          version: "0.116.1"
+
+      - name: Back off before final Nushell attempt
+        if: steps.nu-second.outcome == 'failure'
+        run: sleep 60
+
+      # The last attempt must fail the gate if installation still fails.
+      - name: Install Nushell (attempt 3)
+        if: steps.nu-second.outcome == 'failure'
+        uses: hustcer/setup-nu@v3
+        with:
+          version: "0.116.1"
+
+      - name: Set up Nushell
+        env:
+          CACHE_HIT: ${{ steps.nu-cache.outputs.cache-hit }}
+        run: |
+          if [ "$CACHE_HIT" != true ]; then
+            install -Dm755 "$(command -v nu)" "$HOME/.cache/prexu-tools/nu/nu"
+          fi
+          test "$("$HOME/.cache/prexu-tools/nu/nu" --version)" = "0.116.1"
+          echo "$HOME/.cache/prexu-tools/nu" >> "$GITHUB_PATH"
 
       - name: Probe driver contract negative controls
         run: python3 -B -m unittest discover -s scripts/hw-probe/driver -v
