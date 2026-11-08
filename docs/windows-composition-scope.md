@@ -6,7 +6,37 @@ evidence, **not a new Windows runtime certification**. Line numbers below refer
 to that revision. See also [native-player status](native-player-status.md) and
 [Windows candidate acceptance](windows-candidate.md).
 
-## Decision
+## Current VM scope (2026-11-07)
+
+The hosted-CI limits below describe the October source audit. They no longer
+exclude interactive VM testing. `win11-test` has a signed-in desktop and two
+virtual monitors: 1280×800 at 100% and 1920×1080 at 150%. The optional Radeon
+may be unavailable; the D3D11 probe records the adapter actually selected.
+
+The [repeatable composition check](windows-composition-check.md) covers windowed
+Alt+Tab video, keyboard return, occlusion, minimize/restore, live scale changes,
+and mixed DPI across the two virtual monitors. It uses pixel assertions and
+saves both-monitor screenshots. A virtual-monitor pass does not certify the
+physical-monitor or real-GPU paths below. Consult the run's metrics and candidate
+SHA for acceptance; implementation alone is not a passing verdict.
+
+### Owner checklist
+
+Only these composition checks remain on the owner's GPU PC:
+
+1. **Fullscreen on real GPU hardware:** play moving video, enter/exit fullscreen,
+   Alt+Tab away/back, and check for blank or stale video and capture behavior
+   across independent-flip transitions.
+2. **Hardware decode:** record the active decoder and GPU/driver while playing
+   representative supported media; check visible progression and errors.
+3. **Two physical monitors:** a quick 100% ↔ 150%/200% move in both directions;
+   confirm video/control alignment and continued playback.
+
+Radeon fullscreen or decode runs are optional extra evidence and do not remove
+this owner checklist. Native menus, drops, and IME have separate task records;
+they are not additional manual requirements for this Alt+Tab/DPI slice.
+
+## Historical audit decision
 
 No small product fix is justified by the evidence. The three open beads do not
 represent three unimplemented features. Composition hosting already replaced
@@ -47,7 +77,7 @@ app ([controller reference](https://learn.microsoft.com/en-us/microsoft-edge/web
 A future drop feature would require host IDropTarget forwarding and coordinate
 conversion, as described in the [composition drag/drop reference](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2compositioncontroller3).
 
-## Reproduction boundary and actual evidence
+## Historical reproduction boundary and evidence
 
 This audit ran on Linux (`uname -s` returned `Linux`). No Windows desktop was
 available. **None of the five visible symptoms was reproduced in this run.**
@@ -88,7 +118,7 @@ Windows GUI automation can never be built. Such a harness would need its own
 scope. Compiler checks can guard Windows types; pure tests can guard geometry
 math. Neither certifies DWM thumbnails, native menus, DPI appearance or IME.
 
-## Verdicts and proposed slices
+## Historical verdicts and proposed slices
 
 All three requested beads receive the **unreproducible-in-CI / hardware
 acceptance required** verdict; none is closed as fixed by this report.
