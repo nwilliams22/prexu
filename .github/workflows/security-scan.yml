@@ -22,8 +22,32 @@ jobs:
 
       - name: Install syft + grype
         run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b "$HOME/.local/bin"
-          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b "$HOME/.local/bin"
+          # Direct, versioned assets avoid runtime release discovery and mutable
+          # installer scripts. Retry transient failures; never skip a failed install.
+          install_tool() (
+            set -euo pipefail
+            tool="$1"
+            version="$2"
+            archive="${tool}_${version}_linux_amd64.tar.gz"
+            checksums="${tool}_${version}_checksums.txt"
+            base="https://github.com/anchore/${tool}/releases/download/v${version}"
+            workdir=$(mktemp -d)
+            trap 'rm -rf "$workdir"' EXIT
+            cd "$workdir"
+            for asset in "$archive" "$checksums"; do
+              curl --fail --silent --show-error --location \
+                --retry 5 --retry-all-errors --connect-timeout 20 --max-time 120 \
+                "$base/$asset" --output "$asset"
+            done
+            awk -v asset="$archive" '$2 == asset {print}' "$checksums" > selected.sha256
+            test "$(wc -l < selected.sha256)" -eq 1
+            sha256sum --check selected.sha256
+            tar -xzf "$archive" "$tool"
+            install -Dm755 "$tool" "$HOME/.local/bin/$tool"
+            "$HOME/.local/bin/$tool" version
+          )
+          install_tool syft 1.57.0
+          install_tool grype 0.121.2
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Cache grype DB

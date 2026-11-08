@@ -74,7 +74,8 @@ jobs:
       - name: Set up Nushell
         uses: hustcer/setup-nu@v3
         with:
-          version: "*"
+          # Keep release discovery out of the gate. Update deliberately.
+          version: "0.116.1"
 
       - name: Probe driver contract negative controls
         run: python3 -B -m unittest discover -s scripts/hw-probe/driver -v
