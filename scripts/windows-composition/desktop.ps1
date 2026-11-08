@@ -148,7 +148,7 @@ function Javascript([string]$Expression) {
  $bytes=[Text.Encoding]::UTF8.GetBytes($message)
  $timeout=New-Object Threading.CancellationTokenSource 30000
  try {
-  $socket.SendAsync([ArraySegment[byte]]::new($bytes),[Net.WebSockets.WebSocketMessageType]::Text,$true,$timeout.Token).GetAwaiter().GetResult()
+  $socket.SendAsync([ArraySegment[byte]]::new($bytes),[Net.WebSockets.WebSocketMessageType]::Text,$true,$timeout.Token).GetAwaiter().GetResult() | Out-Null
   do {
    $stream=New-Object IO.MemoryStream
    try {
