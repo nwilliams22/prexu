@@ -144,6 +144,23 @@ installed; rendering is software only, no GPU). Read
 always `sudo win11-vm reset` when done so the next test starts clean. It is
 rebuilt automatically before the evaluation expires, so keep nothing in it.
 
+## `git` and `gh` as the `paperclip` user
+
+Trees under `/srv/projects` are owned by `bad-dong`; some adapters run as
+`paperclip`. `/etc/gitconfig` grants `safe.directory = *`, but the managed
+GitHub launcher sets `GIT_CONFIG_SYSTEM=/dev/null`, so git never reads it and
+every command fails with `fatal: detected dubious ownership in repository`.
+
+`/home/paperclip/.local/bin/git` is a shim that re-adds the exception and execs
+`/usr/bin/git`. The launcher execs the next `git` on `PATH`, which is that shim,
+so managed credentials still apply; `gh` spawns git as a child and is fixed by
+the same hop. Nothing needs doing — plain `git status` and `gh run list` work.
+
+If the error returns, the shim is gone or `PATH` changed. Do not conclude the
+checkout is corrupt, and do not call `/usr/bin/git` directly — that bypasses
+managed credentials and breaks `git push`. Use `git -c 'safe.directory=*' ...`,
+which keeps them, and restore the shim.
+
 ## Logging conventions
 
 Use Rust `log` macros and the TypeScript logger in `src/services/logger.ts`.
