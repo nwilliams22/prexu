@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { PreferenceSaveContext, PreferenceFailures } from "../components/settings/PreferenceSaveStatus";
-import { Link, Navigate, useParams } from "react-router-dom";
+import { Link, Navigate, useLocation, useParams } from "react-router-dom";
 import { SettingsShell, SETTINGS_CATEGORIES } from "../components/settings/SettingsShell";
 import { useAuth } from "../hooks/useAuth";
 import { useInvites } from "../hooks/useInvites";
@@ -23,6 +23,7 @@ function Settings() {
   const preferenceState = usePreferences();
   const { preferences, updatePreferences, loadState, retryLoad } = preferenceState;
 
+  const location = useLocation();
   const { "*": categoryPath } = useParams();
   const category = SETTINGS_CATEGORIES.find((item) => item.id === categoryPath);
 
@@ -43,7 +44,7 @@ function Settings() {
     updatePreferences({ appearance: partial });
   };
 
-  if (!category) return <Navigate to="/settings/playback" replace />;
+  if (!category) return <Navigate to={`/settings/playback${location.search}`} replace />;
 
   return (
     <SettingsDraftGuard>

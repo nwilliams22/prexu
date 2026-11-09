@@ -104,7 +104,7 @@ vi.mock("../hooks/useToast", () => ({
 function LocationProbe() {
   const location = useLocation();
   const navigate = useNavigate();
-  return <><output data-testid="location">{location.pathname}</output><button onClick={() => navigate(-1)}>Back</button></>;
+  return <><output data-testid="location">{location.pathname}{location.search}{location.hash}</output><button onClick={() => navigate(-1)}>Back</button></>;
 }
 function renderSettings(path = "/settings/playback") {
   return render(<RouterProvider router={createMemoryRouter([{ path: "*", element: <><LocationProbe /><Routes><Route path="/settings/*" element={<Settings />} /></Routes></> }], { initialEntries: [path] })} />);
@@ -198,4 +198,62 @@ describe("Settings", () => {
     await user.click(screen.getByRole("radio", { name: "Large" }));
     expect(mockUpdatePreferences).toHaveBeenCalledWith({ appearance: { posterSize: "large" } });
   });
+});
+
+
+describe("Settings search navigation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockHomeUsers.mockReturnValue({ homeUsers: [], isPlexHome: false });
+    mockUseAuth.mockReturnValue({ server: { uri: "https://private-server.test" }, activeUser: { isAdmin: true, title: "Private Name" } });
+  });
+  it("replaces typing history, pushes results, focuses the control and restores results on Back", async () => {
+    const user = userEvent.setup();
+    renderSettings();
+    await user.type(screen.getByRole("searchbox"), "audio language");
+    expect(screen.getByTestId("location")).toHaveTextContent("?q=audio+language");
+    expect(screen.queryByRole("combobox", { name: "Video Quality" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("link", { name: /Preferred Audio Language.*Language/ }));
+    expect(screen.getByLabelText("Preferred Audio Language")).toHaveFocus();
+    expect(screen.getByTestId("location")).toHaveTextContent("/settings/audio#setting-P7");
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.getByRole("searchbox")).toHaveValue("audio language");
+    expect(screen.getByRole("link", { name: /Preferred Audio Language.*Language/ })).toBeVisible();
+    expect(mockUpdatePreferences).not.toHaveBeenCalled();
+  });
+  it("supports no results and Escape without losing search focus or changing preferences", async () => {
+    const user = userEvent.setup();
+    renderSettings("/settings/audio?q=Private%20Name");
+    expect(screen.getByText("No settings match ‘Private Name’")).toBeVisible();
+    await user.click(screen.getByRole("searchbox"));
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("searchbox")).toHaveFocus();
+    expect(screen.getByRole("searchbox")).toHaveValue("");
+    expect(screen.getByLabelText("Preferred Audio Language")).toBeVisible();
+    expect(mockUpdatePreferences).not.toHaveBeenCalled();
+  });
+  it("focuses a selected radio, read-only entry and parental section without opening an editor", async () => {
+    const user = userEvent.setup();
+    renderSettings("/settings/playback?q=poster");
+    await user.click(screen.getByRole("link", { name: /Poster Size.*Interface/ }));
+    expect(screen.getByRole("radio", { name: "Medium" })).toHaveFocus();
+    await user.type(screen.getByRole("searchbox"), "version");
+    await user.click(screen.getByRole("link", { name: /App version/ }));
+    expect(document.getElementById("about-version")).toHaveFocus();
+    await user.type(screen.getByRole("searchbox"), "rating");
+    await user.click(screen.getByRole("link", { name: /Maximum Allowed Rating/ }));
+    expect(screen.getByRole("heading", { name: "Managed users" })).toHaveFocus();
+    expect(screen.queryByRole("checkbox", { name: "Enable content restrictions" })).not.toBeInTheDocument();
+  });
+});
+
+
+it("search targets the existing relay editor without discarding an unchanged draft", async () => {
+  mockUseAuth.mockReturnValue({ activeUser: { isAdmin: true } });
+  const user = userEvent.setup();
+  renderSettings("/settings/connections");
+  await user.click(await screen.findByRole("button", { name: "Use custom relay URL" }));
+  await user.type(screen.getByRole("searchbox"), "custom relay url");
+  await user.click(screen.getByRole("link", { name: /Custom relay URL.*Relay connection/ }));
+  expect(screen.getByRole("textbox", { name: "Custom relay URL" })).toHaveFocus();
 });

@@ -77,3 +77,11 @@
 
 .settings-dashboard-group { border: 0; min-width: 0; }
 .settings-dashboard-group legend { font-size: 14px; font-weight: 600; }
+
+.settings-search { margin-top: 20px; max-width: 640px; }
+.settings-search label { font-size: 14px; font-weight: 600; }
+.settings-search input { flex: 1; min-width: 0; min-height: 44px; border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; background: var(--bg-primary); color: var(--text-primary); font: inherit; }
+.settings-search-results { list-style: none; padding: 0; margin-top: 16px; }
+.settings-search-results li { margin-bottom: 12px; }
+.settings-search-results a { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--border); border-radius: 8px; padding: 16px; background: var(--bg-card); color: var(--text-primary); }
+.settings-search-results span { color: var(--text-secondary); font-size: 13px; line-height: 1.5; }

@@ -120,7 +120,7 @@ export function ConnectionsSettingsPanel({ serverUri, isRelayConnected, refreshI
         <p><code>{savedUrl !== null ? settingsAddress(savedUrl) : autoUrl ? settingsAddress(autoUrl) : "No server selected"}</code></p>
         {savedUrl !== null && <p className="settings-help">Automatic: {autoUrl ? settingsAddress(autoUrl) : "No server selected"}</p>}
         <p role="status">{isRelayConnected ? "Connected to relay" : "Not connected"}</p>
-        <button ref={editButton} disabled={saving} hidden={editing} onClick={() => { setDraft(savedUrl ?? ""); setEditing(true); setMessage(""); }}>{savedUrl === null ? "Use custom relay URL" : "Edit relay URL"}</button>
+        <button id="relay-edit" ref={editButton} disabled={saving} hidden={editing} onClick={() => { setDraft(savedUrl ?? ""); setEditing(true); setMessage(""); }}>{savedUrl === null ? "Use custom relay URL" : "Edit relay URL"}</button>
         {editing && <form onSubmit={(e) => { e.preventDefault(); void saveRelay(); }}>
           <SettingsRow id="N1" label="Custom relay URL" error={draft && !valid ? "Enter a valid ws:// or wss:// relay address." : undefined}>
             {(props) => <input {...props} autoFocus type="text" value={draft} disabled={saving} onChange={(e) => setDraft(e.target.value)} autoComplete="off" spellCheck={false} />}
@@ -150,7 +150,7 @@ export function ConnectionsSettingsPanel({ serverUri, isRelayConnected, refreshI
         {fileError && <p role="alert" className="settings-error">This audio file could not be loaded. Choose another file.</p>}
         <DeviceSaveStatus {...sound} />
       </div>
-      <button onClick={() => void preview()} disabled={previewDisabled} aria-describedby="sound-preview-help">Preview sound</button>
+      <button id="sound-preview" onClick={() => void preview()} disabled={previewDisabled} aria-describedby="sound-preview-help">Preview sound</button>
       <p id="sound-preview-help" className="settings-help">{volume.value === 0 ? "Increase volume to preview." : !customReady ? "Choose an audio file" : "Play the selected invitation sound."}</p>
       {previewError && <p role="alert" className="settings-error">Could not preview sound. Try again.</p>}
     </SettingsSection>

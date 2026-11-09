@@ -28,7 +28,7 @@ export function SubtitlesSettingsPanel({ playback: pb, updatePlayback, updateSub
     </SettingsSection>
     <SettingsSection title="Appearance" description={off ? "Saved for when subtitles are enabled." : undefined}>
       <div className="settings-subtitle-preview"><span style={{ ...buildPreviewStyle(ss), fontSize: `${1.1 * pb.subtitleSize / 100}rem` }}>Sample subtitle text</span></div>
-      <p className="settings-help">This preview illustrates chosen styling, not a guarantee for all subtitle formats.</p>
+      <p id="subtitle-preview" tabIndex={-1} className="settings-help">This preview illustrates chosen styling, not a guarantee for all subtitle formats.</p>
       <PreferenceRow path="playback.subtitleSize">
         {(props) => <SettingsRange {...props} value={pb.subtitleSize} min={50} max={200} step={10} formatValue={(n) => `${n}%`} onChange={(e) => updatePlayback({ subtitleSize: Number(e.target.value) })} />}
       </PreferenceRow>

@@ -38,7 +38,7 @@ export function SettingsRow({ id, label, help, error, status, children }: Settin
   const descriptions = [help && `${id}-help`, error && `${id}-error`, status && `${id}-status`].filter(Boolean).join(" ");
   return <div className="settings-row" id={`${id}-row`}>
     <div className="settings-row-copy">
-      <label htmlFor={id} id={`${id}-label`} tabIndex={-1}>{label}</label>
+      <label htmlFor={id} id={`${id}-label`} tabIndex={-1} aria-describedby={help ? `${id}-help` : undefined}>{label}</label>
       {help && <p className="settings-help" id={`${id}-help`}>{help}</p>}
     </div>
     <div className="settings-row-control">
