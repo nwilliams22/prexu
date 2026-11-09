@@ -1,10 +1,11 @@
-import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { createMemoryRouter, RouterProvider, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Settings from "./Settings";
 
 const mockUpdatePreferences = vi.fn();
+const mockLoadRestrictions = vi.fn(() => Promise.resolve({ enabled: false, maxContentRating: "none" }));
 
 const mockUseAuth = vi.fn();
 const mockHomeUsers = vi.fn(() => ({ homeUsers: [] as { id: number; title: string; admin: boolean; thumb: string; protected: boolean }[], isPlexHome: false }));
@@ -91,7 +92,7 @@ vi.mock("../hooks/useParentalControls", () => ({
     filterByRating: (items: unknown[]) => items,
     isItemAllowed: () => true,
     maxContentRating: "none",
-    loadForUser: vi.fn(() => Promise.resolve({ enabled: false, maxContentRating: "none" })),
+    loadForUser: mockLoadRestrictions,
     saveForUser: vi.fn(() => Promise.resolve()),
   }),
 }));
@@ -106,12 +107,14 @@ function LocationProbe() {
   return <><output data-testid="location">{location.pathname}</output><button onClick={() => navigate(-1)}>Back</button></>;
 }
 function renderSettings(path = "/settings/playback") {
-  return render(<MemoryRouter initialEntries={[path]}><LocationProbe /><Routes><Route path="/settings/*" element={<Settings />} /></Routes></MemoryRouter>);
+  return render(<RouterProvider router={createMemoryRouter([{ path: "*", element: <><LocationProbe /><Routes><Route path="/settings/*" element={<Settings />} /></Routes></> }], { initialEntries: [path] })} />);
 }
 
 describe("Settings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
+    HTMLDialogElement.prototype.close = function () { this.removeAttribute("open"); };
     mockHomeUsers.mockReturnValue({ homeUsers: [], isPlexHome: false });
     mockUseAuth.mockReturnValue({ server: { uri: "https://plex.test" }, activeUser: { isAdmin: true, title: "Admin" } });
   });
@@ -142,39 +145,48 @@ describe("Settings", () => {
     expect(screen.getByText("Sample Subtitle Text")).toBeVisible();
   });
 
-  it("preserves unfinished relay input across category changes", async () => {
+  it("guards dirty relay category navigation, default focus and Escape keep editing", async () => {
     const user = userEvent.setup();
     renderSettings("/settings/connections");
     await user.click(await screen.findByRole("button", { name: "Use custom relay URL" }));
-    const input = screen.getByPlaceholderText("ws://your-server:9847/ws");
+    const input = screen.getByRole("textbox", { name: "Custom relay URL" });
     await user.type(input, "ws://draft.test/ws");
     await user.click(screen.getByRole("link", { name: "About" }));
-    expect(screen.getByText("Content Requests")).toBeVisible();
-    expect(input).not.toBeVisible();
-    await user.click(screen.getByRole("link", { name: "Connections & notifications" }));
+    expect(screen.getByRole("button", { name: "Keep editing" })).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: "Keep editing" }));
     expect(input).toHaveValue("ws://draft.test/ws");
-    expect(input).toBeVisible();
+    expect(screen.getByTestId("location")).toHaveTextContent("/settings/connections");
+    await user.click(screen.getByRole("link", { name: "About" }));
+    await user.click(screen.getByRole("button", { name: "Discard changes" }));
+    expect(await screen.findByRole("heading", { name: "About", level: 2 })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(await screen.findByRole("button", { name: "Use custom relay URL" })).toBeVisible();
   });
 
-  it("preserves an unfinished parental-control edit across categories", async () => {
-    mockHomeUsers.mockReturnValue({ isPlexHome: true, homeUsers: [{ id: 2, title: "Child", admin: false, thumb: "", protected: false }] });
+  it("guards switching users and category with dirty restrictions", async () => {
+    mockHomeUsers.mockReturnValue({ isPlexHome: true, homeUsers: [{ id: 2, title: "Child", admin: false, thumb: "", protected: false }, { id: 3, title: "Teen", admin: false, thumb: "", protected: false }] });
     const user = userEvent.setup();
     renderSettings("/settings/parental-controls");
-    await user.click(screen.getByRole("button", { name: "Edit" }));
-    await user.click(await screen.findByRole("checkbox", { name: "Enable content restrictions" }));
+    await user.click(await screen.findByRole("button", { name: "Edit Child" }));
+    await user.click(screen.getByRole("checkbox", { name: "Enable content restrictions" }));
     await user.selectOptions(screen.getByDisplayValue("No Restriction"), "PG");
-    await user.click(screen.getByRole("link", { name: "Playback" }));
-    await user.click(screen.getByRole("link", { name: "Parental controls" }));
-    expect(screen.getByRole("checkbox", { name: "Enable content restrictions" })).toBeChecked();
+    await user.click(screen.getByRole("button", { name: "Edit Teen" }));
+    await user.click(screen.getByRole("button", { name: "Keep editing" }));
     expect(screen.getByDisplayValue("PG — Parental Guidance")).toBeVisible();
+    await user.click(screen.getByRole("link", { name: "Playback" }));
+    await user.click(screen.getByRole("button", { name: "Discard changes" }));
+    await user.click(screen.getByRole("link", { name: "Parental controls" }));
+    await user.click(await screen.findByRole("button", { name: "Edit Child" }));
+    expect(screen.getByRole("checkbox", { name: "Enable content restrictions" })).not.toBeChecked();
   });
 
-  it("hides admin navigation and redirects unauthorized categories", async () => {
+  it("hides admin navigation and explains unauthorized direct access without loading users", async () => {
     mockUseAuth.mockReturnValue({ activeUser: { isAdmin: false } });
     renderSettings("/settings/parental-controls");
-    expect(await screen.findByRole("heading", { name: "Playback", level: 2 })).toBeVisible();
+    expect(await screen.findByText("Parental controls are available to administrators")).toBeVisible();
     expect(screen.queryByRole("link", { name: "Parental controls" })).not.toBeInTheDocument();
-    expect(screen.queryByText("Content Requests")).not.toBeInTheDocument();
+    expect(mockHomeUsers).not.toHaveBeenCalled();
+    expect(mockLoadRestrictions).not.toHaveBeenCalled();
   });
 
   it("preserves preference update payloads", async () => {

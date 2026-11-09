@@ -726,7 +726,7 @@ export async function getPlexFriends(
  * Fetch all users in the Plex Home.
  * Returns empty array if the account is not part of a Plex Home.
  */
-export async function getHomeUsers(authToken: string): Promise<HomeUser[]> {
+export async function getHomeUsers(authToken: string, strict = false): Promise<HomeUser[]> {
   const headers = await getAuthHeaders(authToken);
 
   try {
@@ -756,6 +756,7 @@ export async function getHomeUsers(authToken: string): Promise<HomeUser[]> {
       protected: (u.protected as boolean) ?? false,
     }));
   } catch (err) {
+    if (strict) throw err;
     void logger.warn("api", "could not fetch home users", err);
     return [];
   }

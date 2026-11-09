@@ -6,6 +6,8 @@ import type { HomeUser, ActiveUser } from "../types/home-user";
 export interface HomeUsersContextValue {
   homeUsers: HomeUser[];
   isLoading: boolean;
+  loadError?: string | null;
+  retryLoad?: () => void;
   isPlexHome: boolean;
   isSwitching: boolean;
   switchError: string | null;
@@ -27,6 +29,9 @@ export function useHomeUsers(): HomeUsersContextValue {
 export function useHomeUsersState(): HomeUsersContextValue {
   const { authToken, activeUser, switchUser, selectServer } = useAuth();
   const [homeUsers, setHomeUsers] = useState<HomeUser[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const retryLoad = useCallback(() => setLoadAttempt((n) => n + 1), []);
   const [isLoading, setIsLoading] = useState(false);
   const [isSwitching, setIsSwitching] = useState(false);
   const [switchError, setSwitchError] = useState<string | null>(null);
@@ -35,24 +40,29 @@ export function useHomeUsersState(): HomeUsersContextValue {
   useEffect(() => {
     if (!authToken) {
       setHomeUsers([]);
+      setIsLoading(false);
+      setLoadError(null);
       return;
     }
 
     let cancelled = false;
     setIsLoading(true);
+    setLoadError(null);
 
     (async () => {
-      const users = await getHomeUsers(authToken);
+      const users = await getHomeUsers(authToken, true);
       if (!cancelled) {
         setHomeUsers(users);
         setIsLoading(false);
       }
-    })();
+    })().catch(() => {
+      if (!cancelled) { setLoadError("Could not load managed users"); setIsLoading(false); }
+    });
 
     return () => {
       cancelled = true;
     };
-  }, [authToken]);
+  }, [authToken, loadAttempt]);
 
   const switchTo = useCallback(
     async (user: HomeUser, pin?: string) => {
@@ -114,12 +124,14 @@ export function useHomeUsersState(): HomeUsersContextValue {
     () => ({
       homeUsers,
       isLoading,
+      loadError,
+      retryLoad,
       isPlexHome: homeUsers.length >= 2,
       isSwitching,
       switchError,
       switchTo,
       clearError,
     }),
-    [homeUsers, isLoading, isSwitching, switchError, switchTo, clearError],
+    [homeUsers, isLoading, loadError, retryLoad, isSwitching, switchError, switchTo, clearError],
   );
 }

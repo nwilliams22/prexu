@@ -1,4 +1,6 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import userEvent from "@testing-library/user-event";
+import { render, screen } from "@testing-library/react";
 import { ParentalControlsPanel } from "./ParentalControlsPanel";
 
 // Mock hooks
@@ -78,75 +80,52 @@ vi.mock("../../hooks/useToast", () => ({
 describe("ParentalControlsPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockLoadForUser.mockResolvedValue({
-      enabled: false,
-      maxContentRating: "none",
-    });
+    mockLoadForUser.mockResolvedValue({ enabled: false, maxContentRating: "PG" });
     mockSaveForUser.mockResolvedValue(undefined);
   });
-
-  it("renders only non-admin managed users", () => {
-    render(<ParentalControlsPanel />);
-
-    expect(screen.getByText("Child")).toBeInTheDocument();
-    expect(screen.getByText("Teen")).toBeInTheDocument();
-    // Admin should not appear in the list
-    expect(screen.queryByText("Admin")).not.toBeInTheDocument();
+  it("does not load or render restricted data for a non-admin", () => {
+    render(<MemoryRouter><ParentalControlsPanel isAdmin={false} /></MemoryRouter>);
+    expect(screen.getByText("Parental controls are available to administrators")).toBeVisible();
+    expect(screen.queryByText("Child")).toBeNull();
+    expect(mockLoadForUser).not.toHaveBeenCalled();
   });
-
-  it("shows 'No restrictions' by default", () => {
-    render(<ParentalControlsPanel />);
-
-    const noRestrictions = screen.getAllByText("No restrictions");
-    expect(noRestrictions.length).toBeGreaterThanOrEqual(2);
+  it("shows loading rather than unrestricted summaries until data resolves", async () => {
+    mockLoadForUser.mockReturnValue(new Promise(() => {}));
+    render(<ParentalControlsPanel isAdmin />);
+    expect(screen.getByText("Loading managed users and restrictions…")).toBeVisible();
+    expect(screen.queryByText("No restrictions")).toBeNull();
   });
-
-  it("opens edit form when Edit is clicked", async () => {
-    render(<ParentalControlsPanel />);
-
-    const editButtons = screen.getAllByText("Edit");
-    fireEvent.click(editButtons[0]);
-
-    await waitFor(() => {
-      expect(screen.getByText("Enable content restrictions")).toBeInTheDocument();
-    });
+  it("renders only non-admin users and keeps disabled rating visible", async () => {
+    render(<ParentalControlsPanel isAdmin />);
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Child" }));
+    expect(screen.queryByText("Admin")).toBeNull();
+    expect(screen.getByText("Protected profile")).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "Maximum Allowed Rating" })).toBeDisabled();
+    expect(screen.getByRole("combobox")).toHaveValue("PG");
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("checkbox"));
+    expect(screen.getByRole("combobox")).toHaveValue("PG");
+    expect(screen.getByRole("combobox")).toBeEnabled();
   });
-
-  it("shows rating dropdown when restrictions enabled", async () => {
-    render(<ParentalControlsPanel />);
-
-    const editButtons = screen.getAllByText("Edit");
-    fireEvent.click(editButtons[0]);
-
-    await waitFor(() => {
-      expect(screen.getByText("Enable content restrictions")).toBeInTheDocument();
-    });
-
-    const checkbox = screen.getByRole("checkbox");
-    fireEvent.click(checkbox);
-
-    expect(screen.getByText("Maximum Allowed Rating")).toBeInTheDocument();
+  it("retains a failed draft for Retry and focuses Edit after success", async () => {
+    mockSaveForUser.mockRejectedValueOnce(new Error("disk"));
+    render(<ParentalControlsPanel isAdmin />);
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Child" }));
+    await userEvent.click(screen.getByRole("checkbox"));
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not save restrictions");
+    expect(screen.getByRole("checkbox")).toBeChecked();
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("Restrictions updated for Child")).toBeVisible();
+    expect(mockSaveForUser).toHaveBeenLastCalledWith(2, { enabled: true, maxContentRating: "PG" });
+    expect(screen.getByRole("button", { name: "Edit Child" })).toHaveFocus();
   });
-
-  it("saves settings and shows toast", async () => {
-    render(<ParentalControlsPanel />);
-
-    const editButtons = screen.getAllByText("Edit");
-    fireEvent.click(editButtons[0]);
-
-    await waitFor(() => {
-      expect(screen.getByText("Enable content restrictions")).toBeInTheDocument();
-    });
-
-    const saveButton = screen.getByText("Save");
-    fireEvent.click(saveButton);
-
-    await waitFor(() => {
-      expect(mockSaveForUser).toHaveBeenCalled();
-      expect(mockToast).toHaveBeenCalledWith(
-        "Restrictions updated for Child",
-        "success",
-      );
-    });
+  it("reports read failures and retries without displaying false summaries", async () => {
+    mockLoadForUser.mockRejectedValueOnce(new Error("read"));
+    render(<ParentalControlsPanel isAdmin />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load parental controls");
+    expect(screen.queryByText("No restrictions")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("button", { name: "Edit Child" })).toBeVisible();
   });
 });

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Split relay and invitation settings from About. Relay edits validate addresses,
+  preserve failed drafts, and show actual connection state; invitation sounds now
+  play only through an explicit preview, with custom audio checked before saving.
+- Parental controls now show loading, error and empty states, preserve failed
+  edits, and confirm navigation away from unsaved changes. About sanitizes server
+  addresses and reports support-link failures.
+
 ## [0.8.2] - 2026-10-29
 
 **A Linux repair release, and nothing else.** 0.8.2 exists because the Linux

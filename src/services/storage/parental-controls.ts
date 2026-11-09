@@ -12,8 +12,9 @@ function parentalKey(userId: number): string {
 
 export async function getParentalControls(
   userId: number,
+  strict = false,
 ): Promise<ParentalControlSettings> {
-  const saved = await localStore.get<ParentalControlSettings>(parentalKey(userId));
+  const saved = await (strict ? localStore.getStrict<ParentalControlSettings> : localStore.get<ParentalControlSettings>)(parentalKey(userId));
   return saved ?? { ...DEFAULT_PARENTAL_CONTROLS };
 }
 

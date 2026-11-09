@@ -7,9 +7,9 @@ export const SETTINGS_CATEGORIES = [
   { id: "audio", label: "Audio", description: "Choose your audio language, volume and timing." },
   { id: "subtitles", label: "Subtitles", description: "Choose subtitle language, size and style." },
   { id: "appearance", label: "Appearance", description: "Customize the look of Prexu and how you browse." },
-  { id: "connections", label: "Connections & notifications", description: "Configure the relay and invitation notifications for this app." },
+  { id: "connections", label: "Connections & notifications", description: "Configure the relay and invitation sounds." },
   { id: "parental-controls", label: "Parental controls", description: "Manage content restrictions for members of your Plex Home." },
-  { id: "about", label: "About", description: "View app information and find support." },
+  { id: "about", label: "About", description: "App information and support." },
 ] as const;
 
 export type SettingsCategory = typeof SETTINGS_CATEGORIES[number]["id"];
@@ -32,7 +32,14 @@ export function SettingsShell({ category, isAdmin, children, headerContent }: Se
 
   useLayoutEffect(() => {
     // A targeted result owns focus; ordinary navigation always starts at the top.
-    if (location.hash) return;
+    if (location.hash) {
+      if (location.hash === "#N2-row") {
+        const target = document.getElementById("N2");
+        target?.scrollIntoView?.({ block: "center", behavior: "instant" });
+        target?.focus({ preventScroll: true });
+      }
+      return;
+    }
     rootRef.current?.closest("main")?.scrollTo?.({ top: 0, behavior: "instant" });
     headingRef.current?.focus({ preventScroll: true });
   }, [location.pathname, location.hash]);

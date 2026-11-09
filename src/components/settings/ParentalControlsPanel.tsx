@@ -1,272 +1,93 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useLayoutEffect, useRef } from "react";
+import { Link } from "react-router-dom";
 import { useHomeUsers } from "../../hooks/useHomeUsers";
 import { useParentalControls } from "../../hooks/useParentalControls";
-import { useToast } from "../../hooks/useToast";
-import {
-  RATING_LEVELS,
-  RATING_LABELS,
-  DEFAULT_PARENTAL_CONTROLS,
-} from "../../types/parental-controls";
-import type {
-  ContentRatingLevel,
-  ParentalControlSettings,
-} from "../../types/parental-controls";
-import type { HomeUser } from "../../types/home-user";
-import { styles as s } from "./settingsStyles";
+import { RATING_LEVELS, RATING_LABELS, DEFAULT_PARENTAL_CONTROLS, type ContentRatingLevel, type ParentalControlSettings } from "../../types/parental-controls";
+import { SettingsRow, SettingsSection } from "./SettingsPrimitives";
+import { useSettingsDraft } from "./SettingsDraftGuard";
 
-export function ParentalControlsPanel() {
-  const { homeUsers, isPlexHome } = useHomeUsers();
-  const { loadForUser, saveForUser } = useParentalControls();
-  const { toast } = useToast();
-
-  // Only show non-admin managed users
-  const managedUsers = homeUsers.filter((u) => !u.admin);
-
-  const [editingUserId, setEditingUserId] = useState<number | null>(null);
-  const [editSettings, setEditSettings] = useState<ParentalControlSettings>(
-    DEFAULT_PARENTAL_CONTROLS,
-  );
-  const [saving, setSaving] = useState(false);
-
-  // Per-user settings cache for display
-  const [userSettings, setUserSettings] = useState<
-    Record<number, ParentalControlSettings>
-  >({});
-
-  // Load settings for all managed users on mount
-  useEffect(() => {
-    if (managedUsers.length === 0) return;
-    let cancelled = false;
-
-    Promise.all(
-      managedUsers.map(async (u) => {
-        const settings = await loadForUser(u.id);
-        return [u.id, settings] as const;
-      }),
-    ).then((results) => {
-      if (cancelled) return;
-      const map: Record<number, ParentalControlSettings> = {};
-      for (const [id, settings] of results) {
-        map[id] = settings;
-      }
-      setUserSettings(map);
-    });
-
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [managedUsers.length]);
-
-  const handleEdit = useCallback(
-    async (user: HomeUser) => {
-      const settings = await loadForUser(user.id);
-      setEditSettings(settings);
-      setEditingUserId(user.id);
-    },
-    [loadForUser],
-  );
-
-  const handleSave = useCallback(async () => {
-    if (editingUserId === null) return;
-    setSaving(true);
-    try {
-      await saveForUser(editingUserId, editSettings);
-      setUserSettings((prev) => ({
-        ...prev,
-        [editingUserId]: editSettings,
-      }));
-      const user = managedUsers.find((u) => u.id === editingUserId);
-      toast(`Restrictions updated for ${user?.title ?? "user"}`, "success");
-      setEditingUserId(null);
-    } catch {
-      toast("Failed to save restrictions", "error");
-    } finally {
-      setSaving(false);
-    }
-  }, [editingUserId, editSettings, saveForUser, managedUsers, toast]);
-
-  if (!isPlexHome || managedUsers.length === 0) return null;
-
-  return (
-    <div style={s.section}>
-      <h3 style={s.sectionTitle}>Parental Controls</h3>
-      <p style={s.hint}>
-        Set content rating restrictions for managed users. Restricted users will
-        only see content at or below their allowed rating.
-      </p>
-
-      <div style={panelStyles.userList}>
-        {managedUsers.map((user) => {
-          const settings = userSettings[user.id];
-          const isEditing = editingUserId === user.id;
-
-          return (
-            <div key={user.id} style={panelStyles.userCard}>
-              {/* User row */}
-              <div style={panelStyles.userRow}>
-                <img
-                  src={user.thumb}
-                  alt=""
-                  style={panelStyles.avatar}
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).style.display = "none";
-                  }}
-                />
-                <div style={panelStyles.userInfo}>
-                  <span style={panelStyles.userName}>
-                    {user.title}
-                    {user.protected && (
-                      <svg
-                        width={12}
-                        height={12}
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="var(--text-secondary)"
-                        strokeWidth={2}
-                        style={{ marginLeft: 4, verticalAlign: "middle" }}
-                      >
-                        <rect x={3} y={11} width={18} height={11} rx={2} ry={2} />
-                        <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-                      </svg>
-                    )}
-                  </span>
-                  <span style={panelStyles.userRestriction}>
-                    {settings?.enabled && settings.maxContentRating !== "none"
-                      ? `Max: ${settings.maxContentRating}`
-                      : "No restrictions"}
-                  </span>
-                </div>
-                <button
-                  onClick={() =>
-                    isEditing ? setEditingUserId(null) : handleEdit(user)
-                  }
-                  style={panelStyles.editButton}
-                >
-                  {isEditing ? "Cancel" : "Edit"}
-                </button>
-              </div>
-
-              {/* Edit form */}
-              {isEditing && (
-                <div style={panelStyles.editForm}>
-                  <div style={s.field}>
-                    <label style={s.checkboxLabel}>
-                      <input
-                        type="checkbox"
-                        checked={editSettings.enabled}
-                        onChange={(e) =>
-                          setEditSettings((prev) => ({
-                            ...prev,
-                            enabled: e.target.checked,
-                          }))
-                        }
-                        style={s.checkbox}
-                      />
-                      Enable content restrictions
-                    </label>
-                  </div>
-
-                  {editSettings.enabled && (
-                    <div style={s.field}>
-                      <label style={s.label}>Maximum Allowed Rating</label>
-                      <select
-                        value={editSettings.maxContentRating}
-                        onChange={(e) =>
-                          setEditSettings((prev) => ({
-                            ...prev,
-                            maxContentRating: e.target.value as ContentRatingLevel,
-                          }))
-                        }
-                        style={s.select}
-                      >
-                        {RATING_LEVELS.map((level) => (
-                          <option key={level} value={level}>
-                            {RATING_LABELS[level]}
-                          </option>
-                        ))}
-                      </select>
-                      <p style={s.hint}>
-                        Content rated above this level will be hidden from this
-                        user's library, search results, and dashboard.
-                      </p>
-                    </div>
-                  )}
-
-                  <button
-                    onClick={handleSave}
-                    disabled={saving}
-                    style={{
-                      ...s.saveButton,
-                      opacity: saving ? 0.6 : 1,
-                    }}
-                  >
-                    {saving ? "Saving..." : "Save"}
-                  </button>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
+export function ParentalControlsPanel({ isAdmin }: { isAdmin: boolean }) {
+  if (!isAdmin) return <><p>Parental controls are available to administrators</p><Link to="/settings/playback">Back to Playback</Link></>;
+  return <ManagedUserControls />;
 }
 
-const panelStyles: Record<string, React.CSSProperties> = {
-  userList: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "0.5rem",
-  },
-  userCard: {
-    background: "var(--bg-card)",
-    border: "1px solid var(--border)",
-    borderRadius: 8,
-    overflow: "hidden",
-  },
-  userRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: "0.75rem",
-    padding: "0.75rem 1rem",
-  },
-  avatar: {
-    width: 36,
-    height: 36,
-    borderRadius: "50%",
-    objectFit: "cover",
-    flexShrink: 0,
-  },
-  userInfo: {
-    flex: 1,
-    display: "flex",
-    flexDirection: "column",
-    minWidth: 0,
-  },
-  userName: {
-    fontSize: "0.9rem",
-    fontWeight: 600,
-    color: "var(--text-primary)",
-  },
-  userRestriction: {
-    fontSize: "0.8rem",
-    color: "var(--text-secondary)",
-  },
-  editButton: {
-    background: "transparent",
-    color: "var(--accent)",
-    border: "1px solid var(--accent)",
-    borderRadius: 6,
-    padding: "0.3rem 0.75rem",
-    fontSize: "0.8rem",
-    fontWeight: 600,
-    cursor: "pointer",
-    flexShrink: 0,
-  },
-  editForm: {
-    padding: "0 1rem 1rem",
-    borderTop: "1px solid var(--border)",
-    paddingTop: "0.75rem",
-  },
-};
+function ManagedUserControls() {
+  const { homeUsers, isPlexHome, isLoading, loadError, retryLoad } = useHomeUsers();
+  const { loadForUser, saveForUser } = useParentalControls();
+  const managedUsers = homeUsers.filter((user) => !user.admin);
+  const ids = managedUsers.map((user) => user.id).join(",");
+  const [loadedIds, setLoadedIds] = useState<string | null>(null);
+  const [userSettings, setUserSettings] = useState<Record<number, ParentalControlSettings>>({});
+  const [error, setError] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const [editing, setEditing] = useState<number | null>(null);
+  const [draft, setDraft] = useState(DEFAULT_PARENTAL_CONTROLS);
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const [saveError, setSaveError] = useState(false);
+  const [message, setMessage] = useState("");
+  const buttons = useRef(new Map<number, HTMLButtonElement>());
+  const [failedAvatars, setFailedAvatars] = useState<number[]>([]);
+  useEffect(() => {
+    let current = true;
+    setError(false); setLoadedIds(null); setEditing(null);
+    const userIds = ids ? ids.split(",").map(Number) : [];
+    Promise.all(userIds.map(async (id) => [id, await loadForUser(id)] as const)).then((entries) => {
+      if (current) { setUserSettings(Object.fromEntries(entries)); setLoadedIds(ids); }
+    }, () => { if (current) setError(true); });
+    return () => { current = false; };
+  }, [ids, loadForUser, attempt]);
+  const previousEditor = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (previousEditor.current !== null && editing === null) buttons.current.get(previousEditor.current)?.focus();
+    previousEditor.current = editing;
+  }, [editing]);
+  const confirmed = editing === null ? null : userSettings[editing];
+  const dirty = Boolean(confirmed && (draft.enabled !== confirmed.enabled || draft.maxContentRating !== confirmed.maxContentRating));
+  function cancel() { if (editing !== null) buttons.current.get(editing)?.focus(); setEditing(null); setSaveError(false); }
+  const request = useSettingsDraft(dirty || saving, cancel);
+  async function save() {
+    if (editing === null || !dirty || savingRef.current) return;
+    const id = editing;
+    savingRef.current = true; setSaving(true); setSaveError(false);
+    try {
+      await saveForUser(id, draft);
+      setUserSettings((prev) => ({ ...prev, [id]: draft }));
+      setMessage(`Restrictions updated for ${managedUsers.find((user) => user.id === id)?.title ?? "user"}`);
+      setEditing(null); buttons.current.get(id)?.focus();
+    } catch { setSaveError(true); }
+    finally { savingRef.current = false; setSaving(false); }
+  }
+  return <div id="parental-controls-section">
+    <h3 tabIndex={-1} id="parental-controls-target">Managed users</h3>
+    <p className="settings-help">Restrictions for each managed user on this device.</p>
+    <p className="settings-help">Hides content above this rating in Prexu. TV ratings use the equivalent movie rating. Unrated or unknown content uses NC-17.</p>
+    {loadError || error ? <p role="alert">Could not load parental controls. <button onClick={() => { if (loadError) retryLoad?.(); setAttempt((n) => n + 1); }}>Retry</button></p>
+      : isLoading || loadedIds !== ids ? <div role="status">Loading managed users and restrictions…</div>
+      : !isPlexHome || !managedUsers.length ? <p>No managed users available</p>
+      : managedUsers.map((user) => {
+        const settings = userSettings[user.id]!;
+        return <SettingsSection key={user.id} id={`parental-user-${user.id}`} title={user.title}>
+          <div className="settings-user-summary">
+            {user.thumb && !failedAvatars.includes(user.id) ? <img width={36} height={36} src={user.thumb} alt="" onError={() => setFailedAvatars((old) => [...old, user.id])} /> : <span className="settings-user-initial" aria-hidden="true">{user.title.slice(0, 1)}</span>}
+            {user.protected && <span>Protected profile</span>}
+            <p>{settings.enabled && settings.maxContentRating !== "none" ? `Maximum rating: ${RATING_LABELS[settings.maxContentRating]}` : "No restrictions"}</p>
+            <button aria-label={`Edit ${user.title}`} ref={(button) => { if (button) buttons.current.set(user.id, button); else buttons.current.delete(user.id); }} disabled={saving || editing === user.id} onClick={() => request(() => { setDraft(settings); setEditing(user.id); setSaveError(false); setMessage(""); })}>Edit<span className="sr-only"> {user.title}</span></button>
+          </div>
+          {editing === user.id && <form onSubmit={(e) => { e.preventDefault(); void save(); }}>
+            <SettingsRow id="C1" label="Enable content restrictions">
+              {(props) => <input {...props} autoFocus type="checkbox" checked={draft.enabled} disabled={saving} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} />}
+            </SettingsRow>
+            <SettingsRow id="C2" label="Maximum Allowed Rating" help={!draft.enabled ? "Enable content restrictions to choose a maximum rating." : undefined}>
+              {(props) => <select {...props} value={draft.maxContentRating} disabled={saving || !draft.enabled} onChange={(e) => setDraft({ ...draft, maxContentRating: e.target.value as ContentRatingLevel })}>
+                {RATING_LEVELS.map((rating) => <option key={rating} value={rating}>{RATING_LABELS[rating]}</option>)}
+              </select>}
+            </SettingsRow>
+            <div className="settings-actions"><button type="submit" disabled={!dirty || saving}>{saving ? "Saving…" : "Save changes"}</button><button type="button" disabled={saving} onClick={cancel}>Cancel</button></div>
+            {saveError && <p role="alert" className="settings-error">Could not save restrictions. <button type="button" disabled={saving} onClick={() => void save()}>Retry</button></p>}
+          </form>}
+        </SettingsSection>;
+      })}
+    <p role="status">{message}</p>
+  </div>;
+}

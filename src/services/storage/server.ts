@@ -58,9 +58,9 @@ export function deriveRelayUrl(serverUri: string): string {
  * Get the relay URL to use.
  * Priority: manual override > auto-derived from server URI > localhost fallback.
  */
-export async function getRelayUrl(serverUri?: string | null): Promise<string> {
+export async function getRelayUrl(serverUri?: string | null, strict = false): Promise<string> {
   // Check for manual override first
-  const manual = await localStore.get<string>(STORAGE_KEYS.RELAY_URL);
+  const manual = await (strict ? localStore.getStrict<string> : localStore.get<string>)(STORAGE_KEYS.RELAY_URL);
   if (manual) return manual;
 
   // Auto-derive from Plex server URI
@@ -81,8 +81,8 @@ export async function clearRelayUrl(): Promise<void> {
 }
 
 /** Check if user has set a manual relay URL override */
-export async function hasManualRelayUrl(): Promise<boolean> {
-  const url = await localStore.get<string>(STORAGE_KEYS.RELAY_URL);
+export async function hasManualRelayUrl(strict = false): Promise<boolean> {
+  const url = await (strict ? localStore.getStrict<string> : localStore.get<string>)(STORAGE_KEYS.RELAY_URL);
   return url !== null;
 }
 

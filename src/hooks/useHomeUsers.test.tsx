@@ -59,7 +59,7 @@ describe("useHomeUsersState", () => {
     });
 
     expect(result.current.homeUsers).toHaveLength(2);
-    expect(mockPlexApi.getHomeUsers).toHaveBeenCalledWith("test-token");
+    expect(mockPlexApi.getHomeUsers).toHaveBeenCalledWith("test-token", true);
   });
 
   it("isPlexHome is true when users >= 2", async () => {
@@ -230,4 +230,15 @@ describe("useHomeUsersState", () => {
 
     expect(mockPlexApi.switchHomeUser).not.toHaveBeenCalled();
   });
+});
+
+it("exposes failed home-user reads and retries without claiming an empty success", async () => {
+  mockPlexApi.getHomeUsers.mockRejectedValueOnce(new Error("network")).mockResolvedValueOnce([createHomeUser({ id: 1 }), createHomeUser({ id: 2 })]);
+  const { wrapper } = createAuthWrapper();
+  const { result } = renderHook(() => useHomeUsersState(), { wrapper });
+  await waitFor(() => expect(result.current.loadError).toBe("Could not load managed users"));
+  expect(result.current.isLoading).toBe(false);
+  act(() => result.current.retryLoad?.());
+  await waitFor(() => expect(result.current.isPlexHome).toBe(true));
+  expect(result.current.loadError).toBeNull();
 });

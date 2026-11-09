@@ -25,9 +25,9 @@ test.describe("Settings page", () => {
     await expect(page.getByRole("heading", { name: "Appearance", level: 2 })).toBeVisible();
   });
 
-  test("shows Watch Together section", async ({ page }) => {
+  test("shows Relay connection section", async ({ page }) => {
     await page.goto("/settings/connections");
-    await expect(page.getByRole("heading", { name: "Watch Together" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Relay connection" })).toBeVisible();
   });
 
   test("shows About section with version", async ({ page }) => {
@@ -35,12 +35,12 @@ test.describe("Settings page", () => {
     await expect(page.getByText(/v\d+\.\d+\.\d+/)).toBeVisible();
   });
 
-  test("shows Content Requests section for admin users", async ({ page }) => {
+  test("shows Content search section for admin users", async ({ page }) => {
     await page.goto("/settings/about");
-    await expect(page.getByText("Content Requests")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Content search", exact: true })).toBeVisible();
   });
 
-  test("hides Content Requests for non-admin users", async ({ page }) => {
+  test("hides Content search for non-admin users", async ({ page }) => {
     // Override active_user to be non-admin
     await page.addInitScript(() => {
       localStorage.setItem(
@@ -56,23 +56,31 @@ test.describe("Settings page", () => {
     });
     await page.goto("/settings");
     await page.goto("/settings/about");
-    await expect(page.getByText("Content Requests")).not.toBeVisible();
+    await expect(page.getByRole("heading", { name: "Content search", exact: true })).not.toBeVisible();
   });
 });
 
-test("category history, focus and unsaved relay draft survive navigation", async ({ page }) => {
+test("dirty relay navigation requires discard and browser Back restores the category", async ({ page }) => {
   await page.setViewportSize({ width: 600, height: 900 });
   await page.goto("/settings");
   await expect(page).toHaveURL(/\/settings\/playback$/);
   const category = page.getByLabel("Settings category");
   await category.selectOption("connections");
   await page.getByRole("button", { name: "Use custom relay URL" }).click();
-  await page.getByPlaceholder("ws://your-server:9847/ws").fill("ws://draft.test/ws");
+  await page.getByLabel("Custom relay URL", { exact: true }).fill("ws://draft.test/ws");
   await category.selectOption("about");
+  await expect(page.getByRole("button", { name: "Keep editing" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.getByLabel("Custom relay URL", { exact: true })).toHaveValue("ws://draft.test/ws");
+  await page.goBack();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.getByRole("button", { name: "Keep editing" }).click();
+  await expect(page).toHaveURL(/\/settings\/connections$/);
+  await category.selectOption("about");
+  await page.getByRole("button", { name: "Discard changes" }).click();
   await expect(page.getByRole("heading", { name: "About", level: 2 })).toBeFocused();
   await page.goBack();
-  await expect(page.getByPlaceholder("ws://your-server:9847/ws")).toHaveValue("ws://draft.test/ws");
-  await expect(page.getByRole("navigation", { name: "Main navigation" }).getByRole("button", { name: "Settings", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("button", { name: "Use custom relay URL" })).toBeVisible();
 });
 
 for (const width of [1120, 900, 640, 320]) {

@@ -55,7 +55,7 @@ describe("useHomeUsersState", () => {
       expect(result.current.isLoading).toBe(false);
     });
 
-    expect(mockGetHomeUsers).toHaveBeenCalledWith("test-token");
+    expect(mockGetHomeUsers).toHaveBeenCalledWith("test-token", true);
     expect(result.current.homeUsers).toEqual(fakeUsers);
   });
 

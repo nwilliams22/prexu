@@ -20,8 +20,8 @@ const DEFAULT_VOLUME = 0.5;
 const DEFAULT_SOUND: NotificationSoundConfig = { sound: "chime" };
 
 /** Get the invite notification volume (0–1). Defaults to 0.5. */
-export async function getInviteVolume(): Promise<number> {
-  const vol = await localStore.get<number>(STORAGE_KEYS.INVITE_NOTIFICATION_VOLUME);
+export async function getInviteVolume(strict = false): Promise<number> {
+  const vol = await (strict ? localStore.getStrict<number> : localStore.get<number>)(STORAGE_KEYS.INVITE_NOTIFICATION_VOLUME);
   return vol ?? DEFAULT_VOLUME;
 }
 
@@ -31,8 +31,8 @@ export async function saveInviteVolume(volume: number): Promise<void> {
 }
 
 /** Get the invite notification sound config. */
-export async function getInviteSoundConfig(): Promise<NotificationSoundConfig> {
-  const config = await localStore.get<NotificationSoundConfig>(
+export async function getInviteSoundConfig(strict = false): Promise<NotificationSoundConfig> {
+  const config = await (strict ? localStore.getStrict<NotificationSoundConfig> : localStore.get<NotificationSoundConfig>)(
     STORAGE_KEYS.INVITE_NOTIFICATION_SOUND,
   );
   return config ?? DEFAULT_SOUND;

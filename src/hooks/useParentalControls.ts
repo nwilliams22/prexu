@@ -78,7 +78,7 @@ export function useParentalControlsState(
 
   const loadForUser = useCallback(
     async (uid: number): Promise<ParentalControlSettings> => {
-      return getParentalControls(uid);
+      return getParentalControls(uid, true);
     },
     [],
   );

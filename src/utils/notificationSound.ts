@@ -202,14 +202,25 @@ export function previewSound(sound: BuiltinSound, volume: number): void {
 /**
  * Preview a custom audio file from a data URL at a given volume.
  */
+export async function validateCustomSound(dataUrl: string): Promise<AudioBuffer> {
+  if (!dataUrl.startsWith("data:audio/")) throw new Error("Invalid audio data");
+  const ctx = getAudioContext();
+  if (!ctx) throw new Error("Audio unavailable");
+  const response = await fetch(dataUrl);
+  return ctx.decodeAudioData(await response.arrayBuffer());
+}
+
 export async function previewCustomDataUrl(dataUrl: string, volume: number): Promise<void> {
   const ctx = getAudioContext();
-  if (!ctx) return;
-
-  if (ctx.state === "suspended") {
-    ctx.resume().catch(() => {});
-  }
-
+  if (!ctx) throw new Error("Audio unavailable");
+  if (ctx.state === "suspended") await ctx.resume();
   if (volume <= 0) return;
-  await playCustomFromDataUrl(ctx, volume, dataUrl);
+  const buffer = await validateCustomSound(dataUrl);
+  const source = ctx.createBufferSource();
+  source.buffer = buffer;
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(volume, ctx.currentTime);
+  source.connect(gain);
+  gain.connect(ctx.destination);
+  source.start(0);
 }
