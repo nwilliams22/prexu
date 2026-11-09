@@ -17,6 +17,7 @@ import { open } from "@tauri-apps/plugin-shell";
 import { styles } from "./settingsStyles";
 
 interface AccountSettingsPanelProps {
+  view?: "connections" | "about";
   serverUri: string | undefined;
   isAdmin: boolean;
   isRelayConnected: boolean;
@@ -24,6 +25,7 @@ interface AccountSettingsPanelProps {
 }
 
 export function AccountSettingsPanel({
+  view,
   serverUri,
   isAdmin,
   isRelayConnected,
@@ -136,7 +138,7 @@ export function AccountSettingsPanel({
   return (
     <>
       {/* Watch Together */}
-      <section style={styles.section}>
+      <section hidden={view === "about"} style={styles.section}>
         <h3 style={styles.sectionTitle}>Watch Together</h3>
 
         <div style={styles.field}>
@@ -291,7 +293,7 @@ export function AccountSettingsPanel({
       </section>
 
       {/* Content Requests (Admin only) */}
-      {isAdmin && (
+      {isAdmin && view !== "connections" && (
         <section style={styles.section}>
           <h3 style={styles.sectionTitle}>Content Requests</h3>
           <p style={styles.hint}>
@@ -303,7 +305,7 @@ export function AccountSettingsPanel({
       )}
 
       {/* About */}
-      <section style={{ ...styles.section, borderBottom: "none" }}>
+      <section hidden={view === "connections"} style={{ ...styles.section, borderBottom: "none" }}>
         <h3 style={styles.sectionTitle}>About</h3>
         <div style={styles.aboutRow}>
           <span style={styles.aboutLabel}>Prexu</span>

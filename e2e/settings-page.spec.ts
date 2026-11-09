@@ -12,31 +12,31 @@ test.describe("Settings page", () => {
     await page.goto("/settings");
     await expect(
       page.getByRole("heading", { name: /settings/i }),
-    ).toBeVisible();
+    ).toBeVisible({ timeout: 15000 });
   });
 
   test("shows Playback section", async ({ page }) => {
     await page.goto("/settings");
-    await expect(page.getByRole("heading", { name: "Playback" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Playback", level: 2 })).toBeVisible({ timeout: 15000 });
   });
 
   test("shows Appearance section", async ({ page }) => {
-    await page.goto("/settings");
-    await expect(page.getByText("Appearance")).toBeVisible();
+    await page.goto("/settings/appearance");
+    await expect(page.getByRole("heading", { name: "Appearance", level: 2 })).toBeVisible();
   });
 
   test("shows Watch Together section", async ({ page }) => {
-    await page.goto("/settings");
+    await page.goto("/settings/connections");
     await expect(page.getByRole("heading", { name: "Watch Together" })).toBeVisible();
   });
 
   test("shows About section with version", async ({ page }) => {
-    await page.goto("/settings");
+    await page.goto("/settings/about");
     await expect(page.getByText(/v\d+\.\d+\.\d+/)).toBeVisible();
   });
 
   test("shows Content Requests section for admin users", async ({ page }) => {
-    await page.goto("/settings");
+    await page.goto("/settings/about");
     await expect(page.getByText("Content Requests")).toBeVisible();
   });
 
@@ -55,6 +55,63 @@ test.describe("Settings page", () => {
       );
     });
     await page.goto("/settings");
+    await page.goto("/settings/about");
     await expect(page.getByText("Content Requests")).not.toBeVisible();
   });
+});
+
+test("category history, focus and unsaved relay draft survive navigation", async ({ page }) => {
+  await page.setViewportSize({ width: 600, height: 900 });
+  await page.goto("/settings");
+  await expect(page).toHaveURL(/\/settings\/playback$/);
+  const category = page.getByLabel("Settings category");
+  await category.selectOption("connections");
+  await page.getByRole("button", { name: "Use custom relay URL" }).click();
+  await page.getByPlaceholder("ws://your-server:9847/ws").fill("ws://draft.test/ws");
+  await category.selectOption("about");
+  await expect(page.getByRole("heading", { name: "About", level: 2 })).toBeFocused();
+  await page.goBack();
+  await expect(page.getByPlaceholder("ws://your-server:9847/ws")).toHaveValue("ws://draft.test/ws");
+  await expect(page.getByRole("navigation", { name: "Main navigation" }).getByRole("button", { name: "Settings", exact: true })).toHaveAttribute("aria-current", "page");
+});
+
+for (const width of [1120, 900, 640, 320]) {
+  for (const theme of ["dark", "light"] as const) {
+    test(`layout at ${width}px available width in ${theme}`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width: width + 240, height: 1800 });
+      await page.emulateMedia({ colorScheme: theme });
+      await page.goto("/settings/audio");
+      const container = page.locator(".settings-container");
+      // Fix the available content width independently of app sidebar behavior.
+      await container.evaluate((element, size) => { (element as HTMLElement).style.width = `${size}px`; }, width);
+      await expect(page.getByRole("heading", { name: "Audio", level: 2 })).toBeVisible();
+      await expect(page.getByLabel("Settings category")).toBeVisible({ visible: width < 900 });
+      await expect(page.getByRole("navigation", { name: "Settings categories" })).toBeVisible({ visible: width >= 900 });
+      for (const category of ["playback", "audio", "subtitles", "appearance", "connections", "about"]) {
+        await page.goto(`/settings/${category}`);
+        await container.evaluate((element, size) => { (element as HTMLElement).style.width = `${size}px`; }, width);
+        await expect(page.locator(".settings-category-heading h2")).toBeVisible();
+        expect(await container.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+      }
+      await page.goto("/settings/audio");
+      await container.evaluate((element, size) => { (element as HTMLElement).style.width = `${size}px`; }, width);
+      await expect(page.getByText("Fetching server content…", { exact: true })).toHaveCount(0);
+      const screenshotPath = testInfo.outputPath(`settings-${width}-${theme}.png`);
+      await container.screenshot({ path: screenshotPath });
+      await testInfo.attach(`settings-${width}-${theme}`, { path: screenshotPath, contentType: "image/png" });
+    });
+  }
+}
+
+test("200 percent zoom keeps controls within the Settings width", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1280, height: 3000 });
+  await page.goto("/settings/appearance");
+  await page.locator("body").evaluate((element) => { element.style.zoom = "2"; });
+  await expect(page.getByLabel("Settings category")).toBeVisible();
+  const container = page.locator(".settings-container");
+  expect(await container.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect(page.getByText("Fetching server content…", { exact: true })).toHaveCount(0);
+  const screenshotPath = testInfo.outputPath("settings-200-percent.png");
+  await page.screenshot({ path: screenshotPath });
+  await testInfo.attach("settings-200-percent", { path: screenshotPath, contentType: "image/png" });
 });

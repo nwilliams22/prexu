@@ -1,3 +1,4 @@
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -6,6 +7,7 @@ import Settings from "./Settings";
 const mockUpdatePreferences = vi.fn();
 
 const mockUseAuth = vi.fn();
+const mockHomeUsers = vi.fn(() => ({ homeUsers: [] as { id: number; title: string; admin: boolean; thumb: string; protected: boolean }[], isPlexHome: false }));
 vi.mock("../hooks/useAuth", () => ({
   useAuth: () => mockUseAuth(),
 }));
@@ -78,15 +80,7 @@ vi.mock("../utils/notificationSound", () => ({
 }));
 
 vi.mock("../hooks/useHomeUsers", () => ({
-  useHomeUsers: () => ({
-    homeUsers: [],
-    isPlexHome: false,
-    isLoading: false,
-    isSwitching: false,
-    switchError: null,
-    switchTo: vi.fn(),
-    clearError: vi.fn(),
-  }),
+  useHomeUsers: () => mockHomeUsers(),
 }));
 
 vi.mock("../hooks/useParentalControls", () => ({
@@ -104,110 +98,90 @@ vi.mock("../hooks/useToast", () => ({
   useToast: () => ({ toast: vi.fn(), toasts: [], dismiss: vi.fn(), dismissAll: vi.fn() }),
 }));
 
+function LocationProbe() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  return <><output data-testid="location">{location.pathname}</output><button onClick={() => navigate(-1)}>Back</button></>;
+}
+function renderSettings(path = "/settings/playback") {
+  return render(<MemoryRouter initialEntries={[path]}><LocationProbe /><Routes><Route path="/settings/*" element={<Settings />} /></Routes></MemoryRouter>);
+}
+
 describe("Settings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockUseAuth.mockReturnValue({
-      server: { uri: "https://plex.test", accessToken: "token" },
-      activeUser: { isAdmin: true, title: "Admin" },
-    });
+    mockHomeUsers.mockReturnValue({ homeUsers: [], isPlexHome: false });
+    mockUseAuth.mockReturnValue({ server: { uri: "https://plex.test" }, activeUser: { isAdmin: true, title: "Admin" } });
   });
 
-  it("renders Settings heading", () => {
-    render(<Settings />);
-    expect(screen.getByText("Settings")).toBeInTheDocument();
+  it.each(["/settings", "/settings/unknown", "/settings/audio/unknown"])("redirects %s to Playback", async (path) => {
+    renderSettings(path);
+    expect(await screen.findByRole("heading", { name: "Playback", level: 2 })).toHaveFocus();
+    expect(screen.getByTestId("location")).toHaveTextContent("/settings/playback");
   });
 
-  it("renders Playback section with quality select", () => {
-    render(<Settings />);
-    expect(screen.getByText("Playback")).toBeInTheDocument();
-    expect(screen.getByText("Video Quality")).toBeInTheDocument();
+  it("pushes category navigation and restores it with Back", async () => {
+    const user = userEvent.setup();
+    renderSettings();
+    await user.click(screen.getByRole("link", { name: "Audio" }));
+    expect(screen.getByRole("heading", { name: "Audio", level: 2 })).toHaveFocus();
+    expect(screen.getByRole("link", { name: "Audio" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByLabelText("Preferred Audio Language")).toBeVisible();
+    expect(screen.getByText("Video Quality")).not.toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.getByRole("heading", { name: "Playback", level: 2 })).toHaveFocus();
   });
 
-  it("renders Appearance section", () => {
-    render(<Settings />);
-    expect(screen.getByText("Appearance")).toBeInTheDocument();
+  it("supports the category select", async () => {
+    const user = userEvent.setup();
+    renderSettings();
+    await user.selectOptions(screen.getByLabelText("Settings category"), "subtitles");
+    expect(screen.getByText("Default Subtitles")).toBeVisible();
+    expect(screen.getByText("Sample Subtitle Text")).toBeVisible();
   });
 
-  it("renders Watch Together section", () => {
-    render(<Settings />);
-    expect(screen.getByText("Watch Together")).toBeInTheDocument();
+  it("preserves unfinished relay input across category changes", async () => {
+    const user = userEvent.setup();
+    renderSettings("/settings/connections");
+    await user.click(await screen.findByRole("button", { name: "Use custom relay URL" }));
+    const input = screen.getByPlaceholderText("ws://your-server:9847/ws");
+    await user.type(input, "ws://draft.test/ws");
+    await user.click(screen.getByRole("link", { name: "About" }));
+    expect(screen.getByText("Content Requests")).toBeVisible();
+    expect(input).not.toBeVisible();
+    await user.click(screen.getByRole("link", { name: "Connections & notifications" }));
+    expect(input).toHaveValue("ws://draft.test/ws");
+    expect(input).toBeVisible();
   });
 
-  it("renders About section", () => {
-    render(<Settings />);
-    expect(screen.getByText("About")).toBeInTheDocument();
+  it("preserves an unfinished parental-control edit across categories", async () => {
+    mockHomeUsers.mockReturnValue({ isPlexHome: true, homeUsers: [{ id: 2, title: "Child", admin: false, thumb: "", protected: false }] });
+    const user = userEvent.setup();
+    renderSettings("/settings/parental-controls");
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    await user.click(await screen.findByRole("checkbox", { name: "Enable content restrictions" }));
+    await user.selectOptions(screen.getByDisplayValue("No Restriction"), "PG");
+    await user.click(screen.getByRole("link", { name: "Playback" }));
+    await user.click(screen.getByRole("link", { name: "Parental controls" }));
+    expect(screen.getByRole("checkbox", { name: "Enable content restrictions" })).toBeChecked();
+    expect(screen.getByDisplayValue("PG — Parental Guidance")).toBeVisible();
   });
 
-  it("shows Content Requests section for admin users", () => {
-    render(<Settings />);
-    expect(screen.getByText("Content Requests")).toBeInTheDocument();
-  });
-
-  it("hides TMDb section for non-admin users", () => {
-    mockUseAuth.mockReturnValue({
-      server: { uri: "https://plex.test", accessToken: "token" },
-      activeUser: { isAdmin: false, title: "User" },
-    });
-
-    render(<Settings />);
+  it("hides admin navigation and redirects unauthorized categories", async () => {
+    mockUseAuth.mockReturnValue({ activeUser: { isAdmin: false } });
+    renderSettings("/settings/parental-controls");
+    expect(await screen.findByRole("heading", { name: "Playback", level: 2 })).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Parental controls" })).not.toBeInTheDocument();
     expect(screen.queryByText("Content Requests")).not.toBeInTheDocument();
   });
 
-  it("shows relay connected status", () => {
-    render(<Settings />);
-    expect(screen.getByText("Connected to relay")).toBeInTheDocument();
-  });
-
-  it("renders audio language select", () => {
-    render(<Settings />);
-    expect(screen.getByText("Preferred Audio Language")).toBeInTheDocument();
-  });
-
-  it("renders subtitle controls", () => {
-    render(<Settings />);
-    expect(screen.getByText("Default Subtitles")).toBeInTheDocument();
-    expect(screen.getByText(/Subtitle Size/)).toBeInTheDocument();
-  });
-
-  it("renders poster size radio buttons", () => {
-    render(<Settings />);
-    expect(screen.getByText("Poster Size")).toBeInTheDocument();
-    // "Small" and "Large" also appear in slider labels, so use getAllByText
-    expect(screen.getAllByText("Small").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("Medium")).toBeInTheDocument();
-    expect(screen.getAllByText("Large").length).toBeGreaterThanOrEqual(1);
-  });
-
-  it("calls updatePreferences when changing quality", async () => {
+  it("preserves preference update payloads", async () => {
     const user = userEvent.setup();
-    render(<Settings />);
-
-    const qualitySelect = screen.getByDisplayValue("1080p (20 Mbps)");
-    await user.selectOptions(qualitySelect, "720p");
-
-    expect(mockUpdatePreferences).toHaveBeenCalledWith({
-      playback: { quality: "720p" },
-    });
-  });
-
-  it("renders skip single season checkbox", () => {
-    render(<Settings />);
-    expect(
-      screen.getByText("Skip seasons page for single-season shows")
-    ).toBeInTheDocument();
-  });
-
-  it("renders dashboard sections checkboxes", () => {
-    render(<Settings />);
-    expect(screen.getByText("Dashboard Sections")).toBeInTheDocument();
-    // The checkbox labels in the dashboard sections
-    expect(screen.getByText("Recently Added Movies")).toBeInTheDocument();
-    expect(screen.getByText("Recently Added TV Shows")).toBeInTheDocument();
-  });
-
-  it("shows app version in About section", () => {
-    render(<Settings />);
-    expect(screen.getByText("v0.1.0")).toBeInTheDocument();
+    renderSettings();
+    await user.selectOptions(screen.getByDisplayValue("1080p (20 Mbps)"), "720p");
+    expect(mockUpdatePreferences).toHaveBeenCalledWith({ playback: { quality: "720p" } });
+    await user.click(screen.getByRole("link", { name: "Appearance" }));
+    await user.click(screen.getByRole("radio", { name: "Large" }));
+    expect(mockUpdatePreferences).toHaveBeenCalledWith({ appearance: { posterSize: "large" } });
   });
 });

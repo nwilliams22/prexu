@@ -28,10 +28,11 @@ describe("BottomNav", () => {
     expect(screen.getByText("Settings")).toBeInTheDocument();
   });
 
-  it("highlights active tab based on current route", () => {
-    renderBottomNav("/settings");
+  it.each(["/settings", "/settings/audio", "/settings/subtitles"])("highlights Settings at %s", (path) => {
+    renderBottomNav(path);
     const settingsTab = screen.getByLabelText("Settings");
     expect(settingsTab).toHaveStyle({ color: "var(--accent)" });
+    expect(settingsTab).toHaveAttribute("aria-current", "page");
   });
 
   it("does not highlight inactive tabs", () => {

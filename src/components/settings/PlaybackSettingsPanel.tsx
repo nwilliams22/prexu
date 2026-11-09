@@ -1,5 +1,4 @@
 import type { PlaybackPreferences } from "../../types/preferences";
-import { LANGUAGES } from "../../constants/languages";
 import { IS_NATIVE_PLAYER_PLATFORM } from "../../hooks/player/engineResolution";
 import { styles } from "./settingsStyles";
 
@@ -107,19 +106,6 @@ export function PlaybackSettingsPanel({ playback: pb, updatePlayback }: Playback
           />
           Enable auto-play
         </label>
-      </div>
-
-      <div style={styles.field}>
-        <label style={styles.label}>Preferred Audio Language</label>
-        <select
-          value={pb.preferredAudioLanguage}
-          onChange={(e) => updatePlayback({ preferredAudioLanguage: e.target.value })}
-          style={styles.select}
-        >
-          {LANGUAGES.map((l) => (
-            <option key={l.code} value={l.code}>{l.label}</option>
-          ))}
-        </select>
       </div>
     </section>
   );

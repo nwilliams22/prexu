@@ -1,3 +1,5 @@
+import { SettingsRow } from "./SettingsPrimitives";
+import { LANGUAGES } from "../../constants/languages";
 import type { PlaybackPreferences, NormalizationPreset } from "../../types/preferences";
 import { styles } from "./settingsStyles";
 
@@ -10,6 +12,15 @@ export function AudioSettingsPanel({ playback: pb, updatePlayback }: AudioSettin
   return (
     <section style={styles.section}>
       <h3 style={styles.sectionTitle}>Audio</h3>
+
+      <SettingsRow id="preferred-audio-language" label="Preferred Audio Language">
+        {(props) => <select {...props}
+          value={pb.preferredAudioLanguage}
+          onChange={(event) => updatePlayback({ preferredAudioLanguage: event.target.value })}
+        >
+          {LANGUAGES.map((language) => <option key={language.code} value={language.code}>{language.code ? language.label : "No preference"}</option>)}
+        </select>}
+      </SettingsRow>
 
       <div style={styles.field}>
         <label style={styles.label}>

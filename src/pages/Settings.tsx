@@ -1,3 +1,5 @@
+import { Navigate, useParams } from "react-router-dom";
+import { SettingsShell, SETTINGS_CATEGORIES } from "../components/settings/SettingsShell";
 import { useAuth } from "../hooks/useAuth";
 import { useInvites } from "../hooks/useInvites";
 import { usePreferences } from "../hooks/usePreferences";
@@ -16,6 +18,9 @@ function Settings() {
   const isAdmin = activeUser?.isAdmin ?? false;
   const { preferences, updatePreferences } = usePreferences();
 
+  const { "*": categoryPath } = useParams();
+  const category = SETTINGS_CATEGORIES.find((item) => item.id === categoryPath && (isAdmin || item.id !== "parental-controls"));
+
   const pb = preferences.playback;
   const ap = preferences.appearance;
 
@@ -33,40 +38,41 @@ function Settings() {
     updatePreferences({ appearance: partial });
   };
 
-  return (
-    <div style={styles.container}>
-      <h2 style={styles.title}>Settings</h2>
+  if (!category) return <Navigate to="/settings/playback" replace />;
 
-      <PlaybackSettingsPanel playback={pb} updatePlayback={updatePlayback} />
-      <SubtitleStylePanel subtitleStyle={pb.subtitleStyle} updateSubtitleStyle={updateSubtitleStyle} />
-      <AccessibilitySettingsPanel playback={pb} updatePlayback={updatePlayback} />
-      <AudioSettingsPanel playback={pb} updatePlayback={updatePlayback} />
-      <AppearanceSettingsPanel
-        appearance={ap}
-        updateAppearance={updateAppearance}
-        updatePreferences={updatePreferences}
-      />
-      {isAdmin && <ParentalControlsPanel />}
-      <AccountSettingsPanel
-        serverUri={server?.uri}
-        isAdmin={isAdmin}
-        isRelayConnected={isRelayConnected}
-        refreshInvites={refreshInvites}
-      />
-    </div>
+  return (
+    <SettingsShell category={category.id} isAdmin={isAdmin}>
+      <div className="settings-legacy-panel" hidden={category.id !== "playback"}>
+        <PlaybackSettingsPanel playback={pb} updatePlayback={updatePlayback} />
+      </div>
+      <div className="settings-legacy-panel" hidden={category.id !== "subtitles"}>
+        <SubtitleStylePanel subtitleStyle={pb.subtitleStyle} updateSubtitleStyle={updateSubtitleStyle} />
+        <AccessibilitySettingsPanel playback={pb} updatePlayback={updatePlayback} />
+      </div>
+      <div className="settings-legacy-panel" hidden={category.id !== "audio"}>
+        <AudioSettingsPanel playback={pb} updatePlayback={updatePlayback} />
+      </div>
+      <div className="settings-legacy-panel" hidden={category.id !== "appearance"}>
+        <AppearanceSettingsPanel
+          appearance={ap}
+          updateAppearance={updateAppearance}
+          updatePreferences={updatePreferences}
+        />
+      </div>
+      <div className="settings-legacy-panel" hidden={category.id !== "parental-controls"}>
+        {isAdmin && <ParentalControlsPanel />}
+      </div>
+      <div className="settings-legacy-panel" hidden={category.id !== "connections" && category.id !== "about"}>
+        <AccountSettingsPanel
+          view={category.id === "about" ? "about" : "connections"}
+          serverUri={server?.uri}
+          isAdmin={isAdmin}
+          isRelayConnected={isRelayConnected}
+          refreshInvites={refreshInvites}
+        />
+      </div>
+    </SettingsShell>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  container: {
-    padding: "1.5rem",
-    maxWidth: "600px",
-  },
-  title: {
-    fontSize: "1.5rem",
-    fontWeight: 700,
-    marginBottom: "1.5rem",
-  },
-};
 
 export default Settings;

@@ -1,0 +1,54 @@
+.settings-container { container: settings / inline-size; min-width: 0; background: var(--bg-primary); color: var(--text-primary); }
+.settings-shell { max-width: 1120px; margin-inline: auto; padding: 16px; overflow-wrap: anywhere; }
+.settings-header { margin-bottom: 24px; }
+.settings-header h1 { font-size: 24px; font-weight: 700; }
+.settings-header p { margin-top: 8px; color: var(--text-secondary); line-height: 1.5; }
+.settings-header-content { margin-top: 20px; max-width: 640px; }
+.settings-columns, .settings-content, .settings-row-control { min-width: 0; }
+.settings-nav { display: none; }
+.settings-mobile-nav { margin-bottom: 24px; }
+.settings-mobile-nav label { display: block; margin-bottom: 8px; font-size: 14px; font-weight: 600; }
+.settings-category-heading { margin-bottom: 20px; }
+.settings-category-heading h2 { font-size: 20px; font-weight: 600; }
+.settings-category-heading p { color: var(--text-secondary); margin-top: 8px; line-height: 1.5; }
+.settings-section { padding: 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-card); margin-bottom: 24px; min-width: 0; }
+.settings-section h3 { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
+.settings-row { display: grid; gap: 12px; padding-block: 16px; }
+.settings-row + .settings-row { border-top: 1px solid var(--border); }
+.settings-row-copy label, .settings-choice-group legend { font-size: 14px; font-weight: 600; }
+.settings-help { color: var(--text-secondary); font-size: 13px; line-height: 1.5; margin-top: 6px; }
+.settings-error { color: var(--error); font-size: 13px; margin-top: 8px; }
+.settings-row-control input:not([type=checkbox]):not([type=radio]), .settings-row-control select, .settings-mobile-nav select { width: 100%; min-width: 0; min-height: 40px; }
+.settings-row-control select, .settings-row-control input:not([type=range]):not([type=checkbox]):not([type=radio]), .settings-mobile-nav select { background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font: inherit; }
+.settings-container :is(input, select, button, a, [tabindex]):focus-visible, .settings-section :is(input, select, button, a, [tabindex]):focus-visible { outline: 2px solid var(--accent) !important; outline-offset: 2px; }
+.settings-container :is(button, input[type=color]) { min-height: 44px; }
+.settings-range input { display: block; width: 100%; min-height: 40px; accent-color: var(--accent); }
+.settings-range output { display: block; font-size: 14px; }
+.settings-range-endpoints { display: flex; justify-content: space-between; gap: 12px; color: var(--text-secondary); font-size: 12px; }
+.settings-choice-group { border: 0; min-width: 0; }
+.settings-choice-group > div { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+.settings-choice-group label { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+.settings-choice-group input { accent-color: var(--accent); }
+/* Temporary framing for existing panels, until each migrates to the shared rows.
+   Scoped to Settings so the player's frameless subtitle editor is unaffected. */
+.settings-legacy-panel > section, .settings-legacy-panel > div { background: var(--bg-card); border: 1px solid var(--border) !important; border-radius: 8px; padding: 16px; margin-bottom: 24px !important; }
+.settings-legacy-panel h3 { color: var(--text-primary) !important; font-size: 16px !important; }
+.settings-legacy-panel select { min-height: 40px; }
+.settings-legacy-panel label:has(input) { min-height: 44px; }
+.settings-legacy-panel div:has(> label > input[type=radio]) { flex-wrap: wrap; }
+.settings-legacy-panel div:has(> code), .settings-legacy-panel div:has(> input[type=text]) { flex-wrap: wrap; }
+.settings-legacy-panel input[type=text] { min-width: 0; }
+.settings-legacy-panel code { white-space: normal !important; overflow-wrap: anywhere; min-width: 0; }
+.settings-legacy-panel span { white-space: normal !important; overflow-wrap: anywhere; }
+@container settings (min-width: 640px) {
+  .settings-section, .settings-legacy-panel > section, .settings-legacy-panel > div { padding: 20px; }
+  .settings-row { grid-template-columns: minmax(0, 1fr) 280px; column-gap: 24px; }
+}
+@container settings (min-width: 900px) {
+  .settings-shell { padding: 24px; }
+  .settings-columns { display: grid; grid-template-columns: 208px minmax(0, 1fr); gap: 32px; align-items: start; }
+  .settings-mobile-nav { display: none; }
+  .settings-nav { display: flex; flex-direction: column; position: sticky; top: 24px; gap: 4px; }
+  .settings-nav a { display: flex; align-items: center; min-height: 44px; padding: 8px 12px; border-radius: 8px; color: var(--text-primary); font-size: 14px; }
+  .settings-nav a[aria-current=page] { color: var(--accent); background: var(--bg-card); font-weight: 600; }
+}

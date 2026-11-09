@@ -60,7 +60,7 @@ function Sidebar({ collapsed, onToggle, onNavigate, newSections, onMarkSectionSe
   const [hoveredSection, setHoveredSection] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<SectionMenuState | null>(null);
 
-  const isActive = (path: string) => location.pathname === path;
+  const isActive = (path: string) => location.pathname === path || (path === "/settings" && location.pathname.startsWith("/settings/"));
 
   const navigateTo = (path: string) => {
     navigate(path);

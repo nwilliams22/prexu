@@ -63,7 +63,7 @@ function BottomNav() {
     if (tab.matchPaths) {
       return tab.matchPaths.some((p) => location.pathname.startsWith(p));
     }
-    return location.pathname === tab.path;
+    return location.pathname === tab.path || (tab.path === "/settings" && location.pathname.startsWith("/settings/"));
   };
 
   return (

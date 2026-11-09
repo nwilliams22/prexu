@@ -279,7 +279,7 @@ function AppRoutes() {
           <Route path="/discover/:mediaType/:tmdbId" element={<DiscoverDetail />} />
           <Route path="/requests" element={<Requests />} />
           <Route path="/downloads" element={<Downloads />} />
-          <Route path="/settings" element={<Settings />} />
+          <Route path="/settings/*" element={<Settings />} />
         </Route>
 
         {/* Catch-all */}
