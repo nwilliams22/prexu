@@ -67,7 +67,7 @@ function mergeWithDefaults(saved: Preferences): Preferences {
 // ── Global preferences ──
 
 export async function getPreferences(): Promise<Preferences> {
-  const saved = await localStore.get<Preferences>(STORAGE_KEYS.PREFERENCES);
+  const saved = await localStore.getStrict<Preferences>(STORAGE_KEYS.PREFERENCES);
   if (!saved) return getDefaultPreferences();
   return mergeWithDefaults(saved);
 }
@@ -83,10 +83,10 @@ function userPrefsKey(userId: number): string {
 }
 
 export async function getUserPreferences(userId: number): Promise<Preferences> {
-  const saved = await localStore.get<Preferences>(userPrefsKey(userId));
+  const saved = await localStore.getStrict<Preferences>(userPrefsKey(userId));
   if (!saved) {
     // Fall back to global prefs (migration path for existing users)
-    const global = await localStore.get<Preferences>(STORAGE_KEYS.PREFERENCES);
+    const global = await localStore.getStrict<Preferences>(STORAGE_KEYS.PREFERENCES);
     if (global) return mergeWithDefaults(global);
     return getDefaultPreferences();
   }

@@ -1,3 +1,4 @@
+import { PreferenceSaveStatus } from "./PreferenceSaveStatus";
 import type { PlaybackPreferences } from "../../types/preferences";
 import { IS_NATIVE_PLAYER_PLATFORM } from "../../hooks/player/engineResolution";
 import { styles } from "./settingsStyles";
@@ -21,7 +22,7 @@ export function PlaybackSettingsPanel({ playback: pb, updatePlayback }: Playback
           <p style={styles.hint}>
             Changing this applies the next time you open the player.
           </p>
-          <select
+          <select aria-describedby="preference-P1"
             value={pb.playerEngine}
             onChange={(e) => updatePlayback({ playerEngine: e.target.value as PlaybackPreferences["playerEngine"] })}
             style={styles.select}
@@ -30,12 +31,13 @@ export function PlaybackSettingsPanel({ playback: pb, updatePlayback }: Playback
             <option value="native">Native (mpv)</option>
             <option value="html5">HTML5 (browser)</option>
           </select>
+          <PreferenceSaveStatus path="playback.playerEngine" />
         </div>
       )}
 
       <div style={styles.field}>
         <label style={styles.label}>Video Quality</label>
-        <select
+        <select aria-describedby="preference-P2"
           value={pb.quality}
           onChange={(e) => updatePlayback({ quality: e.target.value as PlaybackPreferences["quality"] })}
           style={styles.select}
@@ -45,6 +47,7 @@ export function PlaybackSettingsPanel({ playback: pb, updatePlayback }: Playback
           <option value="720p">720p (4 Mbps)</option>
           <option value="480p">480p (2 Mbps)</option>
         </select>
+        <PreferenceSaveStatus path="playback.quality" />
       </div>
 
       <div style={styles.field}>
@@ -52,7 +55,7 @@ export function PlaybackSettingsPanel({ playback: pb, updatePlayback }: Playback
         <p style={styles.hint}>
           Auto will direct play compatible files and transcode others.
         </p>
-        <select
+        <select aria-describedby="preference-P3"
           value={pb.directPlayPreference}
           onChange={(e) => updatePlayback({ directPlayPreference: e.target.value as PlaybackPreferences["directPlayPreference"] })}
           style={styles.select}
@@ -61,6 +64,7 @@ export function PlaybackSettingsPanel({ playback: pb, updatePlayback }: Playback
           <option value="always">Always try direct play</option>
           <option value="never">Always transcode</option>
         </select>
+        <PreferenceSaveStatus path="playback.directPlayPreference" />
       </div>
 
       <div style={styles.field}>
@@ -69,13 +73,14 @@ export function PlaybackSettingsPanel({ playback: pb, updatePlayback }: Playback
           Show a "Skip Intro" button during detected intro segments.
         </p>
         <label style={styles.checkboxLabel}>
-          <input
+          <input aria-describedby="preference-P4"
             type="checkbox"
             checked={pb.skipIntroEnabled}
             onChange={(e) => updatePlayback({ skipIntroEnabled: e.target.checked })}
           />
           Enable skip intro button
         </label>
+        <PreferenceSaveStatus path="playback.skipIntroEnabled" />
       </div>
 
       <div style={styles.field}>
@@ -84,13 +89,14 @@ export function PlaybackSettingsPanel({ playback: pb, updatePlayback }: Playback
           Show a "Skip Credits" or "Next Episode" button during credits.
         </p>
         <label style={styles.checkboxLabel}>
-          <input
+          <input aria-describedby="preference-P5"
             type="checkbox"
             checked={pb.skipCreditsEnabled}
             onChange={(e) => updatePlayback({ skipCreditsEnabled: e.target.checked })}
           />
           Enable skip credits button
         </label>
+        <PreferenceSaveStatus path="playback.skipCreditsEnabled" />
       </div>
 
       <div style={styles.field}>
@@ -99,13 +105,14 @@ export function PlaybackSettingsPanel({ playback: pb, updatePlayback }: Playback
           When an episode ends, automatically start the next one after a short countdown.
         </p>
         <label style={styles.checkboxLabel}>
-          <input
+          <input aria-describedby="preference-P6"
             type="checkbox"
             checked={pb.autoPlayEnabled}
             onChange={(e) => updatePlayback({ autoPlayEnabled: e.target.checked })}
           />
           Enable auto-play
         </label>
+        <PreferenceSaveStatus path="playback.autoPlayEnabled" />
       </div>
     </section>
   );

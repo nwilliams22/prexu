@@ -1,3 +1,4 @@
+import { PreferenceSaveStatus } from "./PreferenceSaveStatus";
 import { useMemo } from "react";
 import type { SubtitleStylePreferences } from "../../types/preferences";
 import { styles } from "./settingsStyles";
@@ -34,7 +35,7 @@ export function SubtitleStylePanel({
 
       <div style={styles.field}>
         <label style={styles.label}>Font</label>
-        <select
+        <select aria-describedby={frameless ? undefined : "preference-S1"}
           value={ss.fontFamily}
           onChange={(e) => update({ fontFamily: e.target.value })}
           style={styles.select}
@@ -43,12 +44,13 @@ export function SubtitleStylePanel({
             <option key={f.value} value={f.value}>{f.label}</option>
           ))}
         </select>
+        <PreferenceSaveStatus path="playback.subtitleStyle.fontFamily" />
       </div>
 
       <div style={styles.field}>
         <label style={styles.label}>Text Color</label>
         <div style={panelStyles.colorRow}>
-          <input
+          <input aria-describedby={frameless ? undefined : "preference-S2"}
             type="color"
             value={ss.textColor}
             onChange={(e) => update({ textColor: e.target.value })}
@@ -57,12 +59,13 @@ export function SubtitleStylePanel({
           />
           <span style={panelStyles.colorValue}>{ss.textColor}</span>
         </div>
+        <PreferenceSaveStatus path="playback.subtitleStyle.textColor" />
       </div>
 
       <div style={styles.field}>
         <label style={styles.label}>Background Color</label>
         <div style={panelStyles.colorRow}>
-          <input
+          <input aria-describedby={frameless ? undefined : "preference-S3"}
             type="color"
             value={ss.backgroundColor}
             onChange={(e) => update({ backgroundColor: e.target.value })}
@@ -71,13 +74,14 @@ export function SubtitleStylePanel({
           />
           <span style={panelStyles.colorValue}>{ss.backgroundColor}</span>
         </div>
+        <PreferenceSaveStatus path="playback.subtitleStyle.backgroundColor" />
       </div>
 
       <div style={styles.field}>
         <label style={styles.label}>
           Background Opacity: {Math.round(ss.backgroundOpacity * 100)}%
         </label>
-        <input
+        <input aria-describedby={frameless ? undefined : "preference-S4"}
           type="range"
           min={0}
           max={1}
@@ -91,12 +95,13 @@ export function SubtitleStylePanel({
           <span>Transparent</span>
           <span>Opaque</span>
         </div>
+        <PreferenceSaveStatus path="playback.subtitleStyle.backgroundOpacity" />
       </div>
 
       <div style={styles.field}>
         <label style={styles.label}>Outline Color</label>
         <div style={panelStyles.colorRow}>
-          <input
+          <input aria-describedby={frameless ? undefined : "preference-S5"}
             type="color"
             value={ss.outlineColor}
             onChange={(e) => update({ outlineColor: e.target.value })}
@@ -105,13 +110,14 @@ export function SubtitleStylePanel({
           />
           <span style={panelStyles.colorValue}>{ss.outlineColor}</span>
         </div>
+        <PreferenceSaveStatus path="playback.subtitleStyle.outlineColor" />
       </div>
 
       <div style={styles.field}>
         <label style={styles.label}>
           Outline Width: {ss.outlineWidth}px
         </label>
-        <input
+        <input aria-describedby={frameless ? undefined : "preference-S6"}
           type="range"
           min={0}
           max={4}
@@ -125,17 +131,19 @@ export function SubtitleStylePanel({
           <span>None</span>
           <span>4px</span>
         </div>
+        <PreferenceSaveStatus path="playback.subtitleStyle.outlineWidth" />
       </div>
 
       <div style={styles.field}>
         <label style={styles.checkboxLabel}>
-          <input
+          <input aria-describedby={frameless ? undefined : "preference-S7"}
             type="checkbox"
             checked={ss.shadowEnabled}
             onChange={(e) => update({ shadowEnabled: e.target.checked })}
           />
           Drop shadow
         </label>
+        <PreferenceSaveStatus path="playback.subtitleStyle.shadowEnabled" />
       </div>
 
       {/* Live Preview */}

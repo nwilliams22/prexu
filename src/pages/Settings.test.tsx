@@ -55,6 +55,8 @@ vi.mock("../hooks/usePreferences", () => ({
       },
     },
     updatePreferences: mockUpdatePreferences,
+    loadState: "ready",
+    saveStates: {},
   }),
 }));
 

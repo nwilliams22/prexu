@@ -1,3 +1,4 @@
+import { PreferenceSaveStatus } from "./PreferenceSaveStatus";
 import { SettingsRow } from "./SettingsPrimitives";
 import { LANGUAGES } from "../../constants/languages";
 import type { PlaybackPreferences, NormalizationPreset } from "../../types/preferences";
@@ -13,8 +14,8 @@ export function AudioSettingsPanel({ playback: pb, updatePlayback }: AudioSettin
     <section style={styles.section}>
       <h3 style={styles.sectionTitle}>Audio</h3>
 
-      <SettingsRow id="preferred-audio-language" label="Preferred Audio Language">
-        {(props) => <select {...props}
+      <SettingsRow id="preferred-audio-language" label="Preferred Audio Language" status={<PreferenceSaveStatus path="playback.preferredAudioLanguage" />}>
+        {(props) => <select {...props} aria-describedby={`${props["aria-describedby"]} preference-P7`}
           value={pb.preferredAudioLanguage}
           onChange={(event) => updatePlayback({ preferredAudioLanguage: event.target.value })}
         >
@@ -29,7 +30,7 @@ export function AudioSettingsPanel({ playback: pb, updatePlayback }: AudioSettin
         <p style={styles.hint}>
           Server-side audio boost applied during transcoding.
         </p>
-        <input
+        <input aria-describedby="preference-A1"
           type="range"
           min={0}
           max={200}
@@ -43,6 +44,7 @@ export function AudioSettingsPanel({ playback: pb, updatePlayback }: AudioSettin
           <span>Normal</span>
           <span>Max</span>
         </div>
+        <PreferenceSaveStatus path="playback.audioBoost" />
       </div>
 
       <div style={styles.field}>
@@ -53,7 +55,7 @@ export function AudioSettingsPanel({ playback: pb, updatePlayback }: AudioSettin
           Client-side amplification via Web Audio API. Values above 200% may
           cause distortion with some audio tracks.
         </p>
-        <input
+        <input aria-describedby="preference-A2"
           type="range"
           min={100}
           max={500}
@@ -67,6 +69,7 @@ export function AudioSettingsPanel({ playback: pb, updatePlayback }: AudioSettin
           <span>300%</span>
           <span>500%</span>
         </div>
+        <PreferenceSaveStatus path="playback.volumeBoost" />
       </div>
 
       <div style={styles.field}>
@@ -75,7 +78,7 @@ export function AudioSettingsPanel({ playback: pb, updatePlayback }: AudioSettin
           Compresses dynamic range so quiet dialogue and loud effects are
           closer in volume. Night mode is more aggressive for late-night viewing.
         </p>
-        <select
+        <select aria-describedby="preference-A3"
           value={pb.normalizationPreset}
           onChange={(e) => updatePlayback({ normalizationPreset: e.target.value as NormalizationPreset })}
           style={styles.select}
@@ -84,6 +87,7 @@ export function AudioSettingsPanel({ playback: pb, updatePlayback }: AudioSettin
           <option value="light">Light</option>
           <option value="night">Night Mode</option>
         </select>
+        <PreferenceSaveStatus path="playback.normalizationPreset" />
       </div>
 
       <div style={styles.field}>
@@ -94,7 +98,7 @@ export function AudioSettingsPanel({ playback: pb, updatePlayback }: AudioSettin
           Delays audio playback to fix lip-sync issues. Increase if audio
           plays before the video.
         </p>
-        <input
+        <input aria-describedby="preference-A4"
           type="range"
           min={0}
           max={500}
@@ -108,6 +112,7 @@ export function AudioSettingsPanel({ playback: pb, updatePlayback }: AudioSettin
           <span>250ms</span>
           <span>500ms</span>
         </div>
+        <PreferenceSaveStatus path="playback.audioOffsetMs" />
       </div>
     </section>
   );

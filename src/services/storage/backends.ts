@@ -74,6 +74,11 @@ export const secureStorage = {
 };
 
 export const localStore = {
+  /** Preferences must distinguish missing data from a failed read. */
+  async getStrict<T>(key: string): Promise<T | null> {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : null;
+  },
   async get<T>(key: string): Promise<T | null> {
     try {
       const raw = localStorage.getItem(key);

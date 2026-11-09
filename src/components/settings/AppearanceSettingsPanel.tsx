@@ -1,3 +1,4 @@
+import { PreferenceSaveStatus } from "./PreferenceSaveStatus";
 import type { AppearancePreferences, Preferences, ThemeMode } from "../../types/preferences";
 import { styles } from "./settingsStyles";
 
@@ -25,7 +26,7 @@ export function AppearanceSettingsPanel({
         <div style={styles.radioGroup}>
           {(["system", "dark", "light"] as ThemeMode[]).map((mode) => (
             <label key={mode} style={styles.radioLabel}>
-              <input
+              <input aria-describedby="preference-V1"
                 type="radio"
                 name="theme"
                 checked={ap.theme === mode}
@@ -39,6 +40,7 @@ export function AppearanceSettingsPanel({
         <p style={styles.hint}>
           System follows your operating system's light/dark preference.
         </p>
+        <PreferenceSaveStatus path="appearance.theme" />
       </div>
 
       <div style={styles.field}>
@@ -46,7 +48,7 @@ export function AppearanceSettingsPanel({
         <div style={styles.radioGroup}>
           {(["small", "medium", "large"] as const).map((size) => (
             <label key={size} style={styles.radioLabel}>
-              <input
+              <input aria-describedby="preference-V2"
                 type="radio"
                 name="posterSize"
                 checked={ap.posterSize === size}
@@ -57,13 +59,14 @@ export function AppearanceSettingsPanel({
             </label>
           ))}
         </div>
+        <PreferenceSaveStatus path="appearance.posterSize" />
       </div>
 
       <div style={styles.field}>
         <label style={styles.label}>Sidebar Default</label>
         <div style={styles.radioGroup}>
           <label style={styles.radioLabel}>
-            <input
+            <input aria-describedby="preference-V3"
               type="radio"
               name="sidebar"
               checked={!ap.sidebarCollapsed}
@@ -73,7 +76,7 @@ export function AppearanceSettingsPanel({
             Expanded
           </label>
           <label style={styles.radioLabel}>
-            <input
+            <input aria-describedby="preference-V3"
               type="radio"
               name="sidebar"
               checked={ap.sidebarCollapsed}
@@ -83,13 +86,14 @@ export function AppearanceSettingsPanel({
             Collapsed
           </label>
         </div>
+        <PreferenceSaveStatus path="appearance.sidebarCollapsed" />
       </div>
 
       <div style={styles.field}>
         <label style={styles.label}>Dashboard Sections</label>
         <div style={styles.checkboxGroup}>
           <label style={styles.checkboxLabel}>
-            <input
+            <input aria-describedby="preference-V4"
               type="checkbox"
               checked={ap.dashboardSections.continueWatching}
               onChange={(e) =>
@@ -103,8 +107,9 @@ export function AppearanceSettingsPanel({
             />
             Continue Watching
           </label>
+          <PreferenceSaveStatus path="appearance.dashboardSections.continueWatching" />
           <label style={styles.checkboxLabel}>
-            <input
+            <input aria-describedby="preference-V5"
               type="checkbox"
               checked={ap.dashboardSections.recentMovies}
               onChange={(e) =>
@@ -118,8 +123,9 @@ export function AppearanceSettingsPanel({
             />
             Recently Added Movies
           </label>
+          <PreferenceSaveStatus path="appearance.dashboardSections.recentMovies" />
           <label style={styles.checkboxLabel}>
-            <input
+            <input aria-describedby="preference-V6"
               type="checkbox"
               checked={ap.dashboardSections.recentShows}
               onChange={(e) =>
@@ -133,6 +139,7 @@ export function AppearanceSettingsPanel({
             />
             Recently Added TV Shows
           </label>
+          <PreferenceSaveStatus path="appearance.dashboardSections.recentShows" />
         </div>
       </div>
 
@@ -140,7 +147,7 @@ export function AppearanceSettingsPanel({
         <label style={styles.label}>TV Show Navigation</label>
         <div style={styles.checkboxGroup}>
           <label style={styles.checkboxLabel}>
-            <input
+            <input aria-describedby="preference-V7"
               type="checkbox"
               checked={ap.skipSingleSeason}
               onChange={(e) =>
@@ -155,11 +162,12 @@ export function AppearanceSettingsPanel({
           When enabled, shows with only one season go directly to the episode
           list instead of showing a seasons page.
         </p>
+        <PreferenceSaveStatus path="appearance.skipSingleSeason" />
       </div>
 
       <div style={styles.field}>
         <label style={styles.label}>Minimum Collection Size</label>
-        <select
+        <select aria-describedby="preference-V8"
           value={ap.minCollectionSize}
           onChange={(e) =>
             updateAppearance({ minCollectionSize: Number(e.target.value) })
@@ -176,6 +184,7 @@ export function AppearanceSettingsPanel({
           Collections with fewer items than this will be hidden from the
           collections browser and library view.
         </p>
+        <PreferenceSaveStatus path="appearance.minCollectionSize" />
       </div>
     </section>
   );

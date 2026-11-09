@@ -52,3 +52,8 @@
   .settings-nav a { display: flex; align-items: center; min-height: 44px; padding: 8px 12px; border-radius: 8px; color: var(--text-primary); font-size: 14px; }
   .settings-nav a[aria-current=page] { color: var(--accent); background: var(--bg-card); font-weight: 600; }
 }
+
+.settings-preference-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+.preference-save-status { font-size: 0.85rem; color: var(--text-secondary); }
+.preference-save-status button { margin-inline-start: 8px; min-height: 44px; padding: 4px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary); }
+.settings-loading div { height: 40px; margin-block: 12px; border-radius: 6px; background: var(--bg-card); }

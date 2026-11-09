@@ -1,3 +1,4 @@
+import { PreferenceSaveStatus } from "./PreferenceSaveStatus";
 import type { PlaybackPreferences } from "../../types/preferences";
 import { LANGUAGES } from "../../constants/languages";
 import { styles } from "./settingsStyles";
@@ -14,7 +15,7 @@ export function AccessibilitySettingsPanel({ playback: pb, updatePlayback }: Acc
 
       <div style={styles.field}>
         <label style={styles.label}>Default Subtitles</label>
-        <select
+        <select aria-describedby="preference-L1"
           value={pb.defaultSubtitles}
           onChange={(e) => updatePlayback({ defaultSubtitles: e.target.value as PlaybackPreferences["defaultSubtitles"] })}
           style={styles.select}
@@ -23,12 +24,14 @@ export function AccessibilitySettingsPanel({ playback: pb, updatePlayback }: Acc
           <option value="always">Always on</option>
           <option value="off">Off</option>
         </select>
+        <PreferenceSaveStatus path="playback.defaultSubtitles" />
       </div>
 
-      {pb.defaultSubtitles !== "off" && (
-        <div style={styles.field}>
-          <label style={styles.label}>Preferred Subtitle Language</label>
-          <select
+      <div style={styles.field}>
+          <label style={styles.label} tabIndex={-1}>Preferred Subtitle Language</label>
+          {pb.defaultSubtitles === "off" && <p style={styles.hint}>Turn subtitles on to choose a language.</p>}
+          <select aria-describedby="preference-L2"
+            disabled={pb.defaultSubtitles === "off"}
             value={pb.preferredSubtitleLanguage}
             onChange={(e) => updatePlayback({ preferredSubtitleLanguage: e.target.value })}
             style={styles.select}
@@ -37,14 +40,14 @@ export function AccessibilitySettingsPanel({ playback: pb, updatePlayback }: Acc
               <option key={l.code} value={l.code}>{l.label}</option>
             ))}
           </select>
-        </div>
-      )}
+          <PreferenceSaveStatus path="playback.preferredSubtitleLanguage" />
+      </div>
 
       <div style={styles.field}>
         <label style={styles.label}>
           Subtitle Size: {pb.subtitleSize}%
         </label>
-        <input
+        <input aria-describedby="preference-L3"
           type="range"
           min={50}
           max={200}
@@ -58,6 +61,7 @@ export function AccessibilitySettingsPanel({ playback: pb, updatePlayback }: Acc
           <span>Normal</span>
           <span>Large</span>
         </div>
+        <PreferenceSaveStatus path="playback.subtitleSize" />
       </div>
     </section>
   );

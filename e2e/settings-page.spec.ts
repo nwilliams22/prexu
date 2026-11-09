@@ -115,3 +115,83 @@ test("200 percent zoom keeps controls within the Settings width", async ({ page 
   await page.screenshot({ path: screenshotPath });
   await testInfo.attach("settings-200-percent", { path: screenshotPath, contentType: "image/png" });
 });
+
+test("failed profile drafts survive categories, retry persists, and revert restores confirmed values", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 600, height: 900 });
+  await page.addInitScript(() => {
+    const set = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key, value) {
+      if (key.startsWith("prexu_preferences") && sessionStorage.getItem("fail-preferences") === "yes") throw new Error("injected write failure");
+      return set.call(this, key, value);
+    };
+  });
+  await page.goto("/settings/playback");
+  const quality = page.locator("select").filter({ has: page.locator('option[value="original"]') });
+  await expect(quality).toBeEnabled();
+  await page.evaluate(() => sessionStorage.setItem("fail-preferences", "yes"));
+  await quality.selectOption("720p");
+  await expect(page.getByRole("button", { name: "Retry Video Quality" })).toBeVisible();
+  await page.getByLabel("Settings category").selectOption("appearance");
+  await expect(page.getByText("Some changes are not saved")).toBeVisible();
+  await page.getByRole("link", { name: "Video Quality", exact: true }).click();
+  await expect(quality).toHaveValue("720p");
+  await expect(quality).toBeFocused();
+  await page.screenshot({ path: testInfo.outputPath("preference-write-failure.png") });
+  await page.evaluate(() => sessionStorage.removeItem("fail-preferences"));
+  await page.getByRole("button", { name: "Retry Video Quality" }).click();
+  await expect(page.locator("#preference-P2")).toHaveText("Saved");
+  await expect(quality).toBeFocused();
+  await page.reload();
+  await expect(quality).toHaveValue("720p");
+  await page.evaluate(() => sessionStorage.setItem("fail-preferences", "yes"));
+  await quality.selectOption("480p");
+  await page.getByRole("button", { name: "Revert Video Quality" }).click();
+  await expect(quality).toHaveValue("720p");
+  await expect(page.getByText("Some changes are not saved")).toHaveCount(0);
+});
+
+test("failed preference reads disable editing until Retry hydrates stored values", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("prexu_preferences_1", JSON.stringify({ playback: { quality: "720p" } }));
+    const get = Storage.prototype.getItem;
+    Storage.prototype.getItem = function (key) {
+      if (key.startsWith("prexu_preferences") && get.call(sessionStorage, "allow-preference-read") !== "yes") throw new Error("injected read failure");
+      return get.call(this, key);
+    };
+  });
+  await page.goto("/settings/playback");
+  await expect(page.getByText("Could not load settings")).toBeVisible();
+  const quality = page.locator("select").filter({ has: page.locator('option[value="original"]') });
+  await expect(quality).toBeDisabled();
+  await page.evaluate(() => sessionStorage.setItem("allow-preference-read", "yes"));
+  await page.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(quality).toBeEnabled();
+  await expect(quality).toHaveValue("720p");
+});
+
+test("failed language and dashboard links focus their own controls", async ({ page }) => {
+  await page.setViewportSize({ width: 600, height: 900 });
+  await page.addInitScript(() => {
+    const set = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key, value) {
+      if (key.startsWith("prexu_preferences")) throw new Error("injected write failure");
+      return set.call(this, key, value);
+    };
+  });
+  await page.goto("/settings/audio");
+  const language = page.getByLabel("Preferred Audio Language", { exact: true });
+  await language.selectOption("spa");
+  await page.getByLabel("Settings category").selectOption("appearance");
+  await page.getByRole("link", { name: "Preferred Audio Language", exact: true }).click();
+  await expect(language).toBeFocused();
+  await expect(language).toHaveValue("spa");
+  await page.getByLabel("Settings category").selectOption("appearance");
+  const recentShows = page.getByLabel("Recently Added TV Shows", { exact: true });
+  await recentShows.uncheck();
+  await page.getByLabel("Settings category").selectOption("audio");
+  await page.getByRole("link", { name: "Recently Added TV Shows", exact: true }).click();
+  await expect(recentShows).toBeFocused();
+  await page.getByRole("button", { name: "Revert Recently Added TV Shows" }).click();
+  await expect(recentShows).toBeChecked();
+  await expect(recentShows).toBeFocused();
+});

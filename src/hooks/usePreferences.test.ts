@@ -1,4 +1,6 @@
+import { StrictMode, createElement, type ReactNode } from "react";
 import { renderHook, act, waitFor } from "@testing-library/react";
+import { getDefaultPreferences } from "../services/storage/preferences";
 import { usePreferencesState } from "./usePreferences";
 
 // Mock storage
@@ -13,29 +15,7 @@ vi.mock("../services/storage", () => ({
 import * as storage from "../services/storage";
 const mockStorage = vi.mocked(storage);
 
-const defaultPrefs = {
-  playback: {
-    quality: "1080p" as const,
-    preferredAudioLanguage: "",
-    preferredSubtitleLanguage: "",
-    defaultSubtitles: "auto" as const,
-    subtitleSize: 100,
-    audioBoost: 100,
-    directPlayPreference: "auto" as const,
-    volumeBoost: 1.0,
-    normalizationPreset: "off" as const,
-    audioOffsetMs: 0,
-  },
-  appearance: {
-    posterSize: "medium" as const,
-    sidebarCollapsed: false,
-    dashboardSections: {
-      continueWatching: true,
-      recentMovies: true,
-      recentShows: true,
-    },
-  },
-};
+const defaultPrefs = getDefaultPreferences();
 
 describe("usePreferencesState", () => {
   beforeEach(() => {
@@ -45,7 +25,7 @@ describe("usePreferencesState", () => {
     mockStorage.getUserPreferences.mockResolvedValue({ ...defaultPrefs });
   });
 
-  it("initializes with default preferences", () => {
+  it("initializes with default preferences", async () => {
     const { result } = renderHook(() => usePreferencesState());
     expect(result.current.preferences.playback.quality).toBe("1080p");
     expect(result.current.preferences.appearance.posterSize).toBe("medium");
@@ -86,6 +66,7 @@ describe("usePreferencesState", () => {
   it("updatePreferences() deep-merges partial updates", async () => {
     const { result } = renderHook(() => usePreferencesState());
 
+    await act(async () => {});
     act(() => {
       result.current.updatePreferences({
         playback: { quality: "720p" },
@@ -103,6 +84,7 @@ describe("usePreferencesState", () => {
   it("updatePreferences() deep merges dashboardSections", async () => {
     const { result } = renderHook(() => usePreferencesState());
 
+    await act(async () => {});
     act(() => {
       result.current.updatePreferences({
         appearance: { dashboardSections: { continueWatching: false } },
@@ -115,53 +97,65 @@ describe("usePreferencesState", () => {
     expect(result.current.preferences.appearance.dashboardSections.recentShows).toBe(true);
   });
 
-  it("updatePreferences() saves to global when no userId", () => {
+  it("updatePreferences() saves to global when no userId", async () => {
     const { result } = renderHook(() => usePreferencesState());
 
+    await act(async () => {});
     act(() => {
       result.current.updatePreferences({ playback: { quality: "480p" } });
     });
 
+    await act(async () => {});
     expect(mockStorage.savePreferences).toHaveBeenCalled();
+    await act(async () => {});
     expect(mockStorage.saveUserPreferences).not.toHaveBeenCalled();
   });
 
-  it("updatePreferences() saves to user key when userId provided", () => {
+  it("updatePreferences() saves to user key when userId provided", async () => {
     const { result } = renderHook(() => usePreferencesState(42));
 
+    await act(async () => {});
     act(() => {
       result.current.updatePreferences({ playback: { quality: "480p" } });
     });
 
+    await act(async () => {});
     expect(mockStorage.saveUserPreferences).toHaveBeenCalledWith(42, expect.any(Object));
+    await act(async () => {});
     expect(mockStorage.savePreferences).not.toHaveBeenCalled();
   });
 
-  it("resetPreferences() resets to defaults", () => {
+  it("resetPreferences() resets to defaults", async () => {
     const { result } = renderHook(() => usePreferencesState());
 
     // Change something first
+    await act(async () => {});
     act(() => {
       result.current.updatePreferences({ playback: { quality: "480p" } });
     });
     expect(result.current.preferences.playback.quality).toBe("480p");
 
     // Reset
+    await act(async () => {});
     act(() => {
       result.current.resetPreferences();
     });
 
     expect(result.current.preferences.playback.quality).toBe("1080p");
+    await act(async () => {});
     expect(mockStorage.savePreferences).toHaveBeenCalled();
   });
 
-  it("resetPreferences() saves to user key when userId provided", () => {
+  it("resetPreferences() saves to user key when userId provided", async () => {
+    mockStorage.getUserPreferences.mockResolvedValue({ ...defaultPrefs, playback: { ...defaultPrefs.playback, quality: "480p" } });
     const { result } = renderHook(() => usePreferencesState(42));
 
+    await act(async () => {});
     act(() => {
       result.current.resetPreferences();
     });
 
+    await act(async () => {});
     expect(mockStorage.saveUserPreferences).toHaveBeenCalledWith(42, expect.any(Object));
   });
 });
@@ -191,10 +185,155 @@ describe("usePreferencesState — context value identity (prexu-9f4s.1)", () => 
     const { result } = renderHook(() => usePreferencesState());
     await act(async () => {});
     const before = result.current;
+    await act(async () => {});
     act(() => {
       result.current.updatePreferences({ playback: { quality: "720p" } });
     });
     expect(result.current.preferences.playback.quality).toBe("720p");
     expect(result.current).not.toBe(before);
   });
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+describe("observable persistence", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockStorage.getDefaultPreferences.mockImplementation(() => structuredClone(defaultPrefs));
+    mockStorage.getPreferences.mockResolvedValue(structuredClone(defaultPrefs));
+    mockStorage.getUserPreferences.mockResolvedValue(structuredClone(defaultPrefs));
+    mockStorage.savePreferences.mockResolvedValue(undefined);
+    mockStorage.saveUserPreferences.mockResolvedValue(undefined);
+  });
+  it("blocks changes before hydration and retries a failed read", async () => {
+    const pending = deferred<typeof defaultPrefs>();
+    mockStorage.getPreferences.mockReturnValueOnce(pending.promise);
+    const { result } = renderHook(() => usePreferencesState());
+    act(() => result.current.updatePreferences({ playback: { quality: "480p" } }));
+    expect(result.current.loadState).toBe("loading");
+    expect(mockStorage.savePreferences).not.toHaveBeenCalled();
+    await act(async () => pending.reject(new Error("read failed")));
+    expect(result.current.loadState).toBe("error");
+    await act(async () => result.current.retryLoad());
+    expect(result.current.loadState).toBe("ready");
+    expect(result.current.preferences.playback.quality).toBe("1080p");
+  });
+  it("serializes rapid writes and never reports an older write as the latest saved value", async () => {
+    const first = deferred<void>();
+    mockStorage.savePreferences.mockReturnValueOnce(first.promise);
+    const { result } = renderHook(() => usePreferencesState());
+    await act(async () => {});
+    await act(async () => result.current.updatePreferences({ playback: { audioBoost: 110 } }));
+    act(() => result.current.updatePreferences({ playback: { audioBoost: 120 } }));
+    act(() => result.current.updatePreferences({ playback: { audioBoost: 130 } }));
+    expect(result.current.preferences.playback.audioBoost).toBe(130);
+    expect(result.current.saveStates["playback.audioBoost"]).toBe("saving");
+    expect(mockStorage.savePreferences).toHaveBeenCalledTimes(1);
+    await act(async () => first.resolve());
+    expect(mockStorage.savePreferences.mock.calls.map(([value]) => value.playback.audioBoost)).toEqual([110, 120, 130]);
+    expect(result.current.saveStates["playback.audioBoost"]).toBe("saved");
+  });
+  it("keeps failed drafts out of unrelated saves, then reverts to the last confirmed value", async () => {
+    const { result } = renderHook(() => usePreferencesState());
+    await act(async () => {});
+    await act(async () => result.current.updatePreferences({ playback: { quality: "720p" } }));
+    mockStorage.savePreferences.mockRejectedValueOnce(new Error("disk full"));
+    await act(async () => result.current.updatePreferences({ playback: { quality: "480p" } }));
+    expect(result.current.preferences.playback.quality).toBe("480p");
+    expect(result.current.saveStates["playback.quality"]).toBe("error");
+    await act(async () => result.current.updatePreferences({ appearance: { theme: "light" } }));
+    expect(mockStorage.savePreferences).toHaveBeenLastCalledWith(expect.objectContaining({ playback: expect.objectContaining({ quality: "720p" }) }));
+    expect(result.current.preferences.playback.quality).toBe("480p");
+    act(() => result.current.revertPreference("playback.quality"));
+    expect(result.current.preferences.playback.quality).toBe("720p");
+    expect(result.current.saveStates["playback.quality"]).toBeUndefined();
+  });
+  it("retries the failed leaf and preserves nested siblings", async () => {
+    const { result } = renderHook(() => usePreferencesState());
+    await act(async () => {});
+    mockStorage.savePreferences.mockRejectedValueOnce(new Error("disk full"));
+    await act(async () => result.current.updatePreferences({ playback: { subtitleStyle: { fontFamily: "serif" } } }));
+    expect(result.current.saveStates["playback.subtitleStyle.fontFamily"]).toBe("error");
+    await act(async () => result.current.retryPreference("playback.subtitleStyle.fontFamily"));
+    expect(result.current.saveStates["playback.subtitleStyle.fontFamily"]).toBe("saved");
+    expect(result.current.preferences.playback.subtitleStyle.textColor).toBe("#FFFFFF");
+    expect(mockStorage.savePreferences).toHaveBeenCalledTimes(2);
+  });
+  it("ignores stale profile reads and old callbacks after switching users", async () => {
+    const pending = deferred<typeof defaultPrefs>();
+    mockStorage.getUserPreferences.mockReturnValueOnce(pending.promise);
+    const { result, rerender } = renderHook(({ id }) => usePreferencesState(id), { initialProps: { id: 1 } });
+    await act(async () => {});
+    const staleUpdate = result.current.updatePreferences;
+    rerender({ id: 2 });
+    await act(async () => {});
+    await act(async () => result.current.updatePreferences({ appearance: { theme: "dark" } }));
+    await act(async () => pending.resolve(defaultPrefs));
+    act(() => staleUpdate({ playback: { quality: "480p" } }));
+    expect(result.current.preferences.appearance.theme).toBe("dark");
+    expect(mockStorage.saveUserPreferences).toHaveBeenCalledTimes(1);
+    expect(mockStorage.saveUserPreferences).toHaveBeenCalledWith(2, expect.any(Object));
+  });
+  it("waits for an old profile write before reading that profile again", async () => {
+    const pending = deferred<void>();
+    mockStorage.saveUserPreferences.mockReturnValueOnce(pending.promise);
+    const { result, rerender } = renderHook(({ id }) => usePreferencesState(id), { initialProps: { id: 10 } });
+    await act(async () => {});
+    await act(async () => result.current.updatePreferences({ playback: { quality: "720p" } }));
+    rerender({ id: 20 });
+    await act(async () => {});
+    expect(result.current.preferences.playback.quality).toBe("1080p");
+    rerender({ id: 10 });
+    await act(async () => {});
+    expect(result.current.loadState).toBe("loading");
+    expect(mockStorage.getUserPreferences.mock.calls.map(([id]) => id)).toEqual([10, 20]);
+    mockStorage.getUserPreferences.mockResolvedValue({ ...defaultPrefs, playback: { ...defaultPrefs.playback, quality: "720p" } });
+    await act(async () => pending.resolve());
+    expect(result.current.preferences.playback.quality).toBe("720p");
+    expect(result.current.saveStates).toEqual({});
+  });
+  it("shows Saved for two seconds after persistence, not after editing", async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = deferred<void>();
+      mockStorage.savePreferences.mockReturnValueOnce(pending.promise);
+      const { result } = renderHook(() => usePreferencesState());
+      await act(async () => {});
+      await act(async () => result.current.updatePreferences({ playback: { audioBoost: 120 } }));
+      act(() => vi.advanceTimersByTime(3000));
+      expect(result.current.saveStates["playback.audioBoost"]).toBe("saving");
+      await act(async () => pending.resolve());
+      act(() => vi.advanceTimersByTime(1999));
+      expect(result.current.saveStates["playback.audioBoost"]).toBe("saved");
+      act(() => vi.advanceTimersByTime(1));
+      expect(result.current.saveStates["playback.audioBoost"]).toBeUndefined();
+    } finally { vi.useRealTimers(); }
+  });
+  it("does not duplicate writes in StrictMode", async () => {
+    const wrapper = ({ children }: { children: ReactNode }) => createElement(StrictMode, null, children);
+    const { result } = renderHook(() => usePreferencesState(), { wrapper });
+    await act(async () => {});
+    await act(async () => result.current.updatePreferences({ playback: { quality: "720p" } }));
+    expect(mockStorage.savePreferences).toHaveBeenCalledTimes(1);
+  });
+  it("keeps the newest row Saving when an older write fails", async () => {
+    const first = deferred<void>();
+    const second = deferred<void>();
+    mockStorage.savePreferences.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const { result } = renderHook(() => usePreferencesState());
+    await act(async () => {});
+    await act(async () => result.current.updatePreferences({ playback: { audioBoost: 110 } }));
+    act(() => result.current.updatePreferences({ playback: { audioBoost: 120 } }));
+    await act(async () => first.reject(new Error("old write failed")));
+    expect(result.current.saveStates["playback.audioBoost"]).toBe("saving");
+    expect(result.current.preferences.playback.audioBoost).toBe(120);
+    await act(async () => second.resolve());
+    expect(result.current.saveStates["playback.audioBoost"]).toBe("saved");
+  });
+
 });
