@@ -148,6 +148,19 @@ pub async fn player_seek(
     })
 }
 
+/// Common HTML5/native control range. Reject invalid input before reaching mpv.
+#[tauri::command]
+pub async fn player_set_playback_rate(
+    rate: f64,
+    state: State<'_, PlayerState>,
+) -> Result<(), String> {
+    if !rate.is_finite() || !(0.5..=2.0).contains(&rate) {
+        return Err("Playback rate must be between 0.5 and 2".into());
+    }
+    log::debug!("[player:cmd] set_playback_rate {}", rate);
+    state.with_mpv(|mpv| mpv.set_property("speed", rate))
+}
+
 #[tauri::command]
 pub async fn player_set_volume(
     vol: u16,

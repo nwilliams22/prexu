@@ -1,9 +1,9 @@
 # Linux native player command parity
 
-Audit: 2026-11-06, `prexu-axj4.5`. This is a command inventory and bounded
+Audit: 2026-11-06; parity follow-up: 2026-11-09, `prexu-axj4.5`. This is a command inventory and bounded
 acceptance record, not a claim that every native feature passes. Registry:
 `src-tauri/src/lib.rs`; implementation: `src-tauri/src/player/commands/`.
-All 23 distinct registered `player_*` commands have one row below.
+All 24 distinct registered `player_*` commands have one row below.
 
 ## Runtime and evidence
 
@@ -77,16 +77,16 @@ None of these labels silently upgrades historical evidence to a fresh pass.
 | `player_pause` | `pause=true` | PASS S1: paused event and stationary visible timestamp. |
 | `player_seek` | `seek <seconds> absolute` | PASS S1: `seek to 11.708s` at 05:07:20 and matching visible Pattern timestamp. |
 | `player_set_volume` | `volume` (u16 converted to f64) | PARTIAL S1: 100 → 90 command at 05:07:20; audible gain not tested. |
-| `player_set_muted` | `mute` boolean | PASS for command/state S1/S3: true while playing; new load restores false. S6 covers reveal intent; live muted episode handoff and audible silence remain unverified. |
-| `player_set_audio_track` | `aid=<id>` or `aid=no` | PARTIAL S1: default `Some(1)` applied at 05:07:03; alternate-track output not tested. |
-| `player_set_sub_track` | `sid=<id>` or `sid=no` | PARTIAL S1: `None` applied at 05:07:03; selected subtitle rendering not tested. |
-| `player_load_external_sub` | `sub-add <quoted URL> select` | UNVERIFIED: Pattern had no external subtitle selected; source mapping only. |
-| `player_set_audio_delay_ms` | `audio-delay=ms/1000` seconds | PARTIAL S1: default 0 ms dispatched; nonzero audible synchronization not tested. |
-| `player_apply_sub_style` | `sub-font`, `sub-font-size`, `sub-color`, `sub-border-color`, `sub-border-size`, `sub-back-color`, `sub-shadow-offset` | PARTIAL S1: default style applied; no selected subtitles to judge appearance. Does not write `sub-scale`. |
+| `player_set_muted` | `mute` boolean | PASS R3: same-hook episode handoff retained `mute=true` after reveal; new mounts reset intent. Audible silence remains outside this null-audio run. |
+| `player_set_audio_track` | `aid=<id>` or `aid=no` | PASS R1 for selection: live `aid=2` after choosing the second real PCM track. Audible frequency/output not measured (null audio). |
+| `player_set_sub_track` | `sid=<id>` or `sid=no` | PASS R1: live `sid=1`, visible embedded CUE ONE at 2 seconds. |
+| `player_load_external_sub` | `sub-add <quoted URL> select` | PASS R2: direct registered command added the HTTP SRT, live `sid=2`, visible EXTERNAL PARITY CUE. |
+| `player_set_audio_delay_ms` | `audio-delay=ms/1000` seconds | PASS R2 for property: 250 ms became live `audio-delay=0.25`. Audible synchronization remains outside this null-audio run. |
+| `player_apply_sub_style` | `sub-font`, `sub-font-size`, `sub-color`, `sub-border-color`, `sub-border-size`, `sub-back-color`, `sub-shadow-offset` | PASS R2: 150% size and yellow text visibly changed embedded and external cues. Does not write `sub-scale`; full-app baseline layout not tested by this harness. |
 | `player_set_af_chain` | `af`: empty, loudnorm (light), or acompressor+loudnorm (night) | PARTIAL S1: off and light dispatched; audible normalization not tested. |
-| `player_set_timeline_context` | Stores Plex close-report context; teardown reads mpv time/state | PARTIAL S1/S3: context for ratingKey 2/duration 60022 received; independent Plex timeline receipt not checked. |
-| `player_clear_timeline_context` | Clears stored context; no mpv property write | PARTIAL S1/S3: command observed in cleanup; duplicate-report prevention not independently checked at server. |
-| `player_stop` | `mute=true`, `pause=false`, `stop`; retains handle | PARTIAL: cleanup dispatch observed; same-handle episode continuation not run (S6 is mocked). |
+| `player_set_timeline_context` | Stores Plex close-report context; teardown reads mpv time/state | PASS R4 for protocol receipt: independent HTTP receiver recorded playing/stopped state, ratingKey, time and duration. Synthetic Plex-protocol sink, not actual PMS receipt or close-window fallback acceptance. |
+| `player_clear_timeline_context` | Clears stored context; no mpv property write | PASS R4 for cleanup dispatch and independently received stopped state. Window-close duplicate suppression is not certified. |
+| `player_stop` | `mute=true`, `pause=false`, `stop`; retains handle | PASS R3: episode-2 loaded in the same hook session; explicit soft-stop retained initialized handle with idle=true, mute=true and no time-pos. |
 | `player_unload` | Synchronous mute/pause/stop/quit; asynchronous pump/render/handle teardown | PASS S3: exit returned to detail page and next load rendered full-frame. Audible cessation and app-close races not measured. |
 | `player_set_fullscreen` | Tauri main-window fullscreen, actual-state event; compositor follows allocation; not mpv `fullscreen` | PASS S4 for application state/recovery; real window-manager transitions unverified. |
 | `player_enter_minimize` | Stored inset → `video-margin-ratio-*`; compositor subtitle scale/use-margins compensation; busy/ready | PASS S2/S3/S4: visible bounded mini; subtitle scaling unverified without subtitles. |
@@ -94,12 +94,68 @@ None of these labels silently upgrades historical evidence to a fresh pass.
 | `player_exit_minimize` | Clears inset and all four video margins; restores subtitle compensation; busy/ready | PASS S2/S4: full-frame restore, IPC resolves; no frozen mini state. |
 | `player_enter_popout` | Clears mini margins as needed; resizes/repositions Tauri window; subtitle-safe bottom margin | PASS S5 on Xvfb for 480×270 visible popout. Wayland placement/keep-above untested. |
 | `player_exit_popout` | Clears margins; restores saved Tauri geometry, decoration/min-size state | PASS S5: logged and visible 1280×800 recovery. |
+| `player_set_playback_rate` | Validates finite 0.5–2; writes mpv `speed` | PASS R5: production hook reached native `speed=2`; same-session handoff retained it. Real libmpv clock measured 0.500/1.000/2.000×; HTML5 measured 0.500/1.000/2.000×. |
 
-Playback **rate** is separately required by the bead text but has **no registered
-command or hook control** in this checkout. A registry audit and search of
-`src/hooks/player` found no `playbackRate`/`setPlaybackRate` implementation.
-There is therefore no application mapping to mpv `speed` to certify. This is
-`prexu-3bd2`, not a successful playback-control result.
+The common hook exposes `playbackRate` / `setPlaybackRate`; the controls bar
+selects 0.5–2× (compact widths use the existing More menu). HTML5 writes both
+`defaultPlaybackRate` and `playbackRate`. Both engines retain rate across media
+handoffs and reset to 1× on a new hook mount. Invalid rates are ignored by the
+hooks and rejected by the Rust command. Native IPC failure restores the last
+confirmed rate in the selector.
+
+## 2026-11-09 runtime follow-up
+
+Rebuilt debug executable SHA-256:
+`914bc11d7e5b14dad394e5eaf3bd1a25671b0181390c901f6ae85f46d4142fd4`.
+Build base was `663250e` plus this change's native command/probe additions.
+Library: the same checksum-verified patched libmpv above. Xvfb `:96`, 1280×800,
+software GL; ALSA null output enabled audio-track selection, **not audible
+acceptance**. The GPU/audio waiver is unchanged.
+
+Evidence: BAD-357 attachment `linux-parity-evidence.tar.gz` (attachment ID
+`ecf3a3ff-bbf8-458f-9239-a2aaa16dc687`, SHA-256
+`a9625373c6770fb7b403b115f297cf816f2eba9b6a60352954b185e8359ba197`).
+Includes sanitized logs, screenshots, raw observations (including unsuccessful
+exploratory measurements), fixture manifest, harness sources and reproduction
+instructions. The harness rendered the production hooks and controls using
+synthetic auth; it did not exercise full application navigation. The generated
+`av-cues-v1` fixture has real selectable 440/880 Hz PCM tracks and embedded SRT.
+
+- **R1:** Pause, seek 2 s, select Plex audio stream 3 and subtitle stream 4.
+  Read-only native snapshot returned `audioTrack=2`, `subtitleTrack=1`.
+  `embedded.png` shows white CUE ONE.
+- **R2:** Apply 150% yellow subtitle style and 250 ms audio offset. Snapshot
+  returned `audioDelay=0.25`; `styled.png` shows larger yellow CUE ONE.
+  Invoke external subtitle command against the fixture SRT; snapshot returned
+  `subtitleTrack=2`, and `external.png` shows EXTERNAL PARITY CUE. The harness's
+  always-visible bottom bar overlaps the cue baseline; this is not a full-app
+  subtitle-layout result.
+- **R3:** Select 2×, mute, change ratingKey to episode-2 without remounting the
+  production hook. Native snapshot after the load: `muted=true`, `playbackRate=2`,
+  `idle=false`. Then `player_stop`: `initialized=true`, `idle=true`, `muted=true`,
+  `positionMs=null`. This exercises same-session handoff/soft-stop, not queue
+  navigation. Unload then produced `initialized=false`.
+- **R4:** The separate HTTP handler recorded `playing` for av-cues-v1 at 8400 ms
+  and `stopped` for both av-cues-v1 and episode-2, duration 15000 ms. Only those
+  allowlisted fields were recorded. This proves Plex-protocol request receipt at
+  the fixture sink; actual Plex Media Server/account integration is not claimed.
+- **R5:** Native production-hook readback returned `speed=2`. Independent real
+  libmpv null-output test (`cargo test --manifest-path src-tauri/Cargo.toml
+  --test playback_rate -- --ignored --nocapture`, with the patched library)
+  measured 1/2/4 seconds of media over two seconds at 0.5/1/2×; one test passed.
+  HTML5 production-hook timing with silent H.264 media measured 0.499891,
+  1.000251 and 1.999529×. Native JavaScript timing samples are **invalid** because
+  delayed WebKit IPC responses skew their elapsed interval; retained raw
+  measurements are not passes. Native playback logs also show the 15-second
+  fixture reaching EOF about seven seconds after 2× play.
+- Focused Vitest checks cover both hooks, invalid inputs, deferred native rate,
+  IPC rejection, handoff/new-session reset and selector dispatch. The debug
+  native build and TypeScript check passed. The additional libmpv clock test is
+  explicitly opt-in and does not claim hardware rendering or sound.
+
+Both desktop sessions used `qa-desktop-session.sh`; ports were checked before
+start, and stop used the same display/port. The fixture listener, Vite, Xvfb and
+D-Bus holders were stopped. Temporary index entry changes were restored.
 
 Plex timeline reporting is not an mpv command: observed time/duration/pause
 properties feed the frontend reporting hooks, with the stored Rust context as
@@ -114,20 +170,15 @@ The old July summary is superseded by two later Beads records:
   The fresh checks above corroborate recovery only in the stated Xvfb runtime.
 - `prexu-jphh` closed 2026-07-04: stop → play deliberately starts unmuted;
   PR #39 reverted persistence. The corrected A3 is PASS for new-session reset
-  (S3/S6), with live same-session handoff still UNVERIFIED (S6 contract passes).
+  (S3/S6), with live same-session handoff now confirmed by R3.
 
-`prexu-axj4.5` remains blocked on **prexu-3bd2** (missing rate requirement)
-and **prexu-hui3** (remaining runtime track/subtitle/delay/handoff/timeline
-coverage). Both name Duncan as owner and contain concrete closure conditions.
-This audit completes the inventory; it does not close feature parity.
+The scoped runtime gaps in `prexu-hui3` and rate requirement in `prexu-3bd2`
+are resolved by R1–R5 and the committed tests. `prexu-axj4.5` can close on this
+bounded command/state/visible-subtitle evidence. Hardware sound, GPU, Wayland,
+and full navigation acceptance are not implied by closure.
 
-`prexu-axj4.8` is **not closeable**: it retains its feature-parity prerequisite
-and the named defects above. The earlier [codec record](linux-native-codec-qa.md)
-contains source-selection evidence, not per-codec visible/audio acceptance or
-independent server-session confirmation; it is not upgraded by this Pattern run.
-
-`prexu-axj4.9` is **not closeable**: it retains the same named parity blockers.
-Its previous full-gate results remain dated evidence in the codec record; this
-run executed only S6 and the command-inventory check. No fresh full-gate pass is
-claimed. After the blockers close, rerun its specified TypeScript, Vitest,
-desktop/relay clippy and clean Linux build gates before closing it.
+This removes feature parity as a blocker for `prexu-axj4.8` and
+`prexu-axj4.9`. Neither successor was run here; codec verification and the final
+validation gates still require their own evidence. The earlier
+[codec record](linux-native-codec-qa.md) remains historical, not a fresh native
+codec acceptance result.

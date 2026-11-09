@@ -249,3 +249,30 @@ describe("useHtml5Player initPlayback supersession (prexu-bgz.2)", () => {
     );
   });
 });
+
+
+describe("HTML5 playback rate", () => {
+  it("applies speed to the media element and retains it across episode handoff", async () => {
+    vi.mocked(prepareSource).mockResolvedValue(makePrepared("Episode"));
+    const { result, rerender, unmount } = renderHook(
+      ({ rk }) => usePlayer(rk), { initialProps: { rk: "100" } },
+    );
+    const video = document.createElement("video");
+    result.current.videoRef.current = video;
+    await waitFor(() => expect(hlsLoaderMock.loadHls).toHaveBeenCalled());
+    act(() => result.current.setPlaybackRate(1.5));
+    expect(video.playbackRate).toBe(1.5);
+    expect(video.defaultPlaybackRate).toBe(1.5);
+    expect(result.current.chrome.playbackRate).toBe(1.5);
+    for (const rate of [0, -1, NaN, Infinity, 2.1]) {
+      act(() => result.current.setPlaybackRate(rate));
+    }
+    expect(video.playbackRate).toBe(1.5);
+    rerender({ rk: "200" });
+    await waitFor(() => expect(prepareSource).toHaveBeenCalledTimes(2));
+    expect(video.playbackRate).toBe(1.5);
+    unmount();
+    const fresh = renderHook(() => usePlayer("300"));
+    expect(fresh.result.current.playbackRate).toBe(1);
+  });
+});

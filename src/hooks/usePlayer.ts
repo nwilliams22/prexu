@@ -78,6 +78,7 @@ export interface UsePlayerResult {
   duration: number;
   buffered: number;
   volume: number;
+  playbackRate: number;
   isMuted: boolean;
   isFullscreen: boolean;
   playbackError: string | null;
@@ -101,6 +102,8 @@ export interface UsePlayerResult {
   togglePlay: () => void;
   seek: (time: number) => void;
   setVolume: (vol: number) => void;
+  /** Session-local speed, 0.5–2; retained across episode handoffs. */
+  setPlaybackRate: (rate: number) => void;
   toggleMute: () => void;
   toggleFullscreen: () => void;
   selectAudioTrack: (streamId: number) => void;
@@ -225,6 +228,8 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [buffered, setBuffered] = useState(0);
+  const [playbackRate, setPlaybackRateState] = useState(1);
+  const playbackRateRef = useRef(1);
   const [volume, setVolumeState] = useState(getSavedVolume);
   // Mute is deliberately PER-SESSION, unlike volume — same contract as
   // useNativePlayer (prexu-jphh / bd memory player-mute-scope-decision):
@@ -332,6 +337,8 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
         return;
       }
 
+      video.defaultPlaybackRate = playbackRateRef.current;
+      video.playbackRate = playbackRateRef.current;
       video.volume = Math.min(volumeRef.current, 1);
       video.muted = isMutedRef.current;
 
@@ -559,6 +566,17 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
     [],
   );
 
+  const setPlaybackRate = useCallback((rate: number) => {
+    if (!Number.isFinite(rate) || rate < 0.5 || rate > 2) return;
+    const video = videoRef.current;
+    if (video) {
+      video.defaultPlaybackRate = rate;
+      video.playbackRate = rate;
+    }
+    playbackRateRef.current = rate;
+    setPlaybackRateState(rate);
+  }, []);
+
   const setVolume = useCallback((vol: number) => {
     const clamped = Math.max(0, Math.min(2, vol));
     setVolumeState(clamped);
@@ -691,6 +709,7 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
       isBuffering,
       duration,
       volume,
+      playbackRate,
       isMuted,
       isFullscreen,
       playbackError,
@@ -701,6 +720,7 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
       togglePlay,
       seek,
       setVolume,
+      setPlaybackRate,
       toggleMute,
       toggleFullscreen,
       selectAudioTrack: streams.selectAudioTrack,
@@ -727,6 +747,7 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
       isBuffering,
       duration,
       volume,
+      playbackRate,
       isMuted,
       isFullscreen,
       playbackError,
@@ -737,6 +758,7 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
       togglePlay,
       seek,
       setVolume,
+      setPlaybackRate,
       toggleMute,
       toggleFullscreen,
       streams.selectAudioTrack,

@@ -63,6 +63,8 @@ function makePlayerChrome(overrides?: Partial<PlayerChrome>): PlayerChrome {
     duration: 100,
     isMuted: false,
     volume: 1,
+    playbackRate: 1,
+    setPlaybackRate: vi.fn(),
     setVolume: vi.fn(),
     toggleMute: vi.fn(),
     isFullscreen: false,
@@ -108,6 +110,13 @@ describe("ControlsBottomBar responsive compaction (prexu-52ky)", () => {
 
   afterEach(() => {
     globalThis.ResizeObserver = originalResizeObserver;
+  });
+
+  it("routes the speed selector through the engine-neutral player", () => {
+    const player = makePlayerChrome();
+    render(<ControlsBottomBar {...baseProps()} player={player} />);
+    fireEvent.change(screen.getByRole("combobox", { name: "Playback speed" }), { target: { value: "1.5" } });
+    expect(player.setPlaybackRate).toHaveBeenCalledWith(1.5);
   });
 
   function renderAtWidth(width: number, overrides?: Record<string, unknown>) {
@@ -174,6 +183,15 @@ describe("ControlsBottomBar responsive compaction (prexu-52ky)", () => {
     expect(screen.getByRole("menuitem", { name: /Audio/ })).toBeTruthy();
     expect(screen.getByRole("menuitem", { name: /Playback queue/ })).toBeTruthy();
     expect(screen.getByRole("menuitem", { name: /Minimize player to corner/ })).toBeTruthy();
+  });
+
+  it("keeps speed selection available in compact controls", () => {
+    const player = makePlayerChrome();
+    renderAtWidth(320, { player });
+    expect(screen.queryByRole("combobox", { name: "Playback speed" })).toBeNull();
+    fireEvent.click(screen.getByLabelText("More controls"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Playback speed 0.5×" }));
+    expect(player.setPlaybackRate).toHaveBeenCalledWith(0.5);
   });
 
   it("clicking an overflow item invokes its action and closes the menu", () => {

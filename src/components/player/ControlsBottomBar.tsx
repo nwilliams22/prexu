@@ -251,6 +251,15 @@ function ControlsBottomBar({
   }
 
   if (compaction.rightOverflow) {
+    for (const rate of [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]) {
+      overflowItems.push({
+        key: `rate-${rate}`,
+        label: `Playback speed ${rate}×`,
+        icon: <span aria-hidden="true">×</span>,
+        onClick: () => player.setPlaybackRate(rate),
+        active: player.playbackRate === rate,
+      });
+    }
     overflowItems.push({
       key: "audio",
       label: "Audio",
@@ -406,6 +415,18 @@ function ControlsBottomBar({
           {/* Right controls */}
           <div style={styles.controlsRight}>
             {syncIndicator}
+            {!compaction.rightOverflow && <select
+              aria-label="Playback speed"
+              value={player.playbackRate}
+              onChange={(event) => player.setPlaybackRate(Number(event.target.value))}
+              onFocus={() => onPanelPinChange?.(true)}
+              onBlur={() => onPanelPinChange?.(false)}
+              style={{ background: "#14141e", color: "white", border: 0, borderRadius: 4, padding: 4 }}
+            >
+              {[0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((rate) => (
+                <option key={rate} value={rate}>{rate}×</option>
+              ))}
+            </select>}
 
             {/* Subtitle button — opens the full tabbed panel (tracks /
                 search / style) directly. The compact TrackMenu is only the

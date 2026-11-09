@@ -132,6 +132,7 @@ export interface PlayerChrome {
   isBuffering: boolean;
   duration: number;
   volume: number;
+  playbackRate: number;
   isMuted: boolean;
   isFullscreen: boolean;
   playbackError: string | null;
@@ -146,6 +147,7 @@ export interface PlayerChrome {
   togglePlay: () => void;
   seek: (time: number) => void;
   setVolume: (vol: number) => void;
+  setPlaybackRate: (rate: number) => void;
   toggleMute: () => void;
   toggleFullscreen: () => void;
   selectAudioTrack: (streamId: number) => void;
@@ -177,6 +179,7 @@ export function usePlayer(ratingKey: string, _offsetOverride?: number | null): U
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(FIXTURE_DURATION_SECONDS);
+  const [playbackRate, setPlaybackRate] = useState(1);
   const [volume, setVolumeState] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -327,6 +330,7 @@ export function usePlayer(ratingKey: string, _offsetOverride?: number | null): U
       isBuffering: false,
       duration,
       volume,
+      playbackRate,
       isMuted,
       isFullscreen,
       playbackError,
@@ -341,6 +345,7 @@ export function usePlayer(ratingKey: string, _offsetOverride?: number | null): U
       togglePlay,
       seek,
       setVolume,
+      setPlaybackRate,
       toggleMute,
       toggleFullscreen,
       selectAudioTrack,
@@ -361,6 +366,7 @@ export function usePlayer(ratingKey: string, _offsetOverride?: number | null): U
       isPlaying,
       duration,
       volume,
+      playbackRate,
       isMuted,
       isFullscreen,
       playbackError,
@@ -369,6 +375,7 @@ export function usePlayer(ratingKey: string, _offsetOverride?: number | null): U
       togglePlay,
       seek,
       setVolume,
+      setPlaybackRate,
       toggleMute,
       toggleFullscreen,
       selectAudioTrack,

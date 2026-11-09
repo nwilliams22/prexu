@@ -80,6 +80,9 @@ export function useNativePlayer(
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [buffered, setBuffered] = useState(0);
+  const [playbackRate, setPlaybackRateState] = useState(1);
+  const playbackRateRef = useRef(1);
+  const confirmedRateRef = useRef(1);
   const [volume, setVolumeState] = useState(getSavedVolume);
   // Mute is deliberately PER-SESSION, unlike volume (design decision,
   // prexu-jphh / bd memory player-mute-scope-decision): it carries across
@@ -554,6 +557,9 @@ export function useNativePlayer(
       setIsPlaying(true);
       logger.info("player", "load_url returned OK, waiting for ready event");
 
+      await invoke("player_set_playback_rate", { rate: playbackRateRef.current });
+      if (gen !== initGenRef.current) return;
+
       // Apply saved volume + mute now that mpv exists. mpv volume is 0..200
       // (we configured volume-max=200 in PlayerState::ensure_init); our
       // `volume` state is 0..2 in float.
@@ -741,6 +747,25 @@ export function useNativePlayer(
     logger.debug("player", "seek", { seconds: time });
     invoke("player_seek", { seconds: time }).catch(() => {});
   }, []);
+
+  const setPlaybackRate = useCallback((rate: number) => {
+    if (!Number.isFinite(rate) || rate < 0.5 || rate > 2) return;
+    playbackRateRef.current = rate;
+    setPlaybackRateState(rate);
+    dequeueByTag("rate");
+    enqueueOrRun("rate", () => {
+      const requested = playbackRateRef.current;
+      invoke("player_set_playback_rate", { rate: requested }).then(() => {
+        confirmedRateRef.current = requested;
+      }).catch((err) => {
+        logger.error("player:cmd", "playback rate failed", String(err));
+        if (playbackRateRef.current === requested) {
+          playbackRateRef.current = confirmedRateRef.current;
+          setPlaybackRateState(confirmedRateRef.current);
+        }
+      });
+    });
+  }, [dequeueByTag, enqueueOrRun]);
 
   const setVolume = useCallback(
     (vol: number) => {
@@ -995,6 +1020,7 @@ export function useNativePlayer(
       isBuffering,
       duration,
       volume,
+      playbackRate,
       isMuted,
       isFullscreen,
       playbackError,
@@ -1005,6 +1031,7 @@ export function useNativePlayer(
       togglePlay,
       seek,
       setVolume,
+      setPlaybackRate,
       toggleMute,
       toggleFullscreen,
       selectAudioTrack,
@@ -1031,6 +1058,7 @@ export function useNativePlayer(
       isBuffering,
       duration,
       volume,
+      playbackRate,
       isMuted,
       isFullscreen,
       playbackError,
@@ -1041,6 +1069,7 @@ export function useNativePlayer(
       togglePlay,
       seek,
       setVolume,
+      setPlaybackRate,
       toggleMute,
       toggleFullscreen,
       selectAudioTrack,

@@ -1251,3 +1251,62 @@ describe("Linux-only reveal-mute workaround (prexu-axj4.5)", () => {
     expect(mutedInvokeCalls()).toEqual([false]);
   });
 });
+
+
+describe("native playback rate", () => {
+  it("defers the latest speed until ready and ignores invalid values", async () => {
+    const { result } = renderHook(() => useNativePlayer("100"));
+    await act(async () => {});
+    act(() => {
+      result.current.setPlaybackRate(1.25);
+      result.current.setPlaybackRate(1.5);
+    });
+    expect(invoke).not.toHaveBeenCalledWith("player_set_playback_rate", { rate: 1.5 });
+    act(() => fireReady());
+    expect(invoke).toHaveBeenCalledWith("player_set_playback_rate", { rate: 1.5 });
+    expect(result.current.chrome.playbackRate).toBe(1.5);
+    vi.mocked(invoke).mockClear();
+    for (const rate of [0, -1, NaN, Infinity, 2.1]) {
+      act(() => result.current.setPlaybackRate(rate));
+    }
+    expect(invoke).not.toHaveBeenCalledWith("player_set_playback_rate", expect.anything());
+    act(() => result.current.setPlaybackRate(0.5));
+    expect(invoke).toHaveBeenCalledWith("player_set_playback_rate", { rate: 0.5 });
+  });
+});
+
+
+it("restores the confirmed rate when native IPC rejects the change", async () => {
+  const { result } = renderHook(() => useNativePlayer("100"));
+  await act(async () => {});
+  act(() => fireReady());
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "player_set_playback_rate") throw new Error("unavailable");
+  });
+  await act(async () => result.current.setPlaybackRate(2));
+  expect(result.current.playbackRate).toBe(1);
+});
+
+it("reapplies speed on episode handoff and resets it on a new native mount", async () => {
+  vi.mocked(invoke).mockImplementation(async (command) =>
+    command === "player_engine_status" ? { available: true } : undefined);
+  vi.mocked(prepareSource).mockResolvedValue({
+    item: { type: "episode", title: "Episode" }, playable: { Marker: [], duration: 60000 },
+    part: { id: 1, Chapter: [] }, categorized: { audio: [], subtitles: [] },
+    isLocal: false, sourceKind: "direct", url: "https://server/episode.mp4", viewOffset: 0,
+  } as unknown as Awaited<ReturnType<typeof prepareSource>>);
+  const { result, rerender, unmount } = renderHook(({ key }) => useNativePlayer(key),
+    { initialProps: { key: "100" } });
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("player_set_playback_rate", { rate: 1 }));
+  act(() => fireReady());
+  await act(async () => result.current.setPlaybackRate(1.5));
+  vi.mocked(invoke).mockClear();
+  rerender({ key: "200" });
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("player_set_playback_rate", { rate: 1.5 }));
+  expect(result.current.playbackRate).toBe(1.5);
+  unmount();
+  vi.mocked(invoke).mockClear();
+  const fresh = renderHook(() => useNativePlayer("300"));
+  expect(fresh.result.current.playbackRate).toBe(1);
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("player_set_playback_rate", { rate: 1 }));
+});

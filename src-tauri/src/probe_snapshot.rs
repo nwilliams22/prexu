@@ -12,6 +12,10 @@ pub struct Snapshot {
     pub paused: Option<bool>,
     pub audio_track: Option<i64>,
     pub subtitle_track: Option<i64>,
+    pub playback_rate: Option<f64>,
+    pub muted: Option<bool>,
+    pub audio_delay: Option<f64>,
+    pub subtitle_scale: Option<f64>,
 }
 
 impl Snapshot {
@@ -24,6 +28,10 @@ impl Snapshot {
             paused: None,
             audio_track: None,
             subtitle_track: None,
+            playback_rate: None,
+            muted: None,
+            audio_delay: None,
+            subtitle_scale: None,
         }
     }
 }
@@ -56,5 +64,9 @@ pub fn sample(mpv: &Mpv, expected_path: &str) -> Snapshot {
         paused: mpv.get_property::<bool>("pause").ok(),
         audio_track: mpv.get_property::<i64>("aid").ok().filter(|id| *id > 0),
         subtitle_track,
+        playback_rate: mpv.get_property::<f64>("speed").ok(),
+        muted: mpv.get_property::<bool>("mute").ok(),
+        audio_delay: mpv.get_property::<f64>("audio-delay").ok(),
+        subtitle_scale: mpv.get_property::<f64>("sub-scale").ok(),
     }
 }
