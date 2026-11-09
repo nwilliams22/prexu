@@ -10,9 +10,9 @@ export const preferenceRows = {
   "playback.playerEngine": ["P1", "playback", "Player Engine"],
   "playback.quality": ["P2", "playback", "Video Quality"],
   "playback.directPlayPreference": ["P3", "playback", "Direct Play Preference"],
-  "playback.skipIntroEnabled": ["P4", "playback", "Skip Intro"],
-  "playback.skipCreditsEnabled": ["P5", "playback", "Skip Credits"],
-  "playback.autoPlayEnabled": ["P6", "playback", "Auto-play Next Episode"],
+  "playback.skipIntroEnabled": ["P4", "playback", "Show Skip Intro button"],
+  "playback.skipCreditsEnabled": ["P5", "playback", "Show Skip Credits button"],
+  "playback.autoPlayEnabled": ["P6", "playback", "Play next episode automatically"],
   "playback.preferredAudioLanguage": ["P7", "audio", "Preferred Audio Language"],
   "playback.defaultSubtitles": ["L1", "subtitles", "Default Subtitles"],
   "playback.preferredSubtitleLanguage": ["L2", "subtitles", "Preferred Subtitle Language"],
@@ -24,17 +24,17 @@ export const preferenceRows = {
   "playback.subtitleStyle.outlineColor": ["S5", "subtitles", "Outline Color"],
   "playback.subtitleStyle.outlineWidth": ["S6", "subtitles", "Outline Width"],
   "playback.subtitleStyle.shadowEnabled": ["S7", "subtitles", "Drop shadow"],
-  "playback.audioBoost": ["A1", "audio", "Audio Boost"],
-  "playback.volumeBoost": ["A2", "audio", "Volume Boost"],
+  "playback.audioBoost": ["A1", "audio", "Transcode audio boost"],
+  "playback.volumeBoost": ["A2", "audio", "Playback volume boost"],
   "playback.normalizationPreset": ["A3", "audio", "Audio Normalization"],
-  "playback.audioOffsetMs": ["A4", "audio", "Audio Offset"],
+  "playback.audioOffsetMs": ["A4", "audio", "Audio delay"],
   "appearance.theme": ["V1", "appearance", "Theme"],
   "appearance.posterSize": ["V2", "appearance", "Poster Size"],
-  "appearance.sidebarCollapsed": ["V3", "appearance", "Sidebar Default"],
+  "appearance.sidebarCollapsed": ["V3", "appearance", "Sidebar default"],
   "appearance.dashboardSections.continueWatching": ["V4", "appearance", "Continue Watching"],
   "appearance.dashboardSections.recentMovies": ["V5", "appearance", "Recently Added Movies"],
   "appearance.dashboardSections.recentShows": ["V6", "appearance", "Recently Added TV Shows"],
-  "appearance.skipSingleSeason": ["V7", "appearance", "TV Show Navigation"],
+  "appearance.skipSingleSeason": ["V7", "appearance", "Skip seasons page for single-season shows"],
   "appearance.minCollectionSize": ["V8", "appearance", "Minimum Collection Size"],
 } satisfies Record<PreferencePath, readonly [string, string, string]>;
 
@@ -42,7 +42,7 @@ function focusRow(id: string) {
   const feedback = document.getElementById(id);
   if (!feedback) return;
   const row = feedback.closest(".settings-row") ?? feedback.parentElement;
-  const control = row?.querySelector<HTMLElement>(`input[aria-describedby~="${id}"]:not(:disabled), select[aria-describedby~="${id}"]:not(:disabled)`);
+  const control = row?.querySelector<HTMLElement>(`input[aria-describedby~="${id}"]:not(:disabled), select[aria-describedby~="${id}"]:not(:disabled), fieldset[aria-describedby~="${id}"] input:checked:not(:disabled)`);
   (control ?? row?.querySelector<HTMLElement>("label[tabindex]") ?? feedback).focus({ preventScroll: true });
   row?.scrollIntoView?.({ block: "center", behavior: "instant" });
 }

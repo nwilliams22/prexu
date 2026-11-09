@@ -52,7 +52,11 @@ export function getDefaultPreferences(): Preferences {
 function mergeWithDefaults(saved: Preferences): Preferences {
   const defaults = getDefaultPreferences();
   return {
-    playback: { ...defaults.playback, ...saved.playback },
+    playback: {
+      ...defaults.playback,
+      ...saved.playback,
+      subtitleStyle: { ...defaults.playback.subtitleStyle, ...saved.playback?.subtitleStyle },
+    },
     appearance: {
       ...defaults.appearance,
       ...saved.appearance,

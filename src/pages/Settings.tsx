@@ -7,8 +7,7 @@ import { useInvites } from "../hooks/useInvites";
 import { usePreferences } from "../hooks/usePreferences";
 import type { PlaybackPreferences, AppearancePreferences, SubtitleStylePreferences } from "../types/preferences";
 import { PlaybackSettingsPanel } from "../components/settings/PlaybackSettingsPanel";
-import { SubtitleStylePanel } from "../components/settings/SubtitleStylePanel";
-import { AccessibilitySettingsPanel } from "../components/settings/AccessibilitySettingsPanel";
+import { SubtitlesSettingsPanel } from "../components/settings/SubtitlesSettingsPanel";
 import { AudioSettingsPanel } from "../components/settings/AudioSettingsPanel";
 import { AppearanceSettingsPanel } from "../components/settings/AppearanceSettingsPanel";
 import { ConnectionsSettingsPanel } from "../components/settings/ConnectionsSettingsPanel";
@@ -49,21 +48,20 @@ function Settings() {
   return (
     <SettingsDraftGuard>
     <PreferenceSaveContext value={preferenceState}>
-      <SettingsShell category={category.id} isAdmin={isAdmin} headerContent={<><PreferenceFailures />{deviceFailure && <p role="status">Some changes are not saved. <Link to="/settings/connections#N2-row">Review invitation sounds</Link></p>}</>}>
+      <SettingsShell profileName={activeUser?.title} category={category.id} isAdmin={isAdmin} headerContent={<><PreferenceFailures />{deviceFailure && <p role="status">Some changes are not saved. <Link to="/settings/connections#N2-row">Review invitation sounds</Link></p>}</>}>
         {loadState === "error" && <div role="alert"><p>Could not load settings</p><button type="button" onClick={retryLoad}>Retry</button></div>}
         {loadState === "loading" && <div role="status" aria-label="Loading settings" className="settings-loading"><div /><div /><div /></div>}
         <fieldset disabled={loadState !== "ready"} aria-busy={loadState === "loading"} className="settings-preference-fields">
-        <div className="settings-legacy-panel" hidden={category.id !== "playback"}>
+        <div hidden={category.id !== "playback"}>
           <PlaybackSettingsPanel playback={pb} updatePlayback={updatePlayback} />
         </div>
-        <div className="settings-legacy-panel" hidden={category.id !== "subtitles"}>
-          <SubtitleStylePanel subtitleStyle={pb.subtitleStyle} updateSubtitleStyle={updateSubtitleStyle} />
-          <AccessibilitySettingsPanel playback={pb} updatePlayback={updatePlayback} />
+        <div hidden={category.id !== "subtitles"}>
+          <SubtitlesSettingsPanel playback={pb} updatePlayback={updatePlayback} updateSubtitleStyle={updateSubtitleStyle} />
         </div>
-        <div className="settings-legacy-panel" hidden={category.id !== "audio"}>
+        <div hidden={category.id !== "audio"}>
           <AudioSettingsPanel playback={pb} updatePlayback={updatePlayback} />
         </div>
-        <div className="settings-legacy-panel" hidden={category.id !== "appearance"}>
+        <div hidden={category.id !== "appearance"}>
           <AppearanceSettingsPanel
             appearance={ap}
             updateAppearance={updateAppearance}

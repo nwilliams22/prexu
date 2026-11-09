@@ -203,3 +203,30 @@ test("failed language and dashboard links focus their own controls", async ({ pa
   await expect(recentShows).toBeChecked();
   await expect(recentShows).toBeFocused();
 });
+
+test("migrated profile controls preserve subtitle choices and preview size across reload", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 600, height: 1100 });
+  await page.goto("/settings/subtitles");
+  await expect(page.getByText("Preferences for TestUser on this device.")).toBeVisible();
+  await page.getByLabel("Preferred Subtitle Language", { exact: true }).selectOption("fra");
+  const size = page.getByRole("slider", { name: "Subtitle Size", exact: true });
+  await size.focus();
+  await page.keyboard.press("End");
+  await expect(size).toHaveValue("200");
+  await expect(page.getByText("Sample subtitle text", { exact: true })).toHaveCSS("font-size", "35.2px");
+  await page.getByLabel("Default Subtitles", { exact: true }).selectOption("off");
+  await expect(page.getByLabel("Preferred Subtitle Language", { exact: true })).toBeDisabled();
+  await expect(page.getByLabel("Preferred Subtitle Language", { exact: true })).toHaveValue("fra");
+  await expect(page.getByLabel("Font", { exact: true })).toBeEnabled();
+  await page.getByRole("slider", { name: "Background Opacity", exact: true }).focus();
+  await page.keyboard.press("Home");
+  await expect(page.getByLabel("Background Color", { exact: true })).toBeVisible();
+  await expect(page.locator("#preference-S4")).toHaveText("Saved");
+  await page.reload();
+  await expect(size).toHaveValue("200");
+  await expect(page.getByLabel("Preferred Subtitle Language", { exact: true })).toHaveValue("fra");
+  await expect(page.getByRole("slider", { name: "Background Opacity", exact: true })).toHaveValue("0");
+  const shot = testInfo.outputPath("subtitles-migrated.png");
+  await page.locator(".settings-container").screenshot({ path: shot });
+  await testInfo.attach("subtitles-migrated", { path: shot, contentType: "image/png" });
+});

@@ -12,7 +12,7 @@ interface SubtitleStylePanelProps {
   frameless?: boolean;
 }
 
-const FONT_OPTIONS = [
+export const FONT_OPTIONS = [
   { value: "sans-serif", label: "Sans-serif (Default)" },
   { value: "serif", label: "Serif" },
   { value: "monospace", label: "Monospace" },
@@ -157,7 +157,7 @@ export function SubtitleStylePanel({
   );
 }
 
-function buildPreviewStyle(ss: SubtitleStylePreferences): React.CSSProperties {
+export function buildPreviewStyle(ss: SubtitleStylePreferences): React.CSSProperties {
   const bgR = parseInt(ss.backgroundColor.slice(1, 3), 16);
   const bgG = parseInt(ss.backgroundColor.slice(3, 5), 16);
   const bgB = parseInt(ss.backgroundColor.slice(5, 7), 16);

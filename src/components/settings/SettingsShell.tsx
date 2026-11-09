@@ -3,10 +3,10 @@ import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import "./settings.css";
 
 export const SETTINGS_CATEGORIES = [
-  { id: "playback", label: "Playback", description: "Choose video quality and playback behavior." },
-  { id: "audio", label: "Audio", description: "Choose your audio language, volume and timing." },
-  { id: "subtitles", label: "Subtitles", description: "Choose subtitle language, size and style." },
-  { id: "appearance", label: "Appearance", description: "Customize the look of Prexu and how you browse." },
+  { id: "playback", label: "Playback", description: "Choose playback quality and episode behavior." },
+  { id: "audio", label: "Audio", description: "Set preferred language, loudness and timing." },
+  { id: "subtitles", label: "Subtitles", description: "Choose subtitle defaults and appearance." },
+  { id: "appearance", label: "Appearance", description: "Customize the interface and library browsing." },
   { id: "connections", label: "Connections & notifications", description: "Configure the relay and invitation sounds." },
   { id: "parental-controls", label: "Parental controls", description: "Manage content restrictions for members of your Plex Home." },
   { id: "about", label: "About", description: "App information and support." },
@@ -16,13 +16,14 @@ export type SettingsCategory = typeof SETTINGS_CATEGORIES[number]["id"];
 
 interface SettingsShellProps {
   category: SettingsCategory;
+  profileName?: string;
   isAdmin: boolean;
   children: ReactNode;
   /** Reserved for the search and persistence slices. */
   headerContent?: ReactNode;
 }
 
-export function SettingsShell({ category, isAdmin, children, headerContent }: SettingsShellProps) {
+export function SettingsShell({ category, isAdmin, children, headerContent, profileName }: SettingsShellProps) {
   const headingRef = useRef<HTMLHeadingElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const location = useLocation();
@@ -49,7 +50,7 @@ export function SettingsShell({ category, isAdmin, children, headerContent }: Se
       <div className="settings-shell">
         <header className="settings-header">
           <h1>Settings</h1>
-          <p>Playback and appearance preferences apply to your profile. Connections and notifications apply to this app.</p>
+          <p>{category === "connections" ? "These settings apply to all profiles on this device." : category === "parental-controls" ? "Restrictions for each managed user on this device." : profileName ? `Preferences for ${profileName} on this device.` : "Preferences on this device."}</p>
           {headerContent && <div className="settings-header-content">{headerContent}</div>}
         </header>
         <div className="settings-mobile-nav">

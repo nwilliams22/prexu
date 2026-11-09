@@ -142,7 +142,7 @@ describe("Settings", () => {
     renderSettings();
     await user.selectOptions(screen.getByLabelText("Settings category"), "subtitles");
     expect(screen.getByText("Default Subtitles")).toBeVisible();
-    expect(screen.getByText("Sample Subtitle Text")).toBeVisible();
+    expect(screen.getByText("Sample subtitle text")).toBeVisible();
   });
 
   it("guards dirty relay category navigation, default focus and Escape keep editing", async () => {
