@@ -198,3 +198,61 @@ reviewed; the DTS-HD MA follow-up needs its own review. Worker-count remediation
 is tracked separately from this report. The `prexu-axj4.5` Beads prerequisite
 remains explicit. Xvfb results do not
 establish real-GPU rendering or audible playback.
+
+## Current native playback verification, 2026-11-10
+
+**All eight codec rows passed direct-play selection and visible-frame checks on
+the current checkout `3338007`.** The run used Linux/X11, Xvfb `:98` at
+1280×800, Mesa software GL, an isolated XDG profile, session D-Bus, Vite on
+port 1420, and the Prexu QA Test Server. The debug executable was rebuilt from
+this checkout. Its playback runtime was the checksum-verified patched libmpv
+from the BAD-292 QA attachment: `libmpv.so.2` SHA-256
+`bd8fbceb286353c0069fbfc007e307052966f8d0a771b5f39c6a5dc918c721c1`. The
+baseline system library produced a black capture on the first attempt; the
+codec verdicts below use the patched library, confirmed in the running
+process's `/proc/<pid>/maps`.
+
+Each row was played in the native player. The sanitized runtime log records
+`skipCodecCheck:true`, the codec-specific `URL chosen: direct play` line and a
+selected `/library/parts/…` URL. No `buildTranscodeUrl` or `canDirectPlay`
+helper line was present in the playback log. Captures show the rendered test
+pattern at two points; ImageMagick grayscale means were nonzero and the
+normalized mean absolute error (MAE) between each capture pair was nonzero.
+The exact sanitized log lines and captures are attached to BAD-358 in
+`linux-native-codec-qa-2026-11-10.tar.gz`.
+
+| Codec row | QA title shown | Runtime selection | Capture pair (gray means; normalized MAE) | Verdict |
+| --- | --- | --- | --- | --- |
+| H.264/AAC | Prexu QA Pattern (2020) | `ratingKey:2`, `h264` / `aac`, direct `/library/parts/2/1793168329/f` | `11-h264aac-playback.png`, `12-h264aac-playback-later.png` (`0.419241`, `0.429989`; `0.068827`) | **PASS** |
+| HEVC 8-bit | Prexu QA HEVC8 (2023) | `ratingKey:12`, `hevc` / `aac`, direct `/library/parts/10/1793380084/` | `03-hevc8-playback.png`, `04-hevc8-playback-later.png` (`0.431020`, `0.739167`; `0.541612`) | **PASS** |
+| HEVC 10-bit | Prexu QA (2022) | `ratingKey:1`, `hevc` / `eac3`, direct `/library/parts/1/1793168362/f` | `80-hevc10-playback.png`, `81-hevc10-later.png` (`0.422065`, `0.429917`; `0.052001`) | **PASS** |
+| AV1 | Prexu QA AV1 (2024) | `ratingKey:11`, `av1` / `aac`, direct `/library/parts/9/1793380096/f` | `31-av1-playback.png`, `32-av1-later.png` (`0.421653`, `0.428769`; `0.051696`) | **PASS** |
+| AC3 | Prexu QA Surround (2021) | `ratingKey:3`, `h264` / `ac3`, direct `/library/parts/3/1793168347/f` | `41-ac3-playback.png`, `42-ac3-later.png` (`0.420408`, `0.429740`; `0.060670`) | **PASS** |
+| E-AC3 | Prexu QA (2022), same file as HEVC 10-bit | `ratingKey:1`, `hevc` / `eac3`, direct `/library/parts/1/1793168362/f`; separately replayed | `82-eac3-playback.png`, `83-eac3-later.png` (`0.419063`, `0.423346`; `0.038891`) | **PASS** |
+| TrueHD | Prexu QA (2025) | `ratingKey:10`, `h264` / `truehd`, direct `/library/parts/8/1793380108/f` | `52-truehd-playback.png`, `53-truehd-later.png` (`0.425369`, `0.424151`; `0.023795`) | **PASS** |
+| DTS | Prexu QA (2019) | `ratingKey:9`, `h264` / `dca`, direct `/library/parts/7/1793380119/f` | `61-dts-playback.png`, `62-dts-later.png` (`0.421535`, `0.422913`; `0.023030`) | **PASS** |
+| DTS-HD MA | Prexu QA Lossless Surround (2018) | `ratingKey:13`, `h264` / `dca-ma`, direct `/library/parts/11/1793387220/` | `71-dtsma-playback.png`, `72-dtsma-later.png` (`0.201759`, `0.258451`; `0.181547`) | **PASS** |
+
+The direct URL and runtime log establish that Prexu did not choose the Plex
+transcode route. The Xvfb captures establish visible, changing pixels for this
+software-rendered Linux session only. They do not establish hardware video
+decoding. No real audio device was available: audible output and lossless audio
+passthrough remain unverified. No real-GPU rendering was tested.
+
+## Validation gates on local checkout `3338007`
+
+Commands rerun on 2026-11-10:
+
+| Command | Result | Interpretation |
+| --- | --- | --- |
+| `npx tsc --noEmit` | **Exit 0** | TypeScript check passed. |
+| `npx vitest run` | **Exit 0**; 214 files, 2,414 tests passed | Full frontend unit suite passed. |
+| `npx vitest run src/hooks/player/engineResolution.test.ts src/hooks/player/useNativePlayer.test.ts` | **Exit 0**; 2 files, 58 tests passed | HTML5 fallback and native-player hook tests passed. |
+| `mise run clippy-tauri` | **Exit 0** | Frontend production build and desktop `cargo clippy --all-targets -- -D warnings` passed. Vite emitted dependency-annotation and chunk-size warnings. |
+| `mise run clippy-relay` | **Exit 0** | Relay `cargo clippy --all-targets -- -D warnings` passed. |
+| `CARGO_TARGET_DIR="$PAPERCLIP_TASK_SCRATCH_DIR/prexu-qa98/clean-native-target" cargo build --manifest-path src-tauri/Cargo.toml` | **Exit 0** | Fresh Linux build; `ldd` confirmed a link to `libmpv.so.2`. The temporary target was removed after verification. |
+| `mise run hw-probe:selftest` | **Exit 0**; 64/64 assertions passed | Probe self-test passed; Nushell emitted its existing `str downcase` deprecation warning. |
+
+These checks are local results on `3338007`; CI has not yet run against an
+updated QA document. A passing local build/test run does not certify GPU,
+audible audio or lossless passthrough.
