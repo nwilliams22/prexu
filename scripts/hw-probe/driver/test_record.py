@@ -47,6 +47,17 @@ class RecorderTests(unittest.TestCase):
         with self.assertRaises(ProcessLookupError):
             os.kill(self.pid, 0)
 
+    def test_window_destroyed_between_search_and_geometry_is_not_capture_failure(self):
+        recorder = Recorder(self.root)
+        recorder.process = Mock()
+        recorder.process.poll.return_value = None
+        recorder.started = 0
+        recorder.focused.add('123')
+        with patch('record.subprocess.run', return_value=Mock(stdout=b'123\n')):
+            with patch('record.command', side_effect=Invalid('capture_failed')):
+                recorder.tick(Mock(pid=456))
+        self.assertEqual(recorder.windows, [])  # No fabricated coverage.
+
     def test_wrong_display_screenshot_rejected(self):
         recorder = Recorder(self.root)
         recorder.stamp = Mock(width=1280)

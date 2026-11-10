@@ -180,13 +180,19 @@ class Recorder:
                                 '--name', '^Prexu$'], stdout=subprocess.PIPE,
                                stderr=subprocess.DEVNULL, timeout=2)
         for wid in found.stdout.decode().split():
-            if wid not in self.focused:
-                if self.window_size:
-                    width, height = self.window_size.split('x')
-                    command(['xdotool', 'windowsize', '--sync', wid, width, height])
-                command(['xdotool', 'windowfocus', wid])
-                self.focused.add(wid)
-            geometry = command(['xdotool', 'getwindowgeometry', '--shell', wid]).decode()
+            try:
+                if wid not in self.focused:
+                    if self.window_size:
+                        width, height = self.window_size.split('x')
+                        command(['xdotool', 'windowsize', '--sync', wid, width, height])
+                    command(['xdotool', 'windowfocus', wid])
+                    self.focused.add(wid)
+                geometry = command(['xdotool', 'getwindowgeometry', '--shell', wid]).decode()
+            except Invalid:
+                # The native window can disappear between search and query at
+                # normal quit. Ignore this sample, never invent bounds. A run
+                # with no successful samples still fails in finish().
+                continue
             data = dict(line.split('=', 1) for line in geometry.splitlines() if '=' in line)
             x, y, width, height = (int(data[key]) for key in ('X', 'Y', 'WIDTH', 'HEIGHT'))
             if width < 100 or height < 100:
