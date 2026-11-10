@@ -9,6 +9,7 @@ import time
 import unittest
 from unittest.mock import patch
 
+from contract import Invalid
 from fixtures import digest
 from launch import launch, run_child
 from test_contract import script_and_trace
@@ -137,6 +138,32 @@ time.sleep(60)
                 time.sleep(0.01)
             else:
                 self.fail('watchdog left a running process')
+
+    def test_capture_failure_cannot_pass_successful_trace(self):
+        self.trace_app()
+        with patch('record.Recorder') as factory:
+            factory.return_value.finish.side_effect = Invalid('capture_stale_frames')
+            result = launch(self.app, self.script, self.fixtures, self.output, 'a' * 40, True)
+        self.assertEqual(result['status'], 'fail')
+        self.assertEqual(result['codes'], ['capture_stale_frames'])
+        factory.return_value.close.assert_called_once()
+        self.assertTrue((self.output / 'capture-environment.json').is_file())
+
+    def test_record_output_suppresses_arbitrary_child_secrets(self):
+        self.trace_app()
+        with self.app.open('a') as app:
+            app.write('print("unused")\n')
+        body = self.app.read_text().replace('raise SystemExit(0)',
+            'print("password=synthetic-secret https://example.test/?token=synthetic-token")')
+        self.app.write_text(body)
+        with patch('record.Recorder') as factory:
+            factory.return_value.finish.return_value = {'status': 'pass'}
+            result = launch(self.app, self.script, self.fixtures, self.output, 'a' * 40, True)
+        self.assertEqual(result['status'], 'pass')
+        log = (self.output / 'app.log').read_text()
+        self.assertNotIn('synthetic-secret', log)
+        self.assertNotIn('synthetic-token', log)
+        self.assertIn('suppressed', log)
 
     @staticmethod
     def remove_survivors(pids):

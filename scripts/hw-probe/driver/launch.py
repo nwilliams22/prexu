@@ -5,8 +5,10 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import platform
 import signal
 import subprocess
+import time
 import sys
 import uuid
 from urllib.parse import urlsplit
@@ -21,6 +23,11 @@ APP_ENV = ('PATH', 'LANG', 'LC_ALL', 'DISPLAY', 'WAYLAND_DISPLAY',
            'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'XAUTHORITY',
            'LD_LIBRARY_PATH', 'LIBGL_ALWAYS_SOFTWARE', 'GDK_BACKEND',
            'WEBKIT_DISABLE_DMABUF_RENDERER', 'WEBKIT_DISABLE_COMPOSITING_MODE')
+
+
+def digest(path):
+    with path.open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
 def save(path, value):
@@ -39,20 +46,31 @@ def kill_group(process):
     process.wait(timeout=5)
 
 
-def run_child(app, environment, log, timeout):
+def run_child(app, environment, log, timeout, recorder=None):
     process = subprocess.Popen([str(app)], env=environment, stdin=subprocess.DEVNULL,
                                stdout=log, stderr=subprocess.STDOUT,
                                start_new_session=True)
     try:
         try:
-            return process.wait(timeout=timeout), False
+            if recorder is None:
+                return process.wait(timeout=timeout), False
+            deadline = time.monotonic() + timeout
+            while process.poll() is None:
+                recorder.tick(process)
+                if time.monotonic() >= deadline:
+                    return None, True
+                time.sleep(.02)
+            recorder.tick(process)
+            return process.returncode, False
         except subprocess.TimeoutExpired:
             return None, True
     finally:
         kill_group(process)
+        if recorder:
+            recorder.app_exit_code = process.returncode
 
 
-def launch(app, script_path, fixtures, root, source_commit):
+def launch(app, script_path, fixtures, root, source_commit, record=False, window_size=None):
     """Reserve a fresh evidence directory; never replace an earlier run."""
     root = root.absolute()
     root.mkdir(mode=0o700)  # Caller supplies an existing parent, never a run directory.
@@ -60,12 +78,28 @@ def launch(app, script_path, fixtures, root, source_commit):
     exit_code = None
     failure = None
     result = None
+    recorder = None
+    capture = None
     try:
         if sys.platform != 'linux':
             raise Invalid('unsupported_platform')
         if not source_commit or len(source_commit) != 40 or any(
                 c not in '0123456789abcdef' for c in source_commit):
             raise Invalid('invalid_source_commit')
+        if record:
+            from record import Recorder
+            save(root / 'capture-environment.json', {
+                'sourceCommit': source_commit, 'sourceCommitOrigin': 'caller-supplied',
+                'applicationSha256': digest(app) if app.is_file() else None,
+                'recorderSha256': digest(Path(__file__).with_name('record.py')),
+                'platform': platform.system(), 'kernel': platform.release(),
+                'displaySet': bool(os.environ.get('DISPLAY')),
+                'waylandSet': bool(os.environ.get('WAYLAND_DISPLAY')),
+                'softwareRenderingRequested': os.environ.get('LIBGL_ALWAYS_SOFTWARE') == '1',
+                'scope': 'composed X11 desktop; no GPU/audio acceptance',
+            })
+            recorder = Recorder(root, window_size)
+            recorder.start()
         script = decode(read_bounded(script_path, MAX_SCRIPT_BYTES))
         validate_script(script)
         script['runId'] = 'probe-' + uuid.uuid4().hex
@@ -90,31 +124,60 @@ def launch(app, script_path, fixtures, root, source_commit):
                 'sourceCommit': source_commit, 'sourceCommitOrigin': 'caller-supplied',
                 'scriptSha256': hashlib.sha256((root / 'script.json').read_bytes()).hexdigest(),
                 'fixtureManifest': service['manifest'],
-                'evidenceScope': 'control-state-only',
+                'evidenceScope': 'composed-desktop' if record else 'control-state-only',
             })
             with (root / 'app.log').open('xb') as log:
                 exit_code, timed_out = run_child(app.resolve(), environment, log,
-                                                script['timeoutMs'] / 1000 + 10)
+                                                script['timeoutMs'] / 1000 + 10, **({'recorder': recorder} if record else {}))
             save(root / 'process.json', {'exitCode': exit_code, 'timedOut': timed_out})
             if timed_out:
                 raise Invalid('process_timeout')
             result = verdict(script, read_bounded(root / 'output' / 'events.jsonl',
                                                  2 * MAX_SCRIPT_BYTES), exit_code)
+        if recorder:
+            capture = recorder.finish()
+    except KeyboardInterrupt:
+        failure = 'interrupted'
     except Invalid as exc:
         failure = str(exc)
+    except (KeyError, TypeError, IndexError, StopIteration):
+        failure = 'capture_trace_invalid'
     except (OSError, ValueError, subprocess.SubprocessError):
         # Never include paths, raw exception text, URLs or environment contents.
         failure = 'launch_failed'
+    finally:
+        if recorder:
+            try:
+                recorder.close()
+            except (OSError, Invalid, subprocess.SubprocessError):
+                failure = failure or 'capture_cleanup_failed'
+        if record:
+            if not (root / 'process.json').exists():
+                save(root / 'process.json', {'exitCode': getattr(recorder, 'app_exit_code', None),
+                                            'failure': failure, 'started': hasattr(recorder, 'app_exit_code')})
+            # Raw child output is deliberately not an exportable log. Only the
+            # native allowlisted cue trace is shared; arbitrary child messages
+            # may carry URLs, paths or future credentials. Retain line counts.
+            log = root / 'app.log'
+            if log.exists():
+                lines = len(log.read_bytes().splitlines())
+                log.write_text(f'[redacted] {lines} child output lines suppressed; see output/events.jsonl for correlated structured logs.\n')
+            save(root / 'capture.json', capture or {'status': 'fail', 'codes': [failure or 'capture_failed']})
     if result is None:
         result = verdict(script, '', exit_code)
     if failure:
         result['status'] = 'fail'
         result['codes'] = [failure]
+    if record:
+        result['evidenceScope'] = 'control-state and composed-desktop recording; no frame-content, GPU or audio assertions'
     save(root / 'verdict.json', result)
     return result
 
 
 def main():
+    def interrupted(signum, frame):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, interrupted)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--app', required=True, type=Path)
     parser.add_argument('--script', required=True, type=Path)
@@ -122,9 +185,11 @@ def main():
     parser.add_argument('--run-dir', required=True, type=Path)
     parser.add_argument('--source-commit', required=True,
                         help='40-character revision used to build --app; recorded as caller-supplied')
+    parser.add_argument('--record', action='store_true', help='Record and validate the composed Linux X11 desktop')
+    parser.add_argument('--record-window-size', help='Resize the launched window, e.g. 800x600, on the dedicated capture session')
     args = parser.parse_args()
     try:
-        result = launch(args.app, args.script, args.fixtures, args.run_dir, args.source_commit)
+        result = launch(args.app, args.script, args.fixtures, args.run_dir, args.source_commit, args.record, args.record_window_size)
     except OSError:
         result = {'status': 'fail', 'codes': ['output_unavailable']}
     print(json.dumps(result, allow_nan=False))

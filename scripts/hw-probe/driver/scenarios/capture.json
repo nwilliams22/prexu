@@ -1,0 +1,14 @@
+{
+  "schema": "prexu.probe.script",
+  "version": 1,
+  "runId": "capture-test",
+  "fixture": "av-cues-v1",
+  "timeoutMs": 60000,
+  "steps": [
+    {"id": "play", "action": "play", "args": {"mediaId": "av-cues-v1"}, "timeoutMs": 30000},
+    {"id": "record-playback", "action": "wait", "args": {"durationMs": 2000}, "timeoutMs": 5000},
+    {"id": "stop", "action": "stop", "timeoutMs": 10000},
+    {"id": "record-idle", "action": "wait", "args": {"durationMs": 1000}, "timeoutMs": 5000},
+    {"id": "quit", "action": "quit", "timeoutMs": 5000}
+  ]
+}

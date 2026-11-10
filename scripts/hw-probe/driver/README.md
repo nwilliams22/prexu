@@ -249,3 +249,89 @@ time on the fresh handle. Do not use queued `player://ready` or `time-pos` event
 as new-load evidence. Real-mpv tests cover snapshot seek/track/idle values and
 wrong-fixture rejection with null outputs. The transport scenario exercises the
 connected UI adapter and native observations together.
+
+## Linux composed-desktop recording (RECORD stage)
+
+On a **dedicated, provisioned X11 graphical session**, add `--record` to the
+launcher. This launches the app and fixture service, drives the scenario,
+records the composed desktop, validates evidence and cleans up its own processes:
+
+```sh
+DISPLAY=:96 XAUTHORITY=/absolute/path/to/session-authority \
+GDK_BACKEND=x11 LIBGL_ALWAYS_SOFTWARE=1 \
+python3 scripts/hw-probe/driver/launch.py --record --record-window-size 800x600 \
+  --app /absolute/path/to/debug/prexu \
+  --script scripts/hw-probe/driver/scenarios/capture.json \
+  --fixtures /absolute/path/to/generated-fixtures \
+  --run-dir /absolute/path/to/new-run \
+  --source-commit <40-character-build-revision>
+```
+
+Provision Xvfb/Xephyr or a dedicated X11 desktop first, and serve the completed
+frontend build at the binary's dev URL as described above. The launcher owns
+only its app, fixture listener, recorder and marker window; the provisioner
+owns cleanup of the X server and frontend server. Never reuse another task's
+session or port. The app window must fit entirely inside the captured root. The recorder focuses
+the launched window. `--record-window-size 800x600` also resizes it explicitly;
+this is useful for software-rendered sessions where larger windows can starve
+WebKit dispatch. Omit it to preserve the application size.
+This path requires `nu`, `ffmpeg`, `ffprobe`, `identify`, `xdotool`, libX11 and
+at least one working hw-probe screenshot backend (`import` on X11).
+
+`capture-screen.nu` calls the existing `lib.nu` capture API, including the
+bounded retry implemented in `prexu-s83x`. Recording uses FFmpeg X11 root
+capture at 30 fps with lossless FFV1. Neither operation uses webview/DOM capture.
+Wayland currently fails explicitly with `capture_wayland_unsupported`; Windows
+capture is outside this stage.
+
+The evidence contains:
+
+- `desktop.mkv`: continuous composed-root video, including fast steps.
+- `capture.json`: per-step cue sequence numbers, approximate video intervals,
+  per-step image names, window samples, decoded frame count and video hash.
+- `step-*.png`: decoded midpoint navigation images for completed steps.
+- `output/events.jsonl`: native-validated, allowlisted structured logs correlated
+  by run ID, sequence and elapsed milliseconds; the script/manifest identify
+  their scenario, fixture and caller-supplied build revision.
+- `capture-environment.json`: kernel, display availability, rendering scope,
+  binary hash and recorder source hash, including on failed preflight.
+- `capture-observations.json`: partial window/cue observations on failure.
+- `process.json`, `verdict.json`, `capture-before.png`, `capture-after.png` and
+  FFmpeg's numeric `capture-progress.log`.
+
+Two fresh random color challenges occupy the **top-right 16×16 desktop pixels**.
+The shared screenshot backend must capture the current challenge, and full
+video decoding must find both challenges. Exclude `excludedRect` from future
+image assertions. This proves fresh capture of this display, not that the app
+itself rendered correct content. Window geometry is sampled by the launched
+PID and exact `Prexu` title; an absent window or out-of-root bounds fail.
+The dedicated session must keep that window unobscured. This does not certify
+window-manager transitions, GPU rendering or audio output.
+
+Cue receipts use a monotonic host clock and the native elapsed clock. Video
+startup and polling introduce timing uncertainty; intervals and midpoint
+images are navigation aids, **not exact frame/transition assertions**. A step
+shorter than a video frame may share its image with adjacent steps. Frame
+content and precise transition assertions belong to `prexu-vbb2.3`.
+
+A zero exit requires both the original script verifier and capture validation.
+No display (`no_graphical_session`), denied/unreachable X connection
+(`display_inaccessible`), failed backend/decoder (`capture_failed`), stale
+frames or missing window evidence all fail explicitly. Failed evidence is
+preserved, and the watchdog/SIGTERM/SIGINT paths clean up owned child groups.
+Existing run directories are never overwritten.
+
+For sharing, export only the evidence files listed above plus `script.json`
+and `manifest.json`. **Do not export `home/` or `state/`**: they are isolated
+runtime profiles and can contain raw application diagnostics. In record mode
+`app.log` suppresses arbitrary child output and retains only a line-count
+notice; the safe correlated log is `output/events.jsonl`. This deliberately
+avoids guessing which future free-form messages might contain credentials.
+
+Negative controls must be executed on the target session, not inferred from
+unit tests: remove `DISPLAY`/`WAYLAND_DISPLAY`; use an empty `XAUTHORITY` against
+an X server started with `-auth`; put failing `grim`, `spectacle` and `import`
+executables first on PATH. Use a fresh run directory for each, retain the
+nonzero exit and JSON evidence, and confirm the graphical provisioner's
+processes are stopped afterwards. `test_record.py` additionally rejects real
+stale/corrupt video and tests that recorder failure kills the launched app.
