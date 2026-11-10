@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { SETTINGS_CATEGORIES } from "./settingsCategories";
-import type { SettingSearchEntry } from "./settingsSearch";
+import type { SettingSearchEntry } from "./settingsSearchIndex";
 
 function useClearSearch() {
   const location = useLocation();

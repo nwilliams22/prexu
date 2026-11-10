@@ -5,7 +5,7 @@ import "./settings.css";
 import { SETTINGS_CATEGORIES, type SettingsCategory } from "./settingsCategories";
 export { SETTINGS_CATEGORIES, type SettingsCategory } from "./settingsCategories";
 import { SettingsSearch, SettingsSearchResults } from "./SettingsSearch";
-import { searchSettings, focusSettingTarget } from "./settingsSearch";
+import { searchSettings, focusSettingTarget } from "./settingsSearchIndex";
 import { IS_NATIVE_PLAYER_PLATFORM } from "../../hooks/player/engineResolution";
 interface SettingsShellProps {
   category: SettingsCategory;

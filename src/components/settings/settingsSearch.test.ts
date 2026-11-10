@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { searchSettings, SETTINGS_SEARCH_ENTRIES } from "./settingsSearch";
+import { searchSettings, SETTINGS_SEARCH_ENTRIES } from "./settingsSearchIndex";
 import { preferenceRows } from "./PreferenceSaveStatus";
 const all = { isAdmin: true, nativePlayer: true };
 const ids = (query: string, capabilities = all) => searchSettings(query, capabilities).map((item) => item.id);
