@@ -21,7 +21,8 @@ from contract import Invalid
 
 def command(args, timeout=15):
     if args[0] == 'ffmpeg':
-        args = [args[0], '-threads', '1', '-filter_threads', '1', *args[1:]]
+        args = [args[0], '-threads', '1', '-filter_threads', '1',
+                *args[1:-1], '-threads', '1', args[-1]]
     process = None
     try:
         process = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
