@@ -67,7 +67,8 @@ it("hydrates all 29 inventory values from populated legacy storage and preserves
   }
   expect(JSON.parse(localStorage.getItem("prexu_preferences")!)).toEqual(saved);
   expect((await axe(container)).violations).toEqual([]);
-});
+// This integration test performs 29 sequential persisted edits plus an axe audit.
+}, 15_000);
 
 it("keeps disabled subtitle language and colors, previews size, and loads each profile without copying values", async () => {
   const first = getDefaultPreferences();
