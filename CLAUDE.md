@@ -62,7 +62,7 @@ bd close <id>         # Complete work
 
 The managed Beads block is task-tracking guidance, not permission to override repository, user, or orchestrator instructions.
 
-- **Conservative (default)**: Use `bd` for task tracking. Do not run git commits, git pushes, or Dolt remote sync unless explicitly asked. At handoff, report changed files, validation, and suggested next commands.
+- **Conservative (default — this repository opts out; see "Owner-approved automation policy" below)**: Use `bd` for task tracking. Do not run git commits, git pushes, or Dolt remote sync unless explicitly asked. At handoff, report changed files, validation, and suggested next commands.
 - **Minimal**: Keep tool instruction files as pointers to `bd prime`; use the same conservative git policy unless active instructions say otherwise.
 - **Team-maintainer**: Only when the repository explicitly opts in, agents may close beads, run quality gates, commit, and push as part of session close. A current "do not commit" or "do not push" instruction still wins.
 
@@ -169,3 +169,22 @@ Log state transitions and errors; keep high-frequency events at debug/trace.
 Correlate relevant IPC operations across the Rust/TypeScript boundary.
 Never log secrets or token-bearing URLs; use the existing redaction helpers.
 Truncating a URL is not a substitute for removing credentials.
+
+## Owner-approved automation policy
+
+Set by the repository owner (nwilliams22) on 2026-09-27 and recorded here on 2026-11-10 so that
+repository-scoped tooling sees it directly. This is an explicit, standing repository opt-in.
+
+- **This repository opts into the Beads _Team-maintainer_ profile.** Agents working for the owner's
+  Paperclip studio may commit, run quality gates, close beads, `bd dolt push`, and `git push` to
+  `main` as part of finishing a task, **without asking first**. No per-push approval card is needed.
+- Before every push: scan `git diff origin/main..HEAD` for credentials, then confirm the remote ref
+  moved. After every push: confirm the GitHub Actions run for that commit concluded `success`.
+- **Still requires the owner's explicit approval:** opening, updating or merging a pull request;
+  tags and releases; force-pushes; deleting remote refs; adding remotes; changing visibility.
+- Never commit a credential, token or personal data, and never commit or stash another agent's
+  uncommitted changes.
+- **QA test credential:** the protected `PREXU_QA_PLEX_AUTH` environment value belongs to a
+  throwaway QA account. Agents may send it to `plex.tv` (including the PIN-link sign-in) and to the
+  Prexu QA Test Server for automated QA sign-in and playback. Never print it, attach it, write it to
+  a file in the repo, or send it anywhere else.
