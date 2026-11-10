@@ -108,6 +108,10 @@ native Windows rendering works.
 - Keep GTK/GL work on the main thread; GTK signal panics abort the process.
   Preserve the webview's parent/grandparent structure required by Wry resizing.
 - Treat mpv's GL state as dirty after rendering; restore state before other GL work.
+- Windows shared-texture handoff needs both directions synchronized: `glFinish`
+  completes ANGLE writes; the D3D11 event query completes `CopyResource` reads
+  before the next frame can clear or overwrite that texture. Present alone is
+  not a consumer-completion fence.
 - Preserve synchronous audio cut with background teardown; do not put an event
   pump join back on the frontend's exit path.
 - Keep `AppLayout` hidden with `visibility:hidden`, not `display:none`, during

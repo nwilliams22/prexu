@@ -34,9 +34,9 @@ use libmpv2::Mpv;
 use windows::core::{Interface, BOOL};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Graphics::Direct3D11::{
-    ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_BIND_RENDER_TARGET,
-    D3D11_BIND_SHADER_RESOURCE, D3D11_RESOURCE_MISC_SHARED, D3D11_TEXTURE2D_DESC,
-    D3D11_USAGE_DEFAULT,
+    ID3D11Device, ID3D11DeviceContext, ID3D11Query, ID3D11Texture2D, D3D11_BIND_RENDER_TARGET,
+    D3D11_BIND_SHADER_RESOURCE, D3D11_QUERY_DESC, D3D11_QUERY_EVENT, D3D11_RESOURCE_MISC_SHARED,
+    D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
@@ -664,6 +664,23 @@ fn render_loop(
     let ctx: ID3D11DeviceContext =
         unsafe { device.GetImmediateContext() }.map_err(|e| format!("GetImmediateContext: {e:?}"))?;
 
+    // ANGLE and this immediate context belong to different D3D11 devices.
+    // glFinish completes the producer's writes, but CopyResource is asynchronous:
+    // the next ANGLE frame must not clear/overwrite the texture while this device
+    // is still reading it. Fence the consumer before allowing another GL render.
+    let mut copy_fence = None;
+    unsafe {
+        device.CreateQuery(
+            &D3D11_QUERY_DESC {
+                Query: D3D11_QUERY_EVENT,
+                MiscFlags: 0,
+            },
+            Some(&mut copy_fence),
+        )
+    }
+    .map_err(|e| format!("CreateQuery(copy fence): {e:?}"))?;
+    let copy_fence = copy_fence.ok_or("CreateQuery(copy fence) returned no query")?;
+
     // ANGLE GL context is thread-affine — created and driven entirely here.
     let mut gl = AngleGl::create(width as i32, height as i32)?;
     fbo = gl.import_share_handle_as_fbo(share_handle.0, width as i32, height as i32)?;
@@ -776,6 +793,7 @@ fn render_loop(
         match unsafe { swapchain.GetBuffer::<ID3D11Texture2D>(0) } {
             Ok(back) => {
                 unsafe { ctx.CopyResource(&back, &shared_tex) };
+                wait_for_copy(&ctx, &copy_fence)?;
                 let _ = unsafe { swapchain.Present(1, Default::default()) }.ok();
                 if !committed {
                     committed = true;
@@ -814,4 +832,32 @@ fn resize_surfaces(
         .map_err(|e| format!("recreate shared texture: {e:?}"))?;
     let fbo = gl.import_share_handle_as_fbo(handle.0, w as i32, h as i32)?;
     Ok((tex, fbo))
+}
+
+/// Complete the shared-texture read before the producer can overwrite it.
+/// A successful GetData call can still mean S_FALSE, so inspect the BOOL payload
+/// rather than treating every Ok as completion.
+fn wait_for_copy(ctx: &ID3D11DeviceContext, query: &ID3D11Query) -> Result<(), String> {
+    unsafe { ctx.End(query) };
+    unsafe { ctx.Flush() };
+    let started = Instant::now();
+    loop {
+        let mut complete = BOOL::from(false);
+        unsafe {
+            ctx.GetData(
+                query,
+                Some((&mut complete as *mut BOOL).cast()),
+                std::mem::size_of::<BOOL>() as u32,
+                0,
+            )
+        }
+        .map_err(|e| format!("GetData(copy fence): {e:?}"))?;
+        if complete.as_bool() {
+            return Ok(());
+        }
+        if started.elapsed() >= Duration::from_secs(5) {
+            return Err("consumer copy fence timed out after 5 seconds".into());
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
 }
