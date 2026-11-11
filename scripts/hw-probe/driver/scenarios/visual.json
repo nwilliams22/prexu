@@ -1,0 +1,123 @@
+{
+  "schema": "prexu.probe.script",
+  "version": 1,
+  "runId": "visual",
+  "fixture": "av-cues-v1",
+  "timeoutMs": 180000,
+  "steps": [
+    {
+      "id": "play",
+      "action": "play",
+      "timeoutMs": 15000,
+      "args": {
+        "mediaId": "av-cues-v1"
+      }
+    },
+    {
+      "id": "playing",
+      "action": "wait",
+      "timeoutMs": 15000,
+      "args": {
+        "durationMs": 1200
+      }
+    },
+    {
+      "id": "pause",
+      "action": "pause",
+      "timeoutMs": 15000
+    },
+    {
+      "id": "paused",
+      "action": "wait",
+      "timeoutMs": 15000,
+      "args": {
+        "durationMs": 1200
+      }
+    },
+    {
+      "id": "subtitle",
+      "action": "selectSubtitle",
+      "timeoutMs": 15000,
+      "args": {
+        "trackId": 1
+      }
+    },
+    {
+      "id": "selected",
+      "action": "wait",
+      "timeoutMs": 15000,
+      "args": {
+        "durationMs": 1200
+      }
+    },
+    {
+      "id": "seek-red",
+      "action": "seek",
+      "timeoutMs": 15000,
+      "args": {
+        "positionMs": 1500,
+        "toleranceMs": 100
+      }
+    },
+    {
+      "id": "red",
+      "action": "wait",
+      "timeoutMs": 15000,
+      "args": {
+        "durationMs": 1200
+      }
+    },
+    {
+      "id": "seek-green",
+      "action": "seek",
+      "timeoutMs": 15000,
+      "args": {
+        "positionMs": 6500,
+        "toleranceMs": 100
+      }
+    },
+    {
+      "id": "green",
+      "action": "wait",
+      "timeoutMs": 15000,
+      "args": {
+        "durationMs": 1200
+      }
+    },
+    {
+      "id": "seek-blue",
+      "action": "seek",
+      "timeoutMs": 15000,
+      "args": {
+        "positionMs": 11500,
+        "toleranceMs": 100
+      }
+    },
+    {
+      "id": "blue",
+      "action": "wait",
+      "timeoutMs": 15000,
+      "args": {
+        "durationMs": 1200
+      }
+    },
+    {
+      "id": "stop",
+      "action": "stop",
+      "timeoutMs": 15000
+    },
+    {
+      "id": "idle",
+      "action": "wait",
+      "timeoutMs": 15000,
+      "args": {
+        "durationMs": 1200
+      }
+    },
+    {
+      "id": "quit",
+      "action": "quit",
+      "timeoutMs": 15000
+    }
+  ]
+}

@@ -1,0 +1,596 @@
+{
+  "schema": "prexu.probe.visual-plan",
+  "version": 1,
+  "calibration": {
+    "profile": "debug",
+    "source": "Linux Xvfb 1280x800, 800x600 app, software GL, native build 22bf40b3465a217f01e45f060d94fdf9344001f9. Reviewed cue images from baseline2, 2026-11-11. Budgets are scenario-specific regression allowances, not release performance ceilings.",
+    "reference": "prexu-xxct",
+    "maxClockUncertaintyMs": 120,
+    "clockSlackMs": 10
+  },
+  "allocationGapMs": null,
+  "checks": [
+    {
+      "name": "play",
+      "step": "play",
+      "anchor": "end",
+      "afterMs": 0,
+      "withinMs": 1500,
+      "holdMs": 200,
+      "rect": [
+        100,
+        160,
+        600,
+        240
+      ],
+      "kind": "video",
+      "rgb": [
+        253,
+        0,
+        0
+      ],
+      "pixelTolerance": 20,
+      "maxBadPixelFraction": 0.03,
+      "windowRect": [
+        0,
+        0,
+        800,
+        600
+      ],
+      "windowTolerancePx": 2
+    },
+    {
+      "name": "playing",
+      "step": "playing",
+      "anchor": "begin",
+      "afterMs": 0,
+      "withinMs": 600,
+      "holdMs": 200,
+      "rect": [
+        100,
+        160,
+        600,
+        240
+      ],
+      "kind": "video",
+      "rgb": [
+        253,
+        0,
+        0
+      ],
+      "pixelTolerance": 20,
+      "maxBadPixelFraction": 0.03,
+      "windowRect": [
+        0,
+        0,
+        800,
+        600
+      ],
+      "windowTolerancePx": 2
+    },
+    {
+      "name": "pause",
+      "step": "pause",
+      "anchor": "end",
+      "afterMs": 0,
+      "withinMs": 600,
+      "holdMs": 200,
+      "rect": [
+        100,
+        160,
+        600,
+        240
+      ],
+      "kind": "video",
+      "rgb": [
+        253,
+        0,
+        0
+      ],
+      "pixelTolerance": 20,
+      "maxBadPixelFraction": 0.03,
+      "windowRect": [
+        0,
+        0,
+        800,
+        600
+      ],
+      "windowTolerancePx": 2
+    },
+    {
+      "name": "paused",
+      "step": "paused",
+      "anchor": "begin",
+      "afterMs": 0,
+      "withinMs": 600,
+      "holdMs": 200,
+      "rect": [
+        100,
+        160,
+        600,
+        240
+      ],
+      "kind": "video",
+      "rgb": [
+        253,
+        0,
+        0
+      ],
+      "pixelTolerance": 20,
+      "maxBadPixelFraction": 0.03,
+      "windowRect": [
+        0,
+        0,
+        800,
+        600
+      ],
+      "windowTolerancePx": 2
+    },
+    {
+      "name": "subtitle",
+      "step": "subtitle",
+      "anchor": "end",
+      "afterMs": 0,
+      "withinMs": 600,
+      "holdMs": 200,
+      "rect": [
+        100,
+        160,
+        600,
+        240
+      ],
+      "kind": "video",
+      "rgb": [
+        253,
+        0,
+        0
+      ],
+      "pixelTolerance": 20,
+      "maxBadPixelFraction": 0.03,
+      "windowRect": [
+        0,
+        0,
+        800,
+        600
+      ],
+      "windowTolerancePx": 2
+    },
+    {
+      "name": "selected",
+      "step": "selected",
+      "anchor": "begin",
+      "afterMs": 0,
+      "withinMs": 600,
+      "holdMs": 200,
+      "rect": [
+        100,
+        160,
+        600,
+        240
+      ],
+      "kind": "video",
+      "rgb": [
+        253,
+        0,
+        0
+      ],
+      "pixelTolerance": 20,
+      "maxBadPixelFraction": 0.03,
+      "windowRect": [
+        0,
+        0,
+        800,
+        600
+      ],
+      "windowTolerancePx": 2
+    },
+    {
+      "name": "seek-red",
+      "step": "seek-red",
+      "anchor": "end",
+      "afterMs": 0,
+      "withinMs": 600,
+      "holdMs": 200,
+      "rect": [
+        100,
+        160,
+        600,
+        240
+      ],
+      "kind": "video",
+      "rgb": [
+        253,
+        0,
+        0
+      ],
+      "pixelTolerance": 20,
+      "maxBadPixelFraction": 0.03,
+      "windowRect": [
+        0,
+        0,
+        800,
+        600
+      ],
+      "windowTolerancePx": 2
+    },
+    {
+      "name": "red",
+      "step": "red",
+      "anchor": "begin",
+      "afterMs": 0,
+      "withinMs": 600,
+      "holdMs": 200,
+      "rect": [
+        100,
+        160,
+        600,
+        240
+      ],
+      "kind": "video",
+      "rgb": [
+        253,
+        0,
+        0
+      ],
+      "pixelTolerance": 20,
+      "maxBadPixelFraction": 0.03,
+      "windowRect": [
+        0,
+        0,
+        800,
+        600
+      ],
+      "windowTolerancePx": 2
+    },
+    {
+      "name": "red-subtitle",
+      "step": "red",
+      "anchor": "begin",
+      "afterMs": 0,
+      "withinMs": 600,
+      "holdMs": 200,
+      "rect": [
+        305,
+        548,
+        190,
+        36
+      ],
+      "kind": "subtitle",
+      "pixelTolerance": 20,
+      "maxBadPixelFraction": 0.02,
+      "windowRect": [
+        0,
+        0,
+        800,
+        600
+      ],
+      "windowTolerancePx": 2,
+      "template": "red.png",
+      "templateSha256": "fb47e17ba667ec69b889fc50efe2bf3927ec7c12eb8ab55e5a8e65845e0f0dd3"
+    },
+    {
+      "name": "red-geometry",
+      "step": "red",
+      "anchor": "begin",
+      "afterMs": 0,
+      "withinMs": 600,
+      "holdMs": 200,
+      "rect": [
+        0,
+        60,
+        800,
+        40
+      ],
+      "kind": "geometry",
+      "pixelTolerance": 20,
+      "maxBadPixelFraction": 0.02,
+      "windowRect": [
+        0,
+        0,
+        800,
+        600
+      ],
+      "windowTolerancePx": 2,
+      "template": "red.png",
+      "templateSha256": "fb47e17ba667ec69b889fc50efe2bf3927ec7c12eb8ab55e5a8e65845e0f0dd3"
+    },
+    {
+      "name": "seek-green",
+      "step": "seek-green",
+      "anchor": "end",
+      "afterMs": 0,
+      "withinMs": 600,
+      "holdMs": 200,
+      "rect": [
+        100,
+        160,
+        600,
+        240
+      ],
+      "kind": "video",
+      "rgb": [
+        0,
+        127,
+        0
+      ],
+      "pixelTolerance": 20,
+      "maxBadPixelFraction": 0.03,
+      "windowRect": [
+        0,
+        0,
+        800,
+        600
+      ],
+      "windowTolerancePx": 2
+    },
+    {
+      "name": "green",
+      "step": "green",
+      "anchor": "begin",
+      "afterMs": 0,
+      "withinMs": 600,
+      "holdMs": 200,
+      "rect": [
+        100,
+        160,
+        600,
+        240
+      ],
+      "kind": "video",
+      "rgb": [
+        0,
+        127,
+        0
+      ],
+      "pixelTolerance": 20,
+      "maxBadPixelFraction": 0.03,
+      "windowRect": [
+        0,
+        0,
+        800,
+        600
+      ],
+      "windowTolerancePx": 2
+    },
+    {
+      "name": "green-subtitle",
+      "step": "green",
+      "anchor": "begin",
+      "afterMs": 0,
+      "withinMs": 600,
+      "holdMs": 200,
+      "rect": [
+        305,
+        548,
+        190,
+        36
+      ],
+      "kind": "subtitle",
+      "pixelTolerance": 20,
+      "maxBadPixelFraction": 0.02,
+      "windowRect": [
+        0,
+        0,
+        800,
+        600
+      ],
+      "windowTolerancePx": 2,
+      "template": "green.png",
+      "templateSha256": "ce1cb0379ca5a153d362f94da14ca422b6856c8b325890a318e949d37efea788"
+    },
+    {
+      "name": "green-geometry",
+      "step": "green",
+      "anchor": "begin",
+      "afterMs": 0,
+      "withinMs": 600,
+      "holdMs": 200,
+      "rect": [
+        0,
+        60,
+        800,
+        40
+      ],
+      "kind": "geometry",
+      "pixelTolerance": 20,
+      "maxBadPixelFraction": 0.02,
+      "windowRect": [
+        0,
+        0,
+        800,
+        600
+      ],
+      "windowTolerancePx": 2,
+      "template": "green.png",
+      "templateSha256": "ce1cb0379ca5a153d362f94da14ca422b6856c8b325890a318e949d37efea788"
+    },
+    {
+      "name": "seek-blue",
+      "step": "seek-blue",
+      "anchor": "end",
+      "afterMs": 0,
+      "withinMs": 600,
+      "holdMs": 200,
+      "rect": [
+        100,
+        160,
+        600,
+        240
+      ],
+      "kind": "video",
+      "rgb": [
+        0,
+        0,
+        254
+      ],
+      "pixelTolerance": 20,
+      "maxBadPixelFraction": 0.03,
+      "windowRect": [
+        0,
+        0,
+        800,
+        600
+      ],
+      "windowTolerancePx": 2
+    },
+    {
+      "name": "blue",
+      "step": "blue",
+      "anchor": "begin",
+      "afterMs": 0,
+      "withinMs": 600,
+      "holdMs": 200,
+      "rect": [
+        100,
+        160,
+        600,
+        240
+      ],
+      "kind": "video",
+      "rgb": [
+        0,
+        0,
+        254
+      ],
+      "pixelTolerance": 20,
+      "maxBadPixelFraction": 0.03,
+      "windowRect": [
+        0,
+        0,
+        800,
+        600
+      ],
+      "windowTolerancePx": 2
+    },
+    {
+      "name": "blue-subtitle",
+      "step": "blue",
+      "anchor": "begin",
+      "afterMs": 0,
+      "withinMs": 600,
+      "holdMs": 200,
+      "rect": [
+        305,
+        548,
+        190,
+        36
+      ],
+      "kind": "subtitle",
+      "pixelTolerance": 20,
+      "maxBadPixelFraction": 0.02,
+      "windowRect": [
+        0,
+        0,
+        800,
+        600
+      ],
+      "windowTolerancePx": 2,
+      "template": "blue.png",
+      "templateSha256": "375d92ef5edea4fea2eeb0d929755b5d9d42eb9fe29063644c81c38990f7a9f0"
+    },
+    {
+      "name": "blue-geometry",
+      "step": "blue",
+      "anchor": "begin",
+      "afterMs": 0,
+      "withinMs": 600,
+      "holdMs": 200,
+      "rect": [
+        0,
+        60,
+        800,
+        40
+      ],
+      "kind": "geometry",
+      "pixelTolerance": 20,
+      "maxBadPixelFraction": 0.02,
+      "windowRect": [
+        0,
+        0,
+        800,
+        600
+      ],
+      "windowTolerancePx": 2,
+      "template": "blue.png",
+      "templateSha256": "375d92ef5edea4fea2eeb0d929755b5d9d42eb9fe29063644c81c38990f7a9f0"
+    },
+    {
+      "name": "stop",
+      "step": "stop",
+      "anchor": "end",
+      "afterMs": 0,
+      "withinMs": 600,
+      "holdMs": 200,
+      "rect": [
+        15,
+        8,
+        760,
+        40
+      ],
+      "kind": "chrome",
+      "pixelTolerance": 20,
+      "maxBadPixelFraction": 0.02,
+      "windowRect": [
+        0,
+        0,
+        800,
+        600
+      ],
+      "windowTolerancePx": 2,
+      "template": "idle.png",
+      "templateSha256": "226f9e7b4e441f8416678ae1cbabb8eacc86aa3a72e1b7a04bade6353c4e20f5"
+    },
+    {
+      "name": "idle",
+      "step": "idle",
+      "anchor": "begin",
+      "afterMs": 0,
+      "withinMs": 600,
+      "holdMs": 200,
+      "rect": [
+        15,
+        8,
+        760,
+        40
+      ],
+      "kind": "chrome",
+      "pixelTolerance": 20,
+      "maxBadPixelFraction": 0.02,
+      "windowRect": [
+        0,
+        0,
+        800,
+        600
+      ],
+      "windowTolerancePx": 2,
+      "template": "idle.png",
+      "templateSha256": "226f9e7b4e441f8416678ae1cbabb8eacc86aa3a72e1b7a04bade6353c4e20f5"
+    },
+    {
+      "name": "paused-chrome",
+      "step": "paused",
+      "anchor": "begin",
+      "afterMs": 0,
+      "withinMs": 600,
+      "holdMs": 200,
+      "rect": [
+        60,
+        16,
+        210,
+        22
+      ],
+      "kind": "chrome",
+      "pixelTolerance": 20,
+      "maxBadPixelFraction": 0.03,
+      "windowRect": [
+        0,
+        0,
+        800,
+        600
+      ],
+      "windowTolerancePx": 2,
+      "template": "paused.png",
+      "templateSha256": "d8e559945054b2d85074d4e7bc42e865e6a7d0062e4299402e7ba025c540bcf7"
+    }
+  ]
+}

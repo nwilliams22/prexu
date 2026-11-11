@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import signal
 import subprocess
 import time
@@ -70,7 +71,7 @@ def run_child(app, environment, log, timeout, recorder=None):
             recorder.app_exit_code = process.returncode
 
 
-def launch(app, script_path, fixtures, root, source_commit, record=False, window_size=None):
+def launch(app, script_path, fixtures, root, source_commit, record=False, window_size=None, visual_plan=None):
     """Reserve a fresh evidence directory; never replace an earlier run."""
     root = root.absolute()
     root.mkdir(mode=0o700)  # Caller supplies an existing parent, never a run directory.
@@ -81,6 +82,8 @@ def launch(app, script_path, fixtures, root, source_commit, record=False, window
     recorder = None
     capture = None
     try:
+        if visual_plan is not None and not record:
+            raise Invalid('visual_requires_record')
         if sys.platform != 'linux':
             raise Invalid('unsupported_platform')
         if not source_commit or len(source_commit) != 40 or any(
@@ -160,7 +163,15 @@ def launch(app, script_path, fixtures, root, source_commit, record=False, window
             # may carry URLs, paths or future credentials. Retain line counts.
             log = root / 'app.log'
             if log.exists():
-                lines = len(log.read_bytes().splitlines())
+                raw_lines = log.read_text(errors='replace').splitlines()
+                # Retain only numeric allocation markers, never raw diagnostics.
+                allocation = []
+                for line in raw_lines:
+                    match = re.search(r'(exit geometry applied|webview allocated).*? t=([0-9]+)', line)
+                    if match:
+                        allocation.append(f'{match[1]} t={match[2]}')
+                (root / 'allocation.log').write_text('\n'.join(allocation) + '\n')
+                lines = len(raw_lines)
                 log.write_text(f'[redacted] {lines} child output lines suppressed; see output/events.jsonl for correlated structured logs.\n')
             save(root / 'capture.json', capture or {'status': 'fail', 'codes': [failure or 'capture_failed']})
     if result is None:
@@ -170,6 +181,15 @@ def launch(app, script_path, fixtures, root, source_commit, record=False, window
         result['codes'] = [failure]
     if record:
         result['evidenceScope'] = 'control-state and composed-desktop recording; no frame-content, GPU or audio assertions'
+    if visual_plan is not None:
+        from visual import evaluate
+        visual = evaluate(root, visual_plan)
+        save(root / 'visual-verdict.json', visual)
+        result['visualStatus'] = visual['status']
+        result['evidenceScope'] = visual['scope']
+        if visual['status'] != 'pass':
+            result['status'] = 'fail'
+            result['codes'] = list(dict.fromkeys(result['codes'] + visual['codes']))
     save(root / 'verdict.json', result)
     return result
 
@@ -187,9 +207,10 @@ def main():
                         help='40-character revision used to build --app; recorded as caller-supplied')
     parser.add_argument('--record', action='store_true', help='Record and validate the composed Linux X11 desktop')
     parser.add_argument('--record-window-size', help='Resize the launched window, e.g. 800x600, on the dedicated capture session')
+    parser.add_argument('--visual-plan', type=Path, help='Reviewed per-step pixel/timing expectations; requires --record')
     args = parser.parse_args()
     try:
-        result = launch(args.app, args.script, args.fixtures, args.run_dir, args.source_commit, args.record, args.record_window_size)
+        result = launch(args.app, args.script, args.fixtures, args.run_dir, args.source_commit, args.record, args.record_window_size, args.visual_plan)
     except OSError:
         result = {'status': 'fail', 'codes': ['output_unavailable']}
     print(json.dumps(result, allow_nan=False))

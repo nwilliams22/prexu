@@ -337,3 +337,97 @@ executables first on PATH. Use a fresh run directory for each, retain the
 nonzero exit and JSON evidence, and confirm the graphical provisioner's
 processes are stopped afterwards. `test_record.py` additionally rejects real
 stale/corrupt video and tests that recorder failure kills the launched app.
+
+## Per-step visual verdicts (VERDICT stage)
+
+`visual.py` consumes the **continuous composed recording**, native cue trace,
+actual process result, capture clock evidence and a reviewed visual plan. It
+fails closed on absent/invalid inputs, missing frames or markers, changed video
+or reference hashes, excessive clock uncertainty, uncovered required steps,
+unsupported check kinds and failed assertions. `quit` alone is marker-only.
+Capture-only runs still do not assert content; request `--visual-plan` explicitly:
+
+```sh
+# Add these to the launcher invocation on the dedicated X11 session:
+# --script scripts/hw-probe/driver/scenarios/visual.json --record \
+# --record-window-size 800x600 \
+# --visual-plan scripts/hw-probe/driver/fixtures/visual-linux-xvfb/plan.json
+
+# Or independently replay an intact recorded run:
+python3 scripts/hw-probe/driver/visual.py \
+  --run-dir /absolute/path/to/run \
+  --plan scripts/hw-probe/driver/fixtures/visual-linux-xvfb/plan.json \
+  --output /absolute/path/to/new-visual-verdict.json
+```
+
+The checked-in plan is for an 800×600 app at desktop origin on a 1280×800 Xvfb
+root, software GL, the light fixture profile, and the bundled v1 media. Its
+reference PNGs were inspected from a real native run: red/green/blue video,
+CUE ONE/TWO/THREE below the video, paused-player title and restored app header.
+They are fixed expected images, **never automatically replaced from the capture
+under test**. The test regions exclude the random desktop freshness challenge,
+variable elapsed/clock labels and the intentional controls gradient. Other
+layouts, themes, fonts or platforms require separately reviewed plans.
+
+Each check names its step, begin/end anchor, nonnegative sampling offset,
+transition budget, stable hold duration, absolute desktop rectangle and pixel
+thresholds. Video checks compare RGB against the deterministic fixture colors;
+subtitle/chrome/geometry checks compare against a hash-bound reference region.
+Both actual and expected regions are area-resampled to 64×36, then the fraction
+of pixels exceeding the per-channel tolerance is measured. This checks color,
+text shape and placement, not luminance alone. The report includes actual pixel
+errors, thresholds, sample counts, window error, bounded presentation latency,
+clip file/time range and the exact allowlisted marker slice for each check.
+A check needs a continuously matching hold, starting within its budget. It does
+not assert every pixel outside its region or every instant outside that hold.
+
+`scenarios/visual.json` pauses and seeks across all three different colors and
+subtitle cues. A frozen earlier color cannot pass the later cue checks. The v1
+media is constant within each five-second interval: it cannot distinguish two
+frames from the **same** cue interval. These checks do not certify arbitrary
+movie frame identity, GPU decode, audible audio, Windows or Wayland rendering.
+The supplied plan exercises playback/seek/pause/subtitles/stop and restored
+chrome; fullscreen, mini-player and popout need plans for their target layouts.
+
+Timing uses decoded frame PTS (no frame duplication) and two independent clock
+brackets: marker receipt polls bound the native elapsed origin, and the last
+old/first new desktop color-challenge frames bound the video clock origin.
+A plan declares a small clock slack and maximum combined uncertainty; missing,
+inconsistent or too-wide bounds fail. The first stable matching frame's **upper**
+latency bound must fit the budget. Old capture files without these bounds fail
+required timing checks; do not invent an offset from their midpoint PNGs.
+Receipt/flush and X11 capture latency remain part of this calibrated software
+session assumption, not a hardware presentation timestamp guarantee.
+
+Calibration follows **prexu-xxct**: these are explicitly scoped debug regression
+budgets, not universal performance ceilings. The supplied allowance is 1500 ms
+from play completion to visible content, 600 ms for other assertions, a 200 ms
+stable hold, 10 ms clock slack, and at most 120 ms clock uncertainty. The live
+reviewed runs had about 54–57 ms uncertainty. Release performance calibration
+remains separate (`prexu-ed30`); no release ceiling is inferred from this run.
+
+For scripts containing popout exit, `allocationGapMs` must be explicit. The
+launcher preserves only the two existing numeric allocation marker types in
+`allocation.log`; it does not export raw application diagnostics. The verifier
+requires the expected number of exits and calls the existing
+`check-popout-exit-alloc-gap` in `../verdict.nu`. A missing marker, unresolved
+allocation or `skip` fails that required scenario. Scenarios without popout exit
+use `allocationGapMs: null`.
+
+Reproduce real-video negative controls after recording a passing visual scenario:
+
+```sh
+python3 scripts/hw-probe/driver/exercise_visual.py \
+  --run-dir /absolute/path/to/passing-run \
+  --plan scripts/hw-probe/driver/fixtures/visual-linux-xvfb/plan.json \
+  --output-dir /absolute/path/to/new-controls
+```
+
+This keeps the baseline and generates black, stale, wrong-color, missing
+subtitle/chrome, misplaced geometry and delayed-transition videos. It also
+removes a required marker, changes the decoded-frame count and omits a required
+step check. Every mutated video gets a new declared hash, so content mutations
+must fail their pixel/timing assertion rather than merely a hash mismatch.
+`results.json` requires the original capture to pass and each mutation to fail.
+Export the videos, plans/reference PNGs, JSON reports and structured logs as
+issue attachments; exclude `home/`, `state/` and raw child logs.

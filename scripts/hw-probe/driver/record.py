@@ -120,6 +120,7 @@ class Recorder:
         self.markers = []
         self.last_geometry = 0
         self.started = None
+        self.last_trace_poll = None
 
     def screenshot(self, name, color):
         output = self.root / name
@@ -171,7 +172,9 @@ class Recorder:
                 if not line.endswith(b'\n'):
                     break
                 marker = json.loads(line)
-                self.markers.append({'seq': marker['seq'], 'observedSeconds': now - self.started})
+                self.markers.append({'seq': marker['seq'], 'observedSeconds': time.monotonic() - self.started,
+                                     'earliestSeconds': self.last_trace_poll if self.last_trace_poll is not None else 0})
+        self.last_trace_poll = now - self.started
         if now - self.last_geometry < .1:
             return
         self.last_geometry = now
@@ -204,7 +207,9 @@ class Recorder:
                 raise Invalid('capture_window_outside_desktop')
 
     def finish(self):
+        anchor_before = time.monotonic()
         self.last = self.stamp.color()
+        anchor_after = time.monotonic()
         self.screenshot('capture-after.png', self.last)
         time.sleep(.6)
         self.stop_video()
@@ -216,10 +221,21 @@ class Recorder:
         # appear in the lossless stream, proving fresh frames across the run.
         raw = command(['ffmpeg', '-v', 'error', '-xerror', '-i', str(self.root / 'desktop.mkv'),
             '-vf', f'format=rgb24,crop=1:1:{self.stamp.width - 8}:8',
-            '-f', 'rawvideo', '-'], timeout=120)
+            '-vsync', '0', '-f', 'rawvideo', '-'], timeout=120)
         pixels = {raw[i:i+3] for i in range(0, len(raw), 3)}
         if self.first not in pixels or self.last not in pixels or self.first == self.last:
             raise Invalid('capture_stale_frames')
+        # Bound the host/video clock offset with the last old and first new
+        # challenge frames. Use decoded PTS, never frame index / nominal fps.
+        pts = json.loads(command(['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+            '-show_frames', '-show_entries', 'frame=best_effort_timestamp_time',
+            '-of', 'json', str(self.root / 'desktop.mkv')]))['frames']
+        times = [float(frame['best_effort_timestamp_time']) for frame in pts]
+        first_new = next(i for i in range(len(raw) // 3) if raw[i*3:i*3+3] == self.last)
+        if first_new == 0 or len(times) != len(raw) // 3:
+            raise Invalid('capture_clock_anchor_missing')
+        video_origin = [anchor_before - self.started - times[first_new],
+                        anchor_after - self.started - times[first_new - 1]]
         if not self.windows:
             raise Invalid('capture_window_missing')
         events = [json.loads(line) for line in (self.root / 'output' / 'events.jsonl').read_text().splitlines()]
@@ -250,6 +266,9 @@ class Recorder:
                 'decodedFrames': len(raw) // 3, 'fps': 30, 'steps': steps,
                 'timingScope': 'approximate cue correlation; not transition timing assertions',
                 'videoStartMonotonic': self.started, 'markerReceipts': self.markers,
+                'videoOriginBoundsSeconds': video_origin,
+                'clockAnchor': {'firstNewFrame': first_new, 'beforeSeconds': anchor_before - self.started,
+                                'afterSeconds': anchor_after - self.started},
                 'windowSamples': self.windows, 'excludedRect': [self.stamp.width - 16, 0, 16, 16],
                 'freshnessChallenges': [self.first.hex(), self.last.hex()],
                 'videoSha256': video_digest(self.root / 'desktop.mkv')}
