@@ -34,7 +34,8 @@ public class Desktop {
  public static void StopPointer() {if(pointerTimer!=null){pointerTimer.Dispose();pointerTimer=null;}}
  public static double IconFraction(Bitmap b,int x,int y,int w,int h,int red,int green,int blue) {
   int stride;var p=Pixels(b,out stride);int matched=0,total=0;
-  for(int j=y;j<y+h;j++)for(int i=x;i<x+w;i++){int k=j*stride+i*4;if(Math.Abs(p[k]-blue)<20&&Math.Abs(p[k+1]-green)<20&&Math.Abs(p[k+2]-red)<20)matched++;total++;}
+  for(int j=y;j<y+h;j++)for(int i=x;i<x+w;i++){int k=j*stride+i*4;int lo=Math.Min(p[k],Math.Min(p[k+1],p[k+2]));int hi=Math.Max(p[k],Math.Max(p[k+1],p[k+2]));bool lightNeutral=Math.Min(red,Math.Min(green,blue))>170&&Math.Max(red,Math.Max(green,blue))-Math.Min(red,Math.Min(green,blue))<30;
+   if((Math.Abs(p[k]-blue)<20&&Math.Abs(p[k+1]-green)<20&&Math.Abs(p[k+2]-red)<20)||(lightNeutral&&lo>170&&hi-lo<30))matched++;total++;}
   return matched/(double)total;
  }
  public static double WhiteFraction(Bitmap b,int x,int y,int w,int h) {return IconFraction(b,x,y,w,h,255,255,255);}
@@ -117,6 +118,8 @@ if($SelfTest) {
  if($same[2] -ne 0 -or $same[1] -lt .9){throw 'Frozen-video negative control failed'}
  $g=[Drawing.Graphics]::FromImage($b);$g.FillRectangle([Drawing.Brushes]::White,150,150,70,70);$g.Dispose()
  if([Desktop]::WhiteFraction($b,110,130,220,120) -lt .05){throw 'White control pixel detector failed'}
+ $g=[Drawing.Graphics]::FromImage($b);$aa=New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(200,200,200));$g.FillRectangle($aa,150,150,70,70);$aa.Dispose();$g.Dispose()
+ if([Desktop]::IconFraction($b,110,130,220,120,255,255,255) -lt .05){throw 'Antialiased light control detector failed'}
  $moving=[Desktop]::Measure($a,$b,110,130,220,120)
  if($moving[2] -lt .05){throw 'Moving-video positive control failed'}
  $g=[Drawing.Graphics]::FromImage($b);$g.Clear([Drawing.Color]::Black);$g.Dispose()
