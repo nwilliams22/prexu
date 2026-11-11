@@ -1251,16 +1251,23 @@ fn try_create_render_context(comp: &Rc<Compositor>) {
     // software rendering and delay IPC replies until EOF. Seek/subtitle changes
     // also signal this callback; GTK resize/damage still triggers its own draws.
     let weak = Rc::downgrade(comp);
-    let source = glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
-        let Some(c) = weak.upgrade() else {
-            return glib::ControlFlow::Break;
-        };
-        let signalled = needs_render.swap(false, Ordering::Relaxed);
-        if signalled {
-            c.gl_area.queue_render();
-        }
-        glib::ControlFlow::Continue
-    });
+    // Yield to WebKit/GTK dispatch before scheduling another video repaint.
+    // A default-priority timer can keep the main context continuously busy
+    // under software rendering, delaying IPC replies until the clip reaches EOF.
+    let source = glib::timeout_add_local_full(
+        std::time::Duration::from_millis(16),
+        glib::Priority::LOW,
+        move || {
+            let Some(c) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            let signalled = needs_render.swap(false, Ordering::Relaxed);
+            if signalled {
+                c.gl_area.queue_render();
+            }
+            glib::ControlFlow::Continue
+        },
+    );
     match comp.pump_source.try_borrow_mut() {
         Ok(mut g) => {
             // Never leak a previous pump source (idempotence guard).

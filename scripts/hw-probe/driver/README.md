@@ -57,8 +57,10 @@ The transport regression scenario is `scenarios/transport.json`: play, pause,
 seek, audio/subtitle selection, resume, stop, replay, stop and quit. Run it through
 the launcher on a debug desktop with the generated fixtures. On Linux, the mpv
 frame pump redraws on frame notifications; unconditional redraws during playback
-can delay WebKit IPC replies until EOF under software rendering. A passing
-transport verdict establishes control/state only, not visible or audible output.
+can delay WebKit IPC replies until EOF under software rendering. The frame pump
+runs at GLib low priority so pending WebKit/GTK work can dispatch before another
+video repaint; the two-sample advancing-play predicate and deadlines are unchanged.
+A passing transport verdict establishes control/state only, not visible or audible output.
 
 Test the production-compiled environment policy separately without linking the
 GUI (this tests the gate, not a packaged release):
