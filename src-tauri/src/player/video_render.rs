@@ -219,6 +219,96 @@ fn ensure_resolver() -> Result<&'static egl::DynamicInstance<egl::EGL1_4>, Strin
     Ok(&RESOLVER.get().unwrap().egl)
 }
 
+// Bind ANGLE to the texture producer instead of letting it independently pick
+// a default adapter (which can differ on hybrid GPUs and virtual displays).
+// https://chromium.googlesource.com/angle/angle/+/main/extensions/EGL_ANGLE_device_creation_d3d11.txt
+const EGL_D3D11_DEVICE_ANGLE: egl::Int = 0x33A1;
+const EGL_PLATFORM_DEVICE_EXT: egl::Enum = 0x313F;
+type CreateDevice = extern "system" fn(egl::Int, *mut c_void, *const isize) -> *mut c_void;
+type ReleaseDevice = extern "system" fn(*mut c_void) -> egl::Boolean;
+type GetPlatformDisplay =
+    extern "system" fn(egl::Enum, *mut c_void, *const egl::Int) -> *mut c_void;
+
+struct AngleDisplay {
+    egl: &'static egl::DynamicInstance<egl::EGL1_4>,
+    device: *mut c_void,
+    display: Option<egl::Display>,
+    release_device: ReleaseDevice,
+}
+
+impl AngleDisplay {
+    fn create(device: &ID3D11Device) -> Result<Self, String> {
+        let egl = ensure_resolver()?;
+        let extensions = egl
+            .query_string(None, egl::EXTENSIONS)
+            .map_err(|e| format!("eglQueryString client extensions: {e}"))?
+            .to_string_lossy();
+        for required in [
+            "EGL_ANGLE_device_creation",
+            "EGL_ANGLE_device_creation_d3d11",
+            "EGL_EXT_platform_device",
+        ] {
+            if !extensions
+                .split_whitespace()
+                .any(|extension| extension == required)
+            {
+                return Err(format!("ANGLE missing required extension {required}"));
+            }
+        }
+        let create_device: CreateDevice = load("eglCreateDeviceANGLE")?;
+        let release_device: ReleaseDevice = load("eglReleaseDeviceANGLE")?;
+        let get_display: GetPlatformDisplay = load("eglGetPlatformDisplayEXT")?;
+        let native = create_device(EGL_D3D11_DEVICE_ANGLE, device.as_raw(), std::ptr::null());
+        if native.is_null() {
+            return Err(format!(
+                "eglCreateDeviceANGLE(D3D11): {:?}",
+                egl.get_error()
+            ));
+        }
+        let mut owner = Self {
+            egl,
+            device: native,
+            display: None,
+            release_device,
+        };
+        let raw_display = get_display(EGL_PLATFORM_DEVICE_EXT, native, std::ptr::null());
+        if raw_display.is_null() {
+            return Err(format!(
+                "eglGetPlatformDisplayEXT(device): {:?}",
+                egl.get_error()
+            ));
+        }
+        let display = unsafe { egl::Display::from_ptr(raw_display) };
+        owner.display = Some(display);
+        let (major, minor) = egl
+            .initialize(display)
+            .map_err(|e| format!("eglInitialize(device): {e}"))?;
+        let dxgi: IDXGIDevice = device
+            .cast()
+            .map_err(|e| format!("D3D11 DXGI device: {e}"))?;
+        let desc = unsafe { dxgi.GetAdapter().and_then(|adapter| adapter.GetDesc()) }
+            .map_err(|e| format!("D3D11 adapter description: {e}"))?;
+        let name_end = desc
+            .Description
+            .iter()
+            .position(|c| *c == 0)
+            .unwrap_or(desc.Description.len());
+        log::info!("[player:video] EGL {major}.{minor} bound to texture D3D11 device: adapter={} luid={:08x}:{:08x}",
+            String::from_utf16_lossy(&desc.Description[..name_end]),
+            desc.AdapterLuid.HighPart as u32, desc.AdapterLuid.LowPart);
+        Ok(owner)
+    }
+}
+
+impl Drop for AngleDisplay {
+    fn drop(&mut self) {
+        if let Some(display) = self.display {
+            let _ = self.egl.terminate(display);
+        }
+        (self.release_device)(self.device);
+    }
+}
+
 /// ANGLE EGL/GLES context bound to the shared D3D11 texture as a GL FBO. Owns
 /// the GL context (thread-affine — construct and drive from one thread).
 pub struct AngleGl {
@@ -234,26 +324,22 @@ pub struct AngleGl {
     // The texture-backed pbuffer the FBO draws into; must outlive rendering and
     // be destroyed before re-importing at a new size.
     pbuffer: Option<egl::Surface>,
+    // Released after the context and target, including on initialization errors.
+    _display_owner: AngleDisplay,
 }
 
 impl AngleGl {
-    /// Load ANGLE (securely), get the default (D3D11) display, init, choose an
+    /// Load ANGLE (securely), bind the texture producer device, and choose an
     /// ES2-capable pbuffer config, and create the context.
-    pub fn create(width: i32, height: i32) -> Result<Self, String> {
+    pub fn create(device: &ID3D11Device, width: i32, height: i32) -> Result<Self, String> {
         // The ANGLE libraries + EGL instance are process-global and loaded once
         // (idempotent): a player can init→destroy→re-init many times (warmup
         // probe, then each playback), and every render thread builds a fresh
         // context over the SAME EGL instance.
         let egl = ensure_resolver()?;
 
-        // EGL_DEFAULT_DISPLAY == null native display.
-        let default_display: egl::NativeDisplayType = std::ptr::null_mut();
-        let display = unsafe { egl.get_display(default_display) }
-            .ok_or_else(|| "eglGetDisplay returned None".to_string())?;
-        let (major, minor) = egl
-            .initialize(display)
-            .map_err(|e| format!("eglInitialize: {e}"))?;
-        log::info!("[player:video] EGL {major}.{minor} initialized");
+        let display_owner = AngleDisplay::create(device)?;
+        let display = display_owner.display.expect("initialized ANGLE display");
 
         egl.bind_api(egl::OPENGL_ES_API)
             .map_err(|e| format!("eglBindAPI ES: {e}"))?;
@@ -291,6 +377,7 @@ impl AngleGl {
             fbo: 0,
             tex: 0,
             pbuffer: None,
+            _display_owner: display_owner,
         })
     }
 
@@ -408,8 +495,8 @@ impl Drop for AngleGl {
     /// Release the EGL context + imported pbuffer. Runs on the render thread that
     /// owns the (thread-affine) context, when `render_loop` returns at teardown.
     /// Without this, each player init→destroy cycle would leak a context + a
-    /// pbuffer over the shared texture. The EGL instance/display are global and
-    /// intentionally kept (reused by the next render thread).
+    /// pbuffer over the shared texture. The owned display/device are released
+    /// after this body; only the DLL resolver remains process-global.
     fn drop(&mut self) {
         self.release_target();
         let _ = self.egl.make_current(self.display, None, None, None);
@@ -664,7 +751,7 @@ fn render_loop(
     let ctx: ID3D11DeviceContext =
         unsafe { device.GetImmediateContext() }.map_err(|e| format!("GetImmediateContext: {e:?}"))?;
 
-    // ANGLE and this immediate context belong to different D3D11 devices.
+    // Keep the shared-texture read complete before the next ANGLE frame.
     // glFinish completes the producer's writes, but CopyResource is asynchronous:
     // the next ANGLE frame must not clear/overwrite the texture while this device
     // is still reading it. Fence the consumer before allowing another GL render.
@@ -682,7 +769,7 @@ fn render_loop(
     let copy_fence = copy_fence.ok_or("CreateQuery(copy fence) returned no query")?;
 
     // ANGLE GL context is thread-affine — created and driven entirely here.
-    let mut gl = AngleGl::create(width as i32, height as i32)?;
+    let mut gl = AngleGl::create(&device, width as i32, height as i32)?;
     fbo = gl.import_share_handle_as_fbo(share_handle.0, width as i32, height as i32)?;
 
     // RenderContext over the live mpv handle. The handle is internally
