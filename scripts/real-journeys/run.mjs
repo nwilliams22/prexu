@@ -3,10 +3,21 @@ import { chromium } from 'playwright';
 import { createServer } from 'vite';
 import { writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import { createServer as createSocketServer } from 'node:net';
 
 if (process.env.DEBUG) {
   process.stderr.write('Unset DEBUG before running credential-bearing journeys.\n');
   process.exit(1);
+}
+async function unusedPort() {
+  const socket = createSocketServer();
+  await new Promise((resolve, reject) => {
+    socket.once('error', reject);
+    socket.listen(0, '127.0.0.1', resolve);
+  });
+  const port = socket.address().port;
+  await new Promise((resolve, reject) => socket.close(error => error ? reject(error) : resolve()));
+  return port;
 }
 const rows = [];
 let browser, vite;
@@ -65,7 +76,7 @@ try {
     const user = await request('https://plex.tv/api/v2/user', token);
     // Bind an ephemeral port ourselves; never attach to somebody else's Vite.
     stage = 'vite-start';
-    vite = await createServer({ logLevel: 'silent', server: { host: '127.0.0.1', port: 0, strictPort: true, open: false } });
+    vite = await createServer({ logLevel: 'silent', server: { host: '127.0.0.1', port: await unusedPort(), strictPort: true, open: false } });
     await vite.listen();
     const origin = `http://127.0.0.1:${vite.httpServer.address().port}`;
     stage = 'browser-start';
@@ -96,6 +107,9 @@ try {
       await page.getByRole('heading', { name: 'Prexu QA Pattern', exact: true }).waitFor();
     });
     await step('browse-search-detail', async () => {
+      check(/^\d+$/.test(String(fixture.librarySectionID)));
+      await page.goto(`${origin}/library/${fixture.librarySectionID}`);
+      await page.getByText(fixture.title, { exact: true }).first().waitFor();
       await page.goto(`${origin}/search?q=Prexu%20QA%20Pattern`);
       await page.getByText('Prexu QA Pattern', { exact: true }).first().click();
       await until(async () => new URL(page.url()).pathname === '/item/2');
