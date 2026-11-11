@@ -18,4 +18,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: node --check scripts/real-journeys/run.mjs
-      - run: node --test scripts/real-journeys/run.test.mjs
+      - run: node --check scripts/real-journeys/native.mjs
+      - run: node --check scripts/real-journeys/native-driver.js
+      - run: node --test scripts/real-journeys/*.test.mjs
