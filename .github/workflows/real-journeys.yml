@@ -1,0 +1,21 @@
+name: Real journey credential gates
+on:
+  push:
+    branches: [main]
+    paths: ['scripts/real-journeys/**', '.github/workflows/real-journeys.yml']
+  pull_request:
+    paths: ['scripts/real-journeys/**', '.github/workflows/real-journeys.yml']
+permissions:
+  contents: read
+jobs:
+  credential-gates:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node --check scripts/real-journeys/run.mjs
+      - run: node --test scripts/real-journeys/run.test.mjs
