@@ -65,7 +65,7 @@ pub(super) fn configure_mpv_properties(wid: Option<i64>, composition: bool) -> R
     #[cfg(target_os = "linux")]
     ensure_c_numeric_locale();
 
-    Mpv::with_initializer(|init| {
+    let mpv = Mpv::with_initializer(|init| {
         if composition {
             // Render-context path: mpv outputs through libmpv (no OS window).
             init.set_property("vo", "libmpv")?;
@@ -76,18 +76,10 @@ pub(super) fn configure_mpv_properties(wid: Option<i64>, composition: bool) -> R
             init.set_property("vo", "gpu-next")?;
         }
         init.set_property("hwdec", "auto-safe")?;
-        // ── Linux audio (prexu-axj4.3 defect 3) ──
-        // The native player plays the ORIGINAL multichannel track (5.1/7.1
-        // AC3/DTS/TrueHD) that the HTML5 path always received as a stereo AAC
-        // transcode. mpv's default downmix does NOT normalize, so a hot 5.1 mix
-        // folded to the (typically stereo) PipeWire sink clips hard ("blown
-        // out" distortion). `audio-normalize-downmix=yes` rescales the downmix
-        // to prevent clipping; `audio-channels=auto-safe` (mpv's default, made
-        // explicit) lets the AO negotiate the sink's real layout so no downmix
-        // happens on true surround setups. Linux-gated: Windows ships the same
-        // mpv default (same clipping risk) — changing it there is a separate
-        // follow-up bead, not a drive-by.
-        #[cfg(target_os = "linux")]
+        // Native playback keeps the original multichannel track. Normalize
+        // downmixing to prevent clipping on stereo sinks, while auto-safe
+        // preserves the sink's real layout on surround setups.
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         {
             init.set_property("audio-channels", "auto-safe")?;
             init.set_property("audio-normalize-downmix", "yes")?;
@@ -127,7 +119,15 @@ pub(super) fn configure_mpv_properties(wid: Option<i64>, composition: bool) -> R
 
         Ok(())
     })
-    .map_err(|e| format!("mpv init failed: {:?}", e))
+    .map_err(|e| format!("mpv init failed: {:?}", e))?;
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    log::info!(
+        "[player:lifecycle] audio init: audio-channels={:?}, audio-normalize-downmix={:?}",
+        mpv.get_property::<String>("audio-channels"),
+        mpv.get_property::<bool>("audio-normalize-downmix")
+    );
+    Ok(mpv)
 }
 
 /// Request mpv shutdown, then release the pump even if the command failed.
