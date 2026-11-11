@@ -1,8 +1,10 @@
 """Real child-process controls. Synthetic executables are not desktop evidence."""
+import errno
 import json
 import os
 from pathlib import Path
 import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -13,6 +15,51 @@ from contract import Invalid
 from fixtures import digest
 from launch import launch, run_child
 from test_contract import script_and_trace
+
+
+def assert_process_stopped(pid):
+    stat = Path(f'/proc/{pid}/stat')
+    for _ in range(100):
+        try:
+            state = stat.read_text().split()[2]
+        except (FileNotFoundError, ProcessLookupError):
+            # The process can disappear while procfs is opening or reading stat.
+            return
+        if state == 'Z':
+            return
+        time.sleep(0.01)
+    raise AssertionError('watchdog left a running process')
+
+
+@unittest.skipUnless(sys.platform == 'linux', 'Linux procfs cleanup checks')
+class ProcessCleanupTests(unittest.TestCase):
+    def test_disappearance_during_stat_read_counts_as_stopped(self):
+        for error in (FileNotFoundError(errno.ENOENT, 'No such file'),
+                      ProcessLookupError(errno.ESRCH, 'No such process')):
+            with self.subTest(error=type(error).__name__):
+                with patch.object(Path, 'read_text', side_effect=error) as read:
+                    assert_process_stopped(123)
+                read.assert_called_once_with()
+
+    def test_zombie_counts_as_stopped(self):
+        with patch.object(Path, 'read_text', return_value='123 (child) Z'):
+            assert_process_stopped(123)
+
+    def test_unrelated_read_error_is_not_cleanup_success(self):
+        with patch.object(Path, 'read_text', side_effect=PermissionError):
+            with self.assertRaises(PermissionError):
+                assert_process_stopped(123)
+
+    def test_live_child_still_fails_cleanup_check(self):
+        child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+        try:
+            with patch('test_launch.time.sleep'):
+                with self.assertRaisesRegex(AssertionError, 'watchdog left a running process'):
+                    assert_process_stopped(child.pid)
+            self.assertIsNone(child.poll())
+        finally:
+            child.kill()
+            child.wait()
 
 
 @unittest.skipUnless(sys.platform == 'linux', 'Linux process-group launcher')
@@ -131,13 +178,7 @@ time.sleep(60)
         pids = [int(value) for value in pidfile.read_text().split()]
         self.addCleanup(self.remove_survivors, pids)
         for pid in pids:
-            for _ in range(100):
-                stat = Path(f'/proc/{pid}/stat')
-                if not stat.exists() or stat.read_text().split()[2] == 'Z':
-                    break
-                time.sleep(0.01)
-            else:
-                self.fail('watchdog left a running process')
+            assert_process_stopped(pid)
 
     def test_capture_failure_cannot_pass_successful_trace(self):
         self.trace_app()
