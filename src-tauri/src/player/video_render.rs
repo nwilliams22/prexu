@@ -33,7 +33,9 @@ use libmpv2::Mpv;
 
 use windows::core::{Interface, BOOL};
 use windows::Win32::Foundation::HANDLE;
+use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
 use windows::Win32::Graphics::Direct3D11::{
+    D3D11CreateDevice, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION,
     ID3D11Device, ID3D11DeviceContext, ID3D11Query, ID3D11Texture2D, D3D11_BIND_RENDER_TARGET,
     D3D11_BIND_SHADER_RESOURCE, D3D11_QUERY_DESC, D3D11_QUERY_EVENT, D3D11_RESOURCE_MISC_SHARED,
     D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
@@ -219,7 +221,7 @@ fn ensure_resolver() -> Result<&'static egl::DynamicInstance<egl::EGL1_4>, Strin
     Ok(&RESOLVER.get().unwrap().egl)
 }
 
-// Bind ANGLE to the texture producer instead of letting it independently pick
+// Bind ANGLE to the texture producer adapter instead of independently picking
 // a default adapter (which can differ on hybrid GPUs and virtual displays).
 // https://chromium.googlesource.com/angle/angle/+/main/extensions/EGL_ANGLE_device_creation_d3d11.txt
 const EGL_D3D11_DEVICE_ANGLE: egl::Int = 0x33A1;
@@ -234,6 +236,7 @@ struct AngleDisplay {
     device: *mut c_void,
     display: Option<egl::Display>,
     release_device: ReleaseDevice,
+    _render_device: ID3D11Device,
 }
 
 impl AngleDisplay {
@@ -255,10 +258,39 @@ impl AngleDisplay {
                 return Err(format!("ANGLE missing required extension {required}"));
             }
         }
+        // Match the adapter, but keep ANGLE's immediate-context state separate
+        // from DirectComposition and the swapchain-copy device. Sharing that
+        // context lets either renderer invalidate the other's cached D3D state.
+        let dxgi: IDXGIDevice = device
+            .cast()
+            .map_err(|e| format!("D3D11 DXGI device: {e}"))?;
+        let adapter = unsafe { dxgi.GetAdapter() }.map_err(|e| format!("D3D11 adapter: {e}"))?;
+        let desc =
+            unsafe { adapter.GetDesc() }.map_err(|e| format!("D3D11 adapter description: {e}"))?;
+        let mut render_device = None;
+        unsafe {
+            D3D11CreateDevice(
+                &adapter,
+                D3D_DRIVER_TYPE_UNKNOWN,
+                Default::default(),
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                None,
+                D3D11_SDK_VERSION,
+                Some(&mut render_device),
+                None,
+                None,
+            )
+        }
+        .map_err(|e| format!("D3D11 ANGLE device on texture adapter: {e}"))?;
+        let render_device = render_device.ok_or("D3D11 ANGLE device was null")?;
         let create_device: CreateDevice = load("eglCreateDeviceANGLE")?;
         let release_device: ReleaseDevice = load("eglReleaseDeviceANGLE")?;
         let get_display: GetPlatformDisplay = load("eglGetPlatformDisplayEXT")?;
-        let native = create_device(EGL_D3D11_DEVICE_ANGLE, device.as_raw(), std::ptr::null());
+        let native = create_device(
+            EGL_D3D11_DEVICE_ANGLE,
+            render_device.as_raw(),
+            std::ptr::null(),
+        );
         if native.is_null() {
             return Err(format!(
                 "eglCreateDeviceANGLE(D3D11): {:?}",
@@ -270,6 +302,7 @@ impl AngleDisplay {
             device: native,
             display: None,
             release_device,
+            _render_device: render_device,
         };
         let raw_display = get_display(EGL_PLATFORM_DEVICE_EXT, native, std::ptr::null());
         if raw_display.is_null() {
@@ -283,17 +316,12 @@ impl AngleDisplay {
         let (major, minor) = egl
             .initialize(display)
             .map_err(|e| format!("eglInitialize(device): {e}"))?;
-        let dxgi: IDXGIDevice = device
-            .cast()
-            .map_err(|e| format!("D3D11 DXGI device: {e}"))?;
-        let desc = unsafe { dxgi.GetAdapter().and_then(|adapter| adapter.GetDesc()) }
-            .map_err(|e| format!("D3D11 adapter description: {e}"))?;
         let name_end = desc
             .Description
             .iter()
             .position(|c| *c == 0)
             .unwrap_or(desc.Description.len());
-        log::info!("[player:video] EGL {major}.{minor} bound to texture D3D11 device: adapter={} luid={:08x}:{:08x}",
+        log::info!("[player:video] EGL {major}.{minor} bound to separate D3D11 device on texture adapter={} luid={:08x}:{:08x}",
             String::from_utf16_lossy(&desc.Description[..name_end]),
             desc.AdapterLuid.HighPart as u32, desc.AdapterLuid.LowPart);
         Ok(owner)
@@ -329,7 +357,7 @@ pub struct AngleGl {
 }
 
 impl AngleGl {
-    /// Load ANGLE (securely), bind the texture producer device, and choose an
+    /// Load ANGLE (securely), bind the texture producer adapter, and choose an
     /// ES2-capable pbuffer config, and create the context.
     pub fn create(device: &ID3D11Device, width: i32, height: i32) -> Result<Self, String> {
         // The ANGLE libraries + EGL instance are process-global and loaded once
@@ -751,7 +779,7 @@ fn render_loop(
     let ctx: ID3D11DeviceContext =
         unsafe { device.GetImmediateContext() }.map_err(|e| format!("GetImmediateContext: {e:?}"))?;
 
-    // Keep the shared-texture read complete before the next ANGLE frame.
+    // ANGLE and the copy context use separate devices on the same adapter.
     // glFinish completes the producer's writes, but CopyResource is asynchronous:
     // the next ANGLE frame must not clear/overwrite the texture while this device
     // is still reading it. Fence the consumer before allowing another GL render.
