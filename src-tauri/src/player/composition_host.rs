@@ -16,10 +16,14 @@
 #![cfg(target_os = "windows")]
 
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use webview2_com::Microsoft::Web::WebView2::Win32::*;
-use webview2_com::{AcceleratorKeyPressedEventHandler, CursorChangedEventHandler};
-use windows::core::{w, Interface, PCWSTR};
+use webview2_com::{
+    AcceleratorKeyPressedEventHandler, AddScriptToExecuteOnDocumentCreatedCompletedHandler,
+    CursorChangedEventHandler,
+};
+use windows::core::{w, HSTRING, Interface, PCWSTR};
 use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::{
@@ -42,6 +46,18 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_NCDESTROY, WM_RBUTTONDBLCLK, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_XBUTTONDBLCLK,
     WM_XBUTTONDOWN, WM_XBUTTONUP,
 };
+
+static IME_COMPOSING: AtomicBool = AtomicBool::new(false);
+
+/// Composition events carry no text; only the main document can enable the workaround.
+#[tauri::command]
+pub fn ime_set_composing(window: tauri::WebviewWindow, active: bool) {
+    if window.label() == "main" {
+        if IME_COMPOSING.swap(active, Ordering::Relaxed) != active {
+            log::debug!("[player:comp] IME composing={}", active);
+        }
+    }
+}
 
 thread_local! {
     /// Keeps the DComp tree (device/target/visual) alive for the process
@@ -265,6 +281,7 @@ fn configure_controller_parity(hwnd: HWND, controller: &ICoreWebView2Controller)
     // A surgical accelerator filter, not `AreBrowserAcceleratorKeysEnabled(false)`
     // — that would also disable F5/Ctrl+R reload and Ctrl+F find, which we keep.
     install_print_suppressor(controller);
+    install_ime_tracking(controller);
 }
 
 /// DPI scale of `hwnd`'s monitor (1.0 == 96 DPI / 100%); 1.0 if the query fails.
@@ -316,6 +333,43 @@ fn install_print_suppressor(controller: &ICoreWebView2Controller) {
     }
 }
 
+/// Track composition without inspecting, modifying or forwarding the composed text.
+/// Both registration and immediate execution are needed: installation can race
+/// the first navigation, and a later document must install its own listeners.
+fn install_ime_tracking(controller: &ICoreWebView2Controller) {
+    const SCRIPT: &str = r#"(() => {
+        if (window !== window.top || window.__prexuImeTracking) return;
+        window.__prexuImeTracking = true;
+        const report = active => window.__TAURI_INTERNALS__?.invoke(
+            'ime_set_composing', { active }
+        ).catch(() => {});
+        document.addEventListener('compositionstart', () => report(true), true);
+        document.addEventListener('compositionend', () => report(false), true);
+        window.addEventListener('pagehide', () => report(false));
+        report(false);
+    })();"#;
+    let install = || -> windows::core::Result<()> {
+        let webview = unsafe { controller.CoreWebView2()? };
+        let script = HSTRING::from(SCRIPT);
+        let handler = AddScriptToExecuteOnDocumentCreatedCompletedHandler::create(Box::new(
+            |result, _| {
+                if let Err(error) = result {
+                    log::warn!("[player:comp] IME script registration failed: {:?}", error);
+                }
+                Ok(())
+            },
+        ));
+        unsafe {
+            webview.AddScriptToExecuteOnDocumentCreated(&script, &handler)?;
+            webview.ExecuteScript(&script, None)?;
+        }
+        Ok(())
+    };
+    if let Err(error) = install() {
+        log::warn!("[player:comp] IME tracking installation failed: {:?}", error);
+    }
+}
+
 /// C4c: re-apply the rasterization scale after a DPI / monitor-scale change so
 /// the webview stays crisp when moved between monitors of differing DPI. Called
 /// from the player's scale-factor handler. No-op until composition is installed.
@@ -338,9 +392,10 @@ pub fn set_rasterization_scale(scale: f64) {
     });
 }
 
-/// C4b: notify the composition-hosted webview that its parent window moved, so
-/// it repositions OS-owned popups — chiefly the IME candidate window, which
-/// otherwise sticks at its install-time screen position under visual hosting.
+/// Notify WebView2 of ancestor movement and refresh active IME layout.
+/// Runtime 156 leaves an already-open candidate popup at its old screen position
+/// after notification alone (WebView2Feedback #1611). A bounds round trip forces
+/// the layout update without moving the outer window or ending composition.
 /// Called on every window move/origin change. No-op until composition is
 /// installed.
 pub fn notify_window_moved() {
@@ -351,6 +406,28 @@ pub fn notify_window_moved() {
                     "[player:comp] NotifyParentWindowPositionChanged failed: {:?}",
                     e
                 );
+            }
+            if IME_COMPOSING.load(Ordering::Relaxed) {
+                let refresh = || -> windows::core::Result<()> {
+                    let mut bounds = RECT::default();
+                    unsafe { controller.Bounds(&mut bounds)? };
+                    if bounds.right <= bounds.left || bounds.bottom <= bounds.top {
+                        return Ok(());
+                    }
+                    let mut temporary = bounds;
+                    let Some(right) = bounds.right.checked_add(1) else {
+                        return Ok(());
+                    };
+                    temporary.right = right;
+                    // Restore synchronously, even if the first call fails. Never
+                    // resize the HWND: that would also resize the video surface.
+                    let first = unsafe { controller.SetBounds(temporary) };
+                    unsafe { controller.SetBounds(bounds)? };
+                    first
+                };
+                if let Err(error) = refresh() {
+                    log::warn!("[player:comp] IME bounds refresh failed: {:?}", error);
+                }
             }
         }
     });

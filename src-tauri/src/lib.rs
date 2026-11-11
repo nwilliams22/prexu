@@ -700,6 +700,7 @@ pub fn run() {
     // never call these.
     #[cfg(target_os = "windows")]
     let builder = builder.invoke_handler(tauri::generate_handler![
+        player::composition_host::ime_set_composing,
         #[cfg(debug_assertions)]
         probe_commands::probe_driver,
         start_proxy,
