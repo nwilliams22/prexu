@@ -81,8 +81,8 @@ try {
  if(!browser)throw new Error('Installed WebView2 not ready');
  const page=browser.contexts().flatMap(c=>c.pages()).find(p=>p.url().includes('tauri.localhost'));
  if(!page)throw new Error('Real application page missing');
- await page.getByText('Prexu QA Pattern',{exact:true}).last().waitFor({timeout:60_000});
- await page.getByText('Prexu QA Pattern',{exact:true}).last().click();
+ await page.getByText('Prexu QA Pattern',{exact:true}).filter({visible:true}).first().waitFor({timeout:60_000});
+ await page.getByText('Prexu QA Pattern',{exact:true}).filter({visible:true}).first().click();
  await page.getByRole('button',{name:/^▶ (Play|Resume from .+)$/}).waitFor({timeout:60_000});
  const composition=ssh('Get-Content "$env:LOCALAPPDATA\\com.prexu.client\\logs\\Prexu.log" | Select-String "DComp tree committed|render thread up" | ForEach-Object {$_.Line}');
  writeFileSync(join(output,'composition.txt'),composition);
