@@ -52,10 +52,8 @@ static IME_COMPOSING: AtomicBool = AtomicBool::new(false);
 /// Composition events carry no text; only the main document can enable the workaround.
 #[tauri::command]
 pub fn ime_set_composing(window: tauri::WebviewWindow, active: bool) {
-    if window.label() == "main" {
-        if IME_COMPOSING.swap(active, Ordering::Relaxed) != active {
-            log::debug!("[player:comp] IME composing={}", active);
-        }
+    if window.label() == "main" && IME_COMPOSING.swap(active, Ordering::Relaxed) != active {
+        log::debug!("[player:comp] IME composing={}", active);
     }
 }
 
