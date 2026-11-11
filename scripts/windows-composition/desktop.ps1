@@ -1,4 +1,4 @@
-param([string]$Output = 'C:\Users\baddong\qa-composition\evidence', [switch]$SelfTest)
+param([string]$Output = 'C:\Users\baddong\qa-composition\evidence', [switch]$SelfTest, [switch]$Scenarios)
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Force $Output | Out-Null
 trap { $_ | Out-String | Set-Content "$Output\error.txt"; exit 1 }
@@ -24,7 +24,19 @@ public class Desktop {
  [DllImport("user32.dll")] public static extern void keybd_event(byte key,byte scan,uint flags,UIntPtr extra);
  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x,int y);
  public static void Key(byte key,bool up) { keybd_event(key,0,up?2u:0u,UIntPtr.Zero); }
- public static Bitmap Capture(int x,int y,int w,int h) {var b=new Bitmap(w,h); using(var g=Graphics.FromImage(b))g.CopyFromScreen(x,y,0,0,b.Size);return b;}
+ public static Bitmap Capture(int x,int y,int w,int h) {
+  var task=System.Threading.Tasks.Task.Run(()=>{var b=new Bitmap(w,h);try{using(var g=Graphics.FromImage(b))g.CopyFromScreen(x,y,0,0,b.Size);return b;}catch{b.Dispose();throw;}});
+  if(!task.Wait(TimeSpan.FromSeconds(90)))throw new TimeoutException("Composed screen capture did not return within 90 seconds");
+  return task.Result;
+ }
+ static System.Threading.Timer pointerTimer; static int pointerTick;
+ public static void StartPointer(int x,int y) {StopPointer();pointerTimer=new System.Threading.Timer(_=>{SetCursorPos(x+((System.Threading.Interlocked.Increment(ref pointerTick)&1)*8),y);},null,0,250);}
+ public static void StopPointer() {if(pointerTimer!=null){pointerTimer.Dispose();pointerTimer=null;}}
+ public static double WhiteFraction(Bitmap b,int x,int y,int w,int h) {
+  int stride;var p=Pixels(b,out stride);int white=0,total=0;
+  for(int j=y;j<y+h;j++)for(int i=x;i<x+w;i++){int k=j*stride+i*4;int lo=Math.Min(p[k],Math.Min(p[k+1],p[k+2]));int hi=Math.Max(p[k],Math.Max(p[k+1],p[k+2]));if(lo>170&&hi-lo<30)white++;total++;}
+  return white/(double)total;
+ }
  // Only strongly saturated pixels can be the synthetic color-bar fixture.
  // Ignore titlebar/controls and measure a central video ROI supplied by the caller.
  public class Frames {public Bitmap A,B;public DateTime FirstUtc,SecondUtc;}
@@ -99,8 +111,10 @@ if($SelfTest) {
  $bounds=[Desktop]::PatternBounds($a,640,480,150,500)
  if($bounds.Width -lt 235 -or $bounds.X -lt 95 -or $bounds.X -gt 105){throw 'Tile detector rejected known six-stripe tile'}
  $same=[Desktop]::Measure($a,$b,110,130,220,120)
+ if([Desktop]::WhiteFraction($a,110,130,220,120) -ne 0){throw 'Colored video must not pass as a white control icon'}
  if($same[2] -ne 0 -or $same[1] -lt .9){throw 'Frozen-video negative control failed'}
  $g=[Drawing.Graphics]::FromImage($b);$g.FillRectangle([Drawing.Brushes]::White,150,150,70,70);$g.Dispose()
+ if([Desktop]::WhiteFraction($b,110,130,220,120) -lt .05){throw 'White control pixel detector failed'}
  $moving=[Desktop]::Measure($a,$b,110,130,220,120)
  if($moving[2] -lt .05){throw 'Moving-video positive control failed'}
  $g=[Drawing.Graphics]::FromImage($b);$g.Clear([Drawing.Color]::Black);$g.Dispose()
@@ -244,6 +258,7 @@ function Controls([string]$Name) {
  Pair "controls-$Name-resumed"
 }
 try {
+ if($Scenarios) { . "$PSScriptRoot\scenarios.ps1"; return }
  Stage 'baseline'
  Start-Sleep -Seconds 3
  Pair 'baseline'
@@ -316,6 +331,7 @@ try {
  throw
 } finally {
  [Desktop]::Key(18,$true)
+ [Desktop]::StopPointer()
  # Sampling is complete; stop software rendering before encoding PNG evidence.
  try {Javascript "window.__TAURI_INTERNALS__.invoke('player_pause')" | Out-Null} catch {}
  $socket.Dispose()

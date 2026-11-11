@@ -1,5 +1,6 @@
 // Run only against the disposable win11-test VM. Never attach to an occupied VM.
 import { chromium } from '@playwright/test';
+import { requiredScenarios, verifyScenarios } from './scenarios.mjs';
 import { spawn, execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
@@ -7,8 +8,10 @@ import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 
-const [candidateArg, outputArg] = process.argv.slice(2);
-if (!candidateArg || !outputArg) throw new Error('Usage: node scripts/windows-composition/run.mjs CANDIDATE_DIRECTORY EVIDENCE_DIRECTORY');
+const [candidateArg, outputArg, mode] = process.argv.slice(2);
+if (mode && mode !== "--scenarios") throw new Error("Unknown runner mode");
+const scenarios = mode === "--scenarios";
+if (!candidateArg || !outputArg) throw new Error('Usage: node scripts/windows-composition/run.mjs CANDIDATE_DIRECTORY EVIDENCE_DIRECTORY [--scenarios]');
 const candidate = resolve(candidateArg), output = resolve(outputArg);
 const scripts = dirname(fileURLToPath(import.meta.url));
 const remote = 'C:\\Users\\baddong\\qa-composition';
@@ -35,10 +38,11 @@ try {
  const status = run('sudo', ['-n', 'win11-vm', 'status']);
  if (!status.includes('state: shut off')) throw new Error('VM is occupied; coordinate its owner before running');
  started = true;
- writeFileSync(join(output, 'hardware.txt'), run('sudo', ['-n', 'win11-vm', 'start'], { timeout: 360_000 }));
+ writeFileSync(join(output, 'hardware.txt'), run('sudo', ['-n', 'win11-vm', 'start'], { timeout: 600_000 }));
  ssh(`New-Item -ItemType Directory -Force ${ps(remote)} | Out-Null`);
  run('scp', ['-o','BatchMode=yes',join(candidate,installer), 'win11-test:C:/Users/baddong/qa-composition/setup.exe']);
  run('scp', ['-o','BatchMode=yes',join(scripts,'desktop.ps1'), 'win11-test:C:/Users/baddong/qa-composition/desktop.ps1']);
+ if(scenarios) run('scp', ['-o','BatchMode=yes',join(scripts,'scenarios.ps1'), 'win11-test:C:/Users/baddong/qa-composition/scenarios.ps1']);
  run('scp', ['-o','BatchMode=yes',join(scripts,'probe.ps1'), 'win11-test:C:/Users/baddong/qa-composition/probe.ps1']);
  let probe,probeError;
  try {probe=ssh(`C:\\ProgramData\\EvalBuild\\gui-run.ps1 powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File ${remote}\\probe.ps1" -Wait`);} catch(error){probe=String(error.stdout || error.message);probeError=error;}
@@ -83,7 +87,7 @@ try {
  const composition=ssh('Get-Content "$env:LOCALAPPDATA\\com.prexu.client\\logs\\Prexu.log" | Select-String "DComp tree committed|render thread up" | ForEach-Object {$_.Line}');
  writeFileSync(join(output,'composition.txt'),composition);
  if(!composition.includes('DComp tree committed') || !composition.includes('render thread up'))throw new Error('Composition/render prerequisite not ready; see composition.txt');
- desktop=spawn('ssh',[...sshArgs,`C:\\ProgramData\\EvalBuild\\gui-run.ps1 conhost.exe -ArgumentList "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File ${remote}\\desktop.ps1 -Output ${remote}\\evidence" -Wait -TimeoutSec 1200`],{stdio:['ignore','pipe','pipe']});
+ desktop=spawn('ssh',[...sshArgs,`C:\\ProgramData\\EvalBuild\\gui-run.ps1 conhost.exe -ArgumentList "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File ${remote}\\desktop.ps1 ${scenarios ? "-Scenarios" : ""} -Output ${remote}\\evidence" -Wait -TimeoutSec 1200`],{stdio:['ignore','pipe','pipe']});
  let desktopOutput='';desktop.stdout.on('data',b=>desktopOutput+=b);desktop.stderr.on('data',b=>desktopOutput+=b);
  const readyDeadline=Date.now()+180_000;
  while(!ssh(`Test-Path ${ps(remote+'\\evidence\\ready')}`).includes('True')){if(Date.now()>readyDeadline)throw new Error('Desktop worker initialization timed out');await sleep(500);}
@@ -95,7 +99,7 @@ try {
  const loadDeadline=Date.now()+90_000;
  while(!ssh('Get-Content "$env:LOCALAPPDATA\\com.prexu.client\\logs\\Prexu.log" | Select-String -SimpleMatch "received ready event"').includes('received ready event')){if(Date.now()>loadDeadline)throw new Error('Original QA source did not reach ready');await sleep(500);}
  await page.evaluate(async()=>{
-  await window.__TAURI_INTERNALS__.invoke('player_load_url',{url:'http://127.0.0.1:18446/pattern.mkv',headers:{},startOffsetMs:0});
+  await window.__TAURI_INTERNALS__.invoke('player_load_url',{url:'http://127.0.0.1:18446/pattern.mkv',headers:{'X-Plex-Client-Identifier':'prexu-local-fixture'},startOffsetMs:0});
   await window.__TAURI_INTERNALS__.invoke('player_pause');
  });
  ssh(`Set-Content ${ps(remote+'\\evidence\\go')} start`);
@@ -110,8 +114,9 @@ try {
  if(!existsSync(join(output,'evidence','complete')))throw new Error('Desktop evidence did not finish saving');
  const metrics=JSON.parse(readFileSync(join(output,'evidence','metrics.json'),'utf8').replace(/^\uFEFF/,''));
  console.log(JSON.stringify(metrics.map(({name,pass})=>({name,pass})),null,2));
- const required=['baseline','alt-tab','away-focus','occlusion-focus','minimize-state','return-focus','return','space-paused','space-resumed','uncovered','restored',...['scale-150','scale-100','monitor-2','monitor-1'].flatMap(n=>[n,`${n}-video-bounds`,`${n}-dpi`,`controls-${n}-paused`,`controls-${n}-resumed`])];
+ const required=scenarios ? requiredScenarios : ['baseline','alt-tab','away-focus','occlusion-focus','minimize-state','return-focus','return','space-paused','space-resumed','uncovered','restored',...['scale-150','scale-100','monitor-2','monitor-1'].flatMap(n=>[n,`${n}-video-bounds`,`${n}-dpi`,`controls-${n}-paused`,`controls-${n}-resumed`])];
  if(required.some(name=>!metrics.some(m=>m.name===name)))throw new Error('Incomplete matrix: a required verdict is missing');
+ if(scenarios) writeFileSync(join(output,'verdict.json'), JSON.stringify(verifyScenarios(join(output,'evidence')),null,2));
  if(metrics.some(m=>!m.pass))process.exitCode=1;
 } catch(error) {
  writeFileSync(join(output,'failure.txt'),String(error));

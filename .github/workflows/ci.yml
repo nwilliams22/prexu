@@ -55,6 +55,9 @@ jobs:
           node --test scripts/check-release-version.test.mjs
           node scripts/check-release-version.mjs
 
+      - name: Windows scenario evidence negative controls
+        run: node --test scripts/windows-composition/scenarios.test.mjs
+
       - name: Published Linux gate negative controls
         run: python3 -B -m unittest discover -s scripts -p 'test_check_published_linux.py' -v
 
