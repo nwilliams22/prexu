@@ -66,8 +66,17 @@ release publishes those bundles anyway, labelled experimental in the changelog
 and in the release notes: no Linux release artifact has been installed or
 launched from a published release.
 
-Known follow-ups include Windows IME (`prexu-x2bt`) and fullscreen transition
-verification (`prexu-6p8k`), as well as WebKitGTK large-resize presentation
+Windows Japanese IME candidate movement (`prexu-x2bt`) was verified on
+2026-11-11 with candidate `37fca703d7ec68f2a8361dd8240f54e96460dd34`
+and WebView2 156.0.4314.58. During active composition, a WebView2-only bounds
+refresh keeps the candidate popup with the caret on programmatic movement and
+native titlebar dragging. The outer window is not resized. The software-rendered
+VM passed both movement checks, inline composition, commit and cancellation on
+the primary 100% display. This does not certify other IMEs, mixed-DPI movement,
+alt-tab or physical GPU hardware.
+
+Known follow-ups include fullscreen transition verification (`prexu-6p8k`),
+as well as WebKitGTK large-resize presentation
 lag (`prexu-41cw`,
 `prexu-v6pr`). The latter reproduces without the app compositor; further work
 is presentation-layer profiling and an upstream evidence report.

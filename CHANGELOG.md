@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Windows IME candidate windows now follow the caret when the app moves during
+  composition, including titlebar dragging, without committing or cancelling
+  the composed text. Verified with the Japanese IME in the software-rendered VM.
+
 ### Changed
 
 - Split relay and invitation settings from About. Relay edits validate addresses,

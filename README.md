@@ -15,7 +15,7 @@ display-transition acceptance was **waived, not performed**; read the changelog'
 
 | Platform | Player | Status |
 | --- | --- | --- |
-| Windows | Native libmpv via ANGLE/DirectComposition; HTML5 fallback | Implemented, including mini-player and popout; IME and some transition verification remain open |
+| Windows | Native libmpv via ANGLE/DirectComposition; HTML5 fallback | Implemented, including mini-player and popout; Japanese IME window movement verified in VM; hardware transition checks remain open |
 | Linux | Native libmpv via GtkGLArea/WebKitGTK; HTML5 fallback | Implemented and exercised on Wayland; hardware coverage and native-player release packaging remain incomplete |
 | macOS | HTML5 video + hls.js | Native opt-in architecture accepted and spiked, but not integrated; platform-aware HTML5 codec gate remains open |
 
