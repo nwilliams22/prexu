@@ -1,3 +1,5 @@
+#[cfg(target_os = "windows")]
+mod window_work_area;
 mod downloads;
 mod probe_environment;
 #[cfg(debug_assertions)]
@@ -815,6 +817,9 @@ pub fn run() {
                     BOOT_MIN_SIZE.0 as f64,
                     BOOT_MIN_SIZE.1 as f64,
                 )));
+
+                #[cfg(target_os = "windows")]
+                window_work_area::fit(&window);
 
                 // Window is `visible: false` in tauri.conf.json. We do NOT
                 // call window.show() here — the frontend invokes

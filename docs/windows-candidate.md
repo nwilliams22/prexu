@@ -216,3 +216,18 @@ release, not a separately installed preview edition.
 Attach redacted observations to `prexu-0828`. Build failures stay with
 `prexu-nrqw`; lack of Windows hardware stays with the owner. Neither this job nor
 a successful candidate install authorizes a release tag or publication.
+
+### Restored window sizing
+
+On Windows the main window is fitted to its nearest monitor's current work area
+at startup and when leaving player fullscreen. The limit applies to the whole
+outer rectangle, including the non-client frame, and excludes the taskbar.
+A smaller fitting user size and position are preserved; maximized windows stay
+under Windows placement management. Work-area and window coordinates are physical
+pixels, including on monitors with different scaling. This does not impose a
+fixed smaller default on larger monitors.
+
+Acceptance for prexu-3iny requires signed-in desktop captures of button,
+double-click and F-key fullscreen entry/exit on the small Windows monitor, with
+bottom controls visible and reachable and the restored outer rectangle within
+`GetMonitorInfoW().rcWork`. Geometry unit tests alone do not prove that acceptance.

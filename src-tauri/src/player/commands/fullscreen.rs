@@ -38,6 +38,12 @@ pub async fn player_set_fullscreen(
         let fs_result = main
             .set_fullscreen(fullscreen)
             .map_err(|e| format!("set_fullscreen failed: {}", e));
+        #[cfg(target_os = "windows")]
+        if !fullscreen && fs_result.is_ok() {
+            let window = main.clone();
+            app.run_on_main_thread(move || crate::window_work_area::fit(&window))
+                .map_err(|e| format!("work-area fit dispatch failed: {e}"))?;
+        }
         let actual_fs = main.is_fullscreen().unwrap_or(fullscreen);
         let _ = app.emit("player://fullscreen", actual_fs);
         return fs_result;
@@ -90,6 +96,9 @@ pub async fn player_set_fullscreen(
         let win_for_sync = main.clone();
         if let Err(e) = app.run_on_main_thread(move || {
             log::debug!("[player:cmd] set_fullscreen: early sync closure entered");
+            if !fullscreen {
+                crate::window_work_area::fit(&win_for_sync);
+            }
             let st = app_for_sync.state::<PlayerState>();
             match (win_for_sync.inner_position(), win_for_sync.inner_size()) {
                 (Ok(pos), Ok(size)) => {
