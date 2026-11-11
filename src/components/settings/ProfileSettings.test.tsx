@@ -28,7 +28,7 @@ function Panels({ userId = 1 }: { userId?: number }) {
   </PreferenceSaveContext>;
 }
 
-beforeEach(() => { localStorage.clear(); __resetEngineFallbackForTests(); });
+beforeEach(() => { HTMLDialogElement.prototype.close = vi.fn(); localStorage.clear(); __resetEngineFallbackForTests(); });
 
 it("hydrates all 29 inventory values from populated legacy storage and preserves unrelated nested values on every update", async () => {
   const saved = getDefaultPreferences();
@@ -57,7 +57,13 @@ it("hydrates all 29 inventory values from populated legacy storage and preserves
       fireEvent.click(control);
     } else {
       expect((control as HTMLInputElement).value).toBe(String(old));
-      fireEvent.change(control, { target: { value: String(next) } });
+      if (control.matches(".settings-color")) {
+        const dialog = control.nextElementSibling!;
+        fireEvent.change(dialog.querySelector("input[type=text]")!, { target: { value: String(next) } });
+        fireEvent.submit(dialog.querySelector("form")!);
+      } else {
+        fireEvent.change(control, { target: { value: String(next) } });
+      }
     }
     const parts = path.split(".");
     let node = expected as unknown as Record<string, unknown>;
@@ -118,7 +124,28 @@ it("preserves the frameless player popup with its existing style-only update con
   const { container } = render(<SubtitleStylePanel frameless subtitleStyle={getDefaultPreferences().playback.subtitleStyle} updateSubtitleStyle={update} />);
   expect(screen.queryByRole("heading")).not.toBeInTheDocument();
   expect(container.querySelector(".settings-section")).toBeNull();
-  fireEvent.change(screen.getByLabelText("Subtitle text color"), { target: { value: "#123456" } });
+  const dialog = screen.getByLabelText("Subtitle text color").nextElementSibling!;
+  fireEvent.change(dialog.querySelector("input[type=text]")!, { target: { value: "#123456" } });
+  fireEvent.submit(dialog.querySelector("form")!);
   expect(update).toHaveBeenCalledWith({ textColor: "#123456" });
   expect(screen.getByText("Sample Subtitle Text")).toBeVisible();
+});
+
+it("tabs through subtitle colors in both directions without trapping focus", async () => {
+  const user = userEvent.setup();
+  render(<Panels />);
+  const font = screen.getByLabelText("Font");
+  await waitFor(() => expect(font).toBeEnabled());
+  const labels = ["Text Color", "Background Color", "Background Opacity", "Outline Color", "Outline Width", "Drop shadow"];
+  font.focus();
+  for (const label of labels) {
+    await user.tab();
+    expect(screen.getByLabelText(label)).toHaveFocus();
+  }
+  for (const label of labels.slice(0, -1).reverse()) {
+    await user.tab({ shift: true });
+    expect(screen.getByLabelText(label)).toHaveFocus();
+  }
+  await user.tab({ shift: true });
+  expect(font).toHaveFocus();
 });

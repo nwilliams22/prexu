@@ -60,6 +60,7 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof SubtitleSear
 }
 
 beforeEach(() => {
+  HTMLDialogElement.prototype.close = vi.fn();
   mockSearchSubtitles.mockReset();
   mockDownloadSubtitle.mockReset();
   mockUpdatePreferences.mockReset();
@@ -183,7 +184,7 @@ describe("SubtitleSearchPanel", () => {
   });
 
   it("shows the Style tab in the player (side) variant with live style controls", () => {
-    renderPanel();
+    const { props } = renderPanel();
     fireEvent.click(screen.getByRole("button", { name: "Style" }));
     // Frameless embed: no "Subtitle Style" heading and no section divider
     expect(screen.queryByText("Subtitle Style")).toBeNull();
@@ -197,9 +198,13 @@ describe("SubtitleSearchPanel", () => {
       playback: { subtitleSize: 150 },
     });
 
-    fireEvent.change(screen.getByLabelText("Subtitle text color"), {
+    const colorDialog = screen.getByLabelText("Subtitle text color").nextElementSibling!;
+    fireEvent.change(colorDialog.querySelector("input[type=text]")!, {
       target: { value: "#ffff00" },
     });
+    fireEvent.keyDown(colorDialog.querySelector("input")!, { key: "Escape" });
+    expect(props.onClose).not.toHaveBeenCalled();
+    fireEvent.submit(colorDialog.querySelector("form")!);
     expect(mockUpdatePreferences).toHaveBeenCalledWith({
       playback: {
         subtitleStyle: expect.objectContaining({ textColor: "#ffff00" }),

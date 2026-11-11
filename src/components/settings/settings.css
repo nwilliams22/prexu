@@ -18,8 +18,8 @@
 .settings-row-copy label, .settings-choice-group legend { font-size: 14px; font-weight: 600; }
 .settings-help { color: var(--text-secondary); font-size: 13px; line-height: 1.5; margin-top: 6px; }
 .settings-error { color: var(--error); font-size: 13px; margin-top: 8px; }
-.settings-row-control input:not([type=checkbox]):not([type=radio]), .settings-row-control select, .settings-mobile-nav select { width: 100%; min-width: 0; min-height: 40px; }
-.settings-row-control select, .settings-row-control input:not([type=range]):not([type=checkbox]):not([type=radio]), .settings-mobile-nav select { background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font: inherit; }
+.settings-row-control input:not([type=checkbox]):not([type=radio]), .settings-row-control select, .settings-mobile-nav select, .settings-color-dialog input { width: 100%; min-width: 0; min-height: 40px; }
+.settings-row-control select, .settings-row-control input:not([type=range]):not([type=checkbox]):not([type=radio]), .settings-mobile-nav select, .settings-color-dialog input { background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font: inherit; }
 .settings-container :is(input, select, button, a, [tabindex]):focus-visible, .settings-section :is(input, select, button, a, [tabindex]):focus-visible { outline: 2px solid var(--accent) !important; outline-offset: 2px; }
 .settings-container :is(button, input[type=color]) { min-height: 44px; }
 .settings-range input { display: block; width: 100%; min-height: 40px; accent-color: var(--accent); }
@@ -58,7 +58,7 @@
 .preference-save-status button { margin-inline-start: 8px; min-height: 44px; padding: 4px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary); }
 .settings-loading div { height: 40px; margin-block: 12px; border-radius: 6px; background: var(--bg-card); }
 
-.settings-section button, .settings-actions button { min-height: 44px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-primary); color: var(--text-primary); cursor: pointer; }
+.settings-section button, .settings-actions button, .settings-color-dialog button { min-height: 44px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-primary); color: var(--text-primary); cursor: pointer; }
 .settings-section button:disabled { opacity: .6; cursor: default; }
 .settings-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-block: 12px; }
 .settings-user-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
@@ -85,3 +85,15 @@
 .settings-search-results li { margin-bottom: 12px; }
 .settings-search-results a { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--border); border-radius: 8px; padding: 16px; background: var(--bg-card); color: var(--text-primary); }
 .settings-search-results span { color: var(--text-secondary); font-size: 13px; line-height: 1.5; }
+
+.settings-color { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-primary); color: var(--text-primary); cursor: pointer; font: inherit; }
+.settings-color:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.settings-color-swatch { width: 32px; height: 24px; border: 1px solid var(--border); border-radius: 4px; }
+.settings-color-value { font-family: monospace; }
+.settings-color-dialog { margin: auto; max-width: min(380px, calc(100% - 32px)); padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-card); color: var(--text-primary); }
+.settings-color-dialog::backdrop { background: rgb(0 0 0 / 50%); }
+.settings-color-dialog h3 { margin-bottom: 16px; }
+.settings-color-dialog input[type=text] { display: block; margin: 8px 0; width: 100%; }
+.settings-color-dialog p { margin-bottom: 12px; font-size: 13px; }
+.settings-color-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.settings-color-dialog :is(input, button):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

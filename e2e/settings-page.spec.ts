@@ -230,3 +230,58 @@ test("migrated profile controls preserve subtitle choices and preview size acros
   await page.locator(".settings-container").screenshot({ path: shot });
   await testInfo.attach("subtitles-migrated", { path: shot, contentType: "image/png" });
 });
+
+test("subtitle colors retain keyboard order and visible focus", async ({ page }) => {
+  await page.goto("/settings/subtitles");
+  const font = page.getByLabel("Font", { exact: true });
+  await font.focus();
+  const order = ["Text Color", "Background Color", "Background Opacity", "Outline Color", "Outline Width", "Drop shadow"];
+  for (const label of order) {
+    await page.keyboard.press("Tab");
+    const control = page.getByLabel(label, { exact: true });
+    await expect(control).toBeFocused();
+    if (label.endsWith("Color")) {
+      await expect(control).toHaveAttribute("type", "button");
+      await expect(control).toHaveCSS("outline-style", "solid");
+      await expect(control).toHaveCSS("outline-width", "2px");
+    }
+  }
+  for (const label of order.slice(0, -1).reverse()) {
+    await page.keyboard.press("Shift+Tab");
+    await expect(page.getByLabel(label, { exact: true })).toBeFocused();
+  }
+  await page.keyboard.press("Shift+Tab");
+  await expect(font).toBeFocused();
+});
+
+
+test("subtitle colors can be edited and cancelled from the keyboard", async ({ page }) => {
+  await page.goto("/settings/subtitles");
+  for (const [label, color] of [["Text Color", "#123456"], ["Background Color", "#abcdef"], ["Outline Color", "#654321"]]) {
+    const button = page.getByLabel(label, { exact: true });
+    await button.focus();
+    await page.keyboard.press("Enter");
+    const dialog = page.getByRole("dialog", { name: "Choose color" });
+    await expect(dialog.getByLabel("Hex color")).toBeFocused();
+    await page.keyboard.press("ControlOrMeta+a");
+    await page.keyboard.type("#bad");
+    await page.keyboard.press("Enter");
+    await expect(dialog).toBeVisible();
+    // Replace the initial value using only keyboard input.
+    await page.keyboard.press("ControlOrMeta+a");
+    await page.keyboard.type(color);
+    await page.keyboard.press("Enter");
+    await expect(dialog).not.toBeVisible();
+    await expect(button).toBeFocused();
+    await expect(button).toHaveAttribute("value", color);
+    await page.keyboard.press("Space");
+    await dialog.getByLabel("Hex color").fill("#000000");
+    await page.keyboard.press("Escape");
+    await expect(button).toBeFocused();
+    await expect(button).toHaveAttribute("value", color);
+  }
+  await page.reload();
+  await expect(page.getByLabel("Text Color", { exact: true })).toHaveAttribute("value", "#123456");
+  await expect(page.getByLabel("Background Color", { exact: true })).toHaveAttribute("value", "#abcdef");
+  await expect(page.getByLabel("Outline Color", { exact: true })).toHaveAttribute("value", "#654321");
+});

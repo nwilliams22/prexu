@@ -1,3 +1,4 @@
+import { SettingsColor } from "./SettingsColor";
 import { PreferenceSaveStatus } from "./PreferenceSaveStatus";
 import { useMemo } from "react";
 import type { SubtitleStylePreferences } from "../../types/preferences";
@@ -50,14 +51,11 @@ export function SubtitleStylePanel({
       <div style={styles.field}>
         <label style={styles.label}>Text Color</label>
         <div style={panelStyles.colorRow}>
-          <input aria-describedby={frameless ? undefined : "preference-S2"}
-            type="color"
+          <SettingsColor aria-describedby={frameless ? undefined : "preference-S2"}
             value={ss.textColor}
-            onChange={(e) => update({ textColor: e.target.value })}
-            style={panelStyles.colorInput}
+            onChange={(value) => update({ textColor: value })}
             aria-label="Subtitle text color"
           />
-          <span style={panelStyles.colorValue}>{ss.textColor}</span>
         </div>
         <PreferenceSaveStatus path="playback.subtitleStyle.textColor" />
       </div>
@@ -65,14 +63,11 @@ export function SubtitleStylePanel({
       <div style={styles.field}>
         <label style={styles.label}>Background Color</label>
         <div style={panelStyles.colorRow}>
-          <input aria-describedby={frameless ? undefined : "preference-S3"}
-            type="color"
+          <SettingsColor aria-describedby={frameless ? undefined : "preference-S3"}
             value={ss.backgroundColor}
-            onChange={(e) => update({ backgroundColor: e.target.value })}
-            style={panelStyles.colorInput}
+            onChange={(value) => update({ backgroundColor: value })}
             aria-label="Subtitle background color"
           />
-          <span style={panelStyles.colorValue}>{ss.backgroundColor}</span>
         </div>
         <PreferenceSaveStatus path="playback.subtitleStyle.backgroundColor" />
       </div>
@@ -101,14 +96,11 @@ export function SubtitleStylePanel({
       <div style={styles.field}>
         <label style={styles.label}>Outline Color</label>
         <div style={panelStyles.colorRow}>
-          <input aria-describedby={frameless ? undefined : "preference-S5"}
-            type="color"
+          <SettingsColor aria-describedby={frameless ? undefined : "preference-S5"}
             value={ss.outlineColor}
-            onChange={(e) => update({ outlineColor: e.target.value })}
-            style={panelStyles.colorInput}
+            onChange={(value) => update({ outlineColor: value })}
             aria-label="Subtitle outline color"
           />
-          <span style={panelStyles.colorValue}>{ss.outlineColor}</span>
         </div>
         <PreferenceSaveStatus path="playback.subtitleStyle.outlineColor" />
       </div>
@@ -199,20 +191,6 @@ const panelStyles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     gap: "0.75rem",
-  },
-  colorInput: {
-    width: "40px",
-    height: "32px",
-    padding: 0,
-    border: "2px solid var(--border)",
-    borderRadius: "6px",
-    cursor: "pointer",
-    background: "transparent",
-  },
-  colorValue: {
-    fontSize: "0.85rem",
-    color: "var(--text-secondary)",
-    fontFamily: "monospace",
   },
   previewContainer: {
     background: "#1a1a1a",

@@ -1,3 +1,4 @@
+import { SettingsColor } from "./SettingsColor";
 import type { PlaybackPreferences, SubtitleStylePreferences } from "../../types/preferences";
 import { LANGUAGES } from "../../constants/languages";
 import { PreferenceRow } from "./PreferenceRow";
@@ -38,13 +39,13 @@ export function SubtitlesSettingsPanel({ playback: pb, updatePlayback, updateSub
         </select>}
       </PreferenceRow>
       {(["textColor", "backgroundColor"] as const).map((key) => <PreferenceRow key={key} path={`playback.subtitleStyle.${key}`}>
-        {(props) => <><input {...props} type="color" value={ss[key]} onChange={(e) => update({ [key]: e.target.value })} /><span>{ss[key]}</span></>}
+        {(props) => <SettingsColor {...props} value={ss[key]} onChange={(value) => update({ [key]: value })} />}
       </PreferenceRow>)}
       <PreferenceRow path="playback.subtitleStyle.backgroundOpacity">
         {(props) => <SettingsRange {...props} value={ss.backgroundOpacity} min={0} max={1} step={0.05} formatValue={(n) => `${Math.round(n * 100)}%`} onChange={(e) => update({ backgroundOpacity: Number(e.target.value) })} />}
       </PreferenceRow>
       <PreferenceRow path="playback.subtitleStyle.outlineColor">
-        {(props) => <><input {...props} type="color" value={ss.outlineColor} onChange={(e) => update({ outlineColor: e.target.value })} /><span>{ss.outlineColor}</span></>}
+        {(props) => <SettingsColor {...props} value={ss.outlineColor} onChange={(value) => update({ outlineColor: value })} />}
       </PreferenceRow>
       <PreferenceRow path="playback.subtitleStyle.outlineWidth">
         {(props) => <SettingsRange {...props} value={ss.outlineWidth} min={0} max={4} step={1} formatValue={(n) => `${n}px`} onChange={(e) => update({ outlineWidth: Number(e.target.value) })} />}
