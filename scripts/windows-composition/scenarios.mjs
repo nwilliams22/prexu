@@ -25,10 +25,10 @@ export function verifyScenarios(root) {
           png.readUInt32BE(16) < 640 || png.readUInt32BE(20) < 480) throw Error(`Invalid composed capture: ${file}`);
     }
     if (name !== 'stop' && (!metric.videoPresent || !metric.chrome ||
-        !(metric.chromeWhiteFraction > .01) || !(metric.chromeWhiteFractionB > .01) ||
+        !(metric.chromeIconFraction > .01) || !(metric.chromeIconFractionB > .01) ||
         !Number.isFinite(Date.parse(metric.firstUtc)) || !Number.isFinite(Date.parse(metric.secondUtc)) ||
         Date.parse(metric.secondUtc) - Date.parse(metric.firstUtc) < 1000 ||
-        Date.parse(metric.secondUtc) - Date.parse(metric.firstUtc) >= 3000)) throw Error(`Invalid observation: ${name}`);
+        Date.parse(metric.secondUtc) - Date.parse(metric.firstUtc) >= 10000)) throw Error(`Invalid observation: ${name}`);
     if (name === 'fault-detected' && (metric.moving !== false || !(metric.metrics?.[2] < .002))) throw Error('Native freeze not detected');
   }
   return { pass: true, scenarios: requiredScenarios.length, capture: session.capture };

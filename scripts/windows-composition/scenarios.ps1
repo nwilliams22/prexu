@@ -19,7 +19,7 @@ function Observe([string]$Name,[string]$Control,[bool]$ExpectMoving=$true) {
  # Repeated native pointer movement keeps real controls visible during slow
  # software captures; no DOM style or screenshot pixels are changed.
  $labelJson=ConvertTo-Json -InputObject $Control -Compress
- $point=Javascript "(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')===$labelJson);if(!b)return null;const r=b.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height}})()"
+ $point=Javascript "(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')===$labelJson);if(!b)return null;const r=b.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height,color:getComputedStyle(b).color.match(/[0-9.]+/g).slice(0,3).map(Number)}})()"
  if(-not $point){throw "Expected control missing: $Control"}
  $origin=New-Object Drawing.Point;[Desktop]::ClientToScreen($hwnd,[ref]$origin) | Out-Null
  $scale=[Desktop]::GetDpiForWindow($hwnd)/96.0
@@ -34,18 +34,18 @@ function Observe([string]$Name,[string]$Control,[bool]$ExpectMoving=$true) {
   $m=[Desktop]::Measure($a,$b,$roi[0],$roi[1],$roi[2],$roi[3])
   $motion=$m[0] -gt .5 -and $m[1] -gt .15 -and $m[4] -gt .5 -and $m[5] -gt .15 -and $m[2] -gt .005
  }
- $chrome=$false;$chromeRoi=@();$chromeLit=0;$whiteB=0
+ $chrome=$false;$chromeRoi=@();$chromeLit=0;$iconB=0
  if($point -and $point.w -gt 0 -and $point.h -gt 0){
   $origin=New-Object Drawing.Point;[Desktop]::ClientToScreen($hwnd,[ref]$origin) | Out-Null
   $scale=[Desktop]::GetDpiForWindow($hwnd)/96.0
   $chromeRoi=@([int]($origin.X+$point.x*$scale-$screen.X),[int]($origin.Y+$point.y*$scale-$screen.Y),[int]($point.w*$scale),[int]($point.h*$scale))
   if($chromeRoi[0] -ge 0 -and $chromeRoi[1] -ge 0 -and $chromeRoi[0]+$chromeRoi[2] -le $a.Width -and $chromeRoi[1]+$chromeRoi[3] -le $a.Height){
-   $chromeLit=[Desktop]::WhiteFraction($a,$chromeRoi[0],$chromeRoi[1],$chromeRoi[2],$chromeRoi[3]);$whiteB=[Desktop]::WhiteFraction($b,$chromeRoi[0],$chromeRoi[1],$chromeRoi[2],$chromeRoi[3]);$chrome=$chromeLit -gt .01 -and $whiteB -gt .01
+   $chromeLit=[Desktop]::IconFraction($a,$chromeRoi[0],$chromeRoi[1],$chromeRoi[2],$chromeRoi[3],$point.color[0],$point.color[1],$point.color[2]);$iconB=[Desktop]::IconFraction($b,$chromeRoi[0],$chromeRoi[1],$chromeRoi[2],$chromeRoi[3],$point.color[0],$point.color[1],$point.color[2]);$chrome=$chromeLit -gt .01 -and $iconB -gt .01
   }
  }
- $timely=($frames.SecondUtc-$frames.FirstUtc).TotalMilliseconds -lt 3000
+ $timely=($frames.SecondUtc-$frames.FirstUtc).TotalMilliseconds -lt 10000
  $pass=$motion -and $chrome -and $timely
- $results.Add(@{name=$Name;pass=$pass;videoPresent=(-not $bars.IsEmpty);moving=$motion;chrome=$chrome;chromeWhiteFraction=$chromeLit;chromeWhiteFractionB=$whiteB;chromeRoi=$chromeRoi;roi=$roi;metrics=$m;firstUtc=$frames.FirstUtc.ToString('o');secondUtc=$frames.SecondUtc.ToString('o');expectMoving=$ExpectMoving})
+ $results.Add(@{name=$Name;pass=$pass;videoPresent=(-not $bars.IsEmpty);moving=$motion;chrome=$chrome;chromeIconFraction=$chromeLit;chromeIconFractionB=$iconB;chromeRoi=$chromeRoi;iconColor=$point.color;roi=$roi;metrics=$m;firstUtc=$frames.FirstUtc.ToString('o');secondUtc=$frames.SecondUtc.ToString('o');expectMoving=$ExpectMoving})
  ConvertTo-Json -InputObject ($results.ToArray()) -Depth 6 | Set-Content "$Output\metrics.json"
  [Desktop]::StopPointer()
  return $results[$results.Count-1]

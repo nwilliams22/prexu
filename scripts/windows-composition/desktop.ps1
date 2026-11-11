@@ -32,11 +32,12 @@ public class Desktop {
  static System.Threading.Timer pointerTimer; static int pointerTick;
  public static void StartPointer(int x,int y) {StopPointer();pointerTimer=new System.Threading.Timer(_=>{SetCursorPos(x+((System.Threading.Interlocked.Increment(ref pointerTick)&1)*8),y);},null,0,250);}
  public static void StopPointer() {if(pointerTimer!=null){pointerTimer.Dispose();pointerTimer=null;}}
- public static double WhiteFraction(Bitmap b,int x,int y,int w,int h) {
-  int stride;var p=Pixels(b,out stride);int white=0,total=0;
-  for(int j=y;j<y+h;j++)for(int i=x;i<x+w;i++){int k=j*stride+i*4;int lo=Math.Min(p[k],Math.Min(p[k+1],p[k+2]));int hi=Math.Max(p[k],Math.Max(p[k+1],p[k+2]));if(lo>170&&hi-lo<30)white++;total++;}
-  return white/(double)total;
+ public static double IconFraction(Bitmap b,int x,int y,int w,int h,int red,int green,int blue) {
+  int stride;var p=Pixels(b,out stride);int matched=0,total=0;
+  for(int j=y;j<y+h;j++)for(int i=x;i<x+w;i++){int k=j*stride+i*4;if(Math.Abs(p[k]-blue)<20&&Math.Abs(p[k+1]-green)<20&&Math.Abs(p[k+2]-red)<20)matched++;total++;}
+  return matched/(double)total;
  }
+ public static double WhiteFraction(Bitmap b,int x,int y,int w,int h) {return IconFraction(b,x,y,w,h,255,255,255);}
  // Only strongly saturated pixels can be the synthetic color-bar fixture.
  // Ignore titlebar/controls and measure a central video ROI supplied by the caller.
  public class Frames {public Bitmap A,B;public DateTime FirstUtc,SecondUtc;}
@@ -111,6 +112,7 @@ if($SelfTest) {
  $bounds=[Desktop]::PatternBounds($a,640,480,150,500)
  if($bounds.Width -lt 235 -or $bounds.X -lt 95 -or $bounds.X -gt 105){throw 'Tile detector rejected known six-stripe tile'}
  $same=[Desktop]::Measure($a,$b,110,130,220,120)
+ if([Desktop]::IconFraction($a,110,130,220,120,26,26,26) -ne 0){throw 'Colored video must not pass as a dark control icon'}
  if([Desktop]::WhiteFraction($a,110,130,220,120) -ne 0){throw 'Colored video must not pass as a white control icon'}
  if($same[2] -ne 0 -or $same[1] -lt .9){throw 'Frozen-video negative control failed'}
  $g=[Drawing.Graphics]::FromImage($b);$g.FillRectangle([Drawing.Brushes]::White,150,150,70,70);$g.Dispose()
@@ -196,7 +198,7 @@ function CapturePair([string]$Name) {
  do {
   $frames=[Desktop]::Pair([Desktop]::GetSystemMetrics(76),[Desktop]::GetSystemMetrics(77),[Desktop]::GetSystemMetrics(78),[Desktop]::GetSystemMetrics(79))
   $attempt++
-  $timely=($frames.SecondUtc-$frames.FirstUtc).TotalMilliseconds -lt 3000
+  $timely=($frames.SecondUtc-$frames.FirstUtc).TotalMilliseconds -lt $(if($Scenarios){10000}else{3000})
   if(-not $timely -and $attempt -lt 3){
    Trace "pair $Name timing-rejected-$attempt intervalMs=$(($frames.SecondUtc-$frames.FirstUtc).TotalMilliseconds)"
    $captures.Add(@{name="$Name-timing-rejected-$attempt-a";image=$frames.A});$captures.Add(@{name="$Name-timing-rejected-$attempt-b";image=$frames.B})

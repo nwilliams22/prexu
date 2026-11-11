@@ -26,11 +26,14 @@ This is an installed-release adapter, separate from the debug-only
 
 `CopyFromScreen` samples the composed virtual desktop, including native video,
 WebView2 chrome and OS window borders. Evidence contains timestamped pairs of
-PNG frames, video-region motion/color metrics and white control-icon pixel observations.
+PNG frames, video-region motion/color metrics and theme-matched control-icon pixel observations.
 Repeated native pointer movement keeps controls visible while sampling; their
 DOM styles and captured pixels are never changed.
 These are sampled frames, **not a continuous recording or transition-latency
-measurement**. Native pixel self-tests run before playback. The deliberate
+measurement**. Scenario samples must be 1–10 seconds apart to accommodate
+software capture latency; this is not a frame-pacing acceptance threshold.
+The separate focus/DPI matrix retains its tighter three-second bound.
+Native pixel self-tests run before playback. The deliberate
 fault pauses the actual libmpv renderer while the same moving-video predicate
 still expects movement; detection requires visible frozen video and controls,
 not missing/black captures. Playback must recover afterwards. Stop requires
