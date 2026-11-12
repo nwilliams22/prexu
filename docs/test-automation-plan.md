@@ -42,8 +42,33 @@ point-in-time local result, not a permanent expected count or current CI claim.
 | `headless-mpv` (Windows) | Desktop clippy/lib tests and real mpv signal-chain plus generated-fixture seek/track/error/teardown integration; ANGLE runtime DLL integrity tests skipped because this job uses stubs |
 | `headless-mpv-linux` (Ubuntu 24.04) | Real libmpv API 2.x signal-chain and generated-fixture seek/track/error/teardown integration, plus the `#[ignore]`d real-libmpv lib tests |
 | `linux-build` (Ubuntu 22.04) | Frontend production build, desktop clippy/build/tests with system libmpv, check that the player-chrome stub is absent from production assets; its libmpv is API 1.x, so the real-libmpv lib tests are `#[ignore]`d here |
-| `desktop-smoke-linux` | Advisory Xvfb process launch/liveness/exit/zombie check; not authenticated dashboard or visual validation |
+| `desktop-smoke-linux` | Blocking CI gate: Xvfb launch, 18-second liveness, frontend `app_ready` handshake, SIGTERM exit within 15 seconds, and no defunct prexu/mpv processes; not authenticated dashboard or visual validation |
 | Separate security workflow | Report-only SBOM/Grype scanning; findings do not fail this workflow |
+
+### Desktop smoke gate policy (2026-11-12, prexu-vbb2.9)
+
+`desktop-smoke-linux` is blocking at the workflow level: it has no job-level
+`continue-on-error`. Both allowed attempts must fail before the smoke step
+fails CI. This does not configure GitHub branch protection; merge enforcement
+also depends on the repository requiring the CI check.
+
+The promotion is based on the latest 20 `main` CI runs inspected on 2026-11-12,
+from [42958787651](https://github.com/nwilliams22/prexu/actions/runs/42958787651)
+through [43167082189](https://github.com/nwilliams22/prexu/actions/runs/43167082189).
+All 20 desktop-smoke jobs **and their smoke steps** concluded `success`:
+0/20 observed terminal failures (0%). This is a short, two-day sample, not a
+long-term flake guarantee. Attempt-level logs were unavailable through
+`gh run view --log` during the audit, so first-attempt flakiness is unknown;
+the existing two-attempt retry remains in place. Reproduce the job-level
+sample with `gh run list --workflow ci.yml --branch main --limit 20` and
+`gh run view <run-id> --json jobs`, inspecting the smoke step as well as the
+job rather than relying on the overall workflow conclusion.
+
+The job embeds production assets with `tauri/custom-protocol` and requires
+React's `app_ready` IPC handshake in a fresh profile. Failure logs are saved
+as `xvfb-desktop-smoke-logs`. Software GL under Xvfb still does not establish
+GPU rendering, audible sound, authenticated playback, or installed-artifact
+acceptance. Those remain separate acceptance boundaries.
 
 For headless runtime tests after provisioning libmpv and frontend assets:
 

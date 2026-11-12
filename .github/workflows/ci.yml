@@ -458,20 +458,13 @@ jobs:
         run: cargo test
 
   desktop-smoke-linux:
-    name: "Desktop smoke (Xvfb, Linux) [advisory]"
+    name: "Desktop smoke (Xvfb, Linux)"
     runs-on: ubuntu-22.04
-    # Advisory only (prexu-510g, spike prexu-pd1x.12): launches the actual
-    # built binary headlessly under Xvfb and asserts launch + liveness + clean
-    # exit + no zombie child + React startup via the app_ready IPC handshake.
-    # Login renders without Plex credentials. webkit2gtk under Xvfb can
-    # be flaky (no real GPU/DRM device), so this job retries and never blocks
-    # merges (continue-on-error). Runner mirrors linux-build/release.yml
-    # (ubuntu-22.04 is what the Linux release actually ships on), so the smoke
-    # exercises the same base the release AppImage targets. Builds itself
-    # independently rather than downloading linux-build's output — no
-    # artifact-upload/download pattern exists yet in this file, and every
-    # other job here already stays decoupled the same way.
-    continue-on-error: true
+    # Blocking CI gate (prexu-vbb2.9): production frontend app_ready handshake,
+    # launch/liveness, bounded SIGTERM exit, and no defunct prexu/mpv processes.
+    # Retain two attempts for transient WebKit/Xvfb startup failures; exhausting
+    # both fails CI. See docs/test-automation-plan.md for evidence and limits.
+    # Mirrors the release's ubuntu-22.04 base and builds independently.
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
