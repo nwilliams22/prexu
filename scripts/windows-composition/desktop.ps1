@@ -66,7 +66,7 @@ public class Desktop {
     if(ok && pos-begin>=minWidth && pos-begin<=maxWidth){left=Math.Min(left,begin);right=Math.Max(right,pos);top=Math.Min(top,y);bottom=Math.Max(bottom,y);x=pos;}
    }
   }
-  if(right<=left || bottom<=top)return Rectangle.Empty;
+  if(right<=left)return Rectangle.Empty;
   // Animated lines/checkerboards break complete stripe runs. Once horizontal
   // geometry is known, recover vertical bounds from the expected six-bar colors,
   // tolerating moving overlays rather than treating them as cropped video.
@@ -130,6 +130,17 @@ if($SelfTest) {
  $g=[Drawing.Graphics]::FromImage($a);$g.FillRectangle([Drawing.Brushes]::White,220,200,45,70);$g.Dispose()
  $occludedBounds=[Desktop]::PatternBounds($a,640,480,150,500)
  if([Math]::Abs($occludedBounds.Height-$bounds.Height) -gt 3){throw 'Animated overlay changed measured video bounds'}
+ # One unobstructed scan row is enough to find horizontal geometry. Recover
+ # height from the mostly visible stripes, not from the number of seed rows.
+ $single=New-Object Drawing.Bitmap 640,480
+ $g=[Drawing.Graphics]::FromImage($single);$g.Clear([Drawing.Color]::Black)
+ for($i=0;$i -lt 6;$i++){$brush=New-Object Drawing.SolidBrush $colors[$i];$g.FillRectangle($brush,100+$i*40,120,40,150);$brush.Dispose()}
+ $g.FillRectangle([Drawing.Brushes]::Gray,150,120,10,61)
+ $g.FillRectangle([Drawing.Brushes]::Gray,150,184,10,86)
+ $g.Dispose()
+ $singleBounds=[Desktop]::PatternBounds($single,640,480,150,500)
+ $single.Dispose()
+ if($singleBounds.Width -lt 235 -or $singleBounds.Height -lt 140){throw 'Single seed row must recover the visible video bounds'}
  $g=[Drawing.Graphics]::FromImage($b);$g.DrawImageUnscaled($a,0,0);$g.Dispose()
  $a.Dispose();$b.Dispose();'PIXEL_SELFTEST_PASS';exit 0
 }
