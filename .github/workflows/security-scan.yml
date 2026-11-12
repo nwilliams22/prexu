@@ -18,11 +18,11 @@ jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Cache scanner binaries
         id: scanner-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/prexu-tools/scanners
           key: scanners-${{ runner.os }}-${{ runner.arch }}-syft-1.57.0-grype-0.121.2-v1
@@ -64,7 +64,7 @@ jobs:
           echo "$HOME/.cache/prexu-tools/scanners" >> "$GITHUB_PATH"
 
       - name: Cache grype DB
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/grype/db
           key: grype-db-${{ github.run_id }}

@@ -14,14 +14,14 @@ jobs:
     name: Generate deterministic probe fixtures
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install fixture tools
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Generate and verify fixtures
         run: |
           python3 scripts/hw-probe/driver/fixtures.py probe-fixtures
           python3 scripts/hw-probe/driver/fixtures.py probe-fixtures --verify
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: probe-fixtures
           path: probe-fixtures/
@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -42,9 +42,9 @@ jobs:
           components: clippy
 
       - name: Setup Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Install dependencies
@@ -76,7 +76,7 @@ jobs:
       # optional end-to-end luminance leg self-skips when ImageMagick v7 is absent.
       - name: Cache Nushell
         id: nu-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/prexu-tools/nu
           key: nu-${{ runner.os }}-${{ runner.arch }}-0.116.1-v1
@@ -181,7 +181,7 @@ jobs:
     #     which is why the import lib stays vendored.
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -274,7 +274,7 @@ jobs:
           RUST_LOG: debug
         run: cargo test --test headless_mpv -- --nocapture --ignored
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: probe-fixtures
           path: probe-fixtures
@@ -322,7 +322,7 @@ jobs:
     # API 1.x (mpv 0.35) and fails with VersionMismatch. This job mirrors the
     # Windows headless job but uses the system libmpv instead of a bundled DLL.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -354,7 +354,7 @@ jobs:
           RUST_LOG: debug
         run: cargo test --test headless_mpv -- --nocapture --ignored
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: probe-fixtures
           path: probe-fixtures
@@ -395,7 +395,7 @@ jobs:
     # macOS remains gated off (no player module compiles there).
     # Mirrors the release.yml Linux deps.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -414,9 +414,9 @@ jobs:
             libmpv-dev
 
       - name: Setup Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Install dependencies
@@ -474,7 +474,7 @@ jobs:
     continue-on-error: true
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -493,9 +493,9 @@ jobs:
             dbus
 
       - name: Setup Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Install dependencies
@@ -643,7 +643,7 @@ jobs:
 
       - name: Upload smoke logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: xvfb-desktop-smoke-logs
           path: |

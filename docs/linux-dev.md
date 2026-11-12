@@ -6,7 +6,7 @@ packaging acceptance remain open. See [implementation status](native-player-stat
 
 ## Dependencies and launch
 
-Node 22 is configured in `mise.toml`; Rust is supplied by rustup. The native
+Node 26 is configured in `mise.toml` and `.nvmrc`; Rust is supplied by rustup. The native
 player dynamically links system libmpv. Ubuntu CI installs these build packages:
 
 ```bash

@@ -26,7 +26,7 @@ for acceptance gaps and [Linux setup](docs/linux-dev.md) for prerequisites.
 
 ## Development
 
-Use Node 22 (`mise.toml`) and Rust via rustup. Install platform prerequisites
+Use Node 26 (`mise.toml`, `.nvmrc`) and Rust via rustup. Install platform prerequisites
 before launching Tauri; Windows also needs the [native binaries](src-tauri/bin/README.md).
 
 ```bash

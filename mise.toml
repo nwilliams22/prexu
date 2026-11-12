@@ -1,5 +1,5 @@
 [tools]
-node = "22"
+node = "26"
 
 [env]
 # The Tauri backend and relay-server need cargo. Rust is provisioned by rustup
