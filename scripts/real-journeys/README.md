@@ -91,17 +91,16 @@ containing the fixture twice, drives EOF and Play Now, and checks queue index an
 restarted native time. This tests queue restoration/handoff, not playlist creation,
 episode chaining or distinct-item identity. Download playback is attempted after
 replacing the isolated profile's server address with an unreachable loopback port
-and reloading, so an in-memory metadata cache cannot supply offline acceptance.
+and restarting the native app process, so an in-memory metadata cache cannot
+supply offline acceptance.
 
 Limitations remain explicit and keep the exit status nonzero:
 
 - The current QA movie lasts 60.022 seconds; `useTimelineReporting` has a
   60-second minimum resume threshold. A longer synthetic fixture is required to
   test a meaningful stop/resume interval before EOF. `native-resume` is UNSUPPORTED.
-- If downloaded playback reaches Retry/Go Back instead of advancing with the
-  server unavailable, `native-offline` is UNSUPPORTED. `prepareSource` currently
-  requires server metadata before it selects the local file; tracked in
-  `prexu-hwrn`. Download success alone does not establish offline support.
+- Downloaded playback must advance with the server unavailable; reaching
+  Retry/Go Back is a `native-offline` FAIL, not UNSUPPORTED.
 - The second QA identity is still required for the two-client relay journeys.
 - Native events establish control/progress, not audible output, GPU correctness
   or composed-screen acceptance. No screenshots or recordings are captured.
@@ -120,3 +119,13 @@ and skips restoration if another client becomes active. This is a fail-closed
 contention check, not a cross-machine lease: arrange exclusive use of the QA
 account for acceptance runs. A concurrent client can invalidate watch-state
 comparisons even when local profiles and displays are isolated.
+
+For the offline regression alone, set `PREXU_JOURNEY_OFFLINE_ONLY=1` in the
+native command above. This runs real login, download, process restart and
+local playback with an unreachable stored server address, then deletes the file
+and checks the explicit missing-file error. It accepts the
+fixture's current watch state, skips online playback/queue/resume/relay checks,
+and still verifies cleanup and restoration. A PASS for this slice does not
+establish those omitted journeys. The fallback uses the existing completed
+download record for title/episode display; file duration and tracks are probed
+by the local player. Fresh server metadata is still preferred when available.

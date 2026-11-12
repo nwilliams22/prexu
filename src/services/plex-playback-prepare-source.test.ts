@@ -12,6 +12,8 @@ import {
   createPreferences,
   resetIdCounter,
 } from "../__tests__/mocks/plex-data";
+import { saveDownloadItems } from "./storage/downloads";
+import type { DownloadItem } from "../types/downloads";
 import type { PlaybackPreferences } from "../types/preferences";
 
 // ── Module mocks ──
@@ -72,6 +74,7 @@ function makeMovie() {
 // ── Tests ──
 
 beforeEach(() => {
+  localStorage.clear();
   resetIdCounter();
   mockGetLocalFilePath.mockResolvedValue(null);
   mockFetch.mockReset();
@@ -94,6 +97,49 @@ describe("prepareSource", () => {
     expect(result.sourceKind).toBe("local");
     expect(result.isLocal).toBe(true);
     expect(result.url).toBe("C:\\Downloads\\movie.mkv");
+  });
+
+  const savedDownload: DownloadItem = {
+    ratingKey: RATING_KEY, title: "Offline movie", subtitle: "2026",
+    type: "movie", thumb: "/private/thumb", partKey: "/private/part",
+    fileName: "movie.mkv", fileSize: 100, serverUri: SERVER.uri,
+    status: "complete", bytesDownloaded: 100,
+  };
+
+  it("plays a persisted download when metadata rejects after restart", async () => {
+    await saveDownloadItems([savedDownload]);
+    mockGetItemMetadata.mockRejectedValue(new Error("Server unreachable"));
+    mockGetLocalFilePath.mockResolvedValue("/downloads/42/movie.mkv");
+    const result = await prepareSource({
+      server: SERVER, ratingKey: RATING_KEY, preferences: makePrefs(),
+      skipCodecCheck: true, offsetOverride: 1200,
+    });
+    expect(result.sourceKind).toBe("local");
+    expect(result.url).toBe("/downloads/42/movie.mkv");
+    expect(result.item.title).toBe("Offline movie");
+    expect(result.item.year).toBe(2026);
+    expect(result.viewOffset).toBe(1200);
+    expect(result.categorized).toEqual({ video: null, audio: [], subtitles: [] });
+    expect(JSON.stringify(result.item)).not.toContain("/private/");
+    expect(JSON.stringify(result.item)).not.toContain(SERVER.uri);
+  });
+
+  it("reports a missing completed download clearly when offline", async () => {
+    await saveDownloadItems([savedDownload]);
+    mockGetItemMetadata.mockRejectedValue(new Error("Server unreachable"));
+    mockGetLocalFilePath.mockResolvedValue(null);
+    await expect(prepareSource({
+      server: SERVER, ratingKey: RATING_KEY, preferences: makePrefs(),
+    })).rejects.toThrow("Downloaded file is missing or unavailable");
+  });
+
+  it("does not use incomplete download metadata for a local file", async () => {
+    await saveDownloadItems([{ ...savedDownload, status: "downloading" }]);
+    mockGetItemMetadata.mockRejectedValue(new Error("Server unreachable"));
+    mockGetLocalFilePath.mockResolvedValue("/downloads/42/movie.mkv");
+    await expect(prepareSource({
+      server: SERVER, ratingKey: RATING_KEY, preferences: makePrefs(),
+    })).rejects.toThrow("Server unreachable");
   });
 
   // Case 2: directPlayPreference = "always" → direct

@@ -8,15 +8,17 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
 
+const offlineOnly = process.env.PREXU_JOURNEY_OFFLINE_ONLY === '1';
 const rows = [];
-const add = (journey, status) => { const reason = status === 'UNSUPPORTED' ? (journey === 'native-resume' ? 'QA fixture is too short for the 60-second resume threshold' : 'Downloaded playback reached the error UI with the server unavailable') : status === 'BLOCKED' ? 'Second authorized QA identity is not provisioned' : status === 'NOT_RUN' ? 'Required scenario did not complete' : undefined; rows.push({ journey, status, ...(reason ? { reason } : {}) }); if (process.env.PREXU_JOURNEY_PROGRESS === '1') process.stderr.write(`${journey}: ${status}\n`); };
+const add = (journey, status) => { const reason = status === 'UNSUPPORTED' ? 'QA fixture is too short for the 60-second resume threshold' : status === 'BLOCKED' ? 'Second authorized QA identity is not provisioned' : status === 'NOT_RUN' ? 'Required scenario did not complete' : undefined; rows.push({ journey, status, ...(reason ? { reason } : {}) }); if (process.env.PREXU_JOURNEY_PROGRESS === '1') process.stderr.write(`${journey}: ${status}\n`); };
 const token = process.env.PREXU_QA_PLEX_AUTH;
 const appPath = resolve(process.env.PREXU_JOURNEY_APP || 'src-tauri/target/debug/prexu');
 let applicationSha256;
 let server, baseline, watchComparison, appClient;
 let serviceContended = false;
 let root, vite, app, xvfb, stage = 'prerequisites';
-let finish;
+let finish, restartApp;
+let restarted = false, ending = false;
 const completed = new Promise(resolve => { finish = resolve; });
 for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => finish('interrupted'));
 const children = [];
@@ -75,7 +77,7 @@ try {
     throw new Error('busy');
   }
   stage = 'qa-fixture-state';
-  if (!baseline.watched || baseline.offset) { server = undefined; baseline = undefined; throw new Error('fixture-state'); }
+  if (!offlineOnly && (!baseline.watched || baseline.offset)) { server = undefined; baseline = undefined; throw new Error('fixture-state'); }
   root = await mkdtemp(`${tmpdir()}/prexu-native-journey-`);
   await mkdir(`${root}/bin`);
   const nonce = randomBytes(24).toString('hex');
@@ -91,7 +93,7 @@ try {
         try {
           if (req.url === `${endpoint}/driver.js` && req.method === 'GET') {
             res.setHeader('Content-Type', 'text/javascript');
-            res.end((await readFile(new URL('./native-driver.js', import.meta.url), 'utf8')).replace('__JOURNEY_ENDPOINT__', JSON.stringify(endpoint)).replace('__JOURNEY_BASELINE__', JSON.stringify(baseline)));
+            res.end((await readFile(new URL('./native-driver.js', import.meta.url), 'utf8')).replace('__JOURNEY_ENDPOINT__', JSON.stringify(endpoint)).replace('__JOURNEY_BASELINE__', JSON.stringify(baseline)).replace('__JOURNEY_OFFLINE_ONLY__', JSON.stringify(offlineOnly)).replace('__JOURNEY_RESTARTED__', JSON.stringify(restarted)));
             return;
           }
           if (req.method !== 'POST') throw new Error('method');
@@ -105,6 +107,13 @@ try {
             await request('https://plex.tv/api/v2/pins/link', { method: 'PUT',
               headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Plex-Product': 'Plex Web' }, body: new URLSearchParams({ code }) });
             linked = true;
+          } else if (req.url === `${endpoint}/restart`) {
+            if (!linked || !restartApp || !rows.some(row => row.journey === 'native-download' && row.status === 'PASS')) throw new Error('event');
+            const restart = restartApp;
+            restartApp = undefined;
+            res.end('ok');
+            await restart();
+            return;
           } else if (req.url === `${endpoint}/watch`) {
             if (!await serviceIsExclusive()) throw new Error('service-busy');
             const data = await (await request(`${server.uri}/library/metadata/2`, { headers: { 'X-Plex-Token': server.token } })).json();
@@ -151,14 +160,37 @@ try {
     XDG_DATA_HOME: `${root}/data`, XDG_CACHE_HOME: `${root}/cache`, XDG_RUNTIME_DIR: root,
     DISPLAY: `:${number}`, GDK_BACKEND: 'x11', LIBGL_ALWAYS_SOFTWARE: '1' });
   stage = 'native-run';
-  app = child('dbus-run-session', ['--', appPath], env);
-  app.on('exit', (code, signal) => finish(`app-exit-${Number.isInteger(code) ? code : signal === 'SIGABRT' ? 'abort' : 'signal'}`));
+  function launch() {
+    const launched = child('dbus-run-session', ['--', appPath], env);
+    app = launched;
+    launched.on('exit', (code, signal) => {
+      if (app === launched) finish(`app-exit-${Number.isInteger(code) ? code : signal === 'SIGABRT' ? 'abort' : 'signal'}`);
+    });
+  }
+  restartApp = async () => {
+    // Allow WebKit localStorage and the native secure store to flush to disk.
+    await sleep(2000);
+    if (ending) return;
+    restarted = true;
+    const previous = app;
+    app = undefined;
+    const closed = new Promise(resolve => previous.once('close', resolve));
+    globalThis.process.kill(-previous.pid, 'SIGTERM');
+    const force = setTimeout(() => {
+      try { globalThis.process.kill(-previous.pid, 'SIGKILL'); } catch { /* Already exited. */ }
+    }, 3000);
+    await closed;
+    clearTimeout(force);
+    if (!ending) launch();
+  };
+  launch();
   const timer = setTimeout(() => finish('deadline'), 300000);
   const result = await completed;
   clearTimeout(timer);
   if (result !== 'PASS') { stage = result === 'FAIL' ? 'native-run' : result; throw new Error('native'); }
 } catch { add(stage, 'FAIL'); }
 finally {
+  ending = true;
   let clean = true;
   for (const process of children.reverse()) {
     if (!process.pid) continue;
@@ -187,11 +219,16 @@ finally {
   try { if (root) { spawnSync('fusermount3', ['-u', `${root}/doc`], { stdio: 'ignore' }); await rm(root, { recursive: true, force: true, maxRetries: 3 }); } } catch (error) { add('profile-cleanup-' + (/^[A-Z_]+$/.test(error.code || '') ? error.code : 'error'), 'FAIL'); clean = false; }
   add('cleanup', clean ? 'PASS' : 'FAIL');
 }
-if (rows.some(row => row.journey === 'native-login')) {
+if (!offlineOnly && rows.some(row => row.journey === 'native-login')) {
   if (!rows.some(row => row.journey === 'native-queue-postplay')) add('queue-postplay', 'NOT_RUN');
   add('two-client-relay', 'BLOCKED');
 }
-const report = { schema: 1, applicationSha256, watchComparison, binarySourceRevision: 'not independently verified', scope: 'native single-user slice; NOT full journey acceptance', rows };
+if (offlineOnly && rows.some(row => row.journey === 'native-login')) {
+  for (const journey of ['native-download', 'native-offline', 'native-offline-missing-file']) {
+    if (!rows.some(row => row.journey === journey)) add(journey, 'NOT_RUN');
+  }
+}
+const report = { schema: 1, applicationSha256, watchComparison, binarySourceRevision: 'not independently verified', scope: offlineOnly ? 'native offline slice; NOT full journey acceptance' : 'native single-user slice; NOT full journey acceptance', rows };
 const output = JSON.stringify(report, null, 2) + '\n';
 if (process.env.PREXU_JOURNEY_REPORT) await writeFile(process.env.PREXU_JOURNEY_REPORT, output, { mode: 0o600 });
 process.stdout.write(output);

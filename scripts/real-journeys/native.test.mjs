@@ -17,6 +17,7 @@ test('reports reject raw payloads and unknown labels', () => {
   assert.ok(!validEvent({ journey: 'native-login', status: 'PASS', token: 'secret' }));
   assert.ok(!validEvent({ journey: 'raw exception', status: 'FAIL' }));
   assert.ok(!validEvent({ journey: 'native-login', status: 'SKIP' }));
+  assert.ok(!validEvent({ journey: 'native-offline', status: 'UNSUPPORTED' }));
 });
 
 test('native runner fails before startup when credentials are missing', () => {

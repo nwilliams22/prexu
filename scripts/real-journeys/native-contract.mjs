@@ -10,9 +10,9 @@ export function pinCode(value) {
 
 export const JOURNEYS = ['native-login', 'native-session-restore',
   'native-play-advance', 'native-play-pause', 'native-early-stop-watch-state',
-  'native-resume', 'native-queue-start', 'native-queue-eof', 'native-queue-postplay', 'native-download', 'native-offline', 'native-driver'];
+  'native-resume', 'native-queue-start', 'native-queue-eof', 'native-queue-postplay', 'native-download', 'native-offline', 'native-offline-missing-file', 'native-driver'];
 export function validEvent(event) {
   return event && Object.keys(event).length === 2 && JOURNEYS.includes(event.journey) &&
     (['PASS', 'FAIL'].includes(event.status) ||
-      (['native-resume', 'native-offline'].includes(event.journey) && event.status === 'UNSUPPORTED'));
+      (event.journey === 'native-resume' && event.status === 'UNSUPPORTED'));
 }

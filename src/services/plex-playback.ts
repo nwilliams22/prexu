@@ -5,6 +5,8 @@
 
 import { getServerHeaders, timedFetch } from "./plex-api";
 import { getClientIdentifier } from "./storage";
+import { getDownloadItems } from "./storage/downloads";
+import type { DownloadItem } from "../types/downloads";
 import { createTauriLoaderClass } from "./tauri-loader";
 import { getItemMetadata } from "./plex-library";
 import { getLocalFilePath } from "./downloads";
@@ -334,7 +336,7 @@ export interface PreparedSource {
   /** Resolved URL/path passed to the backend. Local URLs are raw file paths;
    *  callers that need an asset-protocol URL (HTML5) must wrap with convertFileSrc. */
   url: string;
-  /** Final metadata item as returned by getItemMetadata. */
+  /** Fresh server metadata, or minimal saved download metadata when offline. */
   item: PlexMediaItem;
   /** Cast to movie | episode — non-null for those types. */
   playable: PlexMovie | PlexEpisode;
@@ -368,6 +370,35 @@ export interface PrepareSourceArgs {
   skipCodecCheck?: boolean;
 }
 
+/** Minimal offline metadata from the existing persisted download record.
+ * Never reuse server URLs, part keys, external subtitles or server file paths.
+ * The local player probes the file for its actual duration and tracks.
+ */
+function offlineMetadata(download: DownloadItem): PlexMediaItem {
+  return {
+    ratingKey: download.ratingKey,
+    key: "",
+    type: download.type,
+    title: download.title,
+    summary: "",
+    thumb: "",
+    art: "",
+    addedAt: 0,
+    updatedAt: 0,
+    grandparentTitle: download.grandparentTitle ?? "",
+    parentIndex: download.parentIndex ?? 0,
+    index: download.index ?? 0,
+    year: download.type === "movie" && /^\d{4}$/.test(download.subtitle)
+      ? Number(download.subtitle) : undefined,
+    Media: [{
+      id: 0, duration: 0, bitrate: 0, videoResolution: "",
+      videoCodec: "", audioCodec: "", audioChannels: 0,
+      Part: [{ id: 0, key: "", duration: 0, file: "", size: download.fileSize,
+        container: "" }],
+    }],
+  };
+}
+
 /**
  * Shared source-preparation helper used by both useNativePlayer and
  * useHtml5Player. Fetches metadata, picks streams, resolves the playback URL,
@@ -381,14 +412,27 @@ export async function prepareSource(args: PrepareSourceArgs): Promise<PreparedSo
 
   logger.debug("player", "prepareSource", { ratingKey, directPlayFailed, skipCodecCheck });
 
-  // Run the metadata fetch (network RTT) and local-file lookup (Tauri IPC)
-  // concurrently — they are independent. A metadata rejection still throws to
-  // the caller (the local-path result is discarded, matching the old
-  // waterfall where it never ran); a local-path failure is still swallowed.
-  const [item, localPath] = await Promise.all([
-    getItemMetadata<PlexMediaItem>(server.uri, server.accessToken, ratingKey),
+  // Keep online startup concurrent and preserve fresh resume metadata. A
+  // failed metadata request must not discard a verified local download.
+  const [metadata, localPath] = await Promise.all([
+    getItemMetadata<PlexMediaItem>(server.uri, server.accessToken, ratingKey)
+      .then(item => ({ item }), error => ({ error })),
     getLocalFilePath(ratingKey).catch(() => null),
   ]);
+  let item: PlexMediaItem;
+  if ("item" in metadata) {
+    item = metadata.item;
+  } else {
+    const download = (await getDownloadItems()).find(
+      entry => entry.ratingKey === ratingKey && entry.status === "complete",
+    );
+    if (!download) throw metadata.error;
+    if (!localPath) {
+      throw new Error("Downloaded file is missing or unavailable. Download it again when the server is reachable.");
+    }
+    item = offlineMetadata(download);
+    logger.info("player", "Using saved download metadata for offline playback", { ratingKey });
+  }
 
   const playable = item as PlexMovie | PlexEpisode;
   const media = playable.Media?.[0];
@@ -420,12 +464,12 @@ export async function prepareSource(args: PrepareSourceArgs): Promise<PreparedSo
 
   const viewOffset = offsetOverride != null ? offsetOverride : (playable.viewOffset ?? 0);
   // Diagnostic for prexu-ix52: confirms the play path always reads the
-  // FRESH metadata fetched above (getItemMetadata), never a cached deck
+  // FRESH online metadata fetched above (getItemMetadata), never a cached deck
   // entry — the resume offset a hardware run actually seeks to.
   logger.debug("playback", "offset used at play start", {
     ratingKey,
     viewOffset,
-    source: offsetOverride != null ? "override" : "fresh-metadata",
+    source: offsetOverride != null ? "override" : "item" in metadata ? "fresh-metadata" : "download",
     serverViewOffset: playable.viewOffset ?? 0,
   });
 

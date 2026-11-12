@@ -1,9 +1,11 @@
 /** Loaded only by the native journey launcher's private Vite instance. */
 import { getAuth, getServer, saveRelayUrl, getDownloadItems, saveServer } from '/src/services/storage/index.ts';
 import { listen } from '/node_modules/@tauri-apps/api/event.js';
-import { getLocalFilePath } from '/src/services/downloads.ts';
+import { getLocalFilePath, deleteDownload } from '/src/services/downloads.ts';
 const endpoint = __JOURNEY_ENDPOINT__;
 const baseline = __JOURNEY_BASELINE__;
+const offlineOnly = __JOURNEY_OFFLINE_ONLY__;
+const restarted = __JOURNEY_RESTARTED__;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, timeout = 60000) {
   const end = Date.now() + timeout;
@@ -25,7 +27,7 @@ async function run() {
   try {
     // Set only the relay destination; login and server selection use real UI/auth.
     await saveRelayUrl('ws://127.0.0.1:1/ws');
-    if (!sessionStorage.getItem('journey-login')) {
+    if (!restarted && !localStorage.getItem('journey-login')) {
       await until(() => [...document.querySelectorAll('button')].some(b => b.textContent.trim() === 'Sign in with Plex'));
       [...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Sign in with Plex').click();
       await until(async () => Boolean((await getAuth())?.authToken));
@@ -35,11 +37,11 @@ async function run() {
         return (await getServer())?.name === 'Prexu QA Test Server';
       });
       await emit(stage, 'PASS');
-      sessionStorage.setItem('journey-login', 'done');
+      localStorage.setItem('journey-login', 'done');
       location.assign('/item/2');
       return;
     }
-    if (sessionStorage.getItem('journey-queue') && !sessionStorage.getItem('journey-offline')) {
+    if (!restarted && localStorage.getItem('journey-queue') && !localStorage.getItem('journey-offline')) {
       stage = 'native-queue-start';
       await until(() => [...document.querySelectorAll('h1,h2')].some(h => h.textContent === 'Prexu QA Pattern'));
       let time = 0, eof = false;
@@ -70,20 +72,32 @@ async function run() {
         if (button('Stop')) button('Stop').click();
       } finally { unlistenTime(); unlistenEof(); }
       await saveServer({ ...await getServer(), uri: 'http://127.0.0.1:1' });
-      sessionStorage.setItem('journey-offline', 'yes');
-      location.assign('/downloads');
+      localStorage.setItem('journey-offline', 'yes');
+      await fetch(`${endpoint}/restart`, { method: 'POST', body: '' });
       return;
     }
-    if (sessionStorage.getItem('journey-offline')) {
+    if (restarted || localStorage.getItem('journey-offline')) {
+      if ((await getServer())?.uri !== 'http://127.0.0.1:1') throw new Error('offline-server-not-restored');
+      if (location.pathname !== '/downloads') { location.assign('/downloads'); return; }
       stage = 'native-offline';
       let time = 0;
       const unlisten = await listen('player://time-pos', event => { time = event.payload; });
       try {
         await click('Play');
         await until(() => time > 2 || (button('Retry') && button('Go Back')));
-        await emit(stage, time > 2 ? 'PASS' : 'UNSUPPORTED');
-        if (time > 2) await click('Stop');
-        else await click('Go Back');
+        await emit(stage, time > 2 ? 'PASS' : 'FAIL');
+        if (time > 2) {
+          await click('Stop');
+          // Leave the completed record intact while removing only its file.
+          stage = 'native-offline-missing-file';
+          await deleteDownload('2');
+          time = 0;
+          await click('Play');
+          await until(() => button('Retry') && button('Go Back'));
+          const clearError = document.body.textContent.includes('Downloaded file is missing or unavailable');
+          await emit(stage, clearError && time === 0 ? 'PASS' : 'FAIL');
+          await click('Go Back');
+        } else await click('Go Back');
         await emit('native-driver', 'PASS');
       } finally { unlisten(); }
       return;
@@ -95,37 +109,45 @@ async function run() {
     let time = 0;
     const unlisten = await listen('player://time-pos', event => { time = event.payload; });
     try {
-      stage = 'native-play-advance';
-      const start = button('Play from Beginning') || [...document.querySelectorAll('button')].find(b => b.textContent.trim() === '▶ Play');
-      if (!start) throw new Error('play');
-      start.click();
-      await until(() => time >= 8 && time < 25);
-      await emit(stage, 'PASS');
-      stage = 'native-play-pause';
-      await click('Pause');
-      await until(() => button('Play'));
-      await emit(stage, 'PASS');
-      stage = 'native-early-stop-watch-state';
-      await click('Stop');
-      // Stops before 60 seconds preserve watched state on a rewatch; they do
-      // not establish a new resume marker. The short QA fixture cannot test it.
-      await until(async () => {
-        const value = await watch(baseline.offset);
-        return value.offset === baseline.offset && value.watched === baseline.watched;
-      });
-      await emit(stage, 'PASS');
-      await emit('native-resume', 'UNSUPPORTED');
+      if (!offlineOnly) {
+        stage = 'native-play-advance';
+        const start = button('Play from Beginning') || [...document.querySelectorAll('button')].find(b => b.textContent.trim() === '▶ Play');
+        if (!start) throw new Error('play');
+        start.click();
+        await until(() => time >= 8 && time < 25);
+        await emit(stage, 'PASS');
+        stage = 'native-play-pause';
+        await click('Pause');
+        await until(() => button('Play'));
+        await emit(stage, 'PASS');
+        stage = 'native-early-stop-watch-state';
+        await click('Stop');
+        // Stops before 60 seconds preserve watched state on a rewatch; they do
+        // not establish a new resume marker. The short QA fixture cannot test it.
+        await until(async () => {
+          const value = await watch(baseline.offset);
+          return value.offset === baseline.offset && value.watched === baseline.watched;
+        });
+        await emit(stage, 'PASS');
+        await emit('native-resume', 'UNSUPPORTED');
+      }
       stage = 'native-download';
       await click('Download for offline');
       await until(async () => (await getDownloadItems()).some(item => item.ratingKey === '2' && item.status === 'complete'), 90000);
       const downloaded = (await getDownloadItems()).find(item => item.ratingKey === '2');
       if (!downloaded || downloaded.fileSize <= 0 || downloaded.bytesDownloaded !== downloaded.fileSize || !await getLocalFilePath('2')) throw new Error('download');
       await emit(stage, 'PASS');
+      if (offlineOnly) {
+        await saveServer({ ...await getServer(), uri: 'http://127.0.0.1:1' });
+        localStorage.setItem('journey-offline', 'yes');
+        await fetch(`${endpoint}/restart`, { method: 'POST', body: '' });
+        return;
+      }
       const item = { ratingKey: '2', title: 'Prexu QA Pattern', subtitle: '', thumb: '', duration: baseline.duration, type: 'movie' };
       // Exercise restoration and advancement of a persisted user queue. This
       // does not claim coverage of playlist creation or distinct-item identity.
       localStorage.setItem('prexu_playback_queue', JSON.stringify({ items: [item, item], currentIndex: 0, source: 'user-built' }));
-      sessionStorage.setItem('journey-queue', 'yes');
+      localStorage.setItem('journey-queue', 'yes');
       location.assign('/item/2');
     } finally { unlisten(); }
   } catch {
