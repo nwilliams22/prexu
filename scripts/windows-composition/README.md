@@ -74,3 +74,30 @@ Without `--scenarios`, the existing focus/occlusion/DPI composition matrix runs.
 No equipment is purchased by this harness. Green hosted installer/build tests
 remain packaging evidence only. Software/virtual runs do not waive the rows
 requiring physical equipment.
+
+### Opt-in pixel readback
+
+For black-output diagnosis, run the normal command with
+`PREXU_VIDEO_PIXEL_PROBE=1`. The runner sets this variable only in the installed
+app's desktop launcher and records the setting in `pixel-probe.txt`. Candidates
+built before this probe ignore it; check for the `pixel probe enabled` log.
+
+The native renderer samples an interior 5×5 grid from the GL render target,
+D3D shared texture and copied swapchain backbuffer after the copy fence and
+before Present, using the same rendered frame and dimensions. `render-events.txt`
+retains each sample's log timestamp, frame counter, dimensions, non-black count,
+maximum RGB channel, RGB hash and readback duration. Alpha is ignored; a sample
+is non-black when any RGB channel exceeds 16. Errors are recorded separately
+from black results. Sampling is capped at once per two seconds and 120 attempts
+per render-thread lifetime; default playback performs no readback.
+
+Correlate these records with the original composed captures and frame counters.
+A lit GL/shared target but black backbuffer implicates the copy; a lit backbuffer
+with black composed output directs investigation after the copy. A black GL
+target requires upstream decode/render investigation. Shared/back hashes use the
+same coordinate and channel ordering; GL samples convert bottom-left to top-left
+coordinates, but GL/D3D orientation must be checked against the fixture before
+assuming their hashes match. Sparse samples cannot prove that every pixel is
+black, and successful Present does not prove composition. Readback synchronizes
+GPU work and can hide a timing fault: compare runs with the probe disabled and
+do not classify passing probe runs as a black-video fix.

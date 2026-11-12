@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 const [candidateArg, outputArg, mode] = process.argv.slice(2);
 if (mode && mode !== "--scenarios") throw new Error("Unknown runner mode");
 const scenarios = mode === "--scenarios";
+const pixelProbe = process.env.PREXU_VIDEO_PIXEL_PROBE === "1";
 if (!candidateArg || !outputArg) throw new Error('Usage: node scripts/windows-composition/run.mjs CANDIDATE_DIRECTORY EVIDENCE_DIRECTORY [--scenarios]');
 const candidate = resolve(candidateArg), output = resolve(outputArg);
 const scripts = dirname(fileURLToPath(import.meta.url));
@@ -70,7 +71,17 @@ try {
  ssh('New-Item -ItemType Directory -Force "$env:APPDATA\\com.prexu.client" | Out-Null');
  run('scp', ['-o','BatchMode=yes',store,'win11-test:C:/Users/baddong/AppData/Roaming/com.prexu.client/secure-store.json']);
  rmSync(store);
- const install = ssh(`$p=Start-Process -Wait -PassThru ${ps(remote+'\\setup.exe')} -ArgumentList '/S'; if($p.ExitCode -ne 0){throw "Installer exit $($p.ExitCode)"}; 'INSTALL_EXIT=0'; $k='HKLM:\\SOFTWARE\\Policies\\Microsoft\\Edge\\WebView2\\AdditionalBrowserArguments'; New-Item $k -Force | Out-Null; New-ItemProperty $k -Name Prexu.exe -Value '--remote-debugging-port=9222' -PropertyType String -Force | Out-Null; C:\\ProgramData\\EvalBuild\\gui-run.ps1 "$env:LOCALAPPDATA\\Prexu\\Prexu.exe"`);
+ // The interactive desktop does not inherit the SSH process environment.
+ // Pass only the explicit diagnostic opt-in through a dedicated launcher.
+ let launch = 'C:\\ProgramData\\EvalBuild\\gui-run.ps1 "$env:LOCALAPPDATA\\Prexu\\Prexu.exe"';
+ if (pixelProbe) {
+  const launcher = join(scratch, 'launch-probe.ps1');
+  writeFileSync(launcher, '$env:PREXU_VIDEO_PIXEL_PROBE="1"\n& "$env:LOCALAPPDATA\\Prexu\\Prexu.exe"\n');
+  run('scp', ['-o','BatchMode=yes',launcher,'win11-test:C:/Users/baddong/qa-composition/launch-probe.ps1']);
+  launch = `C:\\ProgramData\\EvalBuild\\gui-run.ps1 powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File ${remote}\\launch-probe.ps1"`;
+ }
+ writeFileSync(join(output, 'pixel-probe.txt'), `enabled=${pixelProbe}\n`);
+ const install = ssh(`$p=Start-Process -Wait -PassThru ${ps(remote+'\\setup.exe')} -ArgumentList '/S'; if($p.ExitCode -ne 0){throw "Installer exit $($p.ExitCode)"}; 'INSTALL_EXIT=0'; $k='HKLM:\\SOFTWARE\\Policies\\Microsoft\\Edge\\WebView2\\AdditionalBrowserArguments'; New-Item $k -Force | Out-Null; New-ItemProperty $k -Name Prexu.exe -Value '--remote-debugging-port=9222' -PropertyType String -Force | Out-Null; ${launch}`);
  writeFileSync(join(output,'install.txt'),install);
  tunnel = spawn('ssh', ['-o','BatchMode=yes','-o','ExitOnForwardFailure=yes','-N','-L',`127.0.0.1:${port}:127.0.0.1:9222`,'-R',`127.0.0.1:18446:127.0.0.1:${fixturePort}`,'win11-test'], { stdio: 'ignore' });
  const deadline=Date.now()+90_000;

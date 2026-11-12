@@ -51,6 +51,8 @@ use windows::Win32::Graphics::Dxgi::{
 
 use crate::player::angle_loader;
 
+mod pixel_probe;
+
 // ── D3D11 / DXGI surfaces ────────────────────────────────────────────────────
 
 /// Shared BGRA render-target texture. mpv's GL FBO aliases this via ANGLE's
@@ -845,6 +847,7 @@ fn render_loop(
     let mut diagnostic_since = Instant::now();
     let (mut wakes, mut timeouts, mut frames, mut rendered, mut presented) = (0u64, 0u64, 0u64, 0u64, 0u64);
     let mut present_failures = 0u64;
+    let mut pixel_probe = pixel_probe::PixelProbe::from_env();
 
     loop {
         let verdict = signal.wait();
@@ -930,6 +933,11 @@ fn render_loop(
             Ok(back) => {
                 unsafe { ctx.CopyResource(&back, &shared_tex) };
                 wait_for_copy(&ctx, &copy_fence)?;
+                if let Some(probe) = pixel_probe.as_mut() {
+                    if probe.due() {
+                        probe.sample(&device, &ctx, &shared_tex, &back, fbo, cur_w, cur_h, rendered);
+                    }
+                }
                 match unsafe { swapchain.Present(1, Default::default()) }.ok() {
                     Ok(()) => presented += 1,
                     Err(error) => {
