@@ -1,4 +1,4 @@
-param([string]$Output = 'C:\Users\baddong\qa-composition\evidence', [switch]$SelfTest, [switch]$Scenarios)
+param([string]$Output = 'C:\Users\baddong\qa-composition\evidence', [switch]$SelfTest, [switch]$Scenarios, [switch]$PixelProbe)
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Force $Output | Out-Null
 trap { $_ | Out-String | Set-Content "$Output\error.txt"; exit 1 }

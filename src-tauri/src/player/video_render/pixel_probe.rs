@@ -3,6 +3,7 @@
 //! enable this for ordinary playback or interpret a passing sample as a fix.
 use super::{load, PfnBindFramebuffer, PfnGetError, GL_FRAMEBUFFER};
 use std::ffi::c_void;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_BOX, D3D11_CPU_ACCESS_READ,
@@ -11,7 +12,7 @@ use windows::Win32::Graphics::Direct3D11::{
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 
 const GRID: u32 = 5;
-const LIMIT: u32 = 120;
+const LIMIT: u32 = 1;
 type GetInteger = extern "system" fn(u32, *mut i32);
 type ReadPixels = extern "system" fn(i32, i32, i32, i32, u32, u32, *mut c_void);
 
@@ -19,6 +20,7 @@ pub(super) struct PixelProbe {
     started: Instant,
     last: Option<Instant>,
     samples: u32,
+    request: PathBuf,
 }
 
 impl PixelProbe {
@@ -26,11 +28,13 @@ impl PixelProbe {
         if std::env::var("PREXU_VIDEO_PIXEL_PROBE").as_deref() != Ok("1") {
             return None;
         }
-        log::info!("[player:video] pixel probe enabled: 5x5 grid, 2s interval, {LIMIT} samples maximum; readback changes timing");
+        let request = std::env::var_os("PREXU_VIDEO_PIXEL_PROBE_REQUEST")?;
+        log::info!("[player:video] pixel probe armed: one 5x5 sample after capture request; readback changes timing");
         Some(Self {
             started: Instant::now(),
             last: None,
             samples: 0,
+            request: request.into(),
         })
     }
 
@@ -42,8 +46,11 @@ impl PixelProbe {
         {
             return false;
         }
-        self.samples += 1;
         self.last = Some(Instant::now());
+        if !self.request.is_file() {
+            return false;
+        }
+        self.samples += 1;
         true
     }
 
@@ -69,6 +76,17 @@ impl PixelProbe {
             "[player:video] pixels sample={} frame={frame} elapsed_ms={} size={width}x{height} gl={gl:?} shared={shared:?} back={back:?} readback_ms={}",
             self.samples, self.started.elapsed().as_millis(), start.elapsed().as_millis()
         );
+        // Keep the captured scene stable until sampling completes or the
+        // harness wait expires. No request contents or media bytes are saved.
+        if let Err(error) = std::fs::write(
+            self.request.with_extension("done"),
+            format!("frame={frame} size={width}x{height}\n"),
+        ) {
+            log::warn!(
+                "[player:video] pixel probe acknowledgement failed: {:?}",
+                error.kind()
+            );
+        }
     }
 }
 
@@ -222,17 +240,22 @@ mod tests {
     }
 
     #[test]
-    fn sampling_is_rate_limited_and_capped() {
+    fn sampling_requires_request_and_is_one_shot() {
         let mut probe = PixelProbe {
             started: Instant::now(),
             last: None,
             samples: 0,
+            request: std::env::current_exe()
+                .unwrap()
+                .join("missing-probe-request"),
         };
-        assert!(probe.due());
+        assert!(!probe.due());
+        // Existing executable is a harmless stand-in for a request file:
+        // due() only reads metadata, never removes or reads request contents.
+        probe.request = std::env::current_exe().unwrap();
         assert!(!probe.due());
         probe.last = Some(Instant::now() - Duration::from_secs(3));
         assert!(probe.due());
-        probe.samples = LIMIT;
         probe.last = None;
         assert!(!probe.due());
     }

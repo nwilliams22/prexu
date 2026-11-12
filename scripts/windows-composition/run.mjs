@@ -12,6 +12,7 @@ const [candidateArg, outputArg, mode] = process.argv.slice(2);
 if (mode && mode !== "--scenarios") throw new Error("Unknown runner mode");
 const scenarios = mode === "--scenarios";
 const pixelProbe = process.env.PREXU_VIDEO_PIXEL_PROBE === "1";
+if (pixelProbe && !scenarios) throw new Error("Pixel probing requires --scenarios");
 if (!candidateArg || !outputArg) throw new Error('Usage: node scripts/windows-composition/run.mjs CANDIDATE_DIRECTORY EVIDENCE_DIRECTORY [--scenarios]');
 const candidate = resolve(candidateArg), output = resolve(outputArg);
 const scripts = dirname(fileURLToPath(import.meta.url));
@@ -76,7 +77,7 @@ try {
  let launch = 'C:\\ProgramData\\EvalBuild\\gui-run.ps1 "$env:LOCALAPPDATA\\Prexu\\Prexu.exe"';
  if (pixelProbe) {
   const launcher = join(scratch, 'launch-probe.ps1');
-  writeFileSync(launcher, '$env:PREXU_VIDEO_PIXEL_PROBE="1"\n& "$env:LOCALAPPDATA\\Prexu\\Prexu.exe"\n');
+  writeFileSync(launcher, `$env:PREXU_VIDEO_PIXEL_PROBE="1"\n$env:PREXU_VIDEO_PIXEL_PROBE_REQUEST=${ps(remote+'\\pixel-probe-request')}\n& "$env:LOCALAPPDATA\\Prexu\\Prexu.exe"\n`);
   run('scp', ['-o','BatchMode=yes',launcher,'win11-test:C:/Users/baddong/qa-composition/launch-probe.ps1']);
   launch = `C:\\ProgramData\\EvalBuild\\gui-run.ps1 powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File ${remote}\\launch-probe.ps1"`;
  }
@@ -98,7 +99,7 @@ try {
  const composition=ssh('Get-Content "$env:LOCALAPPDATA\\com.prexu.client\\logs\\Prexu.log" | Select-String "DComp tree committed|render thread up" | ForEach-Object {$_.Line}');
  writeFileSync(join(output,'composition.txt'),composition);
  if(!composition.includes('DComp tree committed') || !composition.includes('render thread up'))throw new Error('Composition/render prerequisite not ready; see composition.txt');
- desktop=spawn('ssh',[...sshArgs,`C:\\ProgramData\\EvalBuild\\gui-run.ps1 conhost.exe -ArgumentList "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File ${remote}\\desktop.ps1 ${scenarios ? "-Scenarios" : ""} -Output ${remote}\\evidence" -Wait -TimeoutSec 1200`],{stdio:['ignore','pipe','pipe']});
+ desktop=spawn('ssh',[...sshArgs,`C:\\ProgramData\\EvalBuild\\gui-run.ps1 conhost.exe -ArgumentList "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File ${remote}\\desktop.ps1 ${scenarios ? "-Scenarios" : ""} ${pixelProbe ? "-PixelProbe" : ""} -Output ${remote}\\evidence" -Wait -TimeoutSec 1200`],{stdio:['ignore','pipe','pipe']});
  let desktopOutput='';desktop.stdout.on('data',b=>desktopOutput+=b);desktop.stderr.on('data',b=>desktopOutput+=b);
  const readyDeadline=Date.now()+180_000;
  while(!ssh(`Test-Path ${ps(remote+'\\evidence\\ready')}`).includes('True')){if(Date.now()>readyDeadline)throw new Error('Desktop worker initialization timed out');await sleep(500);}
@@ -125,6 +126,7 @@ try {
  if(existsSync(join(output,'evidence','error.txt')))throw new Error('Desktop script failed; see evidence/error.txt');
  if(!existsSync(join(output,'evidence','complete')))throw new Error('Desktop evidence did not finish saving');
  const metrics=JSON.parse(readFileSync(join(output,'evidence','metrics.json'),'utf8').replace(/^\uFEFF/,''));
+ if(pixelProbe && !metrics.find(item=>item.name==='play')?.probeCompleted)throw new Error('Requested pixel probe did not complete; inspect render-events.txt');
  console.log(JSON.stringify(metrics.map(({name,pass})=>({name,pass})),null,2));
  const required=scenarios ? requiredScenarios : ['baseline','alt-tab','away-focus','occlusion-focus','minimize-state','return-focus','return','space-paused','space-resumed','uncovered','restored',...['scale-150','scale-100','monitor-2','monitor-1'].flatMap(n=>[n,`${n}-video-bounds`,`${n}-dpi`,`controls-${n}-paused`,`controls-${n}-resumed`])];
  if(required.some(name=>!metrics.some(m=>m.name===name)))throw new Error('Incomplete matrix: a required verdict is missing');

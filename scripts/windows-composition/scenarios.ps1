@@ -15,6 +15,7 @@ function ClickControl([string]$Label) {
  Javascript "(()=>{const label=$labelJson;const b=[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')===label);if(!b)throw Error('Control missing: '+label);b.click();return true})()" | Out-Null
  Start-Sleep -Seconds 3
 }
+$script:pixelProbeRequested=$false
 function Observe([string]$Name,[string]$Control,[bool]$ExpectMoving=$true) {
  # Repeated native pointer movement keeps real controls visible during slow
  # software captures; no DOM style or screenshot pixels are changed.
@@ -46,6 +47,18 @@ function Observe([string]$Name,[string]$Control,[bool]$ExpectMoving=$true) {
  $timely=($frames.SecondUtc-$frames.FirstUtc).TotalMilliseconds -lt 10000
  $pass=$motion -and $chrome -and $timely
  $results.Add(@{name=$Name;pass=$pass;videoPresent=(-not $bars.IsEmpty);moving=$motion;chrome=$chrome;chromeIconFraction=$chromeLit;chromeIconFractionB=$iconB;chromeRoi=$chromeRoi;iconColor=$point.color;roi=$roi;metrics=$m;firstUtc=$frames.FirstUtc.ToString('o');secondUtc=$frames.SecondUtc.ToString('o');expectMoving=$ExpectMoving})
+ # Preserve the first composed pair before any readback. It supplies either
+ # a non-black positive control or a black observation independent of probing.
+ if($PixelProbe -and -not $script:pixelProbeRequested){
+  $script:pixelProbeRequested=$true
+  $result=$results[$results.Count-1]
+  $result.probeRequestedUtc=[DateTime]::UtcNow.ToString('o')
+  Set-Content "$PSScriptRoot\pixel-probe-request" $Name
+  $probeDeadline=(Get-Date).AddSeconds(10)
+  while(-not (Test-Path "$PSScriptRoot\pixel-probe-request.done") -and (Get-Date) -lt $probeDeadline){Start-Sleep -Milliseconds 100}
+  $result.probeCompleted=Test-Path "$PSScriptRoot\pixel-probe-request.done"
+  Trace "pixel probe requested after $Name; completed=$($result.probeCompleted)"
+ }
  ConvertTo-Json -InputObject ($results.ToArray()) -Depth 6 | Set-Content "$Output\metrics.json"
  [Desktop]::StopPointer()
  return $results[$results.Count-1]
