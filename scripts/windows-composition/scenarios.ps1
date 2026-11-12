@@ -53,10 +53,10 @@ function Observe([string]$Name,[string]$Control,[bool]$ExpectMoving=$true) {
 Stage 'play'
 Start-Sleep -Seconds 3
 $null=Observe 'play' 'Pause'
-Javascript "(async()=>{await window.__TAURI_INTERNALS__.invoke('player_pause');await window.__TAURI_INTERNALS__.invoke('player_seek',{seconds:25})})()" | Out-Null
-Start-Sleep -Seconds 2
-$position=Javascript 'Number(document.querySelector("[role=slider][aria-label=Seek]")?.getAttribute("aria-valuenow"))'
-Javascript "window.__TAURI_INTERNALS__.invoke('player_play')" | Out-Null
+# Observe a fresh position while playback continues. A paused seek can leave
+# the throttled UI clock at its pre-seek value even after the native seek ends.
+# A fixed delay therefore confuses stale UI state with a failed native seek.
+$position=Javascript '(async()=>{await window.__TAURI_INTERNALS__.invoke("player_seek",{seconds:25});const deadline=performance.now()+10000;while(performance.now()<deadline){const t=Number(document.querySelector("[role=slider][aria-label=Seek]")?.getAttribute("aria-valuenow"));if(t>=24&&t<=26)return t;await new Promise(resolve=>setTimeout(resolve,50))}throw Error("Seek position did not reach 25 seconds during playback")})()'
 Start-Sleep -Seconds 3
 $seek=Observe 'seek' 'Pause'
 $seek.positionSeconds=$position

@@ -21,6 +21,10 @@ The scenario mode exercises play, native seek, fullscreen and return, in-window
 mini and restore, popout and return, a native freeze negative control, recovery,
 and stop. Mode changes use the installed UI's actual button handlers. Transport
 uses the real native IPC. There is no mocked IPC or browser-only renderer.
+The seek check keeps playback moving and waits up to ten seconds for the UI
+position to reach 24–26 seconds after requesting 25. It does not certify
+paused-seek timeline updates; a fixed-delay read while paused can retain a stale
+pre-seek UI position even when native seeking succeeded.
 This is an installed-release adapter, separate from the debug-only
 `PREXU_PROBE_SCRIPT` adapter under `scripts/hw-probe/driver`.
 
@@ -44,6 +48,11 @@ and `BUILD.txt` identify session, displays, adapters, selected D3D11 prerequisit
 adapter, renderer startup, source media and installed build. A Radeon listed by
 WMI does not mean the app selected it. Physical GPU decode is not certified by
 this run. `metrics.json` and `verdict.json` are the source of truth for outcomes.
+`render-events.txt` retains renderer diagnostics on success and, when the guest
+is still reachable, on failure. Builds with frame-progress counters report wakes,
+timeouts, requested frames, completed renders and successful/failed Present calls
+every five seconds. These counters distinguish scheduling and presentation
+failures; successful submission alone does not establish visible video pixels.
 A missing capture, session 0, malformed evidence, failed action, failed capture
 prerequisite or absent required verdict fails the command. Captures can contain
 the throwaway account's UI: review before attaching; never attach its secure store.
