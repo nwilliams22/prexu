@@ -108,7 +108,7 @@ try {
  writeFileSync(join(output,'desktop.txt'),desktopOutput);
  if(desktop.exitCode===null)throw new Error('Desktop worker did not finish');
  run('scp',['-o','BatchMode=yes','-r','win11-test:C:/Users/baddong/qa-composition/evidence',output]);
- writeFileSync(join(output,'playback-events.txt'),ssh('Get-Content "$env:LOCALAPPDATA\\com.prexu.client\\logs\\Prexu.log" | Select-String -SimpleMatch "[player:cmd] pause","[player:cmd] play","[player:events] paused=" | ForEach-Object {$_.Line}'));
+ writeFileSync(join(output,'playback-events.txt'),ssh('Get-Content "$env:LOCALAPPDATA\\com.prexu.client\\logs\\Prexu.log" | Select-String -SimpleMatch "[player:cmd] pause","[player:cmd] play","[player:cmd] seek to","[player:events] paused=" | ForEach-Object {$_.Line}'));
  writeFileSync(join(output,'render-events.txt'),ssh('Get-Content "$env:LOCALAPPDATA\\com.prexu.client\\logs\\Prexu.log" | Select-String -SimpleMatch "[player:video]","[player:comp]","hwdec-current=" | ForEach-Object {$_.Line}'));
  if(desktop.exitCode!==0)throw new Error(`Desktop worker exited ${desktop.exitCode}; see desktop.txt`);
  if(existsSync(join(output,'evidence','error.txt')))throw new Error('Desktop script failed; see evidence/error.txt');
@@ -122,6 +122,7 @@ try {
 } catch(error) {
  writeFileSync(join(output,'failure.txt'),String(error));
  if(started) {
+  try {writeFileSync(join(output,'render-events.txt'),ssh('Get-Content "$env:LOCALAPPDATA\\com.prexu.client\\logs\\Prexu.log" | Select-String -SimpleMatch "[player:video]","[player:comp]","hwdec-current=" | ForEach-Object {$_.Line}'));} catch {}
   try {run('scp',['-o','BatchMode=yes','-r','win11-test:C:/Users/baddong/qa-composition/evidence',output]);} catch {}
   try {writeFileSync(join(output,'failure-playback.txt'),ssh('Get-Content "$env:LOCALAPPDATA\\com.prexu.client\\logs\\Prexu.log" | Select-String -SimpleMatch "FileLoaded","paused=","destroy:","stop_playback:","player:init","warmup","received ready","load_url returned","[player:video]","[player:comp]","hwdec-current=" | ForEach-Object {$_.Line}'));} catch {}
  }

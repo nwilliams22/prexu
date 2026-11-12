@@ -840,9 +840,26 @@ fn render_loop(
     const RESIZE_SETTLE: Duration = Duration::from_millis(120);
     let mut pending_resize: Option<(u32, u32)> = None;
     let mut pending_since = Instant::now();
+    // Rate-limited counters distinguish missing mpv frames from successful
+    // submissions that still appear black in a composed-screen capture.
+    let mut diagnostic_since = Instant::now();
+    let (mut wakes, mut timeouts, mut frames, mut rendered, mut presented) = (0u64, 0u64, 0u64, 0u64, 0u64);
+    let mut present_failures = 0u64;
 
     loop {
-        match signal.wait() {
+        let verdict = signal.wait();
+        match verdict {
+            WaitVerdict::Frame => wakes += 1,
+            WaitVerdict::Timeout => timeouts += 1,
+            WaitVerdict::Stop => {}
+        }
+        if diagnostic_since.elapsed() >= Duration::from_secs(5) || verdict == WaitVerdict::Stop {
+            log::debug!(
+                "[player:video] progress wakes={wakes} timeouts={timeouts} frames={frames} rendered={rendered} presented={presented} present_failures={present_failures} size={cur_w}x{cur_h}"
+            );
+            diagnostic_since = Instant::now();
+        }
+        match verdict {
             WaitVerdict::Stop => break,
             WaitVerdict::Timeout => {
                 // A resize that settled during an mpv-idle gap still needs to apply;
@@ -897,6 +914,9 @@ fn render_loop(
             }
         };
         let have_frame = flags & libmpv2_sys::mpv_render_update_flag_MPV_RENDER_UPDATE_FRAME != 0;
+        if have_frame {
+            frames += 1;
+        }
         if !have_frame && !force_render {
             continue;
         }
@@ -904,12 +924,21 @@ fn render_loop(
             log::warn!("[player:video] render failed: {e:?}");
             continue;
         }
+        rendered += 1;
         gl.finish();
         match unsafe { swapchain.GetBuffer::<ID3D11Texture2D>(0) } {
             Ok(back) => {
                 unsafe { ctx.CopyResource(&back, &shared_tex) };
                 wait_for_copy(&ctx, &copy_fence)?;
-                let _ = unsafe { swapchain.Present(1, Default::default()) }.ok();
+                match unsafe { swapchain.Present(1, Default::default()) }.ok() {
+                    Ok(()) => presented += 1,
+                    Err(error) => {
+                        present_failures += 1;
+                        if present_failures == 1 {
+                            log::warn!("[player:video] Present failed: {error:?}");
+                        }
+                    }
+                }
                 if !committed {
                     committed = true;
                     let app = app.clone();
