@@ -479,6 +479,39 @@ pub async fn get_local_file_path(
     get_local_file_path_impl(&rating_key, &state).await
 }
 
+/// Resolve a downloaded item for native playback without accepting a webview
+/// file path. Canonical containment also rejects symlinks outside this item's
+/// directory (or an item directory symlink outside the downloads root).
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
+pub(crate) async fn playback_file(
+    rating_key: &str,
+    manager: &DownloadManager,
+) -> Result<String, String> {
+    let missing = || "Downloaded file is missing or unavailable".to_string();
+    let path = get_local_file_path_impl(rating_key, manager)
+        .await?
+        .ok_or_else(missing)?;
+    let root = {
+        let cached = manager.downloads_dir.lock().await;
+        match &*cached {
+            Some(dir) => dir.clone(),
+            None => resolve_downloads_dir().await?,
+        }
+    };
+    let root = tokio::fs::canonicalize(root).await.map_err(|_| missing())?;
+    let item = root.join(rating_key);
+    let canonical_item = tokio::fs::canonicalize(&item).await.map_err(|_| missing())?;
+    let file = tokio::fs::canonicalize(path).await.map_err(|_| missing())?;
+    if canonical_item != item
+        || file.parent() != Some(canonical_item.as_path())
+        || !file.is_file()
+        || file.extension().is_some_and(|ext| ext == "part")
+    {
+        return Err(missing());
+    }
+    file.to_str().map(str::to_owned).ok_or_else(missing)
+}
+
 /// Testable core of [`get_local_file_path`] (no `tauri::State` dependency).
 async fn get_local_file_path_impl(
     rating_key: &str,
@@ -828,5 +861,48 @@ mod tests {
         ));
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn playback_file_resolves_only_complete_downloads() {
+        let base = unique_temp_dir("playback");
+        let downloads = base.join("downloads");
+        let item = downloads.join("123");
+        std::fs::create_dir_all(&item).unwrap();
+        let manager = DownloadManager::new();
+        *manager.downloads_dir.lock().await = Some(downloads);
+        assert!(super::playback_file("../secret", &manager).await.is_err());
+        assert!(super::playback_file("missing", &manager).await.is_err());
+        std::fs::write(item.join("video.part"), b"partial").unwrap();
+        assert!(super::playback_file("123", &manager).await.is_err());
+        let video = item.join("video with spaces.mp4");
+        std::fs::write(&video, b"complete").unwrap();
+        assert_eq!(
+            super::playback_file("123", &manager).await.unwrap(),
+            std::fs::canonicalize(&video).unwrap().to_str().unwrap(),
+        );
+        std::fs::remove_file(video).unwrap();
+        assert!(super::playback_file("123", &manager).await.is_err());
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn playback_file_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+        let base = unique_temp_dir("playback-symlink");
+        let downloads = base.join("downloads");
+        let item = downloads.join("123");
+        std::fs::create_dir_all(&item).unwrap();
+        let secret = base.join("secret.mp4");
+        std::fs::write(&secret, b"secret").unwrap();
+        let manager = DownloadManager::new();
+        *manager.downloads_dir.lock().await = Some(downloads.clone());
+        symlink(&secret, item.join("video.mp4")).unwrap();
+        assert!(super::playback_file("123", &manager).await.is_err());
+        std::fs::remove_dir_all(&item).unwrap();
+        symlink(&base, &item).unwrap();
+        assert!(super::playback_file("123", &manager).await.is_err());
+        std::fs::remove_dir_all(base).unwrap();
     }
 }

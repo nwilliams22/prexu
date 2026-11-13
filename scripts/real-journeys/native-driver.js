@@ -88,9 +88,13 @@ async function run() {
         await emit(stage, time > 2 ? 'PASS' : 'FAIL');
         if (time > 2) {
           await click('Stop');
+          // Stop closes the player asynchronously. Do not click the downloads
+          // button underneath the closing player or inspect its stale errors.
+          await until(() => !button('Stop') && !button('Retry') && button('Play'));
           // Leave the completed record intact while removing only its file.
           stage = 'native-offline-missing-file';
           await deleteDownload('2');
+          if (await getLocalFilePath('2')) throw new Error('file-still-present');
           time = 0;
           await click('Play');
           await until(() => button('Retry') && button('Go Back'));

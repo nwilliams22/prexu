@@ -53,17 +53,28 @@ pub async fn player_load_url(
     url: String,
     headers: HashMap<String, String>,
     start_offset_ms: Option<u64>,
+    download_rating_key: Option<String>,
+    downloads: State<'_, crate::downloads::DownloadManager>,
     app: AppHandle,
     state: State<'_, PlayerState>,
 ) -> Result<(), String> {
     log::info!("[player:cmd] load_url offset={}ms headers={}", start_offset_ms.unwrap_or(0), headers.len());
 
-    // Security: reject non-http(s) schemes so mpv cannot open local files,
-    // raw ffmpeg:// pipelines, smb://, etc. via a compromised webview.
-    if let Err(e) = validate_url_scheme(&url) {
-        log::warn!("[player:cmd] load_url rejected — {}: url={}", e, redact_url(&url));
-        return Err(e);
-    }
+    // Local playback accepts only an item ID, resolved and contained by Rust.
+    // The webview-supplied URL is ignored in that mode; network loads retain
+    // the HTTP(S)-only boundary.
+    let url = if let Some(key) = download_rating_key {
+        if !headers.is_empty() {
+            return Err("Downloaded playback does not accept HTTP headers".into());
+        }
+        crate::downloads::playback_file(&key, &downloads).await?
+    } else {
+        if let Err(e) = validate_url_scheme(&url) {
+            log::warn!("[player:cmd] load_url rejected — {}", e);
+            return Err(e);
+        }
+        url
+    };
 
     // Security: reject header names/values containing comma, CR, or LF to
     // prevent corruption of mpv's http-header-fields list and HTTP header
@@ -92,9 +103,8 @@ pub async fn player_load_url(
         .join(",");
 
     state.with_mpv(|mpv| {
-        if !header_str.is_empty() {
-            mpv.set_property("http-header-fields", header_str.as_str())?;
-        }
+        // Clear headers left by an earlier network item for local playback.
+        mpv.set_property("http-header-fields", header_str.as_str())?;
         // Linux reveal-mute (prexu-axj4.5): audio decode starts ~1s before the
         // first video frame, audible under the loading screen (Linux-only —
         // Windows does not exhibit it). Mute here, at the earliest point a

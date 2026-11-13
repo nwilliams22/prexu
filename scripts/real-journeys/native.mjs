@@ -207,7 +207,9 @@ finally {
       } else {
       const query = new URLSearchParams({ ratingKey: '2', key: '/library/metadata/2', state: 'stopped',
         time: String(baseline.offset), duration: String(baseline.duration) });
-      await request(`${server.uri}/:/timeline?${query}`, { headers: { 'X-Plex-Token': server.token } });
+      // The offline-only slice never plays against the live server. Verify
+      // its state without issuing a synthetic timeline mutation.
+      if (!offlineOnly) await request(`${server.uri}/:/timeline?${query}`, { headers: { 'X-Plex-Token': server.token } });
       const data = await (await request(`${server.uri}/library/metadata/2`, { headers: { 'X-Plex-Token': server.token } })).json();
       const item = data.MediaContainer.Metadata?.[0];
       const restored = item?.title === 'Prexu QA Pattern' && (item.viewOffset || 0) === baseline.offset && Boolean(item.viewCount) === baseline.watched;

@@ -202,7 +202,7 @@ function fireEof() {
 }
 
 describe("useNativePlayer dispatch contract (prexu-ve9)", () => {
-  it("pauses a warm player even when pause=false was emitted before mount", async () => {
+  it.each([false, true])("pauses a warm player after loading (local=%s)", async (isLocal) => {
     vi.mocked(invoke).mockImplementation(async (cmd) =>
       cmd === "player_engine_status" ? { available: true } : undefined,
     );
@@ -211,14 +211,19 @@ describe("useNativePlayer dispatch contract (prexu-ve9)", () => {
       playable: { Marker: [], duration: 60000 },
       part: { id: 1, Chapter: [] },
       categorized: { audio: [], subtitles: [] },
-      isLocal: false,
-      sourceKind: "direct",
-      url: "https://server/pattern.mp4",
+      isLocal,
+      sourceKind: isLocal ? "local" : "direct",
+      url: isLocal ? "/downloads/123/pattern.mp4" : "https://server/pattern.mp4",
       viewOffset: 0,
     } as unknown as Awaited<ReturnType<typeof prepareSource>>);
     const { result } = renderHook(() => useNativePlayer("123"));
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("player_load_url", expect.anything());
+      expect(invoke).toHaveBeenCalledWith("player_load_url", {
+        url: isLocal ? "" : "https://server/pattern.mp4",
+        ...(isLocal ? { downloadRatingKey: "123" } : {}),
+        headers: {},
+        startOffsetMs: 0,
+      });
     });
     // No new pause property event: warmup already set mpv pause=false.
     await waitFor(() => expect(result.current.isPlaying).toBe(true));

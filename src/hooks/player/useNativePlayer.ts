@@ -543,7 +543,8 @@ export function useNativePlayer(
       }
 
       await invoke("player_load_url", {
-        url: prepared.url,
+        url: prepared.isLocal ? "" : prepared.url,
+        ...(prepared.isLocal ? { downloadRatingKey: ratingKey } : {}),
         headers: {} as Record<string, string>,
         startOffsetMs: prepared.viewOffset,
       });
