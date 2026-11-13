@@ -50,7 +50,7 @@ export function buildHlsConfig(
 
 // ── Direct Play Detection ──
 
-/** Browser-playable codec/container combos for raw file direct play (WebView2/Chromium) */
+/** Baseline raw-file codecs; macOS WKWebView additions are gated below. */
 const DIRECT_PLAY_CONTAINERS = ["mp4", "m4v", "mov"];
 const DIRECT_PLAY_VIDEO_CODECS = ["h264", "avc1"];
 const DIRECT_PLAY_AUDIO_CODECS = ["aac", "mp3", "flac", "opus"];
@@ -67,22 +67,58 @@ export function canDirectStreamAudio(audioCodec: string | undefined): boolean {
   return HLS_DIRECT_AUDIO_CODECS.includes(audioCodec.toLowerCase());
 }
 
-export function canDirectPlay(media: PlexMediaInfo): boolean {
+/** AV1 support varies by Mac hardware. A missing or failed probe is not support. */
+async function supportsAv1(media: PlexMediaInfo): Promise<boolean> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    if (!navigator.mediaCapabilities?.decodingInfo) return false;
+    const video = media.Part?.[0]?.Stream?.find((stream) => stream.streamType === 1);
+    const bitDepth = video?.bitDepth ?? 8;
+    if (bitDepth !== 8 && bitDepth !== 10) return false;
+    const frameRate = Number.parseFloat(media.videoFrameRate ?? "");
+    const probe = navigator.mediaCapabilities.decodingInfo({
+      type: "file",
+      video: {
+        contentType: `video/mp4; codecs="av01.0.08M.${bitDepth === 10 ? "10" : "08"}"`,
+        width: video?.width ?? 1920,
+        height: video?.height ?? 1080,
+        bitrate: (video?.bitrate ?? media.bitrate) * 1000,
+        framerate: frameRate > 0 ? frameRate : 30,
+      },
+    });
+    // A stalled browser probe must not hold playback preparation indefinitely.
+    return await Promise.race([
+      probe.then((result) => result.supported),
+      new Promise<boolean>((resolve) => {
+        timeout = setTimeout(() => resolve(false), 1500);
+      }),
+    ]);
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function canDirectPlay(media: PlexMediaInfo): Promise<boolean> {
   const part = media.Part?.[0];
   if (!part) return false;
 
   const containerOk = DIRECT_PLAY_CONTAINERS.includes(
     part.container.toLowerCase()
   );
-  const videoOk = DIRECT_PLAY_VIDEO_CODECS.includes(
-    media.videoCodec.toLowerCase()
-  );
-  const audioOk = DIRECT_PLAY_AUDIO_CODECS.includes(
-    media.audioCodec.toLowerCase()
-  );
+  const isMac = typeof navigator !== "undefined" && navigator.userAgent.includes("Macintosh");
+  const videoCodec = media.videoCodec.toLowerCase();
+  const audioCodec = media.audioCodec.toLowerCase();
+  const audioOk = DIRECT_PLAY_AUDIO_CODECS.includes(audioCodec) ||
+    (isMac && ["ac3", "eac3"].includes(audioCodec));
+  const videoOk = DIRECT_PLAY_VIDEO_CODECS.includes(videoCodec) ||
+    (isMac && ["hevc", "hvc1", "hev1"].includes(videoCodec)) ||
+    (isMac && containerOk && audioOk && ["av1", "av01"].includes(videoCodec) &&
+      await supportsAv1(media));
 
   const result = containerOk && videoOk && audioOk;
-  logger.debug("playback", "canDirectPlay", { result });
+  logger.info("playback", "canDirectPlay", { canDirectPlay: result });
   return result;
 }
 
@@ -491,8 +527,8 @@ export async function prepareSource(args: PrepareSourceArgs): Promise<PreparedSo
     };
   }
 
-  // `skipCodecCheck` is the only thing that lets the HTML5 codec gate be
-  // skipped. Without it, BOTH "always" and "auto" require canDirectPlay()
+  // Native playback and explicit original quality bypass the HTML5 gate.
+  // Otherwise, BOTH "always" and "auto" require canDirectPlay()
   // to be true — otherwise the browser <video> element errors on the
   // incompatible file, the error handler flips directPlayFailedRef, and
   // the user sees a brief failure flash before the transcode retry. The
@@ -500,7 +536,7 @@ export async function prepareSource(args: PrepareSourceArgs): Promise<PreparedSo
   // guard outside the `shouldDirectPlay` boolean; preserve that here so
   // "always" remains a silent fall-through to transcode for incompatible
   // codecs on HTML5.
-  const codecOk = skipCodecCheck || pb.quality === "original" || canDirectPlay(media);
+  const codecOk = skipCodecCheck || pb.quality === "original" || await canDirectPlay(media);
   const directPlayPossible =
     !directPlayFailed &&
     (

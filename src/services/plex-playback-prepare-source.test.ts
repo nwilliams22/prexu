@@ -488,3 +488,24 @@ describe("deriveDisplayTitles", () => {
     expect(result.subtitle).toBe("");
   });
 });
+
+describe("prepareSource Mac codec decisions", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each([
+    ["hevc", "aac", true, "direct"],
+    ["h264", "ac3", true, "direct"],
+    ["h264", "eac3", true, "direct"],
+    ["h264", "truehd", true, "transcode"],
+    ["h264", "dts", true, "transcode"],
+    ["av1", "aac", true, "direct"],
+    ["av1", "aac", false, "transcode"],
+  ])("%s/%s probe=%s chooses %s", async (videoCodec, audioCodec, supported, sourceKind) => {
+    vi.stubGlobal("navigator", { userAgent: "Macintosh", mediaCapabilities: { decodingInfo: vi.fn().mockResolvedValue({ supported }) } });
+    const movie = createPlexMovie({ Media: [createPlexMediaInfo({ videoCodec, audioCodec, Part: [createPlexMediaPart({ container: "mp4" })] })] });
+    mockGetItemMetadata.mockResolvedValue(movie);
+    const result = await prepareSource({ server: SERVER, ratingKey: RATING_KEY, preferences: makePrefs({ directPlayPreference: "auto", quality: "1080p" }), skipCodecCheck: false });
+    expect(result.sourceKind).toBe(sourceKind);
+    expect(result.url.includes("/transcode/")).toBe(sourceKind === "transcode");
+  });
+});

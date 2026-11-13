@@ -58,158 +58,158 @@ describe("plex-playback — pure functions", () => {
   // ── canDirectPlay ──
 
   describe("canDirectPlay", () => {
-    it("returns true for mp4 + h264 + aac", () => {
+    it("returns true for mp4 + h264 + aac", async () => {
       const media = createPlexMediaInfo({
         videoCodec: "h264",
         audioCodec: "aac",
         Part: [createPlexMediaPart({ container: "mp4" })],
       });
-      expect(canDirectPlay(media)).toBe(true);
+      expect(await canDirectPlay(media)).toBe(true);
     });
 
-    it("returns true for m4v + h264 + aac", () => {
+    it("returns true for m4v + h264 + aac", async () => {
       const media = createPlexMediaInfo({
         videoCodec: "h264",
         audioCodec: "aac",
         Part: [createPlexMediaPart({ container: "m4v" })],
       });
-      expect(canDirectPlay(media)).toBe(true);
+      expect(await canDirectPlay(media)).toBe(true);
     });
 
-    it("returns true for mov + h264 + mp3", () => {
+    it("returns true for mov + h264 + mp3", async () => {
       const media = createPlexMediaInfo({
         videoCodec: "h264",
         audioCodec: "mp3",
         Part: [createPlexMediaPart({ container: "mov" })],
       });
-      expect(canDirectPlay(media)).toBe(true);
+      expect(await canDirectPlay(media)).toBe(true);
     });
 
-    it("returns true for mp4 + avc1 + aac", () => {
+    it("returns true for mp4 + avc1 + aac", async () => {
       const media = createPlexMediaInfo({
         videoCodec: "avc1",
         audioCodec: "aac",
         Part: [createPlexMediaPart({ container: "mp4" })],
       });
-      expect(canDirectPlay(media)).toBe(true);
+      expect(await canDirectPlay(media)).toBe(true);
     });
 
-    it("returns true for mp4 + h264 + flac", () => {
+    it("returns true for mp4 + h264 + flac", async () => {
       const media = createPlexMediaInfo({
         videoCodec: "h264",
         audioCodec: "flac",
         Part: [createPlexMediaPart({ container: "mp4" })],
       });
-      expect(canDirectPlay(media)).toBe(true);
+      expect(await canDirectPlay(media)).toBe(true);
     });
 
-    it("returns true for mp4 + h264 + opus", () => {
+    it("returns true for mp4 + h264 + opus", async () => {
       const media = createPlexMediaInfo({
         videoCodec: "h264",
         audioCodec: "opus",
         Part: [createPlexMediaPart({ container: "mp4" })],
       });
-      expect(canDirectPlay(media)).toBe(true);
+      expect(await canDirectPlay(media)).toBe(true);
     });
 
-    it("returns false for mp4 + h264 + ac3 (not browser direct-playable)", () => {
+    it("returns false for mp4 + h264 + ac3 (not browser direct-playable)", async () => {
       const media = createPlexMediaInfo({
         videoCodec: "h264",
         audioCodec: "ac3",
         Part: [createPlexMediaPart({ container: "mp4" })],
       });
-      expect(canDirectPlay(media)).toBe(false);
+      expect(await canDirectPlay(media)).toBe(false);
     });
 
-    it("returns false for mp4 + h264 + eac3 (not browser direct-playable)", () => {
+    it("returns false for mp4 + h264 + eac3 (not browser direct-playable)", async () => {
       const media = createPlexMediaInfo({
         videoCodec: "h264",
         audioCodec: "eac3",
         Part: [createPlexMediaPart({ container: "mp4" })],
       });
-      expect(canDirectPlay(media)).toBe(false);
+      expect(await canDirectPlay(media)).toBe(false);
     });
 
-    it("returns false for mkv container", () => {
+    it("returns false for mkv container", async () => {
       const media = createPlexMediaInfo({
         videoCodec: "h264",
         audioCodec: "aac",
         Part: [createPlexMediaPart({ container: "mkv" })],
       });
-      expect(canDirectPlay(media)).toBe(false);
+      expect(await canDirectPlay(media)).toBe(false);
     });
 
-    it("returns false for avi container", () => {
+    it("returns false for avi container", async () => {
       const media = createPlexMediaInfo({
         videoCodec: "h264",
         audioCodec: "aac",
         Part: [createPlexMediaPart({ container: "avi" })],
       });
-      expect(canDirectPlay(media)).toBe(false);
+      expect(await canDirectPlay(media)).toBe(false);
     });
 
-    it("returns false for hevc video codec", () => {
+    it("returns false for hevc video codec", async () => {
       const media = createPlexMediaInfo({
         videoCodec: "hevc",
         audioCodec: "aac",
         Part: [createPlexMediaPart({ container: "mp4" })],
       });
-      expect(canDirectPlay(media)).toBe(false);
+      expect(await canDirectPlay(media)).toBe(false);
     });
 
-    it("returns false for h265 video codec", () => {
+    it("returns false for h265 video codec", async () => {
       const media = createPlexMediaInfo({
         videoCodec: "h265",
         audioCodec: "aac",
         Part: [createPlexMediaPart({ container: "mp4" })],
       });
-      expect(canDirectPlay(media)).toBe(false);
+      expect(await canDirectPlay(media)).toBe(false);
     });
 
-    it("returns false for dts audio codec", () => {
+    it("returns false for dts audio codec", async () => {
       const media = createPlexMediaInfo({
         videoCodec: "h264",
         audioCodec: "dts",
         Part: [createPlexMediaPart({ container: "mp4" })],
       });
-      expect(canDirectPlay(media)).toBe(false);
+      expect(await canDirectPlay(media)).toBe(false);
     });
 
-    it("returns false for truehd audio codec", () => {
+    it("returns false for truehd audio codec", async () => {
       const media = createPlexMediaInfo({
         videoCodec: "h264",
         audioCodec: "truehd",
         Part: [createPlexMediaPart({ container: "mp4" })],
       });
-      expect(canDirectPlay(media)).toBe(false);
+      expect(await canDirectPlay(media)).toBe(false);
     });
 
-    it("returns false when Part array is empty", () => {
+    it("returns false when Part array is empty", async () => {
       const media = createPlexMediaInfo({ Part: [] });
-      expect(canDirectPlay(media)).toBe(false);
+      expect(await canDirectPlay(media)).toBe(false);
     });
 
-    it("returns false when Part is undefined", () => {
+    it("returns false when Part is undefined", async () => {
       const media = createPlexMediaInfo({ Part: undefined });
-      expect(canDirectPlay(media)).toBe(false);
+      expect(await canDirectPlay(media)).toBe(false);
     });
 
-    it("handles case-insensitive codecs", () => {
+    it("handles case-insensitive codecs", async () => {
       const media = createPlexMediaInfo({
         videoCodec: "H264",
         audioCodec: "AAC",
         Part: [createPlexMediaPart({ container: "MP4" })],
       });
-      expect(canDirectPlay(media)).toBe(true);
+      expect(await canDirectPlay(media)).toBe(true);
     });
 
-    it("handles mixed-case codecs", () => {
+    it("handles mixed-case codecs", async () => {
       const media = createPlexMediaInfo({
         videoCodec: "H264",
         audioCodec: "Aac",
         Part: [createPlexMediaPart({ container: "Mp4" })],
       });
-      expect(canDirectPlay(media)).toBe(true);
+      expect(await canDirectPlay(media)).toBe(true);
     });
   });
 
@@ -986,5 +986,85 @@ describe("refreshDownloadedSubtitles (prexu-bgz.31)", () => {
     });
 
     expect(onSelectSubtitle).toHaveBeenCalledWith(newTrack.id);
+  });
+});
+
+describe("platform-aware direct play", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const platforms = ["Macintosh", "Windows NT 10.0", "X11; Linux x86_64", "unknown"];
+  const cases: [string, string, boolean, boolean][] = [
+    ["h264", "aac", true, true],
+    ["avc1", "mp3", true, true],
+    ["h264", "flac", true, true],
+    ["h264", "opus", true, true],
+    ["hevc", "aac", true, false],
+    ["hvc1", "aac", true, false],
+    ["hev1", "aac", true, false],
+    ["h264", "ac3", true, false],
+    ["h264", "eac3", true, false],
+    ["HEVC", "EAC3", true, false],
+    ["h264", "truehd", false, false],
+    ["h264", "dts", false, false],
+    ["h264", "dca", false, false],
+    ["hevc", "truehd", false, false],
+    ["hevc", "dts", false, false],
+    ["vp9", "aac", false, false],
+  ];
+
+  describe.each(platforms)("%s", (platform) => {
+    it.each(cases)("%s + %s preserves platform codec policy", async (videoCodec, audioCodec, mac, other) => {
+      vi.stubGlobal("navigator", { userAgent: platform });
+      const media = createPlexMediaInfo({
+        videoCodec, audioCodec, videoProfile: "main 10",
+        Part: [createPlexMediaPart({ container: "mp4", Stream: [createPlexStream({ streamType: 1, bitDepth: 10 })] })],
+      });
+      expect(await canDirectPlay(media)).toBe(platform === "Macintosh" ? mac : other);
+    });
+
+    it.each(["av1", "av01"])("%s requires a successful Mac probe", async (videoCodec) => {
+      const decodingInfo = vi.fn().mockResolvedValue({ supported: true });
+      vi.stubGlobal("navigator", { userAgent: platform, mediaCapabilities: { decodingInfo } });
+      const media = createPlexMediaInfo({ videoCodec, audioCodec: "aac", Part: [createPlexMediaPart({ container: "mp4" })] });
+      expect(await canDirectPlay(media)).toBe(platform === "Macintosh");
+      expect(decodingInfo).toHaveBeenCalledTimes(platform === "Macintosh" ? 1 : 0);
+    });
+  });
+
+  it.each([undefined, {}, { decodingInfo: vi.fn().mockResolvedValue({ supported: false }) }, { decodingInfo: vi.fn().mockRejectedValue(new TypeError("unsupported")) }])("rejects AV1 without affirmative capability evidence (%j)", async (mediaCapabilities) => {
+    vi.stubGlobal("navigator", { userAgent: "Macintosh", mediaCapabilities });
+    expect(await canDirectPlay(createPlexMediaInfo({ videoCodec: "av1" }))).toBe(false);
+  });
+
+  it("probes file decoding with video dimensions, bitrate and bit depth", async () => {
+    const decodingInfo = vi.fn().mockResolvedValue({ supported: true });
+    vi.stubGlobal("navigator", { userAgent: "Macintosh", mediaCapabilities: { decodingInfo } });
+    const media = createPlexMediaInfo({ videoCodec: "av1", audioCodec: "aac", videoFrameRate: "24p", Part: [createPlexMediaPart({ container: "mp4", Stream: [createPlexStream({ streamType: 1, width: 3840, height: 2160, bitrate: 12000, bitDepth: 10 })] })] });
+    expect(await canDirectPlay(media)).toBe(true);
+    expect(decodingInfo).toHaveBeenCalledWith({ type: "file", video: { contentType: 'video/mp4; codecs="av01.0.08M.10"', width: 3840, height: 2160, bitrate: 12000000, framerate: 24 } });
+  });
+
+  it("falls back when the capability probe never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal("navigator", {
+        userAgent: "Macintosh",
+        mediaCapabilities: { decodingInfo: () => new Promise(() => {}) },
+      });
+      const decision = canDirectPlay(createPlexMediaInfo({ videoCodec: "av1" }));
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(await decision).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["mkv", "avi", "webm"])("keeps the %s container restriction on Mac", async (container) => {
+    const decodingInfo = vi.fn().mockResolvedValue({ supported: true });
+    vi.stubGlobal("navigator", { userAgent: "Macintosh", mediaCapabilities: { decodingInfo } });
+    for (const videoCodec of ["hevc", "av1"]) {
+      expect(await canDirectPlay(createPlexMediaInfo({ videoCodec, audioCodec: "ac3", Part: [createPlexMediaPart({ container })] }))).toBe(false);
+    }
+    expect(decodingInfo).not.toHaveBeenCalled();
   });
 });
