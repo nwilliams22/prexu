@@ -9,8 +9,11 @@ import { resolve } from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
 
 const offlineOnly = process.env.PREXU_JOURNEY_OFFLINE_ONLY === '1';
+const queueOnly = process.env.PREXU_JOURNEY_QUEUE_ONLY === '1';
 const rows = [];
-const add = (journey, status) => { const reason = status === 'UNSUPPORTED' ? 'QA fixture is too short for the 60-second resume threshold' : status === 'BLOCKED' ? 'Second authorized QA identity is not provisioned' : status === 'NOT_RUN' ? 'Required scenario did not complete' : undefined; rows.push({ journey, status, ...(reason ? { reason } : {}) }); if (process.env.PREXU_JOURNEY_PROGRESS === '1') process.stderr.write(`${journey}: ${status}\n`); };
+const watchComparisons = [];
+const diagnostics = [];
+const add = (journey, status) => { const reason = status === 'UNSUPPORTED' ? 'QA fixture is too short for the 60-second resume threshold' : status === 'SKIP' ? 'Pending second account: PREXU_QA_PLEX_GUEST_AUTH is not provisioned' : status === 'NOT_RUN' ? 'Required scenario did not complete' : undefined; rows.push({ journey, status, ...(reason ? { reason } : {}) }); if (process.env.PREXU_JOURNEY_PROGRESS === '1') process.stderr.write(`${journey}: ${status}\n`); };
 const token = process.env.PREXU_QA_PLEX_AUTH;
 const appPath = resolve(process.env.PREXU_JOURNEY_APP || 'src-tauri/target/debug/prexu');
 let applicationSha256;
@@ -93,7 +96,7 @@ try {
         try {
           if (req.url === `${endpoint}/driver.js` && req.method === 'GET') {
             res.setHeader('Content-Type', 'text/javascript');
-            res.end((await readFile(new URL('./native-driver.js', import.meta.url), 'utf8')).replace('__JOURNEY_ENDPOINT__', JSON.stringify(endpoint)).replace('__JOURNEY_BASELINE__', JSON.stringify(baseline)).replace('__JOURNEY_OFFLINE_ONLY__', JSON.stringify(offlineOnly)).replace('__JOURNEY_RESTARTED__', JSON.stringify(restarted)));
+            res.end((await readFile(new URL('./native-driver.js', import.meta.url), 'utf8')).replace('__JOURNEY_ENDPOINT__', JSON.stringify(endpoint)).replace('__JOURNEY_BASELINE__', JSON.stringify(baseline)).replace('__JOURNEY_OFFLINE_ONLY__', JSON.stringify(offlineOnly)).replace('__JOURNEY_QUEUE_ONLY__', JSON.stringify(queueOnly)).replace('__JOURNEY_RESTARTED__', JSON.stringify(restarted)));
             return;
           }
           if (req.method !== 'POST') throw new Error('method');
@@ -114,6 +117,15 @@ try {
             res.end('ok');
             await restart();
             return;
+          } else if (req.url === `${endpoint}/diagnostic`) {
+            const input = JSON.parse(body);
+            if (!['native-queue-start', 'native-queue-eof', 'native-queue-postplay', 'native-offline'].includes(input.stage) ||
+                !Number.isFinite(input.time) || input.time < 0 || input.time > 130 ||
+                Object.keys(input).sort().join(',') !== 'errorWords,invalidUrl,loadFailed,missing,nativeError,noMedia,retry,scheme,stage,time' ||
+                ['retry','missing','scheme','noMedia','loadFailed','invalidUrl'].some(key => typeof input[key] !== 'boolean')) throw new Error('event');
+            if (!Array.isArray(input.errorWords) || input.errorWords.some(word => !['mpv','file','invalid','permission','denied','download','resolve','stream','load','format','argument','fetch','network','http','empty','scheme','protocol','channel','closed','ipc','undefined','null','cannot','video','media','abort','timeout','connection','refused','failed','error'].includes(word))) throw new Error('event');
+            if (!/^Raw\(-?\d+\)$/.test(input.nativeError) && !['none','other','InvalidUtf8','Null'].includes(input.nativeError)) throw new Error('event');
+            diagnostics.push(input);
           } else if (req.url === `${endpoint}/watch`) {
             if (!await serviceIsExclusive()) throw new Error('service-busy');
             const data = await (await request(`${server.uri}/library/metadata/2`, { headers: { 'X-Plex-Token': server.token } })).json();
@@ -123,6 +135,7 @@ try {
             const input = JSON.parse(body);
             if (!Number.isFinite(input.expectedMs) || input.expectedMs < 0 || input.expectedMs > 120000) throw new Error('event');
             watchComparison = { expectedMs: input.expectedMs, observedMs: item.viewOffset || 0, watched: Boolean(item.viewCount) };
+            if (watchComparisons.length < 20 && JSON.stringify(watchComparisons.at(-1)) !== JSON.stringify(watchComparison)) watchComparisons.push(watchComparison);
             res.end(JSON.stringify({ offset: item.viewOffset || 0, watched: Boolean(item.viewCount) }));
             return;
           } else if (req.url === endpoint) {
@@ -184,7 +197,7 @@ try {
     if (!ending) launch();
   };
   launch();
-  const timer = setTimeout(() => finish('deadline'), 300000);
+  const timer = setTimeout(() => finish('deadline'), 480000);
   const result = await completed;
   clearTimeout(timer);
   if (result !== 'PASS') { stage = result === 'FAIL' ? 'native-run' : result; throw new Error('native'); }
@@ -206,10 +219,10 @@ finally {
         clean = false;
       } else {
       const query = new URLSearchParams({ ratingKey: '2', key: '/library/metadata/2', state: 'stopped',
-        time: String(baseline.offset), duration: String(baseline.duration) });
+        time: String(baseline.offset), duration: String(baseline.duration), 'X-Plex-Client-Identifier': appClient });
       // The offline-only slice never plays against the live server. Verify
       // its state without issuing a synthetic timeline mutation.
-      if (!offlineOnly) await request(`${server.uri}/:/timeline?${query}`, { headers: { 'X-Plex-Token': server.token } });
+      if (!offlineOnly) await request(`${server.uri}/:/timeline?${query}`, { headers: { 'X-Plex-Token': server.token, 'X-Plex-Client-Identifier': appClient } });
       const data = await (await request(`${server.uri}/library/metadata/2`, { headers: { 'X-Plex-Token': server.token } })).json();
       const item = data.MediaContainer.Metadata?.[0];
       const restored = item?.title === 'Prexu QA Pattern' && (item.viewOffset || 0) === baseline.offset && Boolean(item.viewCount) === baseline.watched;
@@ -223,15 +236,15 @@ finally {
 }
 if (!offlineOnly && rows.some(row => row.journey === 'native-login')) {
   if (!rows.some(row => row.journey === 'native-queue-postplay')) add('queue-postplay', 'NOT_RUN');
-  add('two-client-relay', 'BLOCKED');
+  add('two-client-relay', process.env.PREXU_QA_PLEX_GUEST_AUTH ? 'NOT_RUN' : 'SKIP');
 }
 if (offlineOnly && rows.some(row => row.journey === 'native-login')) {
   for (const journey of ['native-download', 'native-offline', 'native-offline-missing-file']) {
     if (!rows.some(row => row.journey === journey)) add(journey, 'NOT_RUN');
   }
 }
-const report = { schema: 1, applicationSha256, watchComparison, binarySourceRevision: 'not independently verified', scope: offlineOnly ? 'native offline slice; NOT full journey acceptance' : 'native single-user slice; NOT full journey acceptance', rows };
+const report = { schema: 1, applicationSha256, fixtureDurationMs: baseline?.duration, watchComparison, watchComparisons, diagnostics, binarySourceRevision: 'not independently verified', scope: offlineOnly ? 'native offline slice; NOT full journey acceptance' : queueOnly ? 'native queue/offline slice; NOT full journey acceptance' : 'native single-user slice; NOT full journey acceptance', rows };
 const output = JSON.stringify(report, null, 2) + '\n';
 if (process.env.PREXU_JOURNEY_REPORT) await writeFile(process.env.PREXU_JOURNEY_REPORT, output, { mode: 0o600 });
 process.stdout.write(output);
-process.exitCode = rows.some(row => ['FAIL', 'UNSUPPORTED', 'NOT_RUN', 'BLOCKED'].includes(row.status)) ? 1 : 0;
+process.exitCode = rows.some(row => ['FAIL', 'UNSUPPORTED', 'NOT_RUN', 'BLOCKED', 'SKIP'].includes(row.status)) ? 1 : 0;

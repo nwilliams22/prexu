@@ -130,7 +130,7 @@ try {
     add('play-resume-watch-state', 'NOT_RUN', 'Native playback and service watch-state restoration still need a desktop adapter');
     add('queue-postplay', 'NOT_RUN', 'Playback completion and queue advancement still need a desktop adapter');
     add('downloads-offline', 'UNSUPPORTED', 'Browser cannot invoke the Tauri download backend; desktop adapter required');
-    add('two-client-relay', 'BLOCKED', 'Second distinct authorized QA Plex identity required; same username replaces the first connection');
+    add('two-client-relay', process.env.PREXU_QA_PLEX_GUEST_AUTH ? 'NOT_RUN' : 'SKIP', 'Pending second account; relay acceptance remains required');
   }
 } catch {
   add('setup', 'FAIL', `Failed during ${stage}; raw errors suppressed`);

@@ -68,7 +68,12 @@ node --test scripts/real-journeys/native.test.mjs scripts/real-journeys/run.test
 
 `PREXU_JOURNEY_APP` optionally selects the debug executable. Its SHA-256 is
 recorded; the runner does not certify which revision produced that binary.
-The frontend comes from the current checkout. Port 1420 must be free: the
+The frontend comes from the current checkout. For Xvfb, verify and select the
+patched QA libmpv runtime described in `docs/linux-native-codec-qa.md` with
+`LD_LIBRARY_PATH=/path/to/verified/bundle/lib`; the launcher passes that setting
+to the app. Verify the running app maps that library and record its digest
+alongside the executable digest. This does not establish GPU or audio output.
+Port 1420 must be free: the
 runner starts its own Vite with strict binding and never attaches to an existing
 server. Xvfb allocates a free display. Fresh HOME/XDG directories and a private
 D-Bus session isolate native stores, downloads, browser data and log files.
@@ -94,14 +99,20 @@ replacing the isolated profile's server address with an unreachable loopback por
 and restarting the native app process, so an in-memory metadata cache cannot
 supply offline acceptance.
 
-Limitations remain explicit and keep the exit status nonzero:
+Resume checks and remaining acceptance limits:
 
-- The current QA movie lasts 60.022 seconds; `useTimelineReporting` has a
-  60-second minimum resume threshold. A longer synthetic fixture is required to
-  test a meaningful stop/resume interval before EOF. `native-resume` is UNSUPPORTED.
+- The installed QA movie lasts 119.040 seconds. Resume requires at least 90
+  seconds: the driver plays past 65 seconds, pauses/stops, compares the saved
+  service position within two seconds, clicks the real Resume button, and
+  verifies native progress within six seconds of that position. It then lets
+  playback complete and checks that Plex clears the resume marker.
 - Downloaded playback must advance with the server unavailable; reaching
   Retry/Go Back is a `native-offline` FAIL, not UNSUPPORTED.
-- The second QA identity is still required for the two-client relay journeys.
+- Two-client relay journeys are SKIP with reason "pending second account"
+  while `PREXU_QA_PLEX_GUEST_AUTH` is absent. This is pending coverage, not
+  unsupported behavior. Presence of that secret changes the report to NOT_RUN
+  until the real two-client adapter is implemented and verified. Full acceptance
+  remains nonzero in either case.
 - Native events establish control/progress, not audible output, GPU correctness
   or composed-screen acceptance. No screenshots or recordings are captured.
 
@@ -129,3 +140,10 @@ and still verifies cleanup and restoration. A PASS for this slice does not
 establish those omitted journeys. The fallback uses the existing completed
 download record for title/episode display; file duration and tracks are probed
 by the local player. Fresh server metadata is still preferred when available.
+
+Set `PREXU_JOURNEY_QUEUE_ONLY=1` to diagnose queue/postplay and offline
+playback without repeating online resume. This slice still performs real login
+and download, and its report explicitly excludes full journey acceptance.
+The full native run has an eight-minute deadline. Reports retain up to 20
+numeric watch-state comparisons and fixed boolean error categories; raw UI
+text is never exported.
