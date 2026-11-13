@@ -76,6 +76,9 @@ try {
  // Pass only the explicit diagnostic opt-in through a dedicated launcher.
  let launch = 'C:\\ProgramData\\EvalBuild\\gui-run.ps1 "$env:LOCALAPPDATA\\Prexu\\Prexu.exe"';
  if (pixelProbe) {
+  // A powered-off VM can retain an interrupted run's request and acknowledgement.
+  // Fail before launch if either cannot be removed; the first capture must precede readback.
+  ssh(`$ErrorActionPreference='Stop'; foreach($path in @(${ps(remote+'\\pixel-probe-request')},${ps(remote+'\\pixel-probe-request.done')})){if(Test-Path -LiteralPath $path){Remove-Item -LiteralPath $path -Force}; if(Test-Path -LiteralPath $path){throw 'Stale pixel probe handshake remains'}}`);
   const launcher = join(scratch, 'launch-probe.ps1');
   writeFileSync(launcher, `$env:PREXU_VIDEO_PIXEL_PROBE="1"\n$env:PREXU_VIDEO_PIXEL_PROBE_REQUEST=${ps(remote+'\\pixel-probe-request')}\n& "$env:LOCALAPPDATA\\Prexu\\Prexu.exe"\n`);
   run('scp', ['-o','BatchMode=yes',launcher,'win11-test:C:/Users/baddong/qa-composition/launch-probe.ps1']);
