@@ -158,12 +158,12 @@ export function usePostPlay({
     queue.items.length,
   ]);
 
-  // Reset post-play state when ratingKey changes
+  // Reset on queue advancement too: consecutive entries may share a ratingKey.
   useEffect(() => {
     postPlayShownRef.current = false;
     setShowPostPlay(false);
     setPostPlayDetail(null);
-  }, [ratingKey]);
+  }, [ratingKey, queue.currentIndex]);
 
   const onPlayNext = useCallback(() => {
     setShowPostPlay(false);

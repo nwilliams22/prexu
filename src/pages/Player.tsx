@@ -54,6 +54,7 @@ import {
   derivePostPlayDetailProps,
   deriveUpNextSlice,
 } from "./player-postplay-props";
+import { playQueueItem } from "./player-queue-navigation";
 import { probeLive } from "../services/probe-live";
 import { playerStyles as styles } from "./Player.styles";
 
@@ -413,25 +414,26 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     player.itemType,
   );
 
+  const { seek: seekQueue, isPlaying: queueIsPlaying, togglePlay: toggleQueuePlay } = player;
   const handleNextEpisode = useCallback(() => {
     const next = playNext();
     if (next) {
       // Mutate ratingKey in place — usePlayer's ratingKey effect re-inits
       // playback. AppLayout + the page underneath stay mounted.
-      playerSession.replaceRatingKey(next.ratingKey);
+      playQueueItem(next.ratingKey, ratingKey, { seek: seekQueue, isPlaying: queueIsPlaying, togglePlay: toggleQueuePlay }, playerSession.replaceRatingKey);
     } else if (episodeNav.handleNextEpisode) {
       episodeNav.handleNextEpisode();
     }
-  }, [playNext, episodeNav.handleNextEpisode, playerSession]);
+  }, [playNext, episodeNav.handleNextEpisode, playerSession, ratingKey, seekQueue, queueIsPlaying, toggleQueuePlay]);
 
   const handlePrevEpisode = useCallback(() => {
     const prev = playPrev();
     if (prev) {
-      playerSession.replaceRatingKey(prev.ratingKey);
+      playQueueItem(prev.ratingKey, ratingKey, { seek: seekQueue, isPlaying: queueIsPlaying, togglePlay: toggleQueuePlay }, playerSession.replaceRatingKey);
     } else if (episodeNav.handlePrevEpisode) {
       episodeNav.handlePrevEpisode();
     }
-  }, [playPrev, episodeNav.handlePrevEpisode, playerSession]);
+  }, [playPrev, episodeNav.handlePrevEpisode, playerSession, ratingKey, seekQueue, queueIsPlaying, toggleQueuePlay]);
 
   // "Logical next" — there is a real successor to the currently playing
   // item. Used by:

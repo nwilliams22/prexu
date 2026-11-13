@@ -406,3 +406,18 @@ describe("usePostPlay", () => {
     });
   });
 });
+
+
+it("opens postplay again after advancing to another copy of the same item", () => {
+  const args = makeArgs();
+  const { result, rerender } = renderHook((queue) => usePostPlay({ ...args, queue }), {
+    initialProps: makeQueue({ currentIndex: 0 }),
+  });
+  act(() => triggerEof());
+  expect(result.current.showPostPlay).toBe(true);
+  act(() => result.current.onPlayNext());
+  rerender(makeQueue({ currentIndex: 1 }));
+  expect(result.current.showPostPlay).toBe(false);
+  act(() => triggerEof());
+  expect(result.current.showPostPlay).toBe(true);
+});
