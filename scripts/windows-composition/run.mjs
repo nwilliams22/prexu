@@ -94,8 +94,15 @@ try {
   try { browser=await chromium.connectOverCDP(`http://127.0.0.1:${port}`,{timeout:3000}); } catch { await sleep(500); }
  }
  if(!browser)throw new Error('Installed WebView2 not ready');
- const page=browser.contexts().flatMap(c=>c.pages()).find(p=>p.url().includes('tauri.localhost'));
- if(!page)throw new Error('Real application page missing');
+ // CDP can answer before WebView2 creates/navigates the application target.
+ // Wait for the real target; connection alone is not app readiness.
+ let page;
+ const pageDeadline=Date.now()+30_000;
+ while(!page && Date.now()<pageDeadline){
+  page=browser.contexts().flatMap(c=>c.pages()).find(p=>p.url().includes('tauri.localhost'));
+  if(!page)await sleep(250);
+ }
+ if(!page)throw new Error('Real application page missing after 30 seconds');
  await page.getByText('Prexu QA Pattern',{exact:true}).filter({visible:true}).first().waitFor({timeout:60_000});
  await page.getByText('Prexu QA Pattern',{exact:true}).filter({visible:true}).first().click();
  await page.getByRole('button',{name:/^▶ (Play|Resume from .+)$/}).waitFor({timeout:60_000});
