@@ -58,7 +58,16 @@ public class Desktop {
     int begin=x,pos=x;bool ok=true;int stripe=0;
     for(int c=0;c<6;c++){
      int gap=0;while(pos<maxX && bar(pos,y)!=c && gap++<6)pos++;
-     int start=pos;while(pos<maxX && bar(pos,y)==c)pos++;
+     int start=pos;
+     while(pos<maxX){
+      if(bar(pos,y)==c){pos++;continue;}
+      // The fixture has thin moving black lines through whole color bars.
+      // Bridge only short unclassified gaps that return to this same color;
+      // never cross another bar or merge broad overlays into the stripe.
+      int resume=pos;while(resume<maxX && resume-pos<6 && bar(resume,y)==-1)resume++;
+      if(resume>pos && resume<maxX && bar(resume,y)==c){pos=resume;continue;}
+      break;
+     }
      int width=pos-start;
      if(width<minWidth/8 || width>maxWidth/5 || (stripe>0 && Math.Abs(width-stripe)>stripe*.3)){ok=false;break;}
      stripe=width;
@@ -141,6 +150,17 @@ if($SelfTest) {
  $singleBounds=[Desktop]::PatternBounds($single,640,480,150,500)
  $single.Dispose()
  if($singleBounds.Width -lt 235 -or $singleBounds.Height -lt 140){throw 'Single seed row must recover the visible video bounds'}
+ # Full-height thin lines leave no uninterrupted seed row (real QA fixture).
+ $lined=New-Object Drawing.Bitmap 640,480
+ $g=[Drawing.Graphics]::FromImage($lined);$g.Clear([Drawing.Color]::Black)
+ for($i=0;$i -lt 6;$i++){$brush=New-Object Drawing.SolidBrush $colors[$i];$g.FillRectangle($brush,100+$i*40,120,40,150);$brush.Dispose()}
+ foreach($x in @(150,160,170,185,195,205)){$g.FillRectangle([Drawing.Brushes]::Black,$x,120,3,150)}
+ $g.Dispose()
+ $linedBounds=[Desktop]::PatternBounds($lined,640,480,150,500)
+ if($linedBounds.Width -lt 235 -or $linedBounds.Height -lt 140){throw 'Thin full-height lines must not hide the six-bar fixture'}
+ $g=[Drawing.Graphics]::FromImage($lined);$g.FillRectangle([Drawing.Brushes]::Black,150,120,15,150);$g.Dispose()
+ if(-not [Desktop]::PatternBounds($lined,640,480,150,500).IsEmpty){throw 'Wide missing stripe must not be bridged'}
+ $lined.Dispose()
  $g=[Drawing.Graphics]::FromImage($b);$g.DrawImageUnscaled($a,0,0);$g.Dispose()
  $a.Dispose();$b.Dispose();'PIXEL_SELFTEST_PASS';exit 0
 }

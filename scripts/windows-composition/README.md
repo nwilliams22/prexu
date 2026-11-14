@@ -33,6 +33,12 @@ WebView2 chrome and OS window borders. Evidence contains timestamped pairs of
 PNG frames, video-region motion/color metrics and theme-matched control-icon pixel observations.
 Repeated native pointer movement keeps controls visible while sampling; their
 DOM styles and captured pixels are never changed.
+The six-bar locator tolerates up to six unclassified pixels inside a stripe
+only when the same color resumes, so thin moving fixture lines cannot erase
+every seed row. Wider gaps and other bar colors are not bridged. The Windows
+`desktop.ps1 -SelfTest` includes full-height line and wide-gap regressions.
+Offline replay diagnoses classifier failures; it does not turn a failed live
+scenario run into a clean acceptance pass.
 These are sampled frames, **not a continuous recording or transition-latency
 measurement**. Scenario samples must be 1–10 seconds apart to accommodate
 software capture latency; this is not a frame-pacing acceptance threshold.
