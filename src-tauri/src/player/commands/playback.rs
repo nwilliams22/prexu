@@ -91,6 +91,8 @@ pub async fn player_load_url(
     }
 
     state.ensure_init(&app)?;
+    #[cfg(target_os = "linux")]
+    crate::player::linux_compositor::prepare_for_load(&app).await?;
     log::debug!("[player:cmd] load_url: ensure_init OK, sending loadfile");
 
     // mpv's `http-header-fields` takes a comma-separated list of "Name: Value"

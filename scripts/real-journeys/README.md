@@ -147,3 +147,12 @@ and download, and its report explicitly excludes full journey acceptance.
 The full native run has an eight-minute deadline. Reports retain up to 20
 numeric watch-state comparisons and fixed boolean error categories; raw UI
 text is never exported.
+
+Linux startup must finish creating the GTK/mpv render context before issuing
+`loadfile`, including after player teardown and app restart. Local downloads can
+reach `vo=libmpv` before an asynchronously queued GTK bind finishes; network
+loading can mask that race. The player awaits render readiness without waking
+the idle overlay, and reports initialization failure instead of retrying the
+load. `Raw(-20)` alone is generic: the diagnostic identifying this race was
+`No render context set` before video-output initialization failed. Do not turn
+that error into a pass or retry it away when evaluating repeatability.

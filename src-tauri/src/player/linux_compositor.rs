@@ -751,6 +751,36 @@ pub fn attach_mpv(app: &AppHandle, mpv: Arc<Mpv>) {
     }
 }
 
+/// Wait for the GTK render context before issuing loadfile. `attach_mpv`
+/// queues its bind on the main thread; publishing PlayerState does not mean
+/// that bind has run. A local file can reach vo=libmpv before GTK gets a turn.
+/// Network startup usually hides this race. Keep the idle overlay hidden and
+/// propagate initialization failures instead of retrying a failed load.
+pub(crate) async fn prepare_for_load(app: &AppHandle) -> Result<(), String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let result = (|| {
+            let comp = COMPOSITOR.with(|c| c.try_borrow().ok().and_then(|g| g.clone()))
+                .ok_or("Native compositor is not installed")?;
+            // Realize a hidden GLArea without waking the overlay. Its parent
+            // is already realized when playback is requested from the UI.
+            if !comp.gl_area.is_realized() {
+                comp.gl_area.realize();
+            }
+            try_create_render_context(&comp);
+            let ready = comp.render.try_borrow()
+                .map_err(|_| "Native render context is busy")?.is_some();
+            if !ready {
+                return Err("Native render context is not ready");
+            }
+            log::debug!("[player:linux] render context ready before loadfile");
+            Ok(())
+        })().map_err(str::to_string);
+        let _ = tx.send(result);
+    }).map_err(|e| format!("Cannot prepare native render context: {e}"))?;
+    rx.await.map_err(|_| "Native render preparation was cancelled".to_string())?
+}
+
 /// Edge-triggered overlay wake/sleep (prexu-ertt Phase 1). Called from the
 /// mpv event-pump thread on idle-active flips — a file is loaded ⇔ the
 /// overlay must composite video — and force-slept from `detach_mpv` as a
