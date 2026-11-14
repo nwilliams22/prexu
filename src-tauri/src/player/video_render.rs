@@ -917,6 +917,19 @@ fn render_loop(
             }
         };
         let have_frame = flags & libmpv2_sys::mpv_render_update_flag_MPV_RENDER_UPDATE_FRAME != 0;
+        // Select the one-shot readback before rendering so queued-frame metadata
+        // refers to the same submission. No normal mpv client calls here.
+        let sample_pixels = (have_frame || force_render)
+            && pixel_probe.as_mut().is_some_and(|probe| probe.due());
+        if pixel_probe.as_mut().is_some_and(|probe| probe.queue_due()) {
+            match render.next_frame_info() {
+                Ok(info) => log::info!(
+                    "[player:video] queued frame next_render={} update_flags={flags} flags={} target_time_us={} pixel_sample={sample_pixels}",
+                    rendered + 1, info.flags, info.target_time
+                ),
+                Err(error) => log::warn!("[player:video] queued frame query failed: {error:?}"),
+            }
+        }
         if have_frame {
             frames += 1;
         }
@@ -934,7 +947,7 @@ fn render_loop(
                 unsafe { ctx.CopyResource(&back, &shared_tex) };
                 wait_for_copy(&ctx, &copy_fence)?;
                 if let Some(probe) = pixel_probe.as_mut() {
-                    if probe.due() {
+                    if sample_pixels {
                         probe.sample(&device, &ctx, &shared_tex, &back, fbo, cur_w, cur_h, rendered);
                     }
                 }

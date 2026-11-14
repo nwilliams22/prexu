@@ -21,6 +21,9 @@ pub(super) struct PixelProbe {
     last: Option<Instant>,
     samples: u32,
     request: PathBuf,
+    queue_started: Option<Instant>,
+    queue_last: Option<Instant>,
+    queue_samples: u32,
 }
 
 impl PixelProbe {
@@ -35,6 +38,9 @@ impl PixelProbe {
             last: None,
             samples: 0,
             request: request.into(),
+            queue_started: None,
+            queue_last: None,
+            queue_samples: 0,
         })
     }
 
@@ -50,7 +56,27 @@ impl PixelProbe {
         if !self.request.is_file() {
             return false;
         }
+        self.queue_started = Some(Instant::now());
         self.samples += 1;
+        true
+    }
+
+    // Runs on the render owner after update and before render. Stop after eight
+    // observations or two seconds, even if the renderer goes idle in between.
+    pub(super) fn queue_due(&mut self) -> bool {
+        let Some(started) = self.queue_started else {
+            return false;
+        };
+        if self.queue_samples >= 8
+            || started.elapsed() >= Duration::from_secs(2)
+            || self
+                .queue_last
+                .is_some_and(|last| last.elapsed() < Duration::from_millis(250))
+        {
+            return false;
+        }
+        self.queue_last = Some(Instant::now());
+        self.queue_samples += 1;
         true
     }
 
@@ -248,14 +274,29 @@ mod tests {
             request: std::env::current_exe()
                 .unwrap()
                 .join("missing-probe-request"),
+            queue_started: None,
+            queue_last: None,
+            queue_samples: 0,
         };
         assert!(!probe.due());
+        assert!(!probe.queue_due());
         // Existing executable is a harmless stand-in for a request file:
         // due() only reads metadata, never removes or reads request contents.
         probe.request = std::env::current_exe().unwrap();
         assert!(!probe.due());
         probe.last = Some(Instant::now() - Duration::from_secs(3));
         assert!(probe.due());
+        assert!(probe.queue_due());
+        assert!(!probe.queue_due());
+        for _ in 1..8 {
+            probe.queue_last = Some(Instant::now() - Duration::from_millis(251));
+            assert!(probe.queue_due());
+        }
+        probe.queue_last = None;
+        assert!(!probe.queue_due());
+        probe.queue_samples = 0;
+        probe.queue_started = Some(Instant::now() - Duration::from_secs(3));
+        assert!(!probe.queue_due());
         probe.last = None;
         assert!(!probe.due());
     }

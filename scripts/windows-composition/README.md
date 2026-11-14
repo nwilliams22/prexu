@@ -109,3 +109,14 @@ assuming their hashes match. Sparse samples cannot prove that every pixel is
 black, and successful Present does not prove composition. Readback synchronizes
 GPU work and can hide a timing fault: compare runs with the probe disabled and
 do not classify passing probe runs as a black-video fix.
+
+With queued-frame diagnostics, the same opt-in request also records at most eight
+`NEXT_FRAME_INFO` observations over two seconds, at most four per second. The
+first is taken before the render used for the pixel sample; subsequent entries
+report queued-frame progress without further pixel readbacks. Calls stay on the
+render thread with its GL context current, after update and before rendering.
+Flags are a bitset: 1 PRESENT, 2 REDRAW, 4 REPEAT, 8 BLOCK_VSYNC; zero means no
+queued frame. `target_time_us` is a scheduled absolute display time, not media
+PTS or presentation confirmation, and may be zero. Progress establishes queue
+submission only; it does not prove decoded pixel content. Missing progress does
+not by itself establish decoder starvation. Sampling can still affect timing.

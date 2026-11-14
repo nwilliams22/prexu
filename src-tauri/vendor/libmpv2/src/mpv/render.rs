@@ -278,6 +278,26 @@ impl RenderContext {
         }
     }
 
+    /// Read queued-frame metadata without allocating or narrowing the flag bitset.
+    /// Call on the owning render thread with its OpenGL context current, outside
+    /// callbacks and serialized with every other render API call.
+    pub fn next_frame_info(&self) -> Result<libmpv2_sys::mpv_render_frame_info> {
+        let mut info = libmpv2_sys::mpv_render_frame_info {
+            flags: 0,
+            target_time: 0,
+        };
+        let result = unsafe {
+            libmpv2_sys::mpv_render_context_get_info(
+                self.ctx,
+                libmpv2_sys::mpv_render_param {
+                    type_: libmpv2_sys::mpv_render_param_type_MPV_RENDER_PARAM_NEXT_FRAME_INFO,
+                    data: (&mut info as *mut libmpv2_sys::mpv_render_frame_info).cast(),
+                },
+            )
+        };
+        mpv_err(info, result)
+    }
+
     pub fn get_info<C>(&self, param: RenderParam<C>) -> Result<RenderParam<C>> {
         let is_next_frame_info = matches!(param, RenderParam::NextFrameInfo(_));
         let raw_param = libmpv2_sys::mpv_render_param::from(param);
