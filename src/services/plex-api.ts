@@ -224,15 +224,20 @@ async function fetchOnce(
   const controller = new AbortController();
   const start = Date.now();
 
-  const timer = setTimeout(() => {
-    const elapsed = Date.now() - start;
-    controller.abort(
-      new DOMException(
+  // Some WebKit requests remain pending after abort. Settle our deadline
+  // independently so one unreachable connection cannot hold discovery open.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      const elapsed = Date.now() - start;
+      const reason = new DOMException(
         `Request timed out after ${elapsed}ms: ${redactUrl(url)}`,
         "TimeoutError",
-      ),
-    );
-  }, timeout);
+      );
+      reject(reason);
+      controller.abort(reason);
+    }, timeout);
+  });
 
   // Merge any existing signal (unlikely but safe)
   const signal = init?.signal
@@ -240,12 +245,15 @@ async function fetchOnce(
     : controller.signal;
 
   try {
-    return await fetch(url, {
-      ...init,
-      signal,
-      timeoutMs: undefined,
-      retries: undefined,
-    } as RequestInit);
+    return await Promise.race([
+      fetch(url, {
+        ...init,
+        signal,
+        timeoutMs: undefined,
+        retries: undefined,
+      } as RequestInit),
+      deadline,
+    ]);
   } catch (err) {
     // If WebView2/older runtimes throw a generic AbortError when our
     // controller aborted, surface our explicit reason instead.

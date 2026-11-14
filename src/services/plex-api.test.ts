@@ -307,6 +307,25 @@ describe("plex-api", () => {
       expect((caught as DOMException).message).toContain(url);
     });
 
+    it("settles and releases shared requests when fetch ignores abort", async () => {
+      mockFetch.mockImplementation(() => new Promise<Response>(() => {}));
+      const url = `https://example.test/ignored-abort-${Date.now()}`;
+      const first = timedFetch(url, { timeoutMs: 10, retries: 0 });
+      const shared = timedFetch(url, { timeoutMs: 10, retries: 0 });
+      const results = await Promise.allSettled([first, shared]);
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      for (const result of results) {
+        expect(result.status).toBe("rejected");
+        if (result.status === "rejected") expect(isTimeoutError(result.reason)).toBe(true);
+      }
+      expect(mockFetch.mock.calls[0]![1].signal.aborted).toBe(true);
+
+      mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
+      expect((await timedFetch(url, { timeoutMs: 100, retries: 0 })).ok).toBe(true);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    }, 1000);
+
     it("retries once on timeout when retries > 0", async () => {
       let calls = 0;
       mockFetch.mockImplementation((_url: string, opts: { signal: AbortSignal }) => {
