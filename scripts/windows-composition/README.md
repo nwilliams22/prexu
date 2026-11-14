@@ -116,7 +116,9 @@ first is taken before the render used for the pixel sample; subsequent entries
 report queued-frame progress without further pixel readbacks. Calls stay on the
 render thread with its GL context current, after update and before rendering.
 Flags are a bitset: 1 PRESENT, 2 REDRAW, 4 REPEAT, 8 BLOCK_VSYNC; zero means no
-queued frame. `target_time_us` is a scheduled absolute display time, not media
-PTS or presentation confirmation, and may be zero. Progress establishes queue
+queued frame. `target_time_raw` is the unscaled scheduled absolute display time returned by
+mpv, not media PTS or presentation confirmation, and may be zero. Do not infer
+units from the API header: the pinned runtime returned nanosecond-scale deltas
+in the measured two-second window despite the header describing microseconds. Progress establishes queue
 submission only; it does not prove decoded pixel content. Missing progress does
 not by itself establish decoder starvation. Sampling can still affect timing.

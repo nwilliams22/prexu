@@ -924,7 +924,7 @@ fn render_loop(
         if pixel_probe.as_mut().is_some_and(|probe| probe.queue_due()) {
             match render.next_frame_info() {
                 Ok(info) => log::info!(
-                    "[player:video] queued frame next_render={} update_flags={flags} flags={} target_time_us={} pixel_sample={sample_pixels}",
+                    "[player:video] queued frame next_render={} update_flags={flags} flags={} target_time_raw={} pixel_sample={sample_pixels}",
                     rendered + 1, info.flags, info.target_time
                 ),
                 Err(error) => log::warn!("[player:video] queued frame query failed: {error:?}"),
