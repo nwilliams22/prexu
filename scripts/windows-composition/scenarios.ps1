@@ -15,6 +15,7 @@ function ClickControl([string]$Label) {
  Javascript "(()=>{const label=$labelJson;const b=[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')===label);if(!b)throw Error('Control missing: '+label);b.click();return true})()" | Out-Null
  Start-Sleep -Seconds 3
 }
+Javascript "(()=>{window.__qaPointerEvents=[];window.addEventListener('mousemove',e=>window.__qaPointerEvents.push({utc:new Date().toISOString(),x:e.clientX,y:e.clientY,trusted:e.isTrusted}),true);return true})()" | Out-Null
 $script:pixelProbeRequested=$false
 function Observe([string]$Name,[string]$Control,[bool]$ExpectMoving=$true) {
  # Repeated native pointer movement keeps real controls visible during slow
@@ -61,6 +62,9 @@ function Observe([string]$Name,[string]$Control,[bool]$ExpectMoving=$true) {
  }
  ConvertTo-Json -InputObject ($results.ToArray()) -Depth 6 | Set-Content "$Output\metrics.json"
  [Desktop]::StopPointer()
+ [Desktop]::PointerEvents.ToArray() | Set-Content "$Output\pointer-events.csv"
+ $inputEvents=Javascript 'window.__qaPointerEvents'
+ ConvertTo-Json -InputObject $inputEvents -Depth 6 | Set-Content "$Output\page-pointer-events.json"
  return $results[$results.Count-1]
 }
 Stage 'play'

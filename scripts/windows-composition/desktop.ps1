@@ -29,9 +29,51 @@ public class Desktop {
   if(!task.Wait(TimeSpan.FromSeconds(90)))throw new TimeoutException("Composed screen capture did not return within 90 seconds");
   return task.Result;
  }
- static System.Threading.Timer pointerTimer; static int pointerTick;
- public static void StartPointer(int x,int y) {StopPointer();pointerTimer=new System.Threading.Timer(_=>{SetCursorPos(x+((System.Threading.Interlocked.Increment(ref pointerTick)&1)*8),y);},null,0,250);}
- public static void StopPointer() {if(pointerTimer!=null){pointerTimer.Dispose();pointerTimer=null;}}
+ public static readonly System.Collections.Concurrent.ConcurrentQueue<string> PointerEvents=new System.Collections.Concurrent.ConcurrentQueue<string>();
+ // Screen capture and pixel work use the worker pool. Keep pointer activity
+ // independent: a pool timer can miss the player's three-second hide deadline.
+ static System.Threading.Thread pointerThread;
+ static System.Threading.ManualResetEvent pointerStop;
+ public static void StartPointer(int x,int y) {
+  StopPointer();pointerStop=new System.Threading.ManualResetEvent(false);
+  var stop=pointerStop;
+  pointerThread=new System.Threading.Thread(()=>{
+   int tick=0;
+   do {int px=x+((++tick&1)*8);bool ok=SetCursorPos(px,y);PointerEvents.Enqueue(DateTime.UtcNow.ToString("o")+","+px+","+y+","+ok);}
+   while(!stop.WaitOne(250));
+  });
+  pointerThread.IsBackground=true;pointerThread.Start();
+ }
+ public static void StopPointer() {
+  if(pointerThread==null)return;
+  pointerStop.Set();
+  if(!pointerThread.Join(5000))throw new TimeoutException("Pointer worker did not stop");
+  pointerThread=null;pointerStop.Dispose();pointerStop=null;
+ }
+ public static void PointerSelfTest() {
+  int minWorkers,minIo,maxWorkers,maxIo;
+  System.Threading.ThreadPool.GetMinThreads(out minWorkers,out minIo);
+  System.Threading.ThreadPool.GetMaxThreads(out maxWorkers,out maxIo);
+  int workers=Math.Max(minWorkers,Environment.ProcessorCount);
+  var entered=new System.Threading.CountdownEvent(workers);
+  var release=new System.Threading.ManualResetEvent(false);
+  var finished=new System.Threading.CountdownEvent(workers);
+  try {
+   if(!System.Threading.ThreadPool.SetMinThreads(workers,minIo) || !System.Threading.ThreadPool.SetMaxThreads(workers,maxIo))throw new Exception("Cannot configure pointer regression worker pool");
+   for(int i=0;i<workers;i++)System.Threading.ThreadPool.QueueUserWorkItem(_=>{entered.Signal();release.WaitOne();finished.Signal();});
+   if(!entered.Wait(5000))throw new Exception("Worker-pool blocker did not start");
+   int before=PointerEvents.Count;
+   StartPointer(5,5);System.Threading.Thread.Sleep(1250);StopPointer();
+   if(PointerEvents.Count-before<4)throw new Exception("Pointer activity stalled behind occupied worker pool");
+   int stopped=PointerEvents.Count;System.Threading.Thread.Sleep(300);
+   if(PointerEvents.Count!=stopped)throw new Exception("Pointer activity continued after StopPointer");
+  } finally {
+   StopPointer();release.Set();finished.Wait(5000);
+   System.Threading.ThreadPool.SetMaxThreads(maxWorkers,maxIo);
+   System.Threading.ThreadPool.SetMinThreads(minWorkers,minIo);
+   entered.Dispose();release.Dispose();finished.Dispose();
+  }
+ }
  public static double IconFraction(Bitmap b,int x,int y,int w,int h,int red,int green,int blue) {
   int stride;var p=Pixels(b,out stride);int matched=0,total=0;
   for(int j=y;j<y+h;j++)for(int i=x;i<x+w;i++){int k=j*stride+i*4;int lo=Math.Min(p[k],Math.Min(p[k+1],p[k+2]));int hi=Math.Max(p[k],Math.Max(p[k+1],p[k+2]));bool lightNeutral=Math.Min(red,Math.Min(green,blue))>170&&Math.Max(red,Math.Max(green,blue))-Math.Min(red,Math.Min(green,blue))<30;
@@ -113,6 +155,8 @@ public class Desktop {
 }
 '@
 if($SelfTest) {
+ [Desktop]::PointerSelfTest()
+ 'POINTER_SELFTEST_PASS'
  $a=New-Object Drawing.Bitmap 640,480;$b=New-Object Drawing.Bitmap 640,480
  $g=[Drawing.Graphics]::FromImage($a);$g.Clear([Drawing.Color]::Black)
  $colors=@([Drawing.Color]::Red,[Drawing.Color]::Lime,[Drawing.Color]::Yellow,[Drawing.Color]::Blue,[Drawing.Color]::Magenta,[Drawing.Color]::Cyan)

@@ -88,6 +88,26 @@ never a pass. Inspect `metrics.json` and every failed screenshot before filing a
 product defect: EOF, an occupied VM, and a failed input helper can invalidate a
 run. Preserve evidence as task attachments; temporary paths are not durable.
 
+## Playback scenario controls
+
+Add `--scenarios` to check playback, seek, player modes, an injected native
+freeze, recovery and stop. This mode requires visible controls in both composed
+frames and allows pair intervals below ten seconds. Unlike the focus matrix,
+it deliberately supplies pointer movement while sampling controls.
+
+Pointer movement runs on a dedicated thread, independent of the worker pool
+used for capture. A pool timer can leave multi-second input gaps under load,
+exceeding the player's three-second controls timeout. The native self-test
+occupies all worker-pool threads and requires pointer activity to continue,
+then verifies that stopping the pointer worker prevents further movement.
+
+Scenario evidence includes `pointer-events.csv` (UTC, requested desktop x/y,
+SetCursorPos result) and `page-pointer-events.json` (UTC, delivered viewport
+x/y, trusted-event flag). Compare these with `trace.txt` and capture timestamps
+before classifying missing controls as a product defect. Successful native
+input requests alone do not prove that WebView2 received meaningful movement.
+A passing rerun does not establish the cause of an earlier uninstrumented miss.
+
 ## Recorded result (2026-11-08)
 
 Candidate `1bf70e5fc44b22de54e658d130f4b7a2e59f1624` (Windows candidate run
