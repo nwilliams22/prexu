@@ -7,7 +7,7 @@
 //! `on_window_event` callback. Extracted from `lib.rs::setup()` (prexu-bgz.30).
 //!
 //! Frontend event names:
-//! - `player://time-pos`           f64 seconds (throttled to 4 Hz)
+//! - `player://time-pos`           f64 seconds (4 Hz while playing; unthrottled while paused)
 //! - `player://duration`           f64 seconds
 //! - `player://paused`             bool
 //! - `player://buffering`          bool
@@ -455,6 +455,12 @@ fn should_emit_throttled(now: Instant, last: Instant, throttle: Duration) -> boo
     now.duration_since(last) >= throttle
 }
 
+/// Paused seeks can produce a single final position inside the throttle window.
+/// Read the current pause property rather than relying on property-event order.
+fn should_emit_time_pos(now: Instant, last: Instant, is_paused: impl FnOnce() -> bool) -> bool {
+    should_emit_throttled(now, last, TIME_POS_THROTTLE) || is_paused()
+}
+
 /// Returns `true` on the first PlaybackRestart per file — i.e. when
 /// `hwdec_logged` is still `false`, meaning we have not yet triggered the
 /// load reveal (`player://host-window-ready` — emitted directly on Windows,
@@ -712,7 +718,9 @@ fn dispatch(
         Event::PropertyChange { change, reply_userdata, .. } => match (reply_userdata, change) {
             (REPLY_TIME_POS, PropertyData::Double(t)) => {
                 let now = Instant::now();
-                if should_emit_throttled(now, *last_time_pos, TIME_POS_THROTTLE) {
+                if should_emit_time_pos(now, *last_time_pos, || {
+                    mpv.get_property::<bool>("pause").unwrap_or(false)
+                }) {
                     *last_time_pos = now;
                     log::trace!("[player:events] time-pos={:.1}", t);
                     let _ = app.emit("player://time-pos", t);
@@ -974,6 +982,38 @@ mod tests {
             REPLY_EOF_REACHED => Some("player://eof"),
             _ => None,
         }
+    }
+
+    #[test]
+    fn paused_seek_publishes_final_position_without_resume() {
+        let start = Instant::now();
+        let mut last = start;
+        let mut visible_position = 82.0;
+        // The final value arrives only 20 ms after the previous publish.
+        // There are no more events until playback resumes.
+        for (elapsed_ms, position) in [(10, 24.8), (20, 25.0)] {
+            let now = start + Duration::from_millis(elapsed_ms);
+            if should_emit_time_pos(now, last, || true) {
+                last = now;
+                visible_position = position;
+            }
+        }
+        assert_eq!(visible_position, 25.0);
+    }
+
+    #[test]
+    fn playing_position_keeps_four_hz_throttle() {
+        let start = Instant::now();
+        assert!(!should_emit_time_pos(
+            start + Duration::from_millis(249),
+            start,
+            || false
+        ));
+        assert!(should_emit_time_pos(
+            start + TIME_POS_THROTTLE,
+            start,
+            || { panic!("pause read is unnecessary once the throttle expires") }
+        ));
     }
 
     // ── should_emit_throttled ────────────────────────────────────────────────
