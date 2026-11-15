@@ -55,6 +55,9 @@ jobs:
           node --test scripts/check-release-version.test.mjs
           node scripts/check-release-version.mjs
 
+      - name: Windows click timing negative controls
+        run: node --test scripts/windows-composition/click-timing.test.mjs
+
       - name: Windows scenario evidence negative controls
         run: node --test scripts/windows-composition/scenarios.test.mjs
 

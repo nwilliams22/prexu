@@ -63,7 +63,9 @@ A missing capture, session 0, malformed evidence, failed action, failed capture
 prerequisite or absent required verdict fails the command. Captures can contain
 the throwaway account's UI: review before attaching; never attach its secure store.
 
-Without `--scenarios`, the existing focus/occlusion/DPI composition matrix runs.
+Use [`--click-timing`](CLICK-TIMING.md) for calibrated legacy/compiled input
+dispatch measurements. With no mode flag, the existing focus/occlusion/DPI
+composition matrix runs.
 
 ## Checks a hosted runner cannot establish
 

@@ -9,11 +9,12 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 
 const [candidateArg, outputArg, mode] = process.argv.slice(2);
-if (mode && mode !== "--scenarios") throw new Error("Unknown runner mode");
+if (mode && mode !== "--scenarios" && mode !== "--click-timing") throw new Error("Unknown runner mode");
+const clickTiming = mode === "--click-timing";
 const scenarios = mode === "--scenarios";
 const pixelProbe = process.env.PREXU_VIDEO_PIXEL_PROBE === "1";
 if (pixelProbe && !scenarios) throw new Error("Pixel probing requires --scenarios");
-if (!candidateArg || !outputArg) throw new Error('Usage: node scripts/windows-composition/run.mjs CANDIDATE_DIRECTORY EVIDENCE_DIRECTORY [--scenarios]');
+if (!candidateArg || !outputArg) throw new Error('Usage: node scripts/windows-composition/run.mjs CANDIDATE_DIRECTORY EVIDENCE_DIRECTORY [--scenarios|--click-timing]');
 const candidate = resolve(candidateArg), output = resolve(outputArg);
 const scripts = dirname(fileURLToPath(import.meta.url));
 const remote = 'C:\\Users\\baddong\\qa-composition';
@@ -34,6 +35,10 @@ const expected = manifest.split(/\r?\n/).find(line => line.endsWith(installer))?
 if (!/^[a-fA-F0-9]{64}$/.test(expected ?? '')) throw new Error('Installer missing from checksum manifest');
 if (createHash('sha256').update(readFileSync(join(candidate, installer))).digest('hex') !== expected.toLowerCase()) throw new Error('Installer checksum mismatch');
 writeFileSync(join(output, 'BUILD.txt'), readFileSync(join(candidate, 'BUILD.txt')));
+if(clickTiming) {
+ mkdirSync(join(output,'harness'));
+ for(const name of ['run.mjs','click-timing.ps1','click-timing.mjs']) writeFileSync(join(output,'harness',name),readFileSync(join(scripts,name)));
+}
 let browser, tunnel, desktop, fixtureServer, fixturePort, started = false;
 const scratch = mkdtempSync(join(tmpdir(), 'prexu-composition-'));
 try {
@@ -43,7 +48,7 @@ try {
  writeFileSync(join(output, 'hardware.txt'), run('sudo', ['-n', 'win11-vm', 'start'], { timeout: 600_000 }));
  ssh(`New-Item -ItemType Directory -Force ${ps(remote)} | Out-Null`);
  run('scp', ['-o','BatchMode=yes',join(candidate,installer), 'win11-test:C:/Users/baddong/qa-composition/setup.exe']);
- run('scp', ['-o','BatchMode=yes',join(scripts,'desktop.ps1'), 'win11-test:C:/Users/baddong/qa-composition/desktop.ps1']);
+ run('scp', ['-o','BatchMode=yes',join(scripts,clickTiming ? 'click-timing.ps1' : 'desktop.ps1'), 'win11-test:C:/Users/baddong/qa-composition/desktop.ps1']);
  if(scenarios) run('scp', ['-o','BatchMode=yes',join(scripts,'scenarios.ps1'), 'win11-test:C:/Users/baddong/qa-composition/scenarios.ps1']);
  run('scp', ['-o','BatchMode=yes',join(scripts,'probe.ps1'), 'win11-test:C:/Users/baddong/qa-composition/probe.ps1']);
  let probe,probeError;
@@ -51,10 +56,12 @@ try {
  writeFileSync(join(output,'probe-launch.txt'),probe);
  run('scp',['-o','BatchMode=yes','win11-test:C:/Users/baddong/qa-composition/probe.txt',join(output,'probe.txt')]);
  if(probeError)throw new Error('D3D11 prerequisite failed; see probe.txt');
+ if (!clickTiming) {
  try {writeFileSync(join(output,'pixel-selftest.txt'),ssh(`powershell -NoProfile -ExecutionPolicy Bypass -File ${remote}\\desktop.ps1 -SelfTest -Output ${remote}\\selftest`));}
  catch(error){
   run('scp',['-o','BatchMode=yes','win11-test:C:/Users/baddong/qa-composition/selftest/error.txt',join(output,'pixel-selftest-error.txt')]);
   throw error;
+ }
  }
  run('python3',[join(scripts,'fixture.py'),scratch],{timeout:180_000});
  writeFileSync(join(output,'fixture.json'),readFileSync(join(scratch,'fixture.json')));
@@ -135,6 +142,13 @@ try {
  if(desktop.exitCode!==0)throw new Error(`Desktop worker exited ${desktop.exitCode}; see desktop.txt`);
  if(existsSync(join(output,'evidence','error.txt')))throw new Error('Desktop script failed; see evidence/error.txt');
  if(!existsSync(join(output,'evidence','complete')))throw new Error('Desktop evidence did not finish saving');
+ if (clickTiming) {
+  const { analyzeDirectory } = await import('./click-timing.mjs');
+  const summary = analyzeDirectory(join(output,'evidence'));
+  writeFileSync(join(output,'timing-summary.json'),JSON.stringify(summary,null,2));
+  console.log(JSON.stringify(summary,null,2));
+  if(summary.some(sample => !sample.accepted)) process.exitCode=1;
+ } else {
  const metrics=JSON.parse(readFileSync(join(output,'evidence','metrics.json'),'utf8').replace(/^\uFEFF/,''));
  if(pixelProbe && !metrics.find(item=>item.name==='play')?.probeCompleted)throw new Error('Requested pixel probe did not complete; inspect render-events.txt');
  console.log(JSON.stringify(metrics.map(({name,pass})=>({name,pass})),null,2));
@@ -142,6 +156,7 @@ try {
  if(required.some(name=>!metrics.some(m=>m.name===name)))throw new Error('Incomplete matrix: a required verdict is missing');
  if(scenarios) writeFileSync(join(output,'verdict.json'), JSON.stringify(verifyScenarios(join(output,'evidence')),null,2));
  if(metrics.some(m=>!m.pass))process.exitCode=1;
+ }
 } catch(error) {
  writeFileSync(join(output,'failure.txt'),String(error));
  if(started) {
