@@ -18,8 +18,10 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install targets for the repository toolchain
+        # rust-toolchain.toml can select a different version from stable.
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       - name: Setup Node
         uses: actions/setup-node@v5
