@@ -42,7 +42,7 @@ jobs:
           cat > candidate.conf.json <<'JSON'
           {"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-"}}}
           JSON
-          npm run tauri -- build --ci --target universal-apple-darwin --bundles dmg --config "$PWD/candidate.conf.json"
+          npm run tauri -- build --ci --target universal-apple-darwin --bundles app,dmg --config "$PWD/candidate.conf.json"
 
       - name: Inspect installer and collect provenance
         run: |
