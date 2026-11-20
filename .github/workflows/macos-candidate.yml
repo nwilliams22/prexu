@@ -1,0 +1,84 @@
+name: macOS candidate
+
+# Testing only; produces an artifact without creating a tag or release.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify playback gate
+        run: npx vitest run src/services/plex-playback.test.ts src/services/plex-playback-prepare-source.test.ts
+
+      - name: Build universal test installer
+        run: |
+          # Ad-hoc signing needs no certificate or production signing secrets.
+          # Updater artifacts are disabled for this non-release candidate.
+          cat > candidate.conf.json <<'JSON'
+          {"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-"}}}
+          JSON
+          npm run tauri -- build --ci --target universal-apple-darwin --bundles dmg --config "$PWD/candidate.conf.json"
+
+      - name: Inspect installer and collect provenance
+        run: |
+          set -euo pipefail
+          bundle=src-tauri/target/universal-apple-darwin/release/bundle
+          app="$bundle/macos/Prexu.app"
+          binary="$app/Contents/MacOS/prexu"
+          mkdir -p candidate
+          lipo -verify_arch arm64 x86_64 "$binary"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          otool -L "$binary" | tee candidate/dependencies.txt
+          if grep -E '/opt/homebrew/|/usr/local/|/Users/runner/' candidate/dependencies.txt; then
+            echo 'Unexpected build-machine dependency in packaged app' >&2
+            exit 1
+          fi
+          for dmg in "$bundle"/dmg/*.dmg; do
+            hdiutil verify "$dmg"
+            cp -f "$dmg" candidate/
+          done
+          cp -f docs/macos-candidate.md candidate/README.md
+          {
+            echo 'Testing only; not a release or playback acceptance.'
+            echo "Commit: $GITHUB_SHA"
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "Attempt: $GITHUB_RUN_ATTEMPT"
+            echo 'Architectures: arm64 and x86_64 (universal)'
+            echo 'Ad-hoc signed; not Apple Developer ID signed or notarized.'
+            echo 'Updater artifacts disabled; no production signing keys used.'
+            sw_vers
+            rustc --version
+            node --version
+          } > candidate/BUILD.txt
+          (cd candidate && shasum -a 256 ./*.dmg > SHA256SUMS.txt)
+
+      - name: Upload test installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-candidate-${{ github.sha }}-${{ github.run_attempt }}
+          path: candidate/
+          if-no-files-found: error
+          retention-days: 30
