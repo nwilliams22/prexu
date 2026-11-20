@@ -51,7 +51,7 @@ jobs:
           app="$bundle/macos/Prexu.app"
           binary="$app/Contents/MacOS/prexu"
           mkdir -p candidate
-          lipo -verify_arch arm64 x86_64 "$binary"
+          lipo "$binary" -verify_arch arm64 x86_64
           codesign --verify --deep --strict --verbose=2 "$app"
           otool -L "$binary" | tee candidate/dependencies.txt
           if grep -E '/opt/homebrew/|/usr/local/|/Users/runner/' candidate/dependencies.txt; then
