@@ -63,6 +63,7 @@ test.describe("Settings page", () => {
 test("dirty relay navigation requires discard and browser Back restores the category", async ({ page }) => {
   await page.setViewportSize({ width: 600, height: 900 });
   await page.goto("/settings");
+  await expect(page.getByRole("heading", { name: "Playback", level: 2 })).toBeVisible({ timeout: 15000 });
   await expect(page).toHaveURL(/\/settings\/playback$/);
   const category = page.getByLabel("Settings category");
   await category.selectOption("connections");
@@ -71,10 +72,14 @@ test("dirty relay navigation requires discard and browser Back restores the cate
   await category.selectOption("about");
   await expect(page.getByRole("button", { name: "Keep editing" })).toBeFocused();
   await page.keyboard.press("Escape");
+  // Escape's native cancel event and the router reset complete asynchronously.
+  // The draft value is unchanged even while the old dialog is still mounted.
+  await expect(page.locator(".settings-discard-dialog")).toHaveCount(0);
   await expect(page.getByLabel("Custom relay URL", { exact: true })).toHaveValue("ws://draft.test/ws");
   await page.goBack();
   await expect(page.getByRole("dialog")).toBeVisible();
   await page.getByRole("button", { name: "Keep editing" }).click();
+  await expect(page.locator(".settings-discard-dialog")).toHaveCount(0);
   await expect(page).toHaveURL(/\/settings\/connections$/);
   await category.selectOption("about");
   await page.getByRole("button", { name: "Discard changes" }).click();
