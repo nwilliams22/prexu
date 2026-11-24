@@ -1,5 +1,10 @@
 import { useState } from "react";
 
+// Keep page content clear of the fixed bar, including its inset and a 14px gap.
+const BAR_WIDTH = 52;
+const BAR_RIGHT = 10;
+const ALPHA_JUMP_GUTTER = BAR_WIDTH + BAR_RIGHT + 14;
+
 const LETTERS = "#ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 
 interface AlphaJumpBarProps {
@@ -63,7 +68,12 @@ function AlphaJumpBar({ onJump, availableLetters }: AlphaJumpBarProps) {
 const styles: Record<string, React.CSSProperties> = {
   container: {
     position: "fixed",
-    right: "10px",
+    right: BAR_RIGHT,
+    width: BAR_WIDTH,
+    boxSizing: "border-box",
+    maxHeight: "calc(100vh - 80px)",
+    overflowY: "auto",
+    scrollbarWidth: "none",
     top: "50%",
     transform: "translateY(-50%)",
     display: "flex",
@@ -79,6 +89,7 @@ const styles: Record<string, React.CSSProperties> = {
   letter: {
     width: "44px",
     height: "30px",
+    flexShrink: 0,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -94,5 +105,5 @@ const styles: Record<string, React.CSSProperties> = {
   },
 };
 
-export { LETTERS };
+export { LETTERS, ALPHA_JUMP_GUTTER };
 export default AlphaJumpBar;

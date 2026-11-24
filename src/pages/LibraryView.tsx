@@ -21,7 +21,7 @@ import FilterBar from "../components/FilterBar";
 import PosterCard from "../components/PosterCard";
 import SkeletonCard from "../components/SkeletonCard";
 import ShowExpansionPanel from "../components/ShowExpansionPanel";
-import AlphaJumpBar from "../components/AlphaJumpBar";
+import AlphaJumpBar, { ALPHA_JUMP_GUTTER } from "../components/AlphaJumpBar";
 import SegmentedControl from "../components/SegmentedControl";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
@@ -722,7 +722,10 @@ function LibraryView() {
   };
 
   return (
-    <div style={styles.container}>
+    <div style={{
+      ...styles.container,
+      paddingRight: viewMode === "library" && showAlphaJump ? ALPHA_JUMP_GUTTER : "1.5rem",
+    }}>
       <h2 style={styles.title}>{section?.title ?? `Library ${sectionId}`}</h2>
 
       {/* Segmented control: Library / Collections */}

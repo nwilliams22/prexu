@@ -12,7 +12,7 @@ import PosterCard from "../components/PosterCard";
 import SkeletonCard from "../components/SkeletonCard";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
-import AlphaJumpBar from "../components/AlphaJumpBar";
+import AlphaJumpBar, { ALPHA_JUMP_GUTTER } from "../components/AlphaJumpBar";
 import { logger } from "../services/logger";
 import type { PlexCollection } from "../types/library";
 
@@ -164,7 +164,10 @@ function CollectionsBrowser() {
   if (!server) return null;
 
   return (
-    <div style={styles.container}>
+    <div style={{
+      ...styles.container,
+      paddingRight: showAlphaJump ? ALPHA_JUMP_GUTTER : "1.5rem",
+    }}>
       <h2 style={styles.title}>Collections</h2>
 
       {error && <ErrorState message={error} onRetry={retry} />}

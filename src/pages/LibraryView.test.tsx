@@ -227,7 +227,8 @@ vi.mock("../components/ShowExpansionPanel", () => ({
 
 // Renders real, clickable letter buttons (disabled when unavailable, mirroring
 // the production component) so alpha-jump wiring can be exercised end to end.
-vi.mock("../components/AlphaJumpBar", () => ({
+vi.mock("../components/AlphaJumpBar", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../components/AlphaJumpBar")>(),
   default: ({
     onJump,
     availableLetters,
