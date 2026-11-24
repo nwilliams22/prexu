@@ -7,6 +7,8 @@ import type { NormalizationPreset } from "../../types/preferences";
 import { logger } from "../../services/logger";
 
 export interface KeyboardShortcutDeps {
+  /** Release main-window keys while browser PiP exposes the library. */
+  enabled?: boolean;
   /** Toggle play/pause (sync-aware) */
   togglePlay: () => void;
   /** Seek to time (sync-aware) */
@@ -66,6 +68,7 @@ export function usePlayerKeyboardShortcuts(deps: KeyboardShortcutDeps): void {
         return;
 
       const deps = depsRef.current;
+      if (deps.enabled === false) return;
 
       deps.resetHideTimer();
       logger.debug("player:keys", e.key);

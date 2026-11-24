@@ -1,6 +1,7 @@
 import type React from "react";
 import {
   usePlayerSession,
+  usePlayerBrowserPiP,
   usePlayerMinimize,
 } from "../../contexts/PlayerContext";
 import { miniRectToMaskPosition } from "../../utils/mini-rect";
@@ -13,6 +14,8 @@ import { miniRectToMaskPosition } from "../../utils/mini-rect";
  *     (behind the WebView) shines through when minimized
  *   - Fades to opacity:0 + pointerEvents:none in full-player mode so
  *     clicks pass through to the player overlay
+ *
+ * Browser PiP reveals the full library without a native mini-player cutout.
  *
  * Returns `{}` (semantically empty) when no session — AppLayout
  * spreads the result unconditionally, getting plain navy chrome.
@@ -50,13 +53,15 @@ export function usePlayerLayerStyle(): React.CSSProperties {
   const { session } = usePlayerSession();
   const { isMinimized, miniRect } = usePlayerMinimize();
 
-  const isFullPlayer = session != null && !isMinimized;
+  const { isBrowserPiPActive } = usePlayerBrowserPiP();
+
+  const isFullPlayer = session != null && !isMinimized && !isBrowserPiPActive;
   const hasSession = session != null;
 
   const maskSize = `100% 100%, ${miniRect.width}px ${miniRect.height}px`;
   const maskPosition = `0 0, ${miniRectToMaskPosition(miniRect)}`;
 
-  const maskStyle: React.CSSProperties = hasSession
+  const maskStyle: React.CSSProperties = hasSession && !isBrowserPiPActive
     ? {
         WebkitMaskImage:
           "linear-gradient(#000, #000), linear-gradient(#000, #000)",

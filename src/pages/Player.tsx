@@ -11,6 +11,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import {
+  usePlayerBrowserPiP,
   usePlayerSession,
   usePlayerMinimize,
   type PlayerWatchTogether,
@@ -185,6 +186,12 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   const beginHostTransitionRef = useRef<() => void>(() => {});
 
   const pip = usePictureInPicture(player.videoRef);
+  const { setIsBrowserPiPActive } = usePlayerBrowserPiP();
+  const browserPiPActive = !SUPPORTS_PLAYER_POPOUT && !isNativeEngine && pip.isPiPActive;
+  useEffect(() => {
+    setIsBrowserPiPActive(browserPiPActive);
+    return () => setIsBrowserPiPActive(false);
+  }, [browserPiPActive, setIsBrowserPiPActive]);
   const popOut = usePopOutPlayer();
   // Pop-out is native window management (Windows + Linux since
   // prexu-axj4.10) — gate on SUPPORTS_PLAYER_POPOUT, not the engine flag.
@@ -590,6 +597,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     queue.currentIndex > 0 || episodeNav.handlePrevEpisode != null;
 
   usePlayerKeyboardShortcuts({
+    enabled: !browserPiPActive,
     togglePlay,
     seek,
     currentTime: player.currentTime,
@@ -715,8 +723,14 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   return (
     <div
       data-render-tick={renderTick}
+      inert={browserPiPActive}
+      aria-hidden={browserPiPActive || undefined}
       style={{
         ...styles.container,
+        // Keep the same video mounted and laid out so WebKit continues PiP.
+        // Opacity hides its placeholder; inert releases keyboard focus to the library.
+        opacity: browserPiPActive ? 0 : 1,
+        pointerEvents: browserPiPActive ? "none" : "auto",
         // On the native player path the actual video lives in a sibling
         // Win32 HWND BEHIND this transparent webview. Painting black here
         // would occlude it. HTML5 path keeps black so the <video> letterbox

@@ -26,7 +26,7 @@ vi.mock("../hooks/useAuth", () => ({
 vi.mock("../hooks/usePlayer", () => ({
   usePlayer: () => ({
     engine: "html5",
-    videoRef: { current: null },
+    videoRef: React.useRef<HTMLVideoElement | null>(null),
     isPlaying: false,
     isLoading: false,
     isBuffering: false,
@@ -130,13 +130,7 @@ vi.mock("../hooks/player/usePlayerKeyboardShortcuts", () => ({
   usePlayerKeyboardShortcuts: () => undefined,
 }));
 
-vi.mock("../hooks/player/usePictureInPicture", () => ({
-  usePictureInPicture: () => ({
-    isPiPActive: false,
-    isPiPSupported: false,
-    togglePiP: vi.fn(),
-  }),
-}));
+
 
 vi.mock("../contexts/QueueContext", () => ({
   useQueue: () => ({
@@ -201,9 +195,10 @@ vi.mock("../components/PlayerControls", () => ({
 // prexu-uf4m: the host-transition chrome hide listens for
 // player://host-window-busy, but only when the popout capability exists —
 // force it on in jsdom, keeping everything else from the real module.
+const platformState = vi.hoisted(() => ({ supportsPopOut: true }));
 vi.mock("../hooks/player/engineResolution", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../hooks/player/engineResolution")>()),
-  SUPPORTS_PLAYER_POPOUT: true,
+  get SUPPORTS_PLAYER_POPOUT() { return platformState.supportsPopOut; },
 }));
 
 // Captures the Player's tauri event subscriptions so tests can fire
@@ -258,7 +253,12 @@ vi.mock("../components/player/MinimizedPlayer", () => ({
 
 // PlayerContext split (prexu-ii3): Player consumes the session + minimize
 // slices directly. Stub both so the component renders the full-player path.
+const browserPiPState = vi.hoisted(() => ({ setActive: vi.fn() }));
 vi.mock("../contexts/PlayerContext", () => ({
+  usePlayerBrowserPiP: () => ({
+    isBrowserPiPActive: false,
+    setIsBrowserPiPActive: browserPiPState.setActive,
+  }),
   usePlayerSession: () => ({ session: null, replaceRatingKey: vi.fn() }),
   usePlayerMinimize: () => ({
     isMinimized: false,
@@ -606,5 +606,55 @@ describe("Player – host-transition chrome hide (prexu-uf4m)", () => {
 
     expect(getByTestId("player-controls").dataset.visible).toBe("true");
     expect(popOutState.togglePopOut).toHaveBeenCalledOnce();
+  });
+});
+
+describe("browser PiP player shell", () => {
+  beforeEach(() => {
+    vi.stubGlobal("ResizeObserver", MockResizeObserver);
+    platformState.supportsPopOut = false;
+    browserPiPState.setActive.mockClear();
+  });
+  afterEach(() => {
+    platformState.supportsPopOut = true;
+    vi.unstubAllGlobals();
+  });
+
+  it("does not change native popout shell behavior on browser PiP events", () => {
+    platformState.supportsPopOut = true;
+    const { container } = render(<MemoryRouter><Player ratingKey="123" offset={null} /></MemoryRouter>);
+    const root = container.firstElementChild as HTMLElement;
+    act(() => container.querySelector("video")!.dispatchEvent(new Event("enterpictureinpicture")));
+    expect(root.style.opacity).toBe("1");
+    expect(root).not.toHaveAttribute("inert");
+    expect(browserPiPState.setActive).not.toHaveBeenCalledWith(true);
+  });
+
+  it.each(["standard", "webkit"])("preserves video and releases the library through %s enter/exit", (api) => {
+    const { container, unmount } = render(<MemoryRouter><Player ratingKey="123" offset={null} /></MemoryRouter>);
+    const root = container.firstElementChild as HTMLElement;
+    const video = container.querySelector("video")!;
+    const change = (active: boolean) => act(() => {
+      if (api === "webkit") {
+        Object.defineProperty(video, "webkitPresentationMode", { configurable: true, value: active ? "picture-in-picture" : "inline" });
+        video.dispatchEvent(new Event("webkitpresentationmodechanged"));
+      } else {
+        video.dispatchEvent(new Event(active ? "enterpictureinpicture" : "leavepictureinpicture"));
+      }
+    });
+    change(true);
+    expect(browserPiPState.setActive).toHaveBeenLastCalledWith(true);
+    expect(root.style.opacity).toBe("0");
+    expect(root.style.pointerEvents).toBe("none");
+    expect(root).toHaveAttribute("inert");
+    expect(container.querySelector("video")).toBe(video);
+    change(false);
+    expect(browserPiPState.setActive).toHaveBeenLastCalledWith(false);
+    expect(root.style.opacity).toBe("1");
+    expect(root).not.toHaveAttribute("inert");
+    expect(container.querySelector("video")).toBe(video);
+    change(true);
+    unmount();
+    expect(browserPiPState.setActive).toHaveBeenLastCalledWith(false);
   });
 });

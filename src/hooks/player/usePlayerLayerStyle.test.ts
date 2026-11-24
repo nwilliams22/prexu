@@ -4,11 +4,13 @@ import { usePlayerLayerStyle } from "./usePlayerLayerStyle";
 
 vi.mock("../../contexts/PlayerContext", () => ({
   usePlayerSession: vi.fn(),
+  usePlayerBrowserPiP: vi.fn(),
   usePlayerMinimize: vi.fn(),
 }));
 
 import {
   usePlayerSession,
+  usePlayerBrowserPiP,
   usePlayerMinimize,
 } from "../../contexts/PlayerContext";
 
@@ -45,6 +47,7 @@ function setupContext(args: {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(usePlayerBrowserPiP).mockReturnValue({ isBrowserPiPActive: false, setIsBrowserPiPActive: vi.fn() });
 });
 
 describe("usePlayerLayerStyle", () => {
@@ -114,4 +117,19 @@ describe("usePlayerLayerStyle", () => {
     expect(result.current.maskPosition).toBe("0 0, top 8px left 8px");
     expect(result.current.WebkitMaskPosition).toBe("0 0, top 8px left 8px");
   });
+});
+
+it("reveals the whole library during browser PiP and restores the full player layer on exit", () => {
+  setupContext({ session: { ratingKey: "42" }, isMinimized: false });
+  const { result, rerender } = renderHook(() => usePlayerLayerStyle());
+  vi.mocked(usePlayerBrowserPiP).mockReturnValue({ isBrowserPiPActive: true, setIsBrowserPiPActive: vi.fn() });
+  rerender();
+  expect(result.current.opacity).toBe(1);
+  expect(result.current.pointerEvents).toBe("auto");
+  expect(result.current.maskImage).toBeUndefined();
+  expect(result.current.WebkitMaskImage).toBeUndefined();
+  vi.mocked(usePlayerBrowserPiP).mockReturnValue({ isBrowserPiPActive: false, setIsBrowserPiPActive: vi.fn() });
+  rerender();
+  expect(result.current.opacity).toBe(0);
+  expect(result.current.pointerEvents).toBe("none");
 });

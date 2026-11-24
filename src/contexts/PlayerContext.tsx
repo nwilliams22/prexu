@@ -137,8 +137,23 @@ export interface PlayerMinimizeContextValue {
 const PlayerSessionContext = createContext<PlayerSessionContextValue | null>(null);
 const PlayerMinimizeContext = createContext<PlayerMinimizeContextValue | null>(null);
 
+/** Browser presentation only; separate from native geometry and session data. */
+interface PlayerBrowserPiPContextValue {
+  isBrowserPiPActive: boolean;
+  setIsBrowserPiPActive: (active: boolean) => void;
+}
+
+const PlayerBrowserPiPContext = createContext<PlayerBrowserPiPContextValue | null>(null);
+
+export function usePlayerBrowserPiP(): PlayerBrowserPiPContextValue {
+  const ctx = useContext(PlayerBrowserPiPContext);
+  if (!ctx) throw new Error("usePlayerBrowserPiP must be used within a PlayerProvider");
+  return ctx;
+}
+
 export function PlayerProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<PlayerSession | null>(null);
+  const [isBrowserPiPActive, setIsBrowserPiPActive] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   // Load the persisted size + corner once on mount. The default branch in
   // `loadPersistedMiniRect` covers first-run, corrupted-payload, and
@@ -411,10 +426,17 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     [isMinimized, minimize, restoreFromMinimize, miniRect, updateMiniRect],
   );
 
+  const browserPiPValue = useMemo(
+    () => ({ isBrowserPiPActive, setIsBrowserPiPActive }),
+    [isBrowserPiPActive],
+  );
+
   return (
     <PlayerSessionContext.Provider value={sessionValue}>
       <PlayerMinimizeContext.Provider value={minimizeValue}>
-        {children}
+        <PlayerBrowserPiPContext.Provider value={browserPiPValue}>
+          {children}
+        </PlayerBrowserPiPContext.Provider>
       </PlayerMinimizeContext.Provider>
     </PlayerSessionContext.Provider>
   );
