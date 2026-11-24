@@ -59,7 +59,9 @@ test.describe("Accessibility: Authenticated pages", () => {
   test("sidebar navigation landmark exists", async ({ page }) => {
     await page.goto("/");
     const nav = page.getByRole("navigation", { name: "Main navigation" });
-    await expect(nav).toBeVisible();
+    // The first authenticated visit also compiles the lazy application shell.
+    // Startup speed is checked separately in performance.spec.ts.
+    await expect(nav).toBeVisible({ timeout: 15000 });
   });
 
   test("sidebar buttons are keyboard navigable", async ({ page }) => {
