@@ -1,3 +1,4 @@
+import { logger } from "./logger";
 import {
   canDirectPlay,
   buildDirectPlayUrl,
@@ -55,6 +56,23 @@ vi.mock("./plex-api", () => ({
 }));
 
 describe("plex-playback — pure functions", () => {
+  it("does not log URL-shaped metadata or credentials in codec diagnostics", async () => {
+    const info = vi.spyOn(logger, "info");
+    const privateValue = "https://private.invalid/?X-Plex-Token=secret";
+    const media = createPlexMediaInfo({
+      videoCodec: privateValue, audioCodec: privateValue,
+      Part: [createPlexMediaPart({ container: privateValue })],
+    });
+    await canDirectPlay(media, privateValue);
+    await buildTranscodeUrl("https://private.invalid", "secret", privateValue, { audioCodec: privateValue });
+    expect(info).toHaveBeenCalledWith("playback", "canDirectPlay", expect.objectContaining({
+      container: "unknown", videoCodec: "unknown", audioCodec: "unknown", ratingKey: undefined,
+    }));
+    expect(JSON.stringify(info.mock.calls)).not.toContain("private.invalid");
+    expect(JSON.stringify(info.mock.calls)).not.toContain("secret");
+    info.mockRestore();
+  });
+
   // ── canDirectPlay ──
 
   describe("canDirectPlay", () => {

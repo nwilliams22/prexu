@@ -2,6 +2,7 @@
  * Tests for prepareSource() and deriveDisplayTitles() in plex-playback.ts
  */
 
+import { logger } from "./logger";
 import { prepareSource, deriveDisplayTitles } from "./plex-playback";
 import {
   createPlexMovie,
@@ -82,6 +83,45 @@ beforeEach(() => {
 });
 
 describe("prepareSource", () => {
+  it("logs the rejected codec and selected transcode audio without private metadata", async () => {
+    const movie = makeMovie();
+    movie.Media[0]!.Part[0]!.container = "mkv";
+    mockGetItemMetadata.mockResolvedValue(movie);
+    const info = vi.spyOn(logger, "info");
+    await prepareSource({ server: SERVER, ratingKey: RATING_KEY, preferences: makePrefs() });
+    expect(info).toHaveBeenCalledWith("playback", "canDirectPlay", expect.objectContaining({
+      ratingKey: "42", canDirectPlay: false, container: "mkv", containerOk: false,
+      videoCodec: "h264", audioCodec: "aac", videoOk: true, audioOk: true,
+    }));
+    expect(info).toHaveBeenCalledWith("playback", "sourceDecision", expect.objectContaining({
+      ratingKey: "42", route: "transcode", reason: "codec-gate-rejected",
+      selectedAudioCodec: "aac",
+    }));
+    expect(info).toHaveBeenCalledWith("playback", "buildTranscodeUrl", expect.objectContaining({
+      ratingKey: "42", audioCodec: "aac", directStreamAudio: true,
+    }));
+    const logged = JSON.stringify(info.mock.calls);
+    expect(logged).not.toContain(SERVER.uri);
+    expect(logged).not.toContain('"token"');
+    expect(logged).not.toContain(movie.title);
+    info.mockRestore();
+  });
+
+  it.each([
+    [{ directPlayFailed: true }, {}, "previous-direct-play-failure", "transcode"],
+    [{}, { directPlayPreference: "never" }, "preference-never", "transcode"],
+    [{}, { quality: "original" }, "original-quality-bypass", "direct"],
+    [{ skipCodecCheck: true }, {}, "native-gate-bypass", "direct"],
+  ] as const)("logs the actual route reason for %j / %j", async (input, prefs, reason, route) => {
+    mockGetItemMetadata.mockResolvedValue(makeMovie());
+    const info = vi.spyOn(logger, "info");
+    await prepareSource({ server: SERVER, ratingKey: RATING_KEY, preferences: makePrefs(prefs), ...input });
+    expect(info).toHaveBeenCalledWith("playback", "sourceDecision", expect.objectContaining({
+      ratingKey: "42", reason, route,
+    }));
+    info.mockRestore();
+  });
+
   // Case 1: local file path
   it("returns sourceKind=local with raw path when getLocalFilePath resolves", async () => {
     const movie = makeMovie();

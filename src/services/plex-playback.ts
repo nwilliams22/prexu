@@ -100,9 +100,23 @@ async function supportsAv1(media: PlexMediaInfo): Promise<boolean> {
   }
 }
 
-export async function canDirectPlay(media: PlexMediaInfo): Promise<boolean> {
+// Metadata is server-supplied: allow only short codec/container labels in logs.
+function diagnosticLabel(value: string | undefined): string {
+  return value && /^[a-z0-9._-]{1,32}$/i.test(value) ? value.toLowerCase() : "unknown";
+}
+
+function diagnosticRatingKey(value: string | undefined): string | undefined {
+  return value && /^\d{1,20}$/.test(value) ? value : undefined;
+}
+
+export async function canDirectPlay(media: PlexMediaInfo, ratingKey?: string): Promise<boolean> {
   const part = media.Part?.[0];
-  if (!part) return false;
+  if (!part) {
+    logger.info("playback", "canDirectPlay", {
+      ratingKey: diagnosticRatingKey(ratingKey), canDirectPlay: false, reason: "missing-part",
+    });
+    return false;
+  }
 
   const containerOk = DIRECT_PLAY_CONTAINERS.includes(
     part.container.toLowerCase()
@@ -118,7 +132,15 @@ export async function canDirectPlay(media: PlexMediaInfo): Promise<boolean> {
       await supportsAv1(media));
 
   const result = containerOk && videoOk && audioOk;
-  logger.info("playback", "canDirectPlay", { canDirectPlay: result });
+  logger.info("playback", "canDirectPlay", {
+    ratingKey: diagnosticRatingKey(ratingKey),
+    canDirectPlay: result,
+    platform: isMac ? "macos" : "baseline",
+    container: diagnosticLabel(part.container),
+    videoCodec: diagnosticLabel(videoCodec),
+    audioCodec: diagnosticLabel(audioCodec),
+    containerOk, videoOk, audioOk,
+  });
   return result;
 }
 
@@ -158,7 +180,6 @@ export async function buildTranscodeUrl(
     audioCodec?: string;
   }
 ): Promise<string> {
-  logger.info("playback", "buildTranscodeUrl");
   const clientId = await getClientIdentifier();
   const sessionId = crypto.randomUUID();
 
@@ -170,6 +191,16 @@ export async function buildTranscodeUrl(
   // Only direct-stream audio if the codec is browser-compatible (e.g., AAC, MP3, AC3)
   // DTS, TrueHD, and other exotic codecs must be transcoded to AAC
   const allowDirectAudio = canDirectStreamAudio(options?.audioCodec) ? "1" : "0";
+  logger.info("playback", "buildTranscodeUrl", {
+    ratingKey: diagnosticRatingKey(ratingKey),
+    audioCodec: diagnosticLabel(options?.audioCodec),
+    audioStreamId: options?.audioStreamId,
+    subtitleStreamId: options?.subtitleStreamId,
+    directStream: true,
+    directStreamAudio: allowDirectAudio === "1",
+    resolution: preset.resolution,
+    maxVideoBitrate: preset.bitrate,
+  });
 
   const params = new URLSearchParams({
     hasMDE: "1",
@@ -536,13 +567,29 @@ export async function prepareSource(args: PrepareSourceArgs): Promise<PreparedSo
   // guard outside the `shouldDirectPlay` boolean; preserve that here so
   // "always" remains a silent fall-through to transcode for incompatible
   // codecs on HTML5.
-  const codecOk = skipCodecCheck || pb.quality === "original" || await canDirectPlay(media);
+  const codecOk = skipCodecCheck || pb.quality === "original" || await canDirectPlay(media, ratingKey);
   const directPlayPossible =
     !directPlayFailed &&
     (
       (pb.directPlayPreference === "always" && codecOk) ||
       (pb.directPlayPreference === "auto" && codecOk)
     );
+
+  logger.info("playback", "sourceDecision", {
+    ratingKey: diagnosticRatingKey(ratingKey),
+    route: directPlayPossible ? "direct" : "transcode",
+    reason: directPlayFailed ? "previous-direct-play-failure"
+      : pb.directPlayPreference === "never" ? "preference-never"
+      : !codecOk ? "codec-gate-rejected"
+      : skipCodecCheck ? "native-gate-bypass"
+      : pb.quality === "original" ? "original-quality-bypass" : "codec-gate-passed",
+    container: diagnosticLabel(part.container),
+    videoCodec: diagnosticLabel(media.videoCodec),
+    mediaAudioCodec: diagnosticLabel(media.audioCodec),
+    selectedAudioCodec: diagnosticLabel(defaultAudio?.codec),
+    selectedAudioStreamId: defaultAudio?.id,
+    selectedAudioChannels: defaultAudio?.channels,
+  });
 
   if (directPlayPossible) {
     const url = buildDirectPlayUrl(server.uri, server.accessToken, part.key);
@@ -573,10 +620,6 @@ export async function prepareSource(args: PrepareSourceArgs): Promise<PreparedSo
     subtitleSize: pb.subtitleSize,
     audioBoost: pb.audioBoost,
     audioCodec: defaultAudio?.codec ?? media.audioCodec,
-  });
-  logger.debug("player", "URL chosen: transcode", {
-    reason: directPlayFailed ? "previous direct-play failure" : "user preference=never",
-    quality: pb.quality,
   });
   return {
     url,
