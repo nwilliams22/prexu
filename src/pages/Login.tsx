@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-shell";
 import { createPin, getAuthUrl, pollForAuth } from "../services/plex-auth";
 import { useAuth } from "../hooks/useAuth";
@@ -10,29 +10,71 @@ function Login() {
   const [state, setState] = useState<LoginState>("idle");
   const [error, setError] = useState<string | null>(null);
 
+  const attemptRef = useRef<AbortController | null>(null);
+  const [authUrl, setAuthUrl] = useState<string | null>(null);
+  const [copyStatus, setCopyStatus] = useState<string | null>(null);
+  const [browserFailed, setBrowserFailed] = useState(false);
+
+  useEffect(() => () => attemptRef.current?.abort(), []);
+
+  const handleCancel = () => {
+    attemptRef.current?.abort();
+    setAuthUrl(null);
+    setCopyStatus(null);
+    setState("idle");
+  };
+
   const handleSignIn = async () => {
+    attemptRef.current?.abort();
+    const attempt = new AbortController();
+    attemptRef.current = attempt;
+    const { signal } = attempt;
     setState("waiting");
     setError(null);
+    setAuthUrl(null);
+    setCopyStatus(null);
+    setBrowserFailed(false);
 
     try {
-      // Step 1: Create a PIN
-      const pin = await createPin();
+      const pin = await createPin(signal);
+      signal.throwIfAborted();
+      const url = await getAuthUrl(pin.code);
+      signal.throwIfAborted();
+      setAuthUrl(url);
+      try {
+        await open(url);
+      } catch {
+        // Keep polling: the user can open the copied link in another browser.
+        if (!signal.aborted) setBrowserFailed(true);
+      }
+      signal.throwIfAborted();
+      const authToken = await pollForAuth(pin.id, signal);
+      signal.throwIfAborted();
 
-      // Step 2: Open browser to Plex auth page
-      const authUrl = await getAuthUrl(pin.code);
-      await open(authUrl);
-
-      // Step 3: Poll until the user completes auth
-      const authToken = await pollForAuth(pin.id);
-
-      // Step 4: Save auth and update state
-      await login(authToken);
+      // Authentication is now accepted; remove Cancel before saving the session.
       setState("success");
-    } catch (err) {
+      setAuthUrl(null);
+      await login(authToken);
+    } catch {
+      if (signal.aborted) return;
+      attempt.abort();
+      setAuthUrl(null);
       setState("error");
-      setError(
-        err instanceof Error ? err.message : "Authentication failed. Please try again."
-      );
+      // Network and shell errors can contain the PIN URL. Never display them.
+      setError("Authentication failed or timed out. Please try again.");
+    }
+  };
+
+  const handleCopyLink = async () => {
+    const attempt = attemptRef.current;
+    if (!authUrl || !attempt || attempt.signal.aborted) return;
+    try {
+      await navigator.clipboard.writeText(authUrl);
+      if (!attempt.signal.aborted) setCopyStatus("Sign-in link copied.");
+    } catch {
+      if (!attempt.signal.aborted) {
+        setCopyStatus("Could not copy the link. Try again or restart sign-in.");
+      }
     }
   };
 
@@ -57,17 +99,28 @@ function Login() {
               Waiting for you to sign in...
             </p>
             <p style={styles.waitingHint}>
-              A browser window should have opened. Complete the sign-in there,
-              then come back here.
+              {browserFailed
+                ? "Could not open your browser."
+                : "A browser window should have opened."}{" "}
+              Complete the sign-in there, then come back here. If it does not work,
+              copy the sign-in link and open it in another browser.
             </p>
+            {authUrl && (
+              <button onClick={handleCopyLink} style={styles.cancelButton}>
+                Copy sign-in link
+              </button>
+            )}
+            {copyStatus && <p role="status" style={styles.waitingHint}>{copyStatus}</p>}
             <button
-              onClick={() => setState("idle")}
+              onClick={handleCancel}
               style={styles.cancelButton}
             >
               Cancel
             </button>
           </div>
         )}
+
+        {state === "success" && <p role="status">Completing sign-in...</p>}
 
         {state === "error" && (
           <div style={styles.errorContainer}>

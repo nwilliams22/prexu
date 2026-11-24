@@ -158,3 +158,50 @@ describe("plex-auth", () => {
     });
   });
 });
+
+
+describe("authentication cancellation", () => {
+  beforeEach(() => { mockFetch.mockReset(); vi.useFakeTimers(); });
+  afterEach(() => vi.useRealTimers());
+
+  it("does not fetch for an already aborted poll", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(pollForAuth(1, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("cancels the polling delay without leaving a timer or another request", async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ authToken: null, expiresAt: "2099-01-01" }));
+    const controller = new AbortController();
+    const pending = pollForAuth(1, controller.signal);
+    const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(1);
+    controller.abort();
+    await rejected;
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes cancellation to the request and rejects a late response body", async () => {
+    let finish!: (value: unknown) => void;
+    mockFetch.mockResolvedValue({ ok: true, json: () => new Promise(resolve => { finish = resolve; }) });
+    const controller = new AbortController();
+    const pending = pollForAuth(1, controller.signal);
+    const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockFetch.mock.calls[0][1].signal).toBe(controller.signal);
+    controller.abort();
+    finish({ authToken: "stale-token" });
+    await rejected;
+  });
+
+  it("passes cancellation to PIN creation", async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ id: 1 }));
+    const controller = new AbortController();
+    await createPin(controller.signal);
+    expect(mockFetch.mock.calls[0][1].signal).toBe(controller.signal);
+  });
+});

@@ -29,11 +29,12 @@ async function getPlexHeaders(): Promise<Record<string, string>> {
 }
 
 /** Create a new PIN for authentication */
-export async function createPin(): Promise<PlexPin> {
+export async function createPin(signal?: AbortSignal): Promise<PlexPin> {
   const headers = await getPlexHeaders();
 
   const response = await timedFetch(`${PLEX_API_BASE}/pins`, {
     method: "POST",
+    signal,
     headers: {
       ...headers,
       "Content-Type": "application/x-www-form-urlencoded",
@@ -60,8 +61,9 @@ export async function getAuthUrl(pinCode: string): Promise<string> {
 }
 
 /** Poll a PIN until the user authenticates or the PIN expires */
-export async function pollForAuth(pinId: number): Promise<string> {
+export async function pollForAuth(pinId: number, signal?: AbortSignal): Promise<string> {
   const headers = await getPlexHeaders();
+  signal?.throwIfAborted();
   const startTime = Date.now();
 
   while (Date.now() - startTime < POLL_TIMEOUT_MS) {
@@ -69,7 +71,7 @@ export async function pollForAuth(pinId: number): Promise<string> {
     // each poll must be a fresh request to check for updated authToken.
     const response = await timedFetch(
       `${PLEX_API_BASE}/pins/${pinId}?_t=${Date.now()}`,
-      { headers },
+      { headers, signal },
     );
 
     if (!response.ok) {
@@ -77,6 +79,8 @@ export async function pollForAuth(pinId: number): Promise<string> {
     }
 
     const pin = (await response.json()) as PlexPin;
+
+    signal?.throwIfAborted();
 
     if (pin.authToken) {
       return pin.authToken;
@@ -88,7 +92,18 @@ export async function pollForAuth(pinId: number): Promise<string> {
     }
 
     // Wait before polling again
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    await new Promise<void>((resolve, reject) => {
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(signal?.reason);
+      };
+      const timer = setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, POLL_INTERVAL_MS);
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+    signal?.throwIfAborted();
   }
 
   throw new Error("Authentication timed out. Please try again.");
