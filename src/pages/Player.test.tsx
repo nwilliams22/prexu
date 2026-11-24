@@ -369,6 +369,11 @@ describe("Player – chrome reflow nudge on viewport resize", () => {
     );
   }
 
+  it("requests CORS access for direct media before Web Audio connects", () => {
+    const { container } = renderPlayer();
+    expect(container.querySelector("video")).toHaveAttribute("crossorigin", "anonymous");
+  });
+
   it("attaches a ResizeObserver to document.documentElement on mount", () => {
     renderPlayer();
 

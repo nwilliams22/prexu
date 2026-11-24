@@ -749,6 +749,8 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
         />
       ) : (
         <video
+          // Web Audio must have CORS access or it silently zeros direct-file audio.
+          crossOrigin="anonymous"
           ref={player.videoRef}
           style={styles.video}
           playsInline
