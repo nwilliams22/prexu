@@ -48,6 +48,47 @@ test.describe("Item Detail: Movie", () => {
     );
   });
 
+  test("mark watched clears rewatch resume on the mounted details page", async ({ page }, testInfo) => {
+    test.setTimeout(90000);
+    await page.route("http://localhost:32400/identity", route => route.fulfill({ json: { MediaContainer: { machineIdentifier: "machine-id-123" } } }));
+    const detail = structuredClone(mockPlexData.movieDetail);
+    const movie = detail.MediaContainer.Metadata[0]!;
+    movie.viewOffset = 124000;
+    movie.viewCount = 3;
+    let marked = false;
+    let scrobbles = 0;
+    let unscrobbles = 0;
+    // Keep returning the stale offset after scrobble to exercise Plex ingestion delay.
+    await page.route(/\/library\/metadata\/100(?:\?.*)?$/, route => route.fulfill({ json: detail }));
+    await page.route("**/:/scrobble?*", route => {
+      marked = true;
+      scrobbles++;
+      return route.fulfill({ status: 200, body: "" });
+    });
+    await page.route("**/:/unscrobble?*", route => {
+      unscrobbles++;
+      return route.fulfill({ status: 200, body: "" });
+    });
+    await page.goto("/item/100");
+    const resume = page.getByRole("button", { name: /Resume from 2:04/ });
+    await expect(resume).toBeVisible({ timeout: 30000 });
+    await expect(page.getByRole("button", { name: "Mark Unwatched", exact: true })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("before.png") });
+    await page.getByRole("button", { name: "Mark Watched", exact: true }).click();
+    await expect(resume).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "▶ Play", exact: true })).toBeVisible();
+    expect(marked).toBe(true);
+    expect(scrobbles).toBe(1);
+    expect(unscrobbles).toBe(0);
+    await page.screenshot({ path: testInfo.outputPath("after.png") });
+    // Simulate the server having ingested scrobble before a full page reload.
+    movie.viewOffset = 0;
+    await page.reload();
+    await expect(page.getByRole("button", { name: "▶ Play", exact: true })).toBeVisible();
+    await expect(resume).toHaveCount(0);
+    expect(movie.viewCount).toBe(3);
+  });
+
   test("shows movie title", async ({ page }) => {
     await page.goto("/item/100");
     await expect(page.getByRole("heading", { name: "Test Movie 1", level: 1 })).toBeVisible();

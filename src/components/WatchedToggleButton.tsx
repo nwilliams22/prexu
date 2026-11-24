@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useAuth } from "../hooks/useAuth";
 import { useToast } from "../hooks/useToast";
+import { emitWatchStateChanged } from "../services/watch-state-events";
 import { markAsWatched, markAsUnwatched } from "../services/plex-library";
 
 interface WatchedToggleButtonProps {
@@ -12,7 +13,7 @@ interface WatchedToggleButtonProps {
 }
 
 /**
- * Button to mark a media item as watched or unwatched.
+ * Explicit actions to mark a media item watched or unwatched, including rewatches.
  * Calls the Plex scrobble/unscrobble API and notifies the parent.
  */
 function WatchedToggleButton({
@@ -24,7 +25,7 @@ function WatchedToggleButton({
   const { toast } = useToast();
   const [loading, setLoading] = useState(false);
 
-  const handleToggle = async () => {
+  const handleToggle = async (watched: boolean) => {
     if (!server || loading) return;
     setLoading(true);
     try {
@@ -33,6 +34,8 @@ function WatchedToggleButton({
       } else {
         await markAsWatched(server.uri, server.accessToken, ratingKey);
       }
+      // Patch mounted resume labels and guard refreshes against stale Plex offsets.
+      emitWatchStateChanged(ratingKey, { viewOffsetMs: 0, reset: true });
       toast(watched ? "Marked as unwatched" : "Marked as watched", "success");
       onToggled?.();
     } catch {
@@ -43,54 +46,59 @@ function WatchedToggleButton({
   };
 
   return (
-    <button
-      onClick={handleToggle}
-      style={{
-        ...styles.button,
-        opacity: loading ? 0.6 : 1,
-      }}
-      disabled={loading}
-      title={watched ? "Mark as Unwatched" : "Mark as Watched"}
-    >
-      {watched ? (
-        // Eye-off icon
-        <svg
-          aria-hidden="true"
-          width="18"
-          height="18"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          style={{ marginRight: "0.5rem" }}
+    <>
+      {[watched, !watched].map((watched) => (
+        <button
+          key={String(watched)}
+          onClick={() => handleToggle(watched)}
+          style={{
+            ...styles.button,
+            opacity: loading ? 0.6 : 1,
+          }}
+          disabled={loading}
+          title={watched ? "Mark as Unwatched" : "Mark as Watched"}
         >
-          <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
-          <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
-          <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
-          <line x1="1" y1="1" x2="23" y2="23" />
-        </svg>
-      ) : (
-        // Checkmark circle icon
-        <svg
-          aria-hidden="true"
-          width="18"
-          height="18"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          style={{ marginRight: "0.5rem" }}
-        >
-          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-          <polyline points="22 4 12 14.01 9 11.01" />
-        </svg>
-      )}
-      {watched ? "Mark Unwatched" : "Mark Watched"}
-    </button>
+          {watched ? (
+            // Eye-off icon
+            <svg
+              aria-hidden="true"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              style={{ marginRight: "0.5rem" }}
+            >
+              <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+              <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+              <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+              <line x1="1" y1="1" x2="23" y2="23" />
+            </svg>
+          ) : (
+            // Checkmark circle icon
+            <svg
+              aria-hidden="true"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              style={{ marginRight: "0.5rem" }}
+            >
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+              <polyline points="22 4 12 14.01 9 11.01" />
+            </svg>
+          )}
+          {watched ? "Mark Unwatched" : "Mark Watched"}
+        </button>
+      ))}
+    </>
   );
 }
 

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { onWatchStateChangedDetail } from "../services/watch-state-events";
 import WatchedToggleButton from "./WatchedToggleButton";
 
 vi.mock("../hooks/useAuth", () => ({
@@ -23,6 +24,8 @@ vi.mock("../services/plex-library", () => ({
 describe("WatchedToggleButton", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockMarkWatched.mockResolvedValue();
+    mockMarkUnwatched.mockResolvedValue();
   });
 
   it("renders 'Mark Watched' text when isWatched is false", () => {
@@ -79,6 +82,40 @@ describe("WatchedToggleButton", () => {
     expect(onToggled).toHaveBeenCalledOnce();
   });
 
+  it("marks an already watched item watched again and publishes a resume reset", async () => {
+    const listener = vi.fn();
+    const unsubscribe = onWatchStateChangedDetail(listener);
+    const onToggled = vi.fn(() => {
+      expect(listener).toHaveBeenCalledWith({ ratingKey: "123", viewOffsetMs: 0, reset: true });
+    });
+    render(<WatchedToggleButton ratingKey="123" isWatched={true} onToggled={onToggled} />);
+    try {
+      expect(screen.getByRole("button", { name: "Mark Unwatched" })).toBeInTheDocument();
+      await userEvent.setup().click(screen.getByRole("button", { name: "Mark Watched" }));
+      expect(mockMarkWatched).toHaveBeenCalledWith("https://plex.test", "token", "123");
+      expect(mockMarkUnwatched).not.toHaveBeenCalled();
+      expect(onToggled).toHaveBeenCalledOnce();
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("does not clear resume or refresh after a failed watched request", async () => {
+    mockMarkWatched.mockRejectedValueOnce(new Error("offline"));
+    const listener = vi.fn();
+    const unsubscribe = onWatchStateChangedDetail(listener);
+    const onToggled = vi.fn();
+    render(<WatchedToggleButton ratingKey="123" isWatched={true} onToggled={onToggled} />);
+    try {
+      await userEvent.setup().click(screen.getByRole("button", { name: "Mark Watched" }));
+      expect(listener).not.toHaveBeenCalled();
+      expect(onToggled).not.toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: "Mark Watched" })).toBeEnabled();
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it("disables button during loading", async () => {
     let resolvePromise: () => void;
     mockMarkWatched.mockImplementation(
@@ -88,10 +125,11 @@ describe("WatchedToggleButton", () => {
     const user = userEvent.setup();
     render(<WatchedToggleButton ratingKey="123" isWatched={false} />);
 
-    const button = screen.getByRole("button");
+    const button = screen.getByRole("button", { name: "Mark Watched" });
     await user.click(button);
 
     expect(button).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Mark Unwatched" })).toBeDisabled();
 
     await act(async () => {
       resolvePromise!();
