@@ -23,6 +23,9 @@ const host = process.env.TAURI_DEV_HOST;
 const PLAYER_CHROME_TEST_MODE = "player-chrome-test";
 
 export default defineConfig(async ({ mode }) => ({
+  // Playwright starts both modes together; sharing a cache makes one server
+  // invalidate the other's optimized dependencies (504 Outdated Optimize Dep).
+  cacheDir: `node_modules/.vite-${mode}`,
   plugins: [
     react({
       babel: {
