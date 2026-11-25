@@ -22,7 +22,8 @@ export function useWatchTogether(
   const playback = useRemotePlayback(
     player,
     session.isInSession,
-    session.setSyncStatus
+    session.setSyncStatus,
+    sessionId
   );
 
   const { participants, setParticipants } = useWatchParticipants(
@@ -57,6 +58,7 @@ export function useWatchTogether(
     isHost,
     participants,
     syncStatus: session.syncStatus,
+    catchingUp: playback.catchingUp,
     sessionId,
     showNextEpisodePrompt: mediaSwitch.showNextEpisodePrompt,
     nextEpisodeInfo: mediaSwitch.nextEpisodeInfo,

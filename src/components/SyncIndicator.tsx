@@ -1,9 +1,10 @@
 interface SyncIndicatorProps {
   syncStatus: "synced" | "syncing" | "disconnected";
   participantCount: number;
+  catchingUp?: boolean;
 }
 
-function SyncIndicator({ syncStatus, participantCount }: SyncIndicatorProps) {
+function SyncIndicator({ syncStatus, participantCount, catchingUp }: SyncIndicatorProps) {
   const dotColor =
     syncStatus === "synced"
       ? "var(--success)"
@@ -11,7 +12,7 @@ function SyncIndicator({ syncStatus, participantCount }: SyncIndicatorProps) {
         ? "var(--accent)"
         : "var(--error)";
 
-  const label =
+  const label = catchingUp ? "Catching up…" :
     syncStatus === "synced"
       ? "Synced"
       : syncStatus === "syncing"

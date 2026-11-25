@@ -3,6 +3,10 @@ import { render, screen } from "@testing-library/react";
 import SyncIndicator from "./SyncIndicator";
 
 describe("SyncIndicator", () => {
+  it("shows catching up while a late joiner buffers", () => {
+    render(<SyncIndicator syncStatus="synced" participantCount={2} catchingUp />);
+    expect(screen.getByRole("status")).toHaveTextContent("Catching up…");
+  });
   it("renders with role status", () => {
     render(<SyncIndicator syncStatus="synced" participantCount={2} />);
     expect(screen.getByRole("status")).toBeInTheDocument();

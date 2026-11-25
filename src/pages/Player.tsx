@@ -422,25 +422,36 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   );
 
   const { seek: seekQueue, isPlaying: queueIsPlaying, togglePlay: toggleQueuePlay } = player;
+  const canChangeItem = !wt.isInSession || wt.isHost;
   const handleNextEpisode = useCallback(() => {
+    if (!canChangeItem) return;
     const next = playNext();
+    if (next && wt.isInSession) {
+      wt.loadNextEpisode(next.ratingKey, next.title, next.type);
+      return;
+    }
     if (next) {
       // Mutate ratingKey in place — usePlayer's ratingKey effect re-inits
       // playback. AppLayout + the page underneath stay mounted.
       playQueueItem(next.ratingKey, ratingKey, { seek: seekQueue, isPlaying: queueIsPlaying, togglePlay: toggleQueuePlay }, playerSession.replaceRatingKey);
-    } else if (episodeNav.handleNextEpisode) {
+    } else if (!wt.isInSession && episodeNav.handleNextEpisode) {
       episodeNav.handleNextEpisode();
     }
-  }, [playNext, episodeNav.handleNextEpisode, playerSession, ratingKey, seekQueue, queueIsPlaying, toggleQueuePlay]);
+  }, [canChangeItem, wt.isInSession, wt.loadNextEpisode, playNext, episodeNav.handleNextEpisode, playerSession, ratingKey, seekQueue, queueIsPlaying, toggleQueuePlay]);
 
   const handlePrevEpisode = useCallback(() => {
+    if (!canChangeItem) return;
     const prev = playPrev();
+    if (prev && wt.isInSession) {
+      wt.loadNextEpisode(prev.ratingKey, prev.title, prev.type);
+      return;
+    }
     if (prev) {
       playQueueItem(prev.ratingKey, ratingKey, { seek: seekQueue, isPlaying: queueIsPlaying, togglePlay: toggleQueuePlay }, playerSession.replaceRatingKey);
-    } else if (episodeNav.handlePrevEpisode) {
+    } else if (!wt.isInSession && episodeNav.handlePrevEpisode) {
       episodeNav.handlePrevEpisode();
     }
-  }, [playPrev, episodeNav.handlePrevEpisode, playerSession, ratingKey, seekQueue, queueIsPlaying, toggleQueuePlay]);
+  }, [canChangeItem, wt.isInSession, wt.loadNextEpisode, playPrev, episodeNav.handlePrevEpisode, playerSession, ratingKey, seekQueue, queueIsPlaying, toggleQueuePlay]);
 
   // "Logical next" — there is a real successor to the currently playing
   // item. Used by:
@@ -451,7 +462,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   //
   // Decision lives in player-postplay-gate.ts so it can be unit-tested
   // directly. See that file's docblock for the rules.
-  const hasNextItem = computeHasNextItem({
+  const hasNextItem = canChangeItem && computeHasNextItem({
     itemType: player.itemType,
     ratingKey,
     queue,
@@ -594,7 +605,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   // returned a previous episode. Hidden otherwise (first episode of season,
   // single movie, etc.) — Exit is always available.
   const hasPrevious =
-    queue.currentIndex > 0 || episodeNav.handlePrevEpisode != null;
+    canChangeItem && (queue.currentIndex > 0 || (!wt.isInSession && episodeNav.handlePrevEpisode != null));
 
   usePlayerKeyboardShortcuts({
     enabled: !browserPiPActive,
@@ -652,11 +663,12 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     () =>
       wt.isInSession ? (
         <SyncIndicator
+          catchingUp={wt.catchingUp}
           syncStatus={wt.syncStatus}
           participantCount={wt.participants.length + 1}
         />
       ) : undefined,
-    [wt.isInSession, wt.syncStatus, wt.participants.length],
+    [wt.isInSession, wt.syncStatus, wt.participants.length, wt.catchingUp],
   );
 
   // Memoized URL builders and derived post-play props — stable across the
@@ -715,7 +727,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
         activeSegment={activeSegment}
         onSkipSegment={handleSkipSegment}
         hasNextItem={hasNextItem}
-        onNextEpisode={handleNextEpisode}
+        onNextEpisode={canChangeItem ? handleNextEpisode : undefined}
       />
     );
   }
@@ -846,7 +858,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
           onSkip={handleSkipSegment}
           onDismiss={dismissSegment}
           hasNextEpisode={hasNextItem}
-          onNextEpisode={handleNextEpisode}
+          onNextEpisode={canChangeItem ? handleNextEpisode : undefined}
         />
       )}
 
@@ -887,8 +899,8 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
           chapters={player.chapters}
           onSeek={seek}
           onActivity={resetHideTimer}
-          onNextEpisode={handleNextEpisode}
-          onPrevEpisode={handlePrevEpisode}
+          onNextEpisode={canChangeItem ? handleNextEpisode : undefined}
+          onPrevEpisode={canChangeItem ? handlePrevEpisode : undefined}
           audioEnhancements={audioEnhancements}
           onAudioEnhancementChange={handleAudioEnhancementChange}
           pip={{
@@ -902,7 +914,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
             isActive: playerMinimize.isMinimized,
             onMinimize: handleMinimize,
           } : undefined}
-          queue={{
+          queue={wt.isInSession ? undefined : {
             count: remainingCount,
             onToggle: toggleQueuePanel,
           }}
@@ -939,7 +951,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
       )}
 
       {/* Queue panel */}
-      {queuePanelOpen && server && (
+      {queuePanelOpen && server && !wt.isInSession && (
         <QueuePanel
           onClose={() => setQueuePanelOpen(false)}
           posterUrl={queuePanelPosterUrl}

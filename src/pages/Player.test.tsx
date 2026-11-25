@@ -53,10 +53,10 @@ vi.mock("../hooks/usePlayer", () => ({
   }),
 }));
 
+const watchState = vi.hoisted(() => ({ isInSession: false, isHost: false }));
 vi.mock("../hooks/useWatchTogether", () => ({
   useWatchTogether: () => ({
-    isInSession: false,
-    isHost: false,
+    ...watchState,
     participants: [],
     syncStatus: "idle",
     syncTogglePlay: vi.fn(),
@@ -174,15 +174,24 @@ vi.mock("../components/PlayerControls", () => ({
     reflowTick,
     visible,
     suppressTransition,
+    onNextEpisode,
+    onPrevEpisode,
+    queue,
     pip,
   }: {
     reflowTick?: number;
     visible?: boolean;
     suppressTransition?: boolean;
+    onNextEpisode?: () => void;
+    onPrevEpisode?: () => void;
+    queue?: unknown;
     pip?: { onToggle?: () => void };
   }) => (
     <div
       data-testid="player-controls"
+      data-next={String(Boolean(onNextEpisode))}
+      data-prev={String(Boolean(onPrevEpisode))}
+      data-queue={String(Boolean(queue))}
       data-reflow-tick={reflowTick}
       data-visible={String(visible)}
       data-suppress-transition={String(suppressTransition)}
@@ -657,4 +666,15 @@ describe("browser PiP player shell", () => {
     unmount();
     expect(browserPiPState.setActive).toHaveBeenLastCalledWith(false);
   });
+});
+
+ it("hides item changes and queue controls from a session guest", () => {
+  watchState.isInSession = true;
+  try {
+    const { getByTestId } = render(<MemoryRouter><Player ratingKey="123" offset={null} /></MemoryRouter>);
+    const controls = getByTestId("player-controls");
+    expect(controls).toHaveAttribute("data-next", "false");
+    expect(controls).toHaveAttribute("data-prev", "false");
+    expect(controls).toHaveAttribute("data-queue", "false");
+  } finally { watchState.isInSession = false; }
 });

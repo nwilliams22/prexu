@@ -13,6 +13,8 @@ export type SyncEventType =
   | "auth_ok"
   | "auth_error"
   | "session_created"
+  | "session_state"
+  | "session_started"
   | "session_joined"
   | "session_error"
   | "participant_joined"
@@ -72,7 +74,19 @@ export function parseParticipant(raw: WireParticipant): WatchParticipant {
   };
 }
 
+export interface PlaybackSnapshot {
+  type: "session_state";
+  session_id: string;
+  phase: "lobby" | "playback";
+  playing: boolean;
+  current_time: number;
+  timestamp: number;
+  host_away: boolean;
+}
+
 export interface SyncEventPayloadMap {
+  session_state: PlaybackSnapshot;
+  session_started: { type: "session_started"; current_time: number; timestamp: number };
   connected: null;
   disconnected: null;
   auth_ok: { type: "auth_ok"; plex_username: string };
@@ -100,6 +114,7 @@ export interface SyncEventPayloadMap {
 type Listener = (data: unknown) => void;
 
 const WIRE_TO_EVENT: Record<string, SyncEventType> = {
+  session_state: "session_state", session_started: "session_started",
   auth_ok: "auth_ok", auth_error: "auth_error",
   session_created: "session_created", session_joined: "session_joined",
   session_error: "session_error", participant_joined: "participant_joined",

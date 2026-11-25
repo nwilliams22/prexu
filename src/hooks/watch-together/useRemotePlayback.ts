@@ -1,195 +1,115 @@
-/**
- * Handles remote play/pause/seek events and broadcasts local playback changes.
- */
-
-import { useEffect, useRef, useCallback } from "react";
-import { watchSync } from "../../services/watch-sync";
+/** Shared controls broadcast user intent, never loading/buffering transitions. */
+import { useCallback, useEffect, useRef, useState } from "react";
+import { watchSync, type PlaybackSnapshot } from "../../services/watch-sync";
+import { useToast } from "../useToast";
 import type { UsePlayerResult } from "../usePlayer";
 import type { SyncStatus } from "./useWatchTogetherSession";
-
-export interface UseRemotePlaybackResult {
-  syncTogglePlay: () => void;
-  syncSeek: (time: number) => void;
-  remoteActionRef: React.MutableRefObject<boolean>;
-  lastRemoteSyncRef: React.MutableRefObject<{
-    time: number;
-    localTimestamp: number;
-  } | null>;
-}
 
 export function useRemotePlayback(
   player: UsePlayerResult,
   isInSession: boolean,
-  setSyncStatus: (status: SyncStatus) => void
-): UseRemotePlaybackResult {
-  // Echo guard: prevents re-broadcasting events we received from remote
-  const remoteActionRef = useRef(false);
-
-  // Track last known remote sync point for drift detection
-  const lastRemoteSyncRef = useRef<{
-    time: number;
-    localTimestamp: number;
-  } | null>(null);
-
-  // Broadcast local play/pause changes
-  useEffect(() => {
-    if (!isInSession) return;
-
-    // Skip if this play/pause was triggered by a remote event
-    if (remoteActionRef.current) {
-      remoteActionRef.current = false;
-      return;
-    }
-
-    const now = Date.now();
-    if (player.isPlaying) {
-      watchSync.send({
-        type: "play",
-        current_time: player.currentTime,
-        timestamp: now,
-      });
-    } else if (player.duration > 0) {
-      // Only broadcast pause if we actually have media loaded
-      watchSync.send({
-        type: "pause",
-        current_time: player.currentTime,
-        timestamp: now,
-      });
-    }
-  }, [player.isPlaying, isInSession]);
-
-  // Listen for remote play/pause/seek events.
-  //
-  // We route through `player.seek` / `player.togglePlay` rather than touching
-  // `videoRef.current` directly so this works on both the HTML5 path (videoRef
-  // populated) and the native libmpv path (videoRef is always null on Windows).
-  // Refs let us read the latest player state inside long-lived listeners
-  // without re-binding the watchSync subscriptions on every render.
+  setSyncStatus: (status: SyncStatus) => void,
+  sessionId?: string | null,
+) {
+  const { toast } = useToast();
   const playerRef = useRef(player);
   playerRef.current = player;
+  const remoteActionRef = useRef(false);
+  const lastRemoteSyncRef = useRef<{ time: number; localTimestamp: number } | null>(null);
+  const pendingSnapshot = useRef<PlaybackSnapshot | null>(null);
+  const initialized = useRef(false);
+  const phase = useRef<"lobby" | "playback" | null>(null);
+  const [catchingUp, setCatchingUp] = useState(false);
+
+  const applySnapshot = useCallback(() => {
+    const snapshot = pendingSnapshot.current;
+    const p = playerRef.current;
+    if (!snapshot || p.isLoading || p.isBuffering || p.duration <= 0) return;
+    const elapsed = snapshot.playing ? Math.max(0, (Date.now() - snapshot.timestamp) / 1000) : 0;
+    const time = snapshot.current_time + elapsed;
+    p.seek(time);
+    if (p.isPlaying !== snapshot.playing) p.togglePlay();
+    lastRemoteSyncRef.current = snapshot.playing ? { time, localTimestamp: Date.now() } : null;
+    pendingSnapshot.current = null;
+    initialized.current = true;
+    setCatchingUp(false);
+    setSyncStatus("synced");
+  }, [setSyncStatus]);
+
   useEffect(() => {
+    initialized.current = false;
+    phase.current = null;
+    pendingSnapshot.current = null;
+    lastRemoteSyncRef.current = null;
+    setCatchingUp(false);
     if (!isInSession) return;
 
-    const unsubPlay = watchSync.on(
-      "remote_play",
-      (data: {
-        current_time: number;
-        timestamp: number;
-        from_user: string;
-      }) => {
-        const p = playerRef.current;
-        const transitDelay = Math.min(
-          (Date.now() - data.timestamp) / 1000,
-          2
-        );
-        const adjustedTime = data.current_time + transitDelay;
-
-        remoteActionRef.current = true;
-        p.seek(adjustedTime);
-        if (!p.isPlaying) {
-          p.togglePlay();
+    const subscriptions = [
+      watchSync.on("session_state", (snapshot) => {
+        if (sessionId && snapshot.session_id !== sessionId) return;
+        const phaseChanged = phase.current !== snapshot.phase;
+        phase.current = snapshot.phase;
+        if (!initialized.current || pendingSnapshot.current || phaseChanged) {
+          pendingSnapshot.current = snapshot;
+          setCatchingUp(snapshot.phase === "playback");
+          applySnapshot();
         }
-
-        lastRemoteSyncRef.current = {
-          time: adjustedTime,
-          localTimestamp: Date.now(),
-        };
-        setSyncStatus("synced");
-      }
-    );
-
-    const unsubPause = watchSync.on(
-      "remote_pause",
-      (data: { current_time: number; timestamp: number }) => {
+      }),
+      watchSync.on("remote_play", (data) => {
         const p = playerRef.current;
-        remoteActionRef.current = true;
+        const time = data.current_time + Math.max(0, Math.min((Date.now() - data.timestamp) / 1000, 2));
+        p.seek(time);
+        if (!p.isPlaying) p.togglePlay();
+        lastRemoteSyncRef.current = { time, localTimestamp: Date.now() };
+        toast(`${data.from_user} resumed playback`);
+        setSyncStatus("synced");
+      }),
+      watchSync.on("remote_pause", (data) => {
+        const p = playerRef.current;
         p.seek(data.current_time);
-        if (p.isPlaying) {
-          p.togglePlay();
-        }
-
+        if (p.isPlaying) p.togglePlay();
         lastRemoteSyncRef.current = null;
+        toast(`${data.from_user} paused`);
         setSyncStatus("synced");
-      }
-    );
-
-    const unsubSeek = watchSync.on(
-      "remote_seek",
-      (data: { current_time: number; timestamp: number }) => {
+      }),
+      watchSync.on("remote_seek", (data) => {
         const p = playerRef.current;
-        const transitDelay = Math.min(
-          (Date.now() - data.timestamp) / 1000,
-          2
-        );
-        const adjustedTime = data.current_time + transitDelay;
-
-        remoteActionRef.current = true;
-        p.seek(adjustedTime);
-
-        lastRemoteSyncRef.current = {
-          time: adjustedTime,
-          localTimestamp: Date.now(),
-        };
+        const delay = p.isPlaying ? Math.max(0, Math.min((Date.now() - data.timestamp) / 1000, 2)) : 0;
+        const time = data.current_time + delay;
+        p.seek(time);
+        lastRemoteSyncRef.current = p.isPlaying ? { time, localTimestamp: Date.now() } : null;
+        toast(`${data.from_user} sought to ${Math.floor(data.current_time / 60)}:${Math.floor(data.current_time % 60).toString().padStart(2, "0")}`);
         setSyncStatus("synced");
-      }
-    );
+      }),
+    ];
+    return () => subscriptions.forEach((unsubscribe) => unsubscribe());
+  }, [isInSession, sessionId, applySnapshot, setSyncStatus, toast]);
 
-    return () => {
-      unsubPlay();
-      unsubPause();
-      unsubSeek();
-    };
-  }, [isInSession, setSyncStatus]);
+  useEffect(() => { applySnapshot(); }, [player.isLoading, player.isBuffering, player.duration, applySnapshot]);
 
-  // Broadcast buffering state
   useEffect(() => {
-    if (!isInSession) return;
+    if (!isInSession || player.isLoading || player.duration <= 0) return;
+    watchSync.send({ type: player.isBuffering ? "buffering" : "ready", current_time: player.currentTime });
+  }, [isInSession, player.isLoading, player.isBuffering, player.duration]);
 
-    if (player.isBuffering) {
-      watchSync.send({
-        type: "buffering",
-        current_time: player.currentTime,
-      });
-    } else if (player.isPlaying) {
-      watchSync.send({
-        type: "ready",
-        current_time: player.currentTime,
-      });
-    }
-  }, [player.isBuffering, isInSession]);
-
-  // Sync-aware actions. Depend on the stable togglePlay/seek callbacks —
-  // not the whole `player` object, whose identity changes on every
-  // time-pos tick — so these stay tick-stable for downstream consumers
-  // (keyboard handler, memoized transport controls).
   const { togglePlay, seek } = player;
   const syncTogglePlay = useCallback(() => {
+    const p = playerRef.current;
+    if (isInSession && (phase.current === "lobby" || pendingSnapshot.current)) return;
     togglePlay();
-    // Broadcasting happens via the isPlaying effect above
-  }, [togglePlay]);
+    if (isInSession) {
+      watchSync.send({ type: p.isPlaying ? "pause" : "play", current_time: p.currentTime, timestamp: Date.now() });
+      lastRemoteSyncRef.current = p.isPlaying ? null : { time: p.currentTime, localTimestamp: Date.now() };
+    }
+  }, [togglePlay, isInSession]);
+  const syncSeek = useCallback((time: number) => {
+    if (isInSession && (phase.current === "lobby" || pendingSnapshot.current)) return;
+    seek(time);
+    if (isInSession) {
+      watchSync.send({ type: "seek", current_time: time, timestamp: Date.now() });
+      lastRemoteSyncRef.current = playerRef.current.isPlaying ? { time, localTimestamp: Date.now() } : null;
+    }
+  }, [seek, isInSession]);
 
-  const syncSeek = useCallback(
-    (time: number) => {
-      seek(time);
-      if (isInSession) {
-        watchSync.send({
-          type: "seek",
-          current_time: time,
-          timestamp: Date.now(),
-        });
-        lastRemoteSyncRef.current = {
-          time,
-          localTimestamp: Date.now(),
-        };
-      }
-    },
-    [seek, isInSession]
-  );
-
-  return {
-    syncTogglePlay,
-    syncSeek,
-    remoteActionRef,
-    lastRemoteSyncRef,
-  };
+  return { syncTogglePlay, syncSeek, remoteActionRef, lastRemoteSyncRef, catchingUp: catchingUp || (isInSession && player.isBuffering) };
 }

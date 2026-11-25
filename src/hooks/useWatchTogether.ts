@@ -10,6 +10,7 @@ export interface UseWatchTogetherResult {
   // Session state
   isInSession: boolean;
   isHost: boolean;
+  catchingUp: boolean;
   participants: WatchParticipant[];
   syncStatus: "synced" | "syncing" | "disconnected";
   sessionId: string | null;
@@ -24,7 +25,7 @@ export interface UseWatchTogetherResult {
 
   // Session control
   leaveSession: () => void;
-  loadNextEpisode: (ratingKey: string, title: string) => void;
+  loadNextEpisode: (ratingKey: string, title: string, mediaType?: "movie" | "episode") => void;
   dismissNextEpisodePrompt: () => void;
 }
 

@@ -10,7 +10,7 @@ import type { UsePlayerResult } from "../usePlayer";
 export interface UseRemoteMediaSwitchResult {
   showNextEpisodePrompt: boolean;
   nextEpisodeInfo: { ratingKey: string; title: string } | null;
-  loadNextEpisode: (ratingKey: string, title: string) => void;
+  loadNextEpisode: (ratingKey: string, title: string, mediaType?: "movie" | "episode") => void;
   dismissNextEpisodePrompt: () => void;
 }
 
@@ -74,15 +74,15 @@ export function useRemoteMediaSwitch(
   ]);
 
   const loadNextEpisode = useCallback(
-    (ratingKey: string, title: string) => {
-      if (!isInSession) return;
+    (ratingKey: string, title: string, mediaType: "movie" | "episode" = "episode") => {
+      if (!isInSession || !isHost) return;
 
       // Send new_media to all participants
       watchSync.send({
         type: "new_media",
         media_rating_key: ratingKey,
         media_title: title,
-        media_type: "episode",
+        media_type: mediaType,
       });
 
       // Navigate locally
