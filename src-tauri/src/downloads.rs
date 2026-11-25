@@ -209,13 +209,15 @@ impl Drop for DownloadGuard {
         if self.remove_partial {
             let _ = std::fs::remove_file(&self.temp_path);
         }
-        if let Ok(mut active) = self.active.lock() {
-            active.remove(&self.rating_key);
-        }
         if let Ok(mut s) = self.queue.state.lock() {
             s.waiting.retain(|key| key != &self.rating_key);
             s.running.remove(&self.rating_key);
             s.paused.remove(&self.rating_key);
+        }
+        // Release the duplicate-key reservation last. A new invocation must
+        // not enqueue this key before the old guard has removed its queue state.
+        if let Ok(mut active) = self.active.lock() {
+            active.remove(&self.rating_key);
         }
         self.queue.changed.notify_waiters();
     }
