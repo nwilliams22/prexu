@@ -1,9 +1,13 @@
+import { useState } from "react";
+import { groupShows, groupSeasons, downloadSize, watchedDownloads } from "../components/downloads/groups";
+import DeleteDownloadsDialog from "../components/downloads/DeleteDownloadsDialog";
+import type { PlexEpisode } from "../types/library";
 import { invoke } from "@tauri-apps/api/core";
 import { useAuth } from "../hooks/useAuth";
 import { useDownloads } from "../hooks/useDownloads";
 import { useNavigate } from "react-router-dom";
 import { usePlayerSession } from "../contexts/PlayerContext";
-import { getImageUrl } from "../services/plex-library";
+import { getItemMetadata, getImageUrl } from "../services/plex-library";
 import { logger } from "../services/logger";
 import EmptyState from "../components/EmptyState";
 import type { DownloadItem } from "../types/downloads";
@@ -140,7 +144,33 @@ function DownloadItemRow({ item, serverUri, serverToken }: {
 
 function Downloads() {
   const { server } = useAuth();
-  const { downloads } = useDownloads();
+  const { downloads, deleteDownload } = useDownloads();
+  const [selection, setSelection] = useState<DownloadItem[] | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [message, setMessage] = useState("");
+
+  async function selectWatched(items: DownloadItem[]) {
+    if (!server || checking) return;
+    setChecking(true);
+    setMessage("");
+    try {
+      const watched = new Set<string>();
+      // Use fresh metadata at the user's request, never infer watched from a resume offset.
+      for (const item of items) {
+        if (item.status !== "complete") continue;
+        if (item.serverUri !== server.uri) throw new Error("Server unavailable");
+        const metadata = await getItemMetadata<PlexEpisode>(server.uri, server.accessToken, item.ratingKey);
+        if ((metadata.viewCount ?? 0) > 0) watched.add(item.ratingKey);
+      }
+      const selected = watchedDownloads(items, watched);
+      if (selected.length) setSelection(selected);
+      else setMessage("No watched downloads in this show.");
+    } catch {
+      setMessage("Could not check watched status. No downloads were deleted. Connect to the show's server and try again.");
+    } finally {
+      setChecking(false);
+    }
+  }
 
   if (!server) return null;
 
@@ -148,6 +178,8 @@ function Downloads() {
     (d) => d.status === "downloading" || d.status === "queued",
   );
   const completed = downloads.filter((d) => d.status === "complete");
+  const movies = completed.filter((item) => item.type === "movie");
+  const shows = groupShows(completed.filter((item) => item.type === "episode"));
   const failed = downloads.filter(
     (d) => d.status === "error" || d.status === "cancelled",
   );
@@ -225,12 +257,12 @@ function Downloads() {
         </section>
       )}
 
-      {completed.length > 0 && (
+      {movies.length > 0 && (
         <section style={styles.section}>
           <h3 style={styles.sectionTitle}>
-            Downloaded ({completed.length})
+            Movies ({movies.length})
           </h3>
-          {completed.map((item) => (
+          {movies.map((item) => (
             <DownloadItemRow
               key={item.ratingKey}
               item={item}
@@ -239,6 +271,40 @@ function Downloads() {
             />
           ))}
         </section>
+      )}
+      {shows.length > 0 && (
+        <section style={styles.section}>
+          <h3 style={styles.sectionTitle}>TV shows</h3>
+          {shows.map((show) => (
+            <section key={show.key} aria-label={show.title} style={styles.section}>
+              <div style={{ ...styles.headerRow, marginBottom: "0.5rem", flexWrap: "wrap", gap: "0.75rem" }}>
+                <h4 style={{ margin: 0 }}>{show.title} <span style={styles.itemMeta}>— {formatBytes(downloadSize(show.items))}</span></h4>
+                <div style={{ display: "flex", gap: "0.5rem" }}>
+                  <button style={styles.openFolderBtn} disabled={checking} onClick={() => setSelection(show.items)}>Delete all</button>
+                  <button style={styles.openFolderBtn} disabled={checking} onClick={() => void selectWatched(show.items)}>Delete watched</button>
+                </div>
+              </div>
+              {groupSeasons(show.items).map((season) => (
+                <details key={season.index ?? "unknown"} open style={{ marginBottom: "0.75rem" }}>
+                  <summary style={{ cursor: "pointer", padding: "0.5rem 0" }}>{season.title} ({season.items.length})</summary>
+                  {season.items.map((item) => <DownloadItemRow key={item.ratingKey} item={item} serverUri={server.uri} serverToken={server.accessToken} />)}
+                </details>
+              ))}
+            </section>
+          ))}
+        </section>
+      )}
+      <p role="status">{checking ? "Checking watched status…" : message}</p>
+      {selection && (
+        <DeleteDownloadsDialog items={selection} onCancel={() => setSelection(null)} onConfirm={() => {
+          // Membership can change while the confirmation is open.
+          for (const selected of selection) {
+            if (downloads.some((item) => item.ratingKey === selected.ratingKey && item.serverUri === selected.serverUri && item.status === "complete")) {
+              deleteDownload(selected.ratingKey);
+            }
+          }
+          setSelection(null);
+        }} />
       )}
     </div>
   );
