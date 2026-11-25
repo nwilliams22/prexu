@@ -15,6 +15,7 @@
 //! - `player://eof`                () fired on end-of-file
 //! - `player://error`              String error message
 //! - `player://ready`              () fired once the file is loaded
+//! - `player://prepared`           () first decoder restart, including paused loads
 //! - `player://host-window-ready`  () fired once per file load when the
 //!   first frame is actually on screen. The frontend's useTransparentWindow
 //!   defers body.player-transparent until this signal to avoid the
@@ -687,6 +688,8 @@ fn dispatch(
                     .unwrap_or_else(|_| "<unavailable>".into());
                 log::info!("[player:events] hwdec-current={} (playback-restart)", hwdec);
                 *hwdec_logged = true;
+                // Decoder-ready also fires when loading paused; FileLoaded is too early.
+                let _ = app.emit("player://prepared", ());
                 #[cfg(not(target_os = "linux"))]
                 {
                     log::info!("[player:events] first frame ready → player://host-window-ready");

@@ -35,3 +35,17 @@ pub(crate) fn loadfile(mpv: &Mpv, quoted_url: &str, start_offset_ms: u64) -> Res
         mpv.command("loadfile", &[quoted_url, "replace", &opts])
     }
 }
+
+/// Apply the requested initial state before decode can start. The second write
+/// preserves warm-engine handoff behavior; callers that omit the option autoplay.
+pub(crate) fn loadfile_with_pause(
+    mpv: &Mpv,
+    quoted_url: &str,
+    start_offset_ms: u64,
+    initially_paused: Option<bool>,
+) -> Result<()> {
+    let paused = initially_paused.unwrap_or(false);
+    mpv.set_property("pause", paused)?;
+    loadfile(mpv, quoted_url, start_offset_ms)?;
+    mpv.set_property("pause", paused)
+}

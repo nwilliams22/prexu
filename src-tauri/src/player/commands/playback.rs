@@ -53,6 +53,7 @@ pub async fn player_load_url(
     url: String,
     headers: HashMap<String, String>,
     start_offset_ms: Option<u64>,
+    initially_paused: Option<bool>,
     download_rating_key: Option<String>,
     downloads: State<'_, crate::downloads::DownloadManager>,
     app: AppHandle,
@@ -121,18 +122,10 @@ pub async fn player_load_url(
             mpv.set_property("mute", true)?;
             log::debug!("[player:cmd] load_url: reveal-mute armed (linux)");
         }
-        // Preserve per-file resume options across old and new mpv signatures.
-        crate::player::loadfile::loadfile(mpv, &mpv_quote(&url), start_offset_ms.unwrap_or(0))?;
-        // Belt-and-braces unpause (prexu-7fe.1). stop_playback ALSO sets
-        // pause=false before its `stop` command, but in retest logs the
-        // first post-EOF handoff sometimes left mpv paused — the pre-stop
-        // pause-change either wasn't observed or got coalesced with the
-        // stop's state wipe, so the new file inherited pause=true and sat
-        // there until the user manually clicked play. Setting pause=false
-        // here, AFTER loadfile, applies to the new file's live playback
-        // engine context. Idempotent on cold start (pause is already
-        // false) and on autoplay handoff (pause was just cleared).
-        mpv.set_property("pause", false)
+        // Apply pause before decode can start; omitted options retain solo autoplay.
+        crate::player::loadfile::loadfile_with_pause(
+            mpv, &mpv_quote(&url), start_offset_ms.unwrap_or(0), initially_paused,
+        )
     })
 }
 

@@ -1315,3 +1315,38 @@ it("reapplies speed on episode handoff and resets it on a new native mount", asy
   expect(fresh.result.current.playbackRate).toBe(1);
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("player_set_playback_rate", { rate: 1 }));
 });
+
+
+describe("paused native preparation", () => {
+  it("waits for decoder readiness, stays paused, and clears readiness on retry", async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined);
+    vi.mocked(prepareSource).mockResolvedValue({
+      item: { type: "movie", title: "Pattern" },
+      playable: { Marker: [], duration: 60000 },
+      part: { id: 1, Chapter: [] },
+      categorized: { audio: [], subtitles: [] },
+      isLocal: false, sourceKind: "direct", url: "https://server/pattern.mp4", viewOffset: 0,
+    } as unknown as Awaited<ReturnType<typeof prepareSource>>);
+    const { result, unmount } = renderHook(() => useNativePlayer("123", 0, { initiallyPaused: true }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("player_load_url",
+      expect.objectContaining({ initiallyPaused: true })));
+    expect(result.current.isPlaying).toBe(false);
+    expect(result.current.isPrepared).toBe(false);
+    act(() => fireReady());
+    expect(result.current.isPrepared).toBe(false);
+    const stalePrepared = [...eventHandlers["player://prepared"]];
+    act(() => { for (const handler of stalePrepared) handler({ payload: null }); });
+    expect(result.current.isPrepared).toBe(true);
+    expect(result.current.isPlaying).toBe(false);
+    expect(invoke).not.toHaveBeenCalledWith("player_play");
+    act(() => result.current.togglePlay());
+    expect(invoke).toHaveBeenCalledWith("player_play");
+    act(() => result.current.retry());
+    expect(result.current.isPrepared).toBe(false);
+    act(() => { for (const handler of stalePrepared) handler({ payload: null }); });
+    expect(result.current.isPrepared).toBe(false);
+    await waitFor(() => expect(prepareSource).toHaveBeenCalledTimes(2));
+    unmount();
+    expect(eventHandlers["player://prepared"]).toHaveLength(0);
+  });
+});

@@ -44,7 +44,7 @@ import type {
   NormalizationPreset,
   SubtitleStylePreferences,
 } from "../../types/preferences";
-import type { PlayerChrome, UsePlayerResult } from "../usePlayer";
+import type { PlayerChrome, PlayerLoadOptions, UsePlayerResult } from "../usePlayer";
 import { logger, redactUrl } from "../../services/logger";
 
 /** Shape of the player_engine_status IPC response (prexu-axj4.4 contract). */
@@ -56,6 +56,7 @@ interface PlayerEngineStatus {
 export function useNativePlayer(
   ratingKey: string,
   offsetOverride?: number | null,
+  options?: PlayerLoadOptions,
 ): UsePlayerResult {
   const { server } = useAuth();
   const { preferences } = usePreferences();
@@ -75,6 +76,10 @@ export function useNativePlayer(
 
   // Playback state
   const [isLoading, setIsLoading] = useState(true);
+  const [preparedKey, setPreparedKey] = useState<string | null>(null);
+  const loadOptionsRef = useRef(options);
+  loadOptionsRef.current = options;
+  const preparedUnlistenRef = useRef<UnlistenFn | undefined>(undefined);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isBuffering, setIsBuffering] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -330,6 +335,10 @@ export function useNativePlayer(
   // ── Initialize playback ──
   const initPlayback = useCallback(async () => {
     const gen = ++initGenRef.current;
+    const initiallyPaused = loadOptionsRef.current?.initiallyPaused ?? false;
+    setPreparedKey(null);
+    preparedUnlistenRef.current?.();
+    preparedUnlistenRef.current = undefined;
     logger.info("player", "initPlayback", { ratingKey, gen });
     if (!server || !ratingKey) {
       setIsLoading(false);
@@ -542,20 +551,29 @@ export function useNativePlayer(
         }
       }
 
+      const unlistenPrepared = await listen("player://prepared", () => {
+        if (gen === initGenRef.current) setPreparedKey(ratingKey);
+      });
+      if (gen !== initGenRef.current) {
+        unlistenPrepared();
+        return;
+      }
+      preparedUnlistenRef.current = unlistenPrepared;
       await invoke("player_load_url", {
         url: prepared.isLocal ? "" : prepared.url,
         ...(prepared.isLocal ? { downloadRatingKey: ratingKey } : {}),
         headers: {} as Record<string, string>,
         startOffsetMs: prepared.viewOffset,
+        ...(initiallyPaused ? { initiallyPaused: true } : {}),
       });
       if (gen !== initGenRef.current) {
         logger.debug("player", "initPlayback superseded", { gen });
         return;
       }
-      // load_url explicitly unpauses mpv. On a warm engine, pause=false may
+      // load_url applies the requested initial pause state. On a warm engine, pause=false may
       // have been emitted before this hook subscribed and will not change
       // again on load. Initialize the UI so the first toggle can pause.
-      setIsPlaying(true);
+      setIsPlaying(!initiallyPaused);
       logger.info("player", "load_url returned OK, waiting for ready event");
 
       await invoke("player_set_playback_rate", { rate: playbackRateRef.current });
@@ -664,6 +682,8 @@ export function useNativePlayer(
     initPlayback();
     return () => {
       initGenRef.current++;
+      preparedUnlistenRef.current?.();
+      preparedUnlistenRef.current = undefined;
       logger.info("player", "cleanup: stopping timeline + soft-stop mpv");
       timeline.stopTimeline();
       timeline.reportStopped();
@@ -1007,6 +1027,8 @@ export function useNativePlayer(
   // state only. currentTime/buffered are deliberately excluded so chrome
   // consumers (transport buttons, menus, effects) don't churn at the
   // Rust-throttled 4 Hz time-pos rate.
+  const isPrepared = preparedKey === ratingKey && playbackError === null;
+
   const chrome = useMemo<PlayerChrome>(
     () => ({
       videoRef,
@@ -1017,6 +1039,7 @@ export function useNativePlayer(
       itemType,
       parentRatingKey,
       isLoading,
+      isPrepared,
       isPlaying,
       isBuffering,
       duration,
@@ -1055,6 +1078,7 @@ export function useNativePlayer(
       itemType,
       parentRatingKey,
       isLoading,
+      isPrepared,
       isPlaying,
       isBuffering,
       duration,

@@ -126,3 +126,14 @@ requires `xdotool` and sizes the real app to 1900×1000 on a 1920×1080 display.
 Screenshots of the paused/reordered queue and completed files are required.
 The profile and downloads are removed during cleanup; attach the JSON and PNGs
 to the task. No personal library or seeded download records are used.
+
+
+For the native paused-load backend contract, use
+`PREXU_JOURNEY_PAUSED_LOAD=1 node scripts/real-journeys/native.mjs` with a newly
+built debug app. This signs in through the real app, resolves the QA Pattern
+source through production code, and exercises native IPC: decoder readiness
+while paused, three seconds without time advance, explicit start, and a warm
+solo load that autoplays. It does not exercise the Watch Together lobby or
+establish audible silence on a physical output device. The lobby acceptance
+must mount `usePlayer(key, offset, { initiallyPaused: true })`, report readiness
+from `isPrepared`, and explicitly start only on relay `phase=playback`.

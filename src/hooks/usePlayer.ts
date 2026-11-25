@@ -72,6 +72,8 @@ export interface UsePlayerResult {
 
   // Playback state
   isLoading: boolean;
+  /** Current media has decoded data ready to play; independent of autoplay. */
+  isPrepared: boolean;
   isPlaying: boolean;
   isBuffering: boolean;
   currentTime: number;
@@ -184,7 +186,12 @@ export type PlayerChrome = Omit<
   "currentTime" | "buffered" | "chrome"
 >;
 
-export function usePlayer(ratingKey: string, offsetOverride?: number | null): UsePlayerResult {
+export interface PlayerLoadOptions {
+  /** Load without playing. Changing this option does not start/stop existing media. */
+  initiallyPaused?: boolean;
+}
+
+export function usePlayer(ratingKey: string, offsetOverride?: number | null, options?: PlayerLoadOptions): UsePlayerResult {
   const { preferences } = usePreferences();
 
   // Resolved ONCE via a lazy useState initializer — this is what makes the
@@ -202,11 +209,11 @@ export function usePlayer(ratingKey: string, offsetOverride?: number | null): Us
   );
 
   return engine === "native"
-    ? useNativePlayer(ratingKey, offsetOverride)
-    : useHtml5Player(ratingKey, offsetOverride);
+    ? useNativePlayer(ratingKey, offsetOverride, options)
+    : useHtml5Player(ratingKey, offsetOverride, options);
 }
 
-function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UsePlayerResult {
+function useHtml5Player(ratingKey: string, offsetOverride?: number | null, options?: PlayerLoadOptions): UsePlayerResult {
   const { server } = useAuth();
   const { preferences } = usePreferences();
   const prefsRef = useRef(preferences);
@@ -223,6 +230,10 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
 
   // State
   const [isLoading, setIsLoading] = useState(true);
+  const [preparedKey, setPreparedKey] = useState<string | null>(null);
+  const preparedSourceKeyRef = useRef<string | null>(null);
+  const loadOptionsRef = useRef(options);
+  loadOptionsRef.current = options;
   const [isPlaying, setIsPlaying] = useState(false);
   const [isBuffering, setIsBuffering] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -284,6 +295,10 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
   // ── Initialize playback ──
   const initPlayback = useCallback(async () => {
     const gen = ++initGenRef.current;
+    const initiallyPaused = loadOptionsRef.current?.initiallyPaused ?? false;
+    setPreparedKey(null);
+    preparedSourceKeyRef.current = null;
+    if (initiallyPaused) videoRef.current?.pause();
     if (!server || !ratingKey) {
       setIsLoading(false);
       setPlaybackError("No server or media selected");
@@ -337,6 +352,8 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
         return;
       }
 
+      video.autoplay = false;
+      video.preload = "auto";
       video.defaultPlaybackRate = playbackRateRef.current;
       video.playbackRate = playbackRateRef.current;
       video.volume = Math.min(volumeRef.current, 1);
@@ -351,8 +368,9 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
         const localUrl = convertFileSrc(prepared.url);
         hlsLoader.destroyHls();
         video.src = localUrl;
+        preparedSourceKeyRef.current = ratingKey;
         if (prepared.viewOffset > 0) video.currentTime = prepared.viewOffset / 1000;
-        video.play().catch(() => {});
+        if (!initiallyPaused) video.play().catch(() => {});
         setIsLoading(false);
         timeline.startTimeline();
         return;
@@ -361,8 +379,9 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
       if (prepared.sourceKind === "direct") {
         hlsLoader.destroyHls();
         video.src = prepared.url;
+        preparedSourceKeyRef.current = ratingKey;
         if (prepared.viewOffset > 0) video.currentTime = prepared.viewOffset / 1000;
-        video.play().catch(() => {});
+        if (!initiallyPaused) video.play().catch(() => {});
       } else {
         const Hls = await hlsLoader.loadHls();
         if (gen !== initGenRef.current) {
@@ -382,14 +401,16 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
         const hls = new Hls(hlsConfig);
 
         hls.loadSource(prepared.url);
+        preparedSourceKeyRef.current = ratingKey;
         hls.attachMedia(video);
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          if (gen !== initGenRef.current) return;
           // Seek to resume position after manifest is ready
           if (prepared.viewOffset > 0) {
             video.currentTime = prepared.viewOffset / 1000;
           }
-          video.play().catch(() => {});
+          if (!initiallyPaused) video.play().catch(() => {});
         });
 
         let mediaRecoveryAttempts = 0;
@@ -474,7 +495,13 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
     const onPause = () => setIsPlaying(false);
     const onWaiting = () => setIsBuffering(true);
     const onPlaying = () => setIsBuffering(false);
-    const onCanPlay = () => setIsBuffering(false);
+    const onCanPlay = () => {
+      setIsBuffering(false);
+      if (preparedSourceKeyRef.current === ratingKey && video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
+        setPreparedKey(ratingKey);
+      }
+    };
+    const onEmptied = () => setPreparedKey(null);
     const onTimeUpdate = () => {
       setCurrentTime(video.currentTime);
       if (video.buffered.length > 0) {
@@ -504,6 +531,7 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
       }
     };
     const onError = () => {
+      setPreparedKey(null);
       if (video.error) {
         if (!directPlayFailedRef.current && !hlsLoader.hlsRef.current) {
           directPlayFailedRef.current = true;
@@ -514,6 +542,7 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
       }
     };
 
+    video.addEventListener("emptied", onEmptied);
     video.addEventListener("play", onPlay);
     video.addEventListener("pause", onPause);
     video.addEventListener("waiting", onWaiting);
@@ -525,6 +554,7 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
     video.addEventListener("error", onError);
 
     return () => {
+      video.removeEventListener("emptied", onEmptied);
       video.removeEventListener("play", onPlay);
       video.removeEventListener("pause", onPause);
       video.removeEventListener("waiting", onWaiting);
@@ -535,7 +565,7 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
       video.removeEventListener("ended", onEnded);
       video.removeEventListener("error", onError);
     };
-  }, [server, hlsLoader, timeline]);
+  }, [server, ratingKey, hlsLoader, timeline]);
 
   // ── Fullscreen listener ──
   useEffect(() => {
@@ -695,6 +725,8 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
   // Tick-stable slice: memoized over stable callbacks + rarely-changing
   // state only. currentTime/buffered are deliberately excluded so chrome
   // consumers (transport buttons, menus, effects) don't churn at 4 Hz.
+  const isPrepared = preparedKey === ratingKey && playbackError === null;
+
   const chrome = useMemo<PlayerChrome>(
     () => ({
       videoRef,
@@ -705,6 +737,7 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
       itemType,
       parentRatingKey,
       isLoading,
+      isPrepared,
       isPlaying,
       isBuffering,
       duration,
@@ -743,6 +776,7 @@ function useHtml5Player(ratingKey: string, offsetOverride?: number | null): UseP
       itemType,
       parentRatingKey,
       isLoading,
+      isPrepared,
       isPlaying,
       isBuffering,
       duration,

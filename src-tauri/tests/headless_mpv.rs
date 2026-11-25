@@ -84,6 +84,42 @@ mod inner {
 
     #[test]
     #[ignore]
+    fn paused_load_prepares_without_advancing_then_explicit_play_and_solo_autoplay() {
+        let mpv = headless_mpv();
+        mpv.set_property("speed", 1.0_f64).unwrap();
+        let mut events = EventContext::new(mpv.ctx);
+        let source = "av://lavfi:testsrc=duration=10:size=32x24:rate=25";
+        for paused in [Some(true), None] {
+            crate::loadfile::loadfile_with_pause(&mpv, source, 800, paused).unwrap();
+            let deadline = Instant::now() + MAX_WALL;
+            let mut prepared = false;
+            while Instant::now() < deadline {
+                if matches!(events.wait_event(0.1), Some(Ok(Event::PlaybackRestart))) {
+                    prepared = true;
+                    break;
+                }
+            }
+            assert!(prepared, "decoder readiness must arrive even while paused");
+            let start = mpv.get_property::<f64>("time-pos").unwrap();
+            std::thread::sleep(Duration::from_millis(400));
+            let end = mpv.get_property::<f64>("time-pos").unwrap();
+            assert_eq!(mpv.get_property::<bool>("pause").unwrap(), paused.unwrap_or(false));
+            if paused == Some(true) {
+                assert!((start - 0.8).abs() < 0.15, "resume position: {start}");
+                assert!((end - start).abs() < 0.01, "paused media advanced: {start} -> {end}");
+                mpv.set_property("pause", false).unwrap();
+                std::thread::sleep(Duration::from_millis(400));
+                assert!(mpv.get_property::<f64>("time-pos").unwrap() > end + 0.15);
+                // The next solo load must clear an inherited pause.
+                mpv.set_property("pause", true).unwrap();
+            } else {
+                assert!(end > start + 0.15, "solo autoplay did not advance");
+            }
+        }
+    }
+
+    #[test]
+    #[ignore]
     fn production_loadfile_preserves_resume_and_resets_next_file() {
         let mpv = headless_mpv();
         mpv.set_property("pause", true).unwrap();

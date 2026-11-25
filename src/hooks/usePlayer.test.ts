@@ -13,7 +13,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderHook, act, waitFor } from "@testing-library/react";
+import { createElement } from "react";
+import { render, renderHook, act, waitFor } from "@testing-library/react";
 
 const { serverMock, hlsLoaderMock, timelineMock, streamsMock } = vi.hoisted(() => ({
   serverMock: { uri: "https://server", accessToken: "token" },
@@ -276,3 +277,71 @@ describe("HTML5 playback rate", () => {
     expect(fresh.result.current.playbackRate).toBe(1);
   });
 });
+
+
+vi.mock("@tauri-apps/api/core", () => ({ convertFileSrc: (path: string) => `asset://${path}` }));
+
+describe("paused HTML5 preparation", () => {
+  it.each([true, false])("prepares direct media with initiallyPaused=%s", async (initiallyPaused) => {
+    vi.mocked(prepareSource).mockResolvedValue({ ...makePrepared("Pattern"), sourceKind: "direct" });
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    let player!: ReturnType<typeof usePlayer>;
+    function Harness({ rk }: { rk: string }) {
+      player = usePlayer(rk, 0, initiallyPaused ? { initiallyPaused: true } : undefined);
+      return createElement("video", { ref: player.videoRef });
+    }
+    const view = render(createElement(Harness, { rk: "100" }));
+    await waitFor(() => expect(player.isLoading).toBe(false));
+    expect(play).toHaveBeenCalledTimes(initiallyPaused ? 0 : 1);
+    expect(player.isPrepared).toBe(false);
+    const video = player.videoRef.current!;
+    act(() => video.dispatchEvent(new Event("loadedmetadata")));
+    expect(player.isPrepared).toBe(false);
+    Object.defineProperty(video, "readyState", { configurable: true, value: 3 });
+    act(() => video.dispatchEvent(new Event("canplay")));
+    expect(player.isPrepared).toBe(true);
+    expect(player.chrome.isPrepared).toBe(true);
+    if (initiallyPaused) {
+      expect(play).not.toHaveBeenCalled();
+      act(() => player.togglePlay());
+      expect(play).toHaveBeenCalledTimes(1);
+    }
+    view.rerender(createElement(Harness, { rk: "200" }));
+    expect(player.isPrepared).toBe(false);
+    await waitFor(() => expect(prepareSource).toHaveBeenCalledTimes(2));
+    act(() => video.dispatchEvent(new Event("canplay")));
+    expect(player.isPrepared).toBe(true);
+    view.unmount();
+  });
+});
+
+  it.each(["local", "hls"] as const)("prepares %s without playing, including manifest parsing", async (sourceKind) => {
+    vi.mocked(prepareSource).mockResolvedValue({ ...makePrepared("Pattern"), sourceKind });
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    let manifest: (() => void) | undefined;
+    class Hls {
+      static isSupported() { return true; }
+      static Events = { MANIFEST_PARSED: "manifest", ERROR: "error" };
+      loadSource = vi.fn();
+      attachMedia = vi.fn();
+      on(event: string, callback: () => void) { if (event === "manifest") manifest = callback; }
+    }
+    hlsLoaderMock.loadHls.mockResolvedValue(Hls);
+    let player!: ReturnType<typeof usePlayer>;
+    function Harness() {
+      player = usePlayer("100", 0, { initiallyPaused: true });
+      return createElement("video", { ref: player.videoRef });
+    }
+    const view = render(createElement(Harness));
+    await waitFor(() => expect(player.isLoading).toBe(false));
+    if (sourceKind === "hls") act(() => manifest!());
+    expect(play).not.toHaveBeenCalled();
+    expect(player.isPrepared).toBe(false);
+    Object.defineProperty(player.videoRef.current!, "readyState", { value: 3 });
+    act(() => player.videoRef.current!.dispatchEvent(new Event("canplay")));
+    expect(player.isPrepared).toBe(true);
+    expect(play).not.toHaveBeenCalled();
+    view.unmount();
+  });

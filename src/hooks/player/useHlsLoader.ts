@@ -54,6 +54,7 @@ export function useHlsLoader(): HlsLoaderResult {
 
   const rebuildHls = useCallback(
     async (params: RebuildHlsParams) => {
+      const wasPaused = params.video.paused;
       const Hls = await loadHls();
       destroyHls();
 
@@ -81,7 +82,7 @@ export function useHlsLoader(): HlsLoaderResult {
       hls.loadSource(url);
       hls.attachMedia(params.video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        params.video.play().catch(() => {});
+        if (!wasPaused) params.video.play().catch(() => {});
       });
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (!data.fatal) return;
