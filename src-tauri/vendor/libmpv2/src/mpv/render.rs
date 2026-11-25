@@ -513,11 +513,13 @@ impl RenderContext {
 
 impl Drop for RenderContext {
     fn drop(&mut self) {
-        if let Some(update_callback_cleanup) = self.update_callback_cleanup.take() {
-            update_callback_cleanup();
-        }
+        // Keep callback storage alive until libmpv has stopped invoking it.
+        // Freeing the closure first races the decoder's update callback.
         unsafe {
             libmpv2_sys::mpv_render_context_free(self.ctx);
+        }
+        if let Some(update_callback_cleanup) = self.update_callback_cleanup.take() {
+            update_callback_cleanup();
         }
     }
 }

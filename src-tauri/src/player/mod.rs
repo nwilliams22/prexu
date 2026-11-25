@@ -7,7 +7,13 @@
 //!   - **Linux**: the mpv render API compositing a `GtkGLArea` under the
 //!     transparent WebKitWebView (`linux_compositor`, prexu-axj4.3).
 
-pub(crate) const MACOS_UNAVAILABLE_REASON: &str = "macOS native compositor is not implemented";
+#[cfg(target_os = "macos")]
+pub(crate) const MACOS_UNAVAILABLE_REASON: &str = "macOS native windowing parity is not implemented";
+
+#[cfg(target_os = "macos")]
+pub mod macos_compositor;
+#[cfg(any(target_os = "macos", test))]
+mod macos_render_math;
 
 pub mod commands;
 pub mod events;
@@ -545,8 +551,9 @@ impl PlayerState {
     pub(crate) fn ensure_init(&self, app: &AppHandle) -> Result<(), String> {
         // Do not start decode/audio without a compositor, even if a caller
         // bypasses the frontend availability probe.
-        if cfg!(target_os = "macos") {
-            return Err(MACOS_UNAVAILABLE_REASON.into());
+        #[cfg(target_os = "macos")]
+        if let Some(reason) = macos_compositor::engine_failure_reason() {
+            return Err(reason);
         }
         log::info!("[player] ensure_init called");
         {
@@ -606,6 +613,9 @@ impl PlayerState {
         log::info!("[player] mpv created");
 
         let mpv = Arc::new(mpv);
+        #[cfg(target_os = "macos")]
+        macos_compositor::attach_mpv(app, Arc::clone(&mpv))?;
+
         let event_pump_stop = Arc::new(AtomicBool::new(false));
         let event_pump = events::spawn_event_pump(
             Arc::clone(&mpv),
@@ -824,6 +834,8 @@ impl PlayerState {
         // (same bug class as prexu-60mz.4 on Windows).
         #[cfg(target_os = "linux")]
         linux_compositor::detach_mpv(app);
+        #[cfg(target_os = "macos")]
+        macos_compositor::detach_mpv(app);
 
         // Path C3d: stop the video render thread FIRST (composition mode only).
         // `stop()` signals + joins it, which frees the libmpv2 RenderContext and

@@ -31,8 +31,8 @@ source delivery, existing user edits, and the relay deployment requirement.
 
 - [Linux render-API ADR](adr-native-player-render-api.md): accepted and implemented;
   packaging and broad hardware acceptance remain open.
-- [macOS ADR](adr-native-player-macos.md): accepted design; native production
-  integration remains future work after the HTML5 codec gate.
+- [macOS ADR](adr-native-player-macos.md): accepted design; opt-in AppKit compositor implemented,
+  with remaining acceptance boundaries in the native-player status guide.
 - [Original cross-platform ADR](adr-native-player-cross-platform.md): superseded
   historical assessment of the old Windows foreign-window approach.
 - [Original native-player rollout](archive/native-player-rollout.md) and

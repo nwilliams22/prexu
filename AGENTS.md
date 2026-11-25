@@ -118,8 +118,8 @@ bd prime                # Refresh Beads context
 
 ## Project context and documentation
 
-Prexu uses React 19/TypeScript, Tauri v2, and a Rust/Axum relay. Windows and
-Linux have native libmpv render-API backends; macOS currently uses HTML5.
+Prexu uses React 19/TypeScript, Tauri v2, and a Rust/Axum relay. Windows, Linux and macOS have native libmpv render-API backends; macOS keeps
+HTML5 as its default and has outstanding hardware acceptance.
 Read `docs/README.md` for maintained guides and `docs/native-player-status.md`
 for implementation/acceptance boundaries. Historical rollout/spike documents
 are evidence, not current branch or task instructions.

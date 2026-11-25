@@ -117,7 +117,7 @@ libloading = "0.8"
 wry = "0.57.1"
 
 # macOS development uses Homebrew libmpv through pkg-config (see build.rs).
-# Native playback remains unavailable until the AppKit compositor lands.
+# AppKit render API backend; HTML5 stays the default.
 [target.'cfg(target_os = "macos")'.dependencies]
 libmpv2 = "4"
 libc = "0.2"

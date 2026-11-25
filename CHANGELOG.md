@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in macOS native rendering through libmpv and an AppKit OpenGL view,
+  including HiDPI resizing, ordered teardown and HTML5 fallback on compositor
+  failure. HTML5 remains the default; full on-hardware acceptance is pending.
+
 ### Fixed
 
 - Windows IME candidate windows now follow the caret when the app moves during

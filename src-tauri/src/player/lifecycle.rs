@@ -66,6 +66,12 @@ pub(super) fn configure_mpv_properties(wid: Option<i64>, composition: bool) -> R
     ensure_c_numeric_locale();
 
     let mpv = Mpv::with_initializer(|init| {
+        // Host GPU verification must never open the owner's speakers.
+        #[cfg(all(target_os = "macos", debug_assertions))]
+        if std::env::var_os("PREXU_QA_SILENT").is_some() {
+            init.set_option("ao", "null")?;
+        }
+
         if composition {
             // Render-context path: mpv outputs through libmpv (no OS window).
             init.set_property("vo", "libmpv")?;

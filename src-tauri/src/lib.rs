@@ -15,7 +15,7 @@ mod probe_snapshot;
 // The native libmpv player compiles on Windows (wid/HWND + DirectComposition)
 // and Linux (render API + GtkGLArea under the transparent WebKitWebView — see
 // docs/adr-native-player-render-api.md, prexu-axj4.3). macOS compiles the
-// command surface with an unavailable compositor; HTML5 remains its default.
+// command surface and AppKit compositor; HTML5 remains its default.
 // Other targets omit libmpv (see Cargo.toml per-target dependency tables).
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 mod player;
@@ -845,6 +845,18 @@ pub fn run() {
                         }
                     }
                 });
+
+                #[cfg(target_os = "macos")]
+                {
+                    player::macos_compositor::install(&window, app.handle().clone());
+                    let handle = app.handle().clone();
+                    window.on_window_event(move |event| {
+                        if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                            handle.state::<player::PlayerState>().report_stopped_on_close();
+                            player::macos_compositor::shutdown(&handle);
+                        }
+                    });
+                }
 
                 // Linux native player (prexu-axj4.3): reparent wry's webview
                 // under a GtkOverlay with an mpv-render GtkGLArea beneath it,

@@ -16,7 +16,7 @@ those bundles link system libmpv without provisioning it (`prexu-axj4.7`).
 | --- | --- | --- |
 | Windows | Native by default; HTML5 selectable and runtime fallback supported | libmpv render API → ANGLE/D3D11 → DirectComposition, with composition-hosted WebView2 UI |
 | Linux | Native by default; HTML5 selectable and runtime fallback supported | libmpv OpenGL render API → GtkGLArea below transparent WebKitWebView in GtkOverlay |
-| macOS | HTML5 default; native commands registered but availability is false | WKWebView; AppKit compositor remains pending (`prexu-ia6w.5`) |
+| macOS | HTML5 default; native opt-in when accelerated OpenGL is available | NSOpenGLView under WKWebView; AppKit render API, main-thread frame pump and ordered teardown |
 
 Engine choice is resolved once per player mount in
 [`engineResolution.ts`](../src/hooks/player/engineResolution.ts). A runtime
@@ -81,10 +81,19 @@ lag (`prexu-41cw`,
 `prexu-v6pr`). The latter reproduces without the app compositor; further work
 is presentation-layer profiling and an upstream evidence report.
 
-macOS sequencing is `prexu-ttz9` (platform-aware HTML5 codec gate) before the
-native-player children of `prexu-ia6w`. The accepted
-[macOS ADR](adr-native-player-macos.md) describes intended native opt-in,
-not current application support.
+macOS has the platform-aware HTML5 codec gate and an opt-in AppKit compositor
+(`prexu-ia6w.5`). The compositor binds libmpv on the main thread, follows backing
+pixel dimensions on resize, and frees the render context before its GL drawable.
+Initialization/render failures latch an unavailable reason and emit
+`player://engine-failed`; HTML5 remains the default. Minimize/popout parity is
+still unavailable. Debug host checks can set `PREXU_QA_SILENT=1` for `ao=null`.
+
+Synthetic HEVC 10-bit checks on an Apple M3 Pro exercised VideoToolbox, framebuffer
+readback, HiDPI resize and three attach/detach cycles. These do not establish
+visible React-overlay composition, fullscreen/display transitions, audio, or
+real-library acceptance. Those remain open on `prexu-ia6w.5`. The VM cannot
+create the accelerated GL pixel format and is useful only for fallback checks.
+The [macOS ADR](adr-native-player-macos.md) records the accepted architecture.
 
 The manual [Windows candidate workflow](windows-candidate.md) prepares NSIS/MSI
 artifacts without publishing a release. Candidate run `36384566080` succeeded;
