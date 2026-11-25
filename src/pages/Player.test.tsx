@@ -23,13 +23,13 @@ vi.mock("../hooks/useAuth", () => ({
   }),
 }));
 
+const loadState = vi.hoisted(() => ({ isLoading: false, isBuffering: false }));
 vi.mock("../hooks/usePlayer", () => ({
   usePlayer: () => ({
     engine: "html5",
     videoRef: React.useRef<HTMLVideoElement | null>(null),
     isPlaying: false,
-    isLoading: false,
-    isBuffering: false,
+    ...loadState,
     playbackError: null,
     currentTime: 0,
     duration: 0,
@@ -53,7 +53,7 @@ vi.mock("../hooks/usePlayer", () => ({
   }),
 }));
 
-const watchState = vi.hoisted(() => ({ isInSession: false, isHost: false }));
+const watchState = vi.hoisted(() => ({ isInSession: false, isHost: false, catchingUp: false }));
 vi.mock("../hooks/useWatchTogether", () => ({
   useWatchTogether: () => ({
     ...watchState,
@@ -677,4 +677,18 @@ describe("browser PiP player shell", () => {
     expect(controls).toHaveAttribute("data-prev", "false");
     expect(controls).toHaveAttribute("data-queue", "false");
   } finally { watchState.isInSession = false; }
+});
+
+it.each(["isLoading", "isBuffering"] as const)("keeps catch-up status visible during %s", (flag) => {
+  loadState[flag] = true;
+  watchState.isInSession = true;
+  watchState.catchingUp = true;
+  try {
+    const { getByRole } = render(<MemoryRouter><Player ratingKey="123" offset={null} /></MemoryRouter>);
+    expect(getByRole("status")).toHaveTextContent("Catching up…");
+  } finally {
+    loadState[flag] = false;
+    watchState.isInSession = false;
+    watchState.catchingUp = false;
+  }
 });

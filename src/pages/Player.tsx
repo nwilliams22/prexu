@@ -818,7 +818,8 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
           </button>
           <div style={styles.loadingStack}>
             <div className="loading-spinner" />
-            {showLoadingMsg && (
+            {wt.catchingUp && <div role="status">Catching up…</div>}
+            {showLoadingMsg && !wt.catchingUp && (
               <div style={styles.loadingMessage}>
                 <div style={styles.loadingTitle}>Preparing playback…</div>
                 <div style={styles.loadingHint}>
@@ -834,6 +835,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
       {!player.isLoading && player.isBuffering && (
         <div style={styles.bufferingOverlay}>
           <div className="loading-spinner" />
+          {wt.catchingUp && <div role="status">Catching up…</div>}
         </div>
       )}
 
