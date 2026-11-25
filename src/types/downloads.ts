@@ -1,4 +1,5 @@
 export type DownloadStatus =
+  | "paused"
   | "queued"
   | "downloading"
   | "complete"
@@ -21,6 +22,9 @@ export interface DownloadItem {
   status: DownloadStatus;
   bytesDownloaded: number;
   errorMessage?: string;
+  bytesPerSecond?: number;
+  etaSeconds?: number | null;
+  statusMessage?: string | null;
   /** Epoch ms when download completed */
   completedAt?: number;
   // Episode metadata
@@ -35,4 +39,7 @@ export interface DownloadProgressEvent {
   totalBytes: number;
   status: string;
   errorMessage?: string;
+  bytesPerSecond?: number;
+  etaSeconds?: number | null;
+  statusMessage?: string | null;
 }

@@ -1,9 +1,9 @@
-use std::collections::HashMap;
+use futures_util::StreamExt;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
-use tokio::sync::Mutex;
 use tauri::{AppHandle, Emitter};
-use futures_util::StreamExt;
+use tokio::sync::Mutex;
 
 use crate::validate_server_url;
 
@@ -12,7 +12,12 @@ use crate::validate_server_url;
 /// per-call `Client::new()` paid a fresh TCP+TLS handshake per download.
 fn download_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(reqwest::Client::new)
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("download HTTP client")
+    })
 }
 
 /// Returns true when `downloaded` has reached or exceeded `total` AND `total`
@@ -87,7 +92,10 @@ fn validate_part_key(part_key: &str) -> Result<(), &'static str> {
         return Err("part_key must not start with '//'");
     }
     // Control characters could split the HTTP request line / inject headers.
-    if part_key.chars().any(|c| c == '\0' || c == '\r' || c == '\n') {
+    if part_key
+        .chars()
+        .any(|c| c == '\0' || c == '\r' || c == '\n')
+    {
         return Err("part_key contains a control character");
     }
     Ok(())
@@ -102,6 +110,7 @@ fn validate_part_key(part_key: &str) -> Result<(), &'static str> {
 pub struct DownloadManager {
     active: Arc<ActiveMap>,
     downloads_dir: Mutex<Option<PathBuf>>,
+    queue: Arc<Queue>,
 }
 
 /// Shared map from an in-flight download's rating_key to its cancel `Sender`.
@@ -132,35 +141,83 @@ fn try_claim_active(
     Ok(())
 }
 
-/// RAII guard that guarantees a download's active-map entry and its partial
-/// `.part` temp file are cleaned up if `download_media` returns early for ANY
-/// reason (request failure, non-2xx, write/flush/rename error, stream error,
-/// or cancellation). Without it, an early `return Err(…)` before the manual
-/// cleanup stranded the cancel `Sender` in the map forever and left the temp
-/// file on disk.
-///
-/// Cleanup is synchronous (safe in `Drop`): a `std::sync::Mutex` lock plus a
-/// best-effort `std::fs::remove_file`. The guard is declared *before* the file
-/// handle, so at scope exit the `BufWriter`/`File` drops first (closing the fd)
-/// and the temp file is removed afterwards — correct ordering on Windows.
+/// Native admission is authoritative even if several webview calls arrive together.
+#[derive(Default)]
+struct QueueState {
+    waiting: VecDeque<String>,
+    running: HashSet<String>,
+    paused: HashSet<String>,
+    pause_all: bool,
+    limit: usize,
+}
+struct Queue {
+    state: std::sync::Mutex<QueueState>,
+    changed: tokio::sync::Notify,
+}
+impl Queue {
+    fn new() -> Self {
+        Self {
+            state: std::sync::Mutex::new(QueueState {
+                limit: 1,
+                ..Default::default()
+            }),
+            changed: tokio::sync::Notify::new(),
+        }
+    }
+    fn admit(&self, key: &str) -> bool {
+        let mut s = self.state.lock().unwrap();
+        if s.pause_all || s.paused.contains(key) || s.running.len() >= s.limit {
+            return false;
+        }
+        if s.waiting.front().map(String::as_str) != Some(key) {
+            return false;
+        }
+        s.waiting.pop_front();
+        s.running.insert(key.to_string());
+        self.changed.notify_waiters();
+        true
+    }
+    fn is_paused(&self, key: &str) -> bool {
+        let s = self.state.lock().unwrap();
+        s.pause_all || s.paused.contains(key)
+    }
+    fn reorder(&self, keys: &[String]) {
+        let mut s = self.state.lock().unwrap();
+        let mut ordered = VecDeque::new();
+        for key in keys {
+            if let Some(index) = s.waiting.iter().position(|k| k == key) {
+                ordered.push_back(s.waiting.remove(index).unwrap());
+            }
+        }
+        ordered.append(&mut s.waiting);
+        s.waiting = ordered;
+        self.changed.notify_waiters();
+    }
+}
+
+/// Release admission on every return/abort. Partial bytes survive failures and
+/// process restarts; only an explicit cancel removes them.
 struct DownloadGuard {
     active: Arc<ActiveMap>,
     rating_key: String,
     temp_path: PathBuf,
+    queue: Arc<Queue>,
+    remove_partial: bool,
 }
-
 impl Drop for DownloadGuard {
     fn drop(&mut self) {
+        if self.remove_partial {
+            let _ = std::fs::remove_file(&self.temp_path);
+        }
         if let Ok(mut active) = self.active.lock() {
             active.remove(&self.rating_key);
         }
-        // On the success path the temp file has already been renamed away, so
-        // NotFound is expected and silent; only surface real removal errors.
-        match std::fs::remove_file(&self.temp_path) {
-            Ok(()) => log::debug!("[downloads] removed partial temp file on cleanup"),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => log::warn!("[downloads] failed to remove temp file on cleanup: {}", e),
+        if let Ok(mut s) = self.queue.state.lock() {
+            s.waiting.retain(|key| key != &self.rating_key);
+            s.running.remove(&self.rating_key);
+            s.paused.remove(&self.rating_key);
         }
+        self.queue.changed.notify_waiters();
     }
 }
 
@@ -169,6 +226,7 @@ impl DownloadManager {
         Self {
             active: Arc::new(std::sync::Mutex::new(HashMap::new())),
             downloads_dir: Mutex::new(None),
+            queue: Arc::new(Queue::new()),
         }
     }
 }
@@ -181,6 +239,9 @@ struct DownloadProgress {
     total_bytes: u64,
     status: String,
     error_message: Option<String>,
+    bytes_per_second: f64,
+    eta_seconds: Option<u64>,
+    status_message: Option<String>,
 }
 
 /// Resolve the downloads directory, creating it if needed.
@@ -197,9 +258,7 @@ async fn resolve_downloads_dir() -> Result<PathBuf, String> {
 
 /// Get the downloads directory path.
 #[tauri::command]
-pub async fn get_downloads_dir(
-    state: tauri::State<'_, DownloadManager>,
-) -> Result<String, String> {
+pub async fn get_downloads_dir(state: tauri::State<'_, DownloadManager>) -> Result<String, String> {
     let mut cached = state.downloads_dir.lock().await;
     if let Some(ref dir) = *cached {
         return Ok(dir.to_string_lossy().to_string());
@@ -229,21 +288,55 @@ pub async fn download_media(
     // Log a warning on rejection but do NOT echo the raw value into the log
     // (log-injection risk); only log a fixed label for each parameter.
     if let Err(reason) = validate_path_component(&rating_key) {
-        log::warn!("[downloads] rejected download request: invalid rating_key — {}", reason);
+        log::warn!(
+            "[downloads] rejected download request: invalid rating_key — {}",
+            reason
+        );
         return Err(format!("Invalid rating_key: {}", reason));
     }
     if let Err(reason) = validate_path_component(&file_name) {
-        log::warn!("[downloads] rejected download request: invalid file_name — {}", reason);
+        log::warn!(
+            "[downloads] rejected download request: invalid file_name — {}",
+            reason
+        );
         return Err(format!("Invalid file_name: {}", reason));
     }
     // Guard against SSRF: a non-rooted part_key could redirect the token-bearing
     // fetch to an attacker host. Log the reason only, never the raw value.
     if let Err(reason) = validate_part_key(&part_key) {
-        log::warn!("[downloads] rejected download request: invalid part_key — {}", reason);
+        log::warn!(
+            "[downloads] rejected download request: invalid part_key — {}",
+            reason
+        );
         return Err(format!("Invalid part_key: {}", reason));
     }
 
-    let downloads_dir = resolve_downloads_dir().await?;
+    // Set up cancellation and atomically claim the rating_key (rejects a second
+    // in-flight download of the same key — see `try_claim_active`).
+    let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
+    try_claim_active(&state.active, &rating_key, cancel_tx)?;
+
+    let mut cleanup = DownloadGuard {
+        active: state.active.clone(),
+        rating_key: rating_key.clone(),
+        temp_path: PathBuf::new(),
+        queue: state.queue.clone(),
+        remove_partial: false,
+    };
+    state
+        .queue
+        .state
+        .lock()
+        .unwrap()
+        .waiting
+        .push_back(rating_key.clone());
+    let downloads_dir = {
+        let cached = state.downloads_dir.lock().await;
+        match &*cached {
+            Some(dir) => dir.clone(),
+            None => resolve_downloads_dir().await?,
+        }
+    };
     let item_dir = downloads_dir.join(&rating_key);
     tokio::fs::create_dir_all(&item_dir)
         .await
@@ -252,139 +345,292 @@ pub async fn download_media(
     let final_path = item_dir.join(&file_name);
     let temp_path = item_dir.join(format!("{}.part", &file_name));
 
-    // Set up cancellation and atomically claim the rating_key (rejects a second
-    // in-flight download of the same key — see `try_claim_active`).
-    let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
-    try_claim_active(&state.active, &rating_key, cancel_tx)?;
-
-    // From here on, any early return must release the active-map entry AND drop
-    // the partial temp file. This RAII guard does both on scope exit, so the
-    // error paths below only need to emit progress + return.
-    let _cleanup = DownloadGuard {
-        active: state.active.clone(),
-        rating_key: rating_key.clone(),
-        temp_path: temp_path.clone(),
+    cleanup.temp_path = temp_path.clone();
+    let emit = |bytes, total, status: &str, speed, message: Option<String>| {
+        let _ = app.emit(
+            "download-progress",
+            DownloadProgress {
+                rating_key: rating_key.clone(),
+                bytes_downloaded: bytes,
+                total_bytes: total,
+                status: status.to_string(),
+                error_message: None,
+                bytes_per_second: speed,
+                eta_seconds: eta(bytes, total, speed),
+                status_message: message,
+            },
+        );
     };
+    emit(0, file_size, "queued", 0.0, None);
+    // Register notification before checking admission so release cannot be lost.
+    loop {
+        let notified = state.queue.changed.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if *cancel_rx.borrow() || state.queue.is_paused(&rating_key) {
+            let paused = state.queue.is_paused(&rating_key);
+            cleanup.remove_partial = !paused;
+            let bytes = tokio::fs::metadata(&temp_path)
+                .await
+                .map(|m| m.len())
+                .unwrap_or(0);
+            emit(
+                bytes,
+                file_size,
+                if paused { "paused" } else { "cancelled" },
+                0.0,
+                None,
+            );
+            return Ok(());
+        }
+        if state.queue.admit(&rating_key) {
+            break;
+        }
+        tokio::select! { _ = &mut notified => {}, _ = cancel_rx.changed() => {} }
+    }
+    // Headers keep credentials out of URLs and redirects are disabled.
+    let url = format!("{}{}", server_url, part_key);
+    let outcome = transfer(
+        &url,
+        &token,
+        &temp_path,
+        &final_path,
+        file_size,
+        &mut cancel_rx,
+        &emit,
+    )
+    .await;
+    match outcome {
+        Ok(Some(bytes)) => emit(bytes, bytes, "complete", 0.0, None),
+        Ok(None) => {
+            let paused = state.queue.is_paused(&rating_key);
+            cleanup.remove_partial = !paused;
+            let bytes = tokio::fs::metadata(&temp_path)
+                .await
+                .map(|m| m.len())
+                .unwrap_or(0);
+            emit(
+                bytes,
+                file_size,
+                if paused { "paused" } else { "cancelled" },
+                0.0,
+                None,
+            );
+        }
+        Err(error) => return Err(error),
+    }
+    Ok(())
+}
 
-    // Build download URL
-    let sep = if part_key.contains('?') { "&" } else { "?" };
-    let url = format!("{}{}{}{}{}", server_url, part_key, sep, "X-Plex-Token=", token);
+fn eta(bytes: u64, total: u64, speed: f64) -> Option<u64> {
+    (total > 0 && speed > 0.0).then(|| ((total.saturating_sub(bytes)) as f64 / speed).ceil() as u64)
+}
 
-    let emit_progress = |bytes: u64, status: &str, err: Option<String>| {
-        let _ = app.emit("download-progress", DownloadProgress {
-            rating_key: rating_key.clone(),
-            bytes_downloaded: bytes,
-            total_bytes: file_size,
-            status: status.to_string(),
-            error_message: err,
-        });
-    };
-
-    // Start streaming download
-    let response = download_client()
-        .get(&url)
-        .send()
-        .await
-        // Strip the URL (contains X-Plex-Token) from reqwest's error before
-        // returning it to the webview or logging it.
-        .map_err(|e| format!("Download request failed: {}", e.without_url()))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        emit_progress(0, "error", Some(format!("HTTP {}", status)));
+/// Only append a 206 whose Content-Range starts at the actual on-disk length.
+/// A 200 means Range was ignored: truncate and visibly restart from zero.
+fn response_offset(
+    status: reqwest::StatusCode,
+    range: Option<&str>,
+    offset: u64,
+) -> Result<(u64, Option<u64>), String> {
+    if status == reqwest::StatusCode::OK {
+        return Ok((0, None));
+    }
+    if status != reqwest::StatusCode::PARTIAL_CONTENT {
         return Err(format!("Download failed with HTTP {}", status));
     }
+    let parsed = (|| {
+        let value = range?.strip_prefix("bytes ")?;
+        let (span, total) = value.split_once('/')?;
+        let (start, end) = span.split_once('-')?;
+        Some((
+            start.parse::<u64>().ok()?,
+            end.parse::<u64>().ok()?,
+            total.parse::<u64>().ok()?,
+        ))
+    })();
+    match parsed {
+        Some((start, end, total)) if start == offset && end >= start && end < total => {
+            Ok((offset, Some(total)))
+        }
+        _ => Err("Server returned an invalid resume range; partial file kept".into()),
+    }
+}
 
-    let total = response.content_length().unwrap_or(file_size);
-    let mut stream = response.bytes_stream();
-    // BufWriter coalesces the per-HTTP-chunk write_all calls (each one is a
-    // tokio blocking-pool dispatch) into 256 KiB file writes (prexu-0szx.12).
-    // The post-loop flush() drains it before the rename; the error/cancel
-    // paths drop it unflushed, which is fine — the temp file is deleted.
+async fn transfer(
+    url: &str,
+    token: &str,
+    temp_path: &std::path::Path,
+    final_path: &std::path::Path,
+    file_size: u64,
+    cancel: &mut tokio::sync::watch::Receiver<bool>,
+    emit: &impl Fn(u64, u64, &str, f64, Option<String>),
+) -> Result<Option<u64>, String> {
+    use tokio::io::AsyncWriteExt;
+    let offset = match tokio::fs::metadata(temp_path).await {
+        Ok(meta) => meta.len(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(e) => return Err(format!("Cannot inspect partial file: {}", e)),
+    };
+    let mut request = download_client()
+        .get(url)
+        .header("X-Plex-Token", token)
+        .header("Accept-Encoding", "identity");
+    if offset > 0 {
+        request = request.header(reqwest::header::RANGE, format!("bytes={}-", offset));
+    }
+    let mut response = tokio::select! {
+        biased;
+        _ = async { let _ = cancel.wait_for(|stop| *stop).await; } => return Ok(None),
+        result = request.send() => result.map_err(|e| format!("Download request failed: {}", e.without_url()))?,
+    };
+    let range_rejected =
+        response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE && offset > 0;
+    if range_rejected {
+        // Handles a crash after the last byte but before rename, or a changed file.
+        response = tokio::select! {
+            biased;
+            _ = async { let _ = cancel.wait_for(|stop| *stop).await; } => return Ok(None),
+            result = download_client().get(url).header("X-Plex-Token", token).header("Accept-Encoding", "identity").send() =>
+                result.map_err(|e| format!("Download restart failed: {}", e.without_url()))?,
+        };
+    }
+    let (start, range_total) = response_offset(
+        response.status(),
+        response
+            .headers()
+            .get(reqwest::header::CONTENT_RANGE)
+            .and_then(|v| v.to_str().ok()),
+        offset,
+    )?;
+    let total = range_total
+        .or_else(|| response.content_length().map(|n| n + start))
+        .unwrap_or(file_size);
+    let message = (offset > 0 && start == 0).then(|| {
+        if range_rejected {
+            "Saved offset is no longer available; restarting from zero".to_string()
+        } else {
+            "Server does not support resume; restarting from zero".to_string()
+        }
+    });
+    emit(start, total, "downloading", 0.0, message.clone());
     let mut file = tokio::io::BufWriter::with_capacity(
         256 * 1024,
-        tokio::fs::File::create(&temp_path)
+        tokio::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(start > 0)
+            .truncate(start == 0)
+            .open(temp_path)
             .await
-            .map_err(|e| format!("Failed to create temp file: {}", e))?,
+            .map_err(|e| format!("Cannot open partial file: {}", e))?,
     );
-
-    if total == 0 {
-        log::debug!("[downloads] unknown total size for {} — content-length missing and file_size=0; in-loop 100% gate disabled", rating_key);
-    }
-    log::info!("[Download] Start: {} ({} bytes) -> {:?}", rating_key, total, temp_path);
-
-    let mut downloaded: u64 = 0;
-    let mut last_emit: u64 = 0;
+    let mut stream = response.bytes_stream();
+    let mut downloaded = start;
+    let mut last_emit = start;
     let mut last_emit_at = std::time::Instant::now();
-    let emit_interval_bytes: u64 = 512 * 1024;
-    // On LAN the 512KB byte gate alone fires hundreds of events/sec, which
-    // floods the webview with state updates and starves UI interaction —
-    // a wall-clock gate caps the rate regardless of throughput.
-    const EMIT_INTERVAL_MS: u128 = 500;
-
-    use tokio::io::AsyncWriteExt;
-
+    let mut speed = 0.0;
     loop {
         tokio::select! {
-            chunk = stream.next() => {
-                match chunk {
-                    Some(Ok(bytes)) => {
-                        file.write_all(&bytes).await.map_err(|e| {
-                            format!("Failed to write to file: {}", e)
-                        })?;
-                        downloaded += bytes.len() as u64;
-
-                        let gates_open = downloaded - last_emit >= emit_interval_bytes
-                            && last_emit_at.elapsed().as_millis() >= EMIT_INTERVAL_MS;
-                        // Only use the `downloaded >= total` shortcut when total is
-                        // known; with total == 0 (missing content-length + file_size)
-                        // the condition would be true on every chunk, flooding the
-                        // webview with events on each byte received.
-                        let at_end = progress_at_end(downloaded, total);
-                        if gates_open || at_end {
-                            emit_progress(downloaded, "downloading", None);
-                            last_emit = downloaded;
-                            last_emit_at = std::time::Instant::now();
-                        }
-                    }
-                    Some(Err(e)) => {
-                        // Strip the URL (contains X-Plex-Token) before logging
-                        // or forwarding to the webview via the progress event.
-                        let safe_err = e.without_url();
-                        log::error!("[downloads] stream error for {}: {:?}", rating_key, safe_err);
-                        emit_progress(downloaded, "error", Some(safe_err.to_string()));
-                        // _cleanup guard drops the map entry + temp file on return.
-                        return Err(format!("Download error: {}", safe_err));
-                    }
-                    None => break, // Stream complete
-                }
+            biased;
+            _ = async { let _ = cancel.wait_for(|stop| *stop).await; } => {
+                file.flush().await.map_err(|e| format!("Cannot save partial file: {}", e))?;
+                return Ok(None);
             }
-            _ = cancel_rx.changed() => {
-                if *cancel_rx.borrow() {
-                    emit_progress(downloaded, "cancelled", None);
-                    // _cleanup guard drops the map entry + temp file on return.
-                    return Ok(());
+            chunk = stream.next() => match chunk {
+                Some(Ok(bytes)) => {
+                    file.write_all(&bytes).await.map_err(|e| format!("Download write failed: {}", e))?;
+                    downloaded += bytes.len() as u64;
+                    let elapsed = last_emit_at.elapsed().as_secs_f64();
+                    if (downloaded - last_emit >= 512 * 1024 && elapsed >= 0.5) || (last_emit < total && progress_at_end(downloaded, total)) {
+                        let sample = (downloaded - last_emit) as f64 / elapsed.max(0.001);
+                        speed = if speed == 0.0 { sample } else { speed * 0.7 + sample * 0.3 };
+                        emit(downloaded, total, "downloading", speed, message.clone());
+                        last_emit = downloaded;
+                        last_emit_at = std::time::Instant::now();
+                    }
                 }
+                Some(Err(e)) => {
+                    file.flush().await.map_err(|e| format!("Cannot save partial file: {}", e))?;
+                    return Err(format!("Download stream failed: {}", e.without_url()));
+                }
+                None => break,
             }
         }
     }
-
-    // Flush and rename. Drop the writer first so the OS file handle is closed
-    // before the rename (required on Windows).
-    file.flush().await.map_err(|e| format!("Failed to flush file: {}", e))?;
-    drop(file);
-    tokio::fs::rename(&temp_path, &final_path)
+    file.flush()
         .await
-        .map_err(|e| format!("Failed to finalize download: {}", e))?;
+        .map_err(|e| format!("Download flush failed: {}", e))?;
+    drop(file);
+    if total > 0 && downloaded != total {
+        return Err("Download ended before the complete file arrived; partial file kept".into());
+    }
+    tokio::fs::rename(temp_path, final_path)
+        .await
+        .map_err(|e| format!("Cannot finalize download: {}", e))?;
+    Ok(Some(downloaded))
+}
 
-    // Emit final 100% exactly once. Use `downloaded` (actual bytes written)
-    // rather than `total` so unknown-size downloads (total == 0) still report
-    // the real byte count in the complete event.
-    emit_progress(downloaded, "complete", None);
-
-    // The _cleanup guard removes the active-map entry (and the now-renamed-away
-    // temp file, which is a no-op) when it drops at end of scope.
-    log::info!("[Download] Complete: {} -> {:?}", rating_key, final_path);
+/// Queue mutations share one command so ordering and pause-all are atomic.
+#[tauri::command]
+pub async fn control_download_queue(
+    action: String,
+    rating_key: Option<String>,
+    order: Option<Vec<String>>,
+    limit: Option<usize>,
+    state: tauri::State<'_, DownloadManager>,
+) -> Result<(), String> {
+    control_queue(
+        &state,
+        &action,
+        rating_key.as_deref(),
+        order.as_deref(),
+        limit,
+    )
+}
+fn control_queue(
+    manager: &DownloadManager,
+    action: &str,
+    key: Option<&str>,
+    order: Option<&[String]>,
+    limit: Option<usize>,
+) -> Result<(), String> {
+    if action == "reorder" {
+        manager.queue.reorder(order.ok_or("Missing order")?);
+        return Ok(());
+    }
+    let mut s = manager.queue.state.lock().unwrap();
+    match action {
+        "limit" => {
+            let n = limit.ok_or("Missing limit")?;
+            if !(1..=3).contains(&n) {
+                return Err("Concurrency must be between 1 and 3".into());
+            }
+            s.limit = n;
+        }
+        "resumeAll" => {
+            s.pause_all = false;
+            let active = manager.active.lock().unwrap();
+            s.paused.retain(|key| active.contains_key(key));
+        }
+        "pause" | "pauseAll" => {
+            let active = manager.active.lock().unwrap();
+            if action == "pauseAll" {
+                s.pause_all = true;
+            } else {
+                s.paused
+                    .insert(key.ok_or("Missing rating key")?.to_string());
+            }
+            for (k, tx) in active.iter() {
+                if action == "pauseAll" || Some(k.as_str()) == key {
+                    s.paused.insert(k.clone());
+                    let _ = tx.send(true);
+                }
+            }
+        }
+        _ => return Err("Unknown download queue action".into()),
+    }
+    manager.queue.changed.notify_waiters();
     Ok(())
 }
 
@@ -421,8 +667,30 @@ async fn delete_download_impl(rating_key: &str, manager: &DownloadManager) -> Re
     // remove_dir_all would recursively delete an arbitrary directory. Log the
     // reason only, never the raw value (log-injection risk).
     if let Err(reason) = validate_path_component(rating_key) {
-        log::warn!("[downloads] rejected delete_download: invalid rating_key — {}", reason);
+        log::warn!(
+            "[downloads] rejected delete_download: invalid rating_key — {}",
+            reason
+        );
         return Err(format!("Invalid rating_key: {}", reason));
+    }
+    // Stop the writer before deleting its directory (including on Windows).
+    loop {
+        let notified = manager.queue.changed.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        let pending = {
+            let active = manager.active.lock().unwrap();
+            if let Some(tx) = active.get(rating_key) {
+                let _ = tx.send(true);
+                true
+            } else {
+                false
+            }
+        };
+        if !pending {
+            break;
+        }
+        notified.await;
     }
     let downloads_dir = {
         let cached = manager.downloads_dir.lock().await;
@@ -443,9 +711,7 @@ async fn delete_download_impl(rating_key: &str, manager: &DownloadManager) -> Re
 
 /// Reveal the downloads directory in the OS file manager.
 #[tauri::command]
-pub async fn open_downloads_dir(
-    state: tauri::State<'_, DownloadManager>,
-) -> Result<(), String> {
+pub async fn open_downloads_dir(state: tauri::State<'_, DownloadManager>) -> Result<(), String> {
     let dir = {
         let cached = state.downloads_dir.lock().await;
         match &*cached {
@@ -462,12 +728,10 @@ pub async fn open_downloads_dir(
     #[cfg(all(unix, not(target_os = "macos")))]
     let result = std::process::Command::new("xdg-open").arg(&dir).spawn();
 
-    result
-        .map(|_| ())
-        .map_err(|e| {
-            log::error!("[Download] open_downloads_dir failed: {:?}", e);
-            format!("Failed to open downloads folder: {}", e)
-        })
+    result.map(|_| ()).map_err(|e| {
+        log::error!("[Download] open_downloads_dir failed: {:?}", e);
+        format!("Failed to open downloads folder: {}", e)
+    })
 }
 
 /// Check if a local file exists for a given ratingKey and return its path.
@@ -522,7 +786,10 @@ async fn get_local_file_path_impl(
     // enumerate/read files anywhere on disk. Log the reason only, never the raw
     // value (log-injection risk).
     if let Err(reason) = validate_path_component(rating_key) {
-        log::warn!("[downloads] rejected get_local_file_path: invalid rating_key — {}", reason);
+        log::warn!(
+            "[downloads] rejected get_local_file_path: invalid rating_key — {}",
+            reason
+        );
         return Err(format!("Invalid rating_key: {}", reason));
     }
     let downloads_dir = {
@@ -554,11 +821,13 @@ async fn get_local_file_path_impl(
 
 #[cfg(test)]
 mod tests {
+    use super::{control_queue, eta, response_offset, transfer};
     use super::{
         delete_download_impl, get_local_file_path_impl, progress_at_end, try_claim_active,
         validate_part_key, validate_path_component, ActiveMap, DownloadGuard, DownloadManager,
     };
     use crate::util::redact_url;
+    use std::path::PathBuf;
 
     /// Create a unique, existing temp directory for a test (no `tempfile` dep,
     /// which would require touching the dependency lockfile).
@@ -570,8 +839,13 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir()
-            .join(format!("prexu-test-{}-{}-{}-{}", tag, std::process::id(), nanos, n));
+        let dir = std::env::temp_dir().join(format!(
+            "prexu-test-{}-{}-{}-{}",
+            tag,
+            std::process::id(),
+            nanos,
+            n
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -609,8 +883,14 @@ mod tests {
     fn redact_url_strips_token_from_download_url() {
         let url = "http://192.168.1.5:32400/library/parts/42/file.mkv?X-Plex-Token=s3cr3t";
         let out = redact_url(url);
-        assert!(!out.contains("s3cr3t"), "token must not appear in redacted output");
-        assert!(out.contains("X-Plex-Token=***"), "redaction placeholder must be present");
+        assert!(
+            !out.contains("s3cr3t"),
+            "token must not appear in redacted output"
+        );
+        assert!(
+            out.contains("X-Plex-Token=***"),
+            "redaction placeholder must be present"
+        );
     }
 
     #[test]
@@ -619,14 +899,20 @@ mod tests {
         let url = "http://h/p?quality=high&X-Plex-Token=abc123&format=mkv";
         let out = redact_url(url);
         assert!(!out.contains("abc123"));
-        assert!(out.contains("&format=mkv"), "params after token must be preserved");
+        assert!(
+            out.contains("&format=mkv"),
+            "params after token must be preserved"
+        );
     }
 
     #[test]
     fn redact_url_is_case_insensitive_on_param_name() {
         let url = "http://h/p?x-plex-token=SECRETVAL";
         let out = redact_url(url);
-        assert!(!out.contains("SECRETVAL"), "token value must be redacted regardless of param case");
+        assert!(
+            !out.contains("SECRETVAL"),
+            "token value must be redacted regardless of param case"
+        );
     }
 
     #[test]
@@ -767,7 +1053,7 @@ mod tests {
     // ── error-path cleanup (RAII guard) ──
 
     #[test]
-    fn download_guard_releases_map_entry_and_temp_file_on_drop() {
+    fn download_guard_releases_map_entry_and_keeps_partial_on_drop() {
         let dir = unique_temp_dir("guard");
         let temp_path = dir.join("file.mkv.part");
         std::fs::write(&temp_path, b"partial bytes").unwrap();
@@ -786,6 +1072,8 @@ mod tests {
                 active: active.clone(),
                 rating_key: "77".to_string(),
                 temp_path: temp_path.clone(),
+                queue: std::sync::Arc::new(super::Queue::new()),
+                remove_partial: false,
             };
         }
 
@@ -793,9 +1081,394 @@ mod tests {
             active.lock().unwrap().is_empty(),
             "active-map entry (cancel Sender) must be released on failure"
         );
-        assert!(!temp_path.exists(), "partial .part temp file must be removed on failure");
+        assert!(
+            temp_path.exists(),
+            "partial file must survive failure for resume"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scheduler_order_limit_and_reorder() {
+        let manager = DownloadManager::new();
+        manager.queue.state.lock().unwrap().waiting = ["a", "b", "c", "d"].map(String::from).into();
+        assert!(!manager.queue.admit("b"));
+        assert!(manager.queue.admit("a"));
+        assert!(!manager.queue.admit("b"));
+        control_queue(&manager, "limit", None, None, Some(3)).unwrap();
+        control_queue(
+            &manager,
+            "reorder",
+            None,
+            Some(&["c".into(), "b".into()]),
+            None,
+        )
+        .unwrap();
+        assert!(!manager.queue.admit("b"));
+        assert!(manager.queue.admit("c"));
+        assert!(manager.queue.admit("b"));
+        assert!(!manager.queue.admit("d"));
+        assert!(control_queue(&manager, "limit", None, None, Some(4)).is_err());
+        manager.queue.state.lock().unwrap().running.remove("a");
+        assert!(manager.queue.admit("d"));
+    }
+
+    #[test]
+    fn pause_all_latches_running_stops_and_resume_all_reopens_admission() {
+        let manager = DownloadManager::new();
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        try_claim_active(&manager.active, "a", tx).unwrap();
+        manager.queue.state.lock().unwrap().waiting = ["a", "b"].map(String::from).into();
+        assert!(manager.queue.admit("a"));
+        control_queue(&manager, "pauseAll", None, None, None).unwrap();
+        assert!(*rx.borrow());
+        assert!(!manager.queue.admit("b"));
+        control_queue(&manager, "resumeAll", None, None, None).unwrap();
+        assert!(
+            manager.queue.is_paused("a"),
+            "resume must not turn an acknowledged pause into cancel"
+        );
+        drop(DownloadGuard {
+            active: manager.active.clone(),
+            rating_key: "a".into(),
+            temp_path: PathBuf::new(),
+            queue: manager.queue.clone(),
+            remove_partial: false,
+        });
+        assert!(manager.queue.admit("b"));
+    }
+
+    #[test]
+    fn range_validation_rejects_wrong_offsets_and_reports_unknown_eta() {
+        use reqwest::StatusCode;
+        assert_eq!(
+            response_offset(StatusCode::PARTIAL_CONTENT, Some("bytes 3-5/6"), 3).unwrap(),
+            (3, Some(6))
+        );
+        assert!(response_offset(StatusCode::PARTIAL_CONTENT, Some("bytes 2-5/6"), 3).is_err());
+        assert!(response_offset(StatusCode::PARTIAL_CONTENT, None, 3).is_err());
+        assert_eq!(response_offset(StatusCode::OK, None, 3).unwrap(), (0, None));
+        assert_eq!(eta(20, 100, 10.0), Some(8));
+        assert_eq!(eta(20, 0, 10.0), None);
+        assert_eq!(eta(20, 100, 0.0), None);
+    }
+
+    // Local synthetic HTTP fixtures contain no Plex data or credentials.
+    fn fixture_server(
+        response: &'static str,
+        expected_range: bool,
+    ) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/fixture", listener.local_addr().unwrap());
+        let thread = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0];
+            while !request.ends_with(b"\r\n\r\n") {
+                socket.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+            }
+            let request = String::from_utf8(request).unwrap().to_lowercase();
+            assert_eq!(request.contains("range: bytes=3-"), expected_range);
+            socket.write_all(response.as_bytes()).unwrap();
+        });
+        (url, thread)
+    }
+
+    #[tokio::test]
+    async fn resume_after_restart_uses_disk_length_and_appends_exact_bytes() {
+        let dir = unique_temp_dir("resume");
+        let part = dir.join("movie.part");
+        let final_path = dir.join("movie");
+        std::fs::write(&part, b"abc").unwrap();
+        // No manager state from the previous process is available.
+        let (url, server) = fixture_server("HTTP/1.1 206 Partial Content\r\nContent-Length: 3\r\nContent-Range: bytes 3-5/6\r\nConnection: close\r\n\r\ndef", true);
+        let (_tx, mut rx) = tokio::sync::watch::channel(false);
+        assert_eq!(
+            transfer(
+                &url,
+                "",
+                &part,
+                &final_path,
+                6,
+                &mut rx,
+                &|_, _, _, _, _| {}
+            )
+            .await
+            .unwrap(),
+            Some(6)
+        );
+        server.join().unwrap();
+        assert_eq!(std::fs::read(&final_path).unwrap(), b"abcdef");
+        assert!(!part.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn ignored_range_restarts_without_duplicate_bytes_and_emits_reason() {
+        let dir = unique_temp_dir("restart");
+        let part = dir.join("movie.part");
+        let final_path = dir.join("movie");
+        std::fs::write(&part, b"old").unwrap();
+        let (url, server) = fixture_server(
+            "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nabcdef",
+            true,
+        );
+        let (_tx, mut rx) = tokio::sync::watch::channel(false);
+        let messages = std::sync::Mutex::new(Vec::new());
+        transfer(
+            &url,
+            "",
+            &part,
+            &final_path,
+            6,
+            &mut rx,
+            &|_, _, _, _, message| {
+                if let Some(m) = message {
+                    messages.lock().unwrap().push(m);
+                }
+            },
+        )
+        .await
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(std::fs::read(&final_path).unwrap(), b"abcdef");
+        assert!(messages
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|m| m.contains("restarting from zero")));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn pause_flushes_buffer_and_second_transfer_resumes() {
+        use std::io::{Read, Write};
+        let dir = unique_temp_dir("pause");
+        let part = dir.join("movie.part");
+        let final_path = dir.join("movie");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/fixture", listener.local_addr().unwrap());
+        let (tx, mut rx) = tokio::sync::watch::channel(false);
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = [0; 2048];
+            assert!(socket.read(&mut request).unwrap() > 0);
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabc")
+                .unwrap();
+            // Keep the body open so cancellation, rather than EOF, ends the transfer.
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            tx.send(true).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        });
+        assert_eq!(
+            transfer(
+                &url,
+                "",
+                &part,
+                &final_path,
+                6,
+                &mut rx,
+                &|_, _, _, _, _| {}
+            )
+            .await
+            .unwrap(),
+            None
+        );
+        server.join().unwrap();
+        assert_eq!(std::fs::read(&part).unwrap(), b"abc");
+        let (url, server) = fixture_server("HTTP/1.1 206 Partial Content\r\nContent-Length: 3\r\nContent-Range: bytes 3-5/6\r\nConnection: close\r\n\r\ndef", true);
+        let (_tx, mut rx) = tokio::sync::watch::channel(false);
+        transfer(
+            &url,
+            "",
+            &part,
+            &final_path,
+            6,
+            &mut rx,
+            &|_, _, _, _, _| {},
+        )
+        .await
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(std::fs::read(&final_path).unwrap(), b"abcdef");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn unavailable_saved_range_restarts_from_zero() {
+        use std::io::{Read, Write};
+        let dir = unique_temp_dir("range-416");
+        let part = dir.join("movie.part");
+        let final_path = dir.join("movie");
+        std::fs::write(&part, b"obsolete").unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/fixture", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for first in [true, false] {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut byte = [0];
+                while !request.ends_with(b"\r\n\r\n") {
+                    socket.read_exact(&mut byte).unwrap();
+                    request.push(byte[0]);
+                }
+                assert_eq!(
+                    String::from_utf8(request)
+                        .unwrap()
+                        .to_lowercase()
+                        .contains("range: bytes=8-"),
+                    first
+                );
+                socket.write_all(if first {
+                    b"HTTP/1.1 416 Range Not Satisfiable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                } else { b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nabcdef" }).unwrap();
+            }
+        });
+        let (_tx, mut rx) = tokio::sync::watch::channel(false);
+        transfer(
+            &url,
+            "",
+            &part,
+            &final_path,
+            6,
+            &mut rx,
+            &|_, _, _, _, _| {},
+        )
+        .await
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(std::fs::read(&final_path).unwrap(), b"abcdef");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Explicit opt-in: the only remote fixture this test permits is the named
+    /// QA server's synthetic pattern. Credentials and connection URLs stay in memory.
+    #[tokio::test]
+    #[ignore = "requires PREXU_QA_PLEX_AUTH and the Prexu QA Test Server"]
+    async fn qa_server_range_resume_matches_original() {
+        let token = std::env::var("PREXU_QA_PLEX_AUTH").expect("QA credential required");
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap();
+        let resources_text = client
+            .get("https://plex.tv/api/v2/resources?includeHttps=1")
+            .header("X-Plex-Client-Identifier", "prexu-download-tests")
+            .header("X-Plex-Token", &token)
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .unwrap_or_else(|_| panic!("QA discovery request"))
+            .text()
+            .await
+            .unwrap_or_else(|_| panic!("QA discovery JSON"));
+        let resources: serde_json::Value =
+            serde_json::from_str(&resources_text).expect("QA resource JSON");
+        let server = resources
+            .as_array()
+            .expect("Plex resource list; verify required client headers")
+            .iter()
+            .find(|r| r["name"] == "Prexu QA Test Server" && r["provides"] == "server")
+            .expect("Named QA server");
+        let credential = server["accessToken"]
+            .as_str()
+            .expect("QA server credential");
+        let mut fixture = None;
+        for connection in server["connections"].as_array().unwrap() {
+            let Some(uri) = connection["uri"].as_str() else {
+                continue;
+            };
+            let Ok(response) = client
+                .get(format!("{}/library/metadata/2", uri))
+                .header("X-Plex-Token", credential)
+                .header("Accept", "application/json")
+                .send()
+                .await
+            else {
+                continue;
+            };
+            let Ok(body) = response.text().await else {
+                continue;
+            };
+            let Ok(data) = serde_json::from_str::<serde_json::Value>(&body) else {
+                continue;
+            };
+            let item = &data["MediaContainer"]["Metadata"][0];
+            if item["title"] != "Prexu QA Pattern" || item["ratingKey"] != "2" {
+                continue;
+            }
+            let part = &item["Media"][0]["Part"][0];
+            fixture = Some((
+                format!("{}{}", uri, part["key"].as_str().unwrap()),
+                part["size"]
+                    .as_u64()
+                    .or_else(|| part["size"].as_str()?.parse().ok())
+                    .expect("QA part size"),
+            ));
+            break;
+        }
+        let (url, size) = fixture.expect("Reachable synthetic QA fixture");
+        let response = client
+            .get(&url)
+            .header("X-Plex-Token", credential)
+            .header("Range", "bytes=0-1023")
+            .send()
+            .await
+            .unwrap_or_else(|_| panic!("QA Range request"));
+        assert_eq!(response.status(), reqwest::StatusCode::PARTIAL_CONTENT);
+        let prefix = response
+            .bytes()
+            .await
+            .unwrap_or_else(|_| panic!("QA prefix"));
+        assert_eq!(prefix.len(), 1024);
+        let dir = unique_temp_dir("qa-resume");
+        let part = dir.join("fixture.part");
+        let final_path = dir.join("fixture");
+        std::fs::write(&part, &prefix).unwrap();
+        let (_tx, mut rx) = tokio::sync::watch::channel(false);
+        let result = transfer(
+            &url,
+            credential,
+            &part,
+            &final_path,
+            size,
+            &mut rx,
+            &|_, _, _, _, _| {},
+        )
+        .await;
+        // Do not render raw request failures: the assertion carries no URL or token.
+        assert!(result.is_ok(), "QA resumed transfer succeeds");
+        let original = client
+            .get(&url)
+            .header("X-Plex-Token", credential)
+            .send()
+            .await
+            .unwrap_or_else(|_| panic!("QA original request"))
+            .bytes()
+            .await
+            .unwrap_or_else(|_| panic!("QA original bytes"));
+        let downloaded = std::fs::read(&final_path).unwrap();
+        assert!(
+            downloaded.as_slice() == original.as_ref(),
+            "Resumed bytes equal original"
+        );
+        assert_eq!(downloaded.len() as u64, size);
+        std::fs::remove_dir_all(dir).unwrap();
+        println!(
+            "QA server returned HTTP 206; restart resume matched all {} original bytes",
+            size
+        );
     }
 
     // ── path-traversal rejection at the sinks (with no fs mutation) ──
@@ -845,12 +1518,16 @@ mod tests {
         *manager.downloads_dir.lock().await = Some(downloads.clone());
 
         assert!(
-            get_local_file_path_impl("../secret", &manager).await.is_err(),
+            get_local_file_path_impl("../secret", &manager)
+                .await
+                .is_err(),
             "'..' traversal rating_key must be rejected, not enumerated"
         );
         let secret_abs = secret.to_string_lossy().to_string();
         assert!(
-            get_local_file_path_impl(&secret_abs, &manager).await.is_err(),
+            get_local_file_path_impl(&secret_abs, &manager)
+                .await
+                .is_err(),
             "absolute-path rating_key must be rejected"
         );
 

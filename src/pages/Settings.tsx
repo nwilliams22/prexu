@@ -1,3 +1,4 @@
+import { DownloadSettingsPanel } from "../components/settings/DownloadSettingsPanel";
 import { useState } from "react";
 import { PreferenceSaveContext, PreferenceFailures } from "../components/settings/PreferenceSaveStatus";
 import { Link, Navigate, useLocation, useParams } from "react-router-dom";
@@ -72,6 +73,7 @@ function Settings() {
         </fieldset>
         {category.id === "parental-controls" && <ParentalControlsPanel isAdmin={isAdmin} />}
         <div hidden={category.id !== "connections"}>
+          <DownloadSettingsPanel />
           <ConnectionsSettingsPanel serverUri={server?.uri} isRelayConnected={isRelayConnected} refreshInvites={refreshInvites} onFailureChange={setDeviceFailure} />
         </div>
         {category.id === "about" && <AboutSettingsPanel serverUri={server?.uri} isAdmin={isAdmin} />}

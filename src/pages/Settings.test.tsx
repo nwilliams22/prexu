@@ -1,3 +1,4 @@
+vi.mock("../hooks/useDownloads", () => ({ useDownloads: () => ({ concurrency: 1, setConcurrency: vi.fn() }) }));
 import { createMemoryRouter, RouterProvider, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";

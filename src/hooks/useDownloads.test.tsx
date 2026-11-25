@@ -8,6 +8,7 @@ const mockSaveDownloadItems = vi.fn().mockResolvedValue(undefined);
 const mockGetDownloadItems = vi.fn().mockResolvedValue([]);
 
 vi.mock("../services/downloads", () => ({
+  controlDownloadQueue: vi.fn().mockResolvedValue(undefined),
   startDownload: (...args: unknown[]) => mockStartDownload(...args),
   cancelDownload: (...args: unknown[]) => mockCancelDownload(...args),
   deleteDownload: (...args: unknown[]) => mockDeleteDownload(...args),
@@ -64,6 +65,7 @@ function makeItem(ratingKey: string): DownloadItem {
 const mockToast = vi.fn();
 
 beforeEach(() => {
+  localStorage.clear();
   mockStartDownload.mockReset();
   mockSaveDownloadItems.mockClear();
   mockGetDownloadItems.mockResolvedValue([]);
@@ -211,6 +213,8 @@ describe("useDownloadsState download-progress event toasts", () => {
     totalBytes: number;
     status: string;
     errorMessage?: string;
+    bytesPerSecond?: number;
+    etaSeconds?: number | null;
   }) {
     const handlers = eventHandlers["download-progress"] ?? [];
     for (const h of handlers) h({ payload });
@@ -251,6 +255,18 @@ describe("useDownloadsState download-progress event toasts", () => {
       expect.stringContaining(makeItem("a").title),
       "success",
     );
+  });
+
+  it("exposes transfer speed and aggregate remaining time without persisting every tick", async () => {
+    mockStartDownload.mockReturnValue(new Promise(() => {}));
+    const { result } = await renderSettledWithListener();
+    act(() => { result.current.queueDownload(makeItem("a")); result.current.queueDownload(makeItem("b")); });
+    const writes = mockSaveDownloadItems.mock.calls.length;
+    act(() => fireProgress({ ratingKey: "a", bytesDownloaded: 400, totalBytes: 1000, status: "downloading", bytesPerSecond: 200, etaSeconds: 3 }));
+    expect(result.current.getDownload("a")).toMatchObject({ bytesPerSecond: 200, etaSeconds: 3 });
+    expect(result.current.bytesPerSecond).toBe(200);
+    expect(result.current.etaSeconds).toBe(8);
+    expect(mockSaveDownloadItems).toHaveBeenCalledTimes(writes);
   });
 
   it("does not toast on a user-initiated cancel", async () => {
@@ -300,6 +316,71 @@ describe("useDownloadsState download-progress event toasts", () => {
       });
     });
 
+    expect(mockToast).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("download queue controls", () => {
+  it("restores interrupted downloads as paused without losing their byte count", async () => {
+    mockStartDownload.mockImplementation(() => new Promise(() => {}));
+    mockGetDownloadItems.mockResolvedValue([{ ...makeItem("a"), status: "downloading", bytesDownloaded: 400 }]);
+    const { result } = await renderSettled();
+    expect(result.current.getDownload("a")).toMatchObject({ status: "paused", bytesDownloaded: 400 });
+    expect(mockStartDownload).not.toHaveBeenCalled();
+    await act(async () => result.current.resumeDownload("a"));
+    expect(mockStartDownload).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a slot until pause acknowledgement, then resumes from the retained item", async () => {
+    let finish!: () => void;
+    mockStartDownload.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }))
+      .mockImplementation(() => new Promise(() => {}));
+    const { result } = await renderSettled();
+    act(() => { result.current.queueDownload(makeItem("a")); result.current.queueDownload(makeItem("b")); });
+    act(() => result.current.pauseDownload("a"));
+    expect(result.current.getDownload("a")?.status).toBe("paused");
+    expect(mockStartDownload).toHaveBeenCalledTimes(1);
+    await act(async () => finish());
+    expect(mockStartDownload).toHaveBeenCalledTimes(2);
+    expect(mockStartDownload.mock.calls[1][2]).toBe("b");
+  });
+
+  it("pause all stops queued work, reorder persists, resume all uses the new order", async () => {
+    let finish!: () => void;
+    mockStartDownload.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }))
+      .mockImplementation(() => new Promise(() => {}));
+    const { result } = await renderSettled();
+    act(() => { for (const key of ["a", "b", "c"]) result.current.queueDownload(makeItem(key)); });
+    act(() => result.current.pauseAll());
+    await act(async () => finish());
+    expect(result.current.downloads.every((d) => d.status === "paused")).toBe(true);
+    expect(mockStartDownload).toHaveBeenCalledTimes(1);
+    act(() => result.current.reorderDownloads(["c", "b", "a"]));
+    expect((mockSaveDownloadItems.mock.calls.at(-1)![0] as DownloadItem[]).map((d) => d.ratingKey)).toEqual(["c", "b", "a"]);
+    await act(async () => result.current.resumeAll());
+    expect(mockStartDownload.mock.calls[1][2]).toBe("c");
+  });
+
+  it("applies the persisted concurrency setting and rejects limits outside 1–3", async () => {
+    mockStartDownload.mockImplementation(() => new Promise(() => {}));
+    const { result } = await renderSettled();
+    act(() => { result.current.setConcurrency(3); for (const key of ["a", "b", "c", "d"]) result.current.queueDownload(makeItem(key)); });
+    expect(mockStartDownload).toHaveBeenCalledTimes(3);
+    expect(result.current.getDownload("d")?.status).toBe("queued");
+    expect(localStorage.getItem("prexu.downloadConcurrency")).toBe("3");
+    act(() => result.current.setConcurrency(4));
+    expect(result.current.concurrency).toBe(3);
+  });
+
+  it("does not auto-retry a failed transfer after the user pauses it", async () => {
+    let fail!: (error: Error) => void;
+    mockStartDownload.mockImplementation(() => new Promise<void>((_, reject) => { fail = reject; }));
+    const { result } = await renderSettled();
+    act(() => result.current.queueDownload(makeItem("a")));
+    act(() => result.current.pauseDownload("a"));
+    await act(async () => fail(new Error("interrupted")));
+    expect(result.current.getDownload("a")?.status).toBe("paused");
     expect(mockToast).not.toHaveBeenCalled();
   });
 });

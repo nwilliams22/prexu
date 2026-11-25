@@ -50,3 +50,11 @@ export async function getLocalFilePath(
 ): Promise<string | null> {
   return invoke<string | null>("get_local_file_path", { ratingKey });
 }
+
+export type DownloadQueueAction = "pause" | "pauseAll" | "resumeAll" | "reorder" | "limit";
+export async function controlDownloadQueue(
+  action: DownloadQueueAction,
+  options: { ratingKey?: string; order?: string[]; limit?: number } = {},
+): Promise<void> {
+  return invoke("control_download_queue", { action, ...options });
+}

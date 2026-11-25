@@ -709,6 +709,7 @@ pub fn run() {
         downloads::open_downloads_dir,
         downloads::download_media,
         downloads::cancel_download,
+        downloads::control_download_queue,
         downloads::delete_download,
         downloads::get_local_file_path,
         player::commands::player_load_url,
@@ -757,6 +758,7 @@ pub fn run() {
         downloads::open_downloads_dir,
         downloads::download_media,
         downloads::cancel_download,
+        downloads::control_download_queue,
         downloads::delete_download,
         downloads::get_local_file_path,
         player::commands::player_load_url,
@@ -794,6 +796,7 @@ pub fn run() {
         downloads::open_downloads_dir,
         downloads::download_media,
         downloads::cancel_download,
+        downloads::control_download_queue,
         downloads::delete_download,
         downloads::get_local_file_path,
     ]);

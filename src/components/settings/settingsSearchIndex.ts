@@ -51,6 +51,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingSearchEntry[] = [
   entry("V6", "appearance", "Home", "Recently Added TV Shows", "Hidden dashboard sections can be enabled here at any time."),
   entry("V7", "appearance", "Library browsing", "Skip seasons page for single-season shows", "Go directly to episodes when a show has one season.", ["TV Show Navigation"]),
   entry("V8", "appearance", "Library browsing", "Minimum Collection Size", "Collections with fewer items than this will be hidden from the collections browser and library view."),
+  entry("download-concurrency", "connections", "Downloads", "Simultaneous downloads", "Choose one to three downloads at a time on this device.", ["queue concurrency speed"]),
   entry("relay-status", "connections", "Relay connection", "Relay connection status", "View the connection status, mode and effective address.", [], "relay-connection-heading"),
   entry("N1", "connections", "Relay connection", "Custom relay URL", "Use a custom ws:// or wss:// relay address, or reset to auto-detect.", [], "relay-edit"),
   entry("N2", "connections", "Invitation sounds", "Invite notification volume", "Adjust invitation volume; increase volume to preview."),
