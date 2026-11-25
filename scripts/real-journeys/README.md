@@ -118,6 +118,8 @@ real detail and Downloads controls, pauses both, moves the second item up,
 resumes, and checks both completion metadata and native file presence. It also
 changes the Settings concurrency selector from 1 to 3 and back. A full page reload
 between items checks persistence of paused state; it is not a process-restart test.
+Controls must be visible and unobscured before the driver clicks them. This mode
+requires `xdotool` and sizes the real app to 1900×1000 on a 1920×1080 display.
 Screenshots of the paused/reordered queue and completed files are required.
 The profile and downloads are removed during cleanup; attach the JSON and PNGs
 to the task. No personal library or seeded download records are used.

@@ -9,17 +9,43 @@ async function until(fn, timeout = 60000) {
   while (Date.now() < end) { if (await fn()) return; await sleep(20); }
   throw new Error('deadline');
 }
-const button = label => [...document.querySelectorAll('button')].find(b => !b.disabled &&
+function visible(element) {
+  if (!element) return false;
+  const rect = element.getBoundingClientRect();
+  const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+  return rect.width > 0 && rect.height > 0 && hit && element.contains(hit);
+}
+const button = label => [...document.querySelectorAll('button')].find(b => !b.disabled && visible(b) &&
   (b.getAttribute('aria-label') === label || b.title === label || b.textContent.trim() === label));
 async function click(label) { await until(() => button(label)); button(label).click(); }
 async function nav(path) {
-  await until(() => document.querySelector(`a[href="${path}"]`));
+  if (path === '/downloads') return click('Downloads');
+  if (path === '/settings') {
+    await until(() => visible(document.querySelector('button[aria-haspopup="true"]')));
+    document.querySelector('button[aria-haspopup="true"]').click();
+    return click('Settings');
+  }
+  await until(() => visible(document.querySelector(`a[href="${path}"]`)));
   document.querySelector(`a[href="${path}"]`).click();
+}
+async function openAndPauseQueue(label = 'Pause all') {
+  // Act as soon as the real control mounts; tiny QA files can finish between polls.
+  let paused = false;
+  const observer = new MutationObserver(() => {
+    const control = button(label);
+    if (control && !paused) { paused = true; control.click(); }
+  });
+  observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+  try {
+    await nav('/downloads');
+    await until(() => paused);
+  } finally { observer.disconnect(); }
 }
 async function emit(journey, status = 'PASS') {
   await fetch(endpoint, { method: 'POST', body: JSON.stringify({ journey, status }) });
 }
 async function shot(label) {
+  await until(() => button('Downloads'));
   await sleep(300);
   const response = await fetch(`${endpoint}/screenshot`, { method: 'POST', body: label });
   if (!response.ok) throw new Error('screenshot');
@@ -29,23 +55,35 @@ async function run() {
   try {
     await saveRelayUrl('ws://127.0.0.1:1/ws');
     if (!sessionStorage.getItem('download-queue-login')) {
+      stage = 'download-login-button';
       await click('Sign in with Plex');
+      await emit(stage);
+      stage = 'download-login-token';
       await until(async () => Boolean((await getAuth())?.authToken));
+      await emit(stage);
+      stage = 'download-login-server';
       await until(async () => {
         const server = [...document.querySelectorAll('button')].find(b => b.textContent.includes('Prexu QA Test Server'));
         if (server) server.click();
         return (await getServer())?.name === 'Prexu QA Test Server';
       });
       await emit(stage);
+      await emit('native-login');
       sessionStorage.setItem('download-queue-login', 'yes');
       location.assign(`/item/${fixtures[0].key}`);
       return;
     }
+    await until(() => button('Downloads'));
+    const resized = await fetch(`${endpoint}/resize`, { method: 'POST' });
+    if (!resized.ok) throw new Error('resize');
+    await until(() => innerWidth >= 1800);
+    // Warm the real lazy page before starting a small local-network fixture.
+    // Otherwise cold Vite compilation can outlast the entire download.
+    await import('/src/pages/Downloads.tsx');
     stage = 'download-queue-paused';
     if (!sessionStorage.getItem('download-queue-first')) {
       await click('Download for offline');
-      await nav('/downloads');
-      await click('Pause all');
+      await openAndPauseQueue(`Pause ${fixtures[0].title}`);
       await until(async () => (await getDownloadItems()).some(d => d.ratingKey === fixtures[0].key && d.status === 'paused'));
       sessionStorage.setItem('download-queue-first', 'yes');
       // Reload into the second detail page also proves paused state survives a full page reload.
@@ -53,8 +91,7 @@ async function run() {
       return;
     }
     await click('Download for offline');
-    await nav('/downloads');
-    await click('Pause all');
+    await openAndPauseQueue();
     await until(async () => {
       const items = await getDownloadItems();
       return fixtures.every(f => items.some(d => d.ratingKey === f.key && d.status === 'paused'));
@@ -90,6 +127,7 @@ async function run() {
     await emit(stage);
     await emit('native-driver');
   } catch {
+    if (stage.startsWith('download-queue') && (await getServer())?.name === 'Prexu QA Test Server') await shot('diagnostic').catch(() => {});
     await emit(stage, 'FAIL');
     await emit('native-driver', 'FAIL');
   }

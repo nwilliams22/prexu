@@ -149,8 +149,15 @@ try {
             if (watchComparisons.length < 20 && JSON.stringify(watchComparisons.at(-1)) !== JSON.stringify(watchComparison)) watchComparisons.push(watchComparison);
             res.end(JSON.stringify({ offset: item.viewOffset || 0, watched: Boolean(item.viewCount) }));
             return;
+          } else if (queueMode && req.url === `${endpoint}/resize`) {
+            const env = { PATH: process.env.PATH, DISPLAY: `:${displayNumber}` };
+            const windows = spawnSync('xdotool', ['search', '--onlyvisible', '--name', '^Prexu$'], { env, encoding: 'utf8', timeout: 1000 });
+            const windowId = windows.stdout?.trim().split('\n').at(-1);
+            if (!/^\d+$/.test(windowId || '')) throw new Error('event');
+            const resized = spawnSync('xdotool', ['windowsize', windowId, '1900', '1000', 'windowmove', windowId, '0', '0'], { env, stdio: 'ignore', timeout: 1000 });
+            if (resized.status !== 0) throw new Error('event');
           } else if (queueMode && req.url === `${endpoint}/screenshot`) {
-            if (!['paused', 'complete'].includes(body) || !displayNumber || !process.env.PREXU_JOURNEY_SCREENSHOTS) throw new Error('event');
+            if (!['paused', 'complete', 'diagnostic'].includes(body) || !displayNumber || !process.env.PREXU_JOURNEY_SCREENSHOTS) throw new Error('event');
             await mkdir(process.env.PREXU_JOURNEY_SCREENSHOTS, { recursive: true });
             const shot = spawnSync('import', ['-display', `:${displayNumber}`, '-window', 'root', resolve(process.env.PREXU_JOURNEY_SCREENSHOTS, `${body}.png`)], { stdio: 'ignore', timeout: 10000 });
             if (shot.status !== 0) throw new Error('event');
@@ -175,7 +182,7 @@ try {
   const displayFile = `${root}/display`;
   const { open } = await import('node:fs/promises');
   const display = await open(displayFile, 'wx', 0o600);
-  xvfb = spawn('Xvfb', ['-displayfd','3','-screen','0','1280x800x24','-nolisten','tcp','-ac'],
+  xvfb = spawn('Xvfb', ['-displayfd','3','-screen','0',queueMode ? '1920x1080x24' : '1280x800x24','-nolisten','tcp','-ac'],
     { detached: true, stdio: ['ignore','ignore','ignore',display.fd] });
   children.push(xvfb);
   xvfb.on('error', () => finish('display-start'));
