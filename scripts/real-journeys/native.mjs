@@ -262,7 +262,7 @@ finally {
   try { if (root) { spawnSync('fusermount3', ['-u', `${root}/doc`], { stdio: 'ignore' }); await rm(root, { recursive: true, force: true, maxRetries: 3 }); } } catch (error) { add('profile-cleanup-' + (/^[A-Z_]+$/.test(error.code || '') ? error.code : 'error'), 'FAIL'); clean = false; }
   add('cleanup', clean ? 'PASS' : 'FAIL');
 }
-if (!queueMode && !offlineOnly && rows.some(row => row.journey === 'native-login')) {
+if (!pausedMode && !queueMode && !offlineOnly && rows.some(row => row.journey === 'native-login')) {
   if (!rows.some(row => row.journey === 'native-queue-postplay')) add('queue-postplay', 'NOT_RUN');
   add('two-client-relay', 'NOT_RUN');
 }
