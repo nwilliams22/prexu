@@ -27,6 +27,7 @@ import ActivityButton from "./ActivityButton";
 import InviteNotification from "./InviteNotification";
 import ErrorBoundary from "./ErrorBoundary";
 import BottomNav from "./BottomNav";
+import OfflineRoute, { OfflineBanner } from "./OfflineRoute";
 
 function AppLayout() {
   const auth = useAuth();
@@ -235,6 +236,7 @@ function AppLayout() {
         ...playerLayerStyle,
       }}
     >
+      <OfflineBanner />
       {/* Header */}
       <header style={styles.header}>
         {/* Left: logo/hamburger area — matches sidebar width below */}
@@ -328,7 +330,7 @@ function AppLayout() {
           <InviteNotification />
           <div style={styles.pageTransition}>
             <ErrorBoundary>
-              <Outlet />
+              <OfflineRoute><Outlet /></OfflineRoute>
             </ErrorBoundary>
           </div>
           {showTransitionSpinner && (

@@ -31,7 +31,7 @@ export interface AuthContextValue {
   isLoading: boolean;
   isAuthenticated: boolean;
   serverSelected: boolean;
-  /** True when the stored server URI is unreachable and auto-re-resolve failed */
+  /** True while the selected server is unreachable; local downloads remain available. */
   serverUnreachable: boolean;
   authToken: string | null;
   server: ServerData | null;
@@ -63,6 +63,7 @@ export function useAuthState(): AuthContextValue {
 
   // On mount, migrate storage then check for existing auth
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       const bootStart = performance.now();
       try {
@@ -107,6 +108,8 @@ export function useAuthState(): AuthContextValue {
             userPromise,
           ]);
 
+          if (cancelled) return;
+
           logger.debug("auth", "boot waterfall settled", {
             elapsedMs: Math.round(performance.now() - bootStart),
             validation,
@@ -129,20 +132,22 @@ export function useAuthState(): AuthContextValue {
             setAuthToken(stored.authToken);
 
             if (storedServer) {
-              // Restore optimistically so the UI is not blocked
+              // Retain the server identity for offline downloads. The loading gate
+              // stays up until reachability is resolved.
               setServer(storedServer);
 
-              // Probe reachability in background — do not await before setIsLoading.
+              // Resolve reachability before exposing the initial route.
               // Two attempts: a single 5s probe false-negatives under cold-boot
               // contention, and the discovery sweep it escalates to costs ~11s
               // plus a server-state swap that re-triggers dashboard fetches.
-              void (async () => {
+              await (async () => {
                 const reachable = await probeServerReachability(
                   storedServer.uri,
                   storedServer.accessToken,
                   2
                 );
 
+                if (cancelled) return;
                 if (reachable) {
                   // All good — clear any stale unreachable flag
                   setServerUnreachable(false);
@@ -158,6 +163,7 @@ export function useAuthState(): AuthContextValue {
                 // Attempt to re-discover and find the same server by clientIdentifier
                 try {
                   const servers = await discoverServers(stored.authToken);
+                  if (cancelled) return;
                   const fresh = resolveServerFromDiscovery(
                     servers,
                     storedServer.clientIdentifier
@@ -182,6 +188,7 @@ export function useAuthState(): AuthContextValue {
                   } else if (fresh) {
                     logServerResolve(storedServer.uri, fresh.uri);
                     await saveServer(fresh);
+                    if (cancelled) return;
                     setServer(fresh);
                     setServerUnreachable(false);
                   } else {
@@ -193,6 +200,7 @@ export function useAuthState(): AuthContextValue {
                     setServerUnreachable(true);
                   }
                 } catch (err) {
+                  if (cancelled) return;
                   logger.error(
                     "auth",
                     "discovery failed during server re-resolve",
@@ -203,6 +211,7 @@ export function useAuthState(): AuthContextValue {
               })();
             }
 
+            if (cancelled) return;
             // Restore active user profile
             if (storedUser) {
               setActiveUser(storedUser);
@@ -215,10 +224,51 @@ export function useAuthState(): AuthContextValue {
       } catch {
         // Storage or network error, start fresh
       } finally {
-        setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       }
     })();
+    return () => { cancelled = true; };
   }, []);
+
+  // Check the selected server after startup as well. Schedule after each
+  // completion so slow discovery cannot overlap probes; discard stale results
+  // when changing server/user or unmounting.
+  useEffect(() => {
+    if (isLoading || !server || !authToken) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const check = async () => {
+      const reachable = await probeServerReachability(server.uri, server.accessToken, 2);
+      if (cancelled) return;
+      if (reachable) {
+        setServerUnreachable(false);
+      } else {
+        setServerUnreachable(true);
+        try {
+          const servers = await discoverServers(authToken);
+          if (cancelled) return;
+          const fresh = resolveServerFromDiscovery(servers, server.clientIdentifier);
+          if (fresh) {
+            if (fresh.uri !== server.uri || fresh.accessToken !== server.accessToken) {
+              await saveServer(fresh);
+              if (cancelled) return;
+              logServerResolve(server.uri, fresh.uri);
+              setServer(fresh);
+            }
+            setServerUnreachable(false);
+          }
+        } catch {
+          // Keep downloads available; the next check retries automatically.
+        }
+      }
+      if (!cancelled) timer = setTimeout(() => void check(), 15_000);
+    };
+    timer = setTimeout(() => void check(), 15_000);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [isLoading, server, authToken]);
 
   // Periodic token revalidation (every 30 minutes)
   useEffect(() => {

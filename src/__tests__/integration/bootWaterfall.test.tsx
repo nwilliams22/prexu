@@ -22,7 +22,7 @@
  *   • Revoked token      — an invalid stored token routes to Login with NO
  *                          dashboard flash (H.3).
  *   • Offline launch     — an unreachable stored server still boots to the app
- *                          shell (optimistic restore) with no login flash and
+ *                          shell on Downloads with no login/dashboard flash and
  *                          no stuck splash; surfaces the unreachable banner
  *                          instead of a half-auth state (H.2).
  *   • Splash staging     — the 700ms minimum-display floor is honoured even on
@@ -85,7 +85,7 @@ vi.mock("../../services/plex-api", () => ({
   CONNECTIVITY_TIMEOUT_MS: 5000,
 }));
 
-// Background reachability probe — kept off Tauri; controls the offline path.
+// Startup reachability probe — kept off Tauri; controls the offline path.
 vi.mock("../../services/server-reachability", () => ({
   probeServerReachability: vi.fn().mockResolvedValue(true),
   resolveServerFromDiscovery: vi.fn().mockReturnValue(null),
@@ -120,6 +120,8 @@ vi.mock("../../hooks/useAutoUpdate", () => ({
   useAutoUpdate: vi.fn(() => ({ installing: false, downloadProgress: null })),
 }));
 
+vi.mock("../../pages/Downloads", () => ({ default: () => <div data-testid="downloads-page" /> }));
+
 // The provider stack + authenticated shell are out of scope for the boot gate.
 // AppProviders → passthrough; AppLayout → a faithful copy of its real auth
 // guard (AppLayout.tsx:152-153) so the "no dashboard flash on revoked token"
@@ -130,6 +132,7 @@ vi.mock("../../contexts/AppProviders", () => ({
 vi.mock("../../components/AppLayout", async () => {
   const { Navigate, Outlet } = await import("react-router-dom");
   const { useAuth } = await import("../../hooks/useAuth");
+  const { default: OfflineRoute, OfflineBanner } = await import("../../components/OfflineRoute");
   return {
     default: function MockAppLayout() {
       const { isAuthenticated, serverSelected } = useAuth();
@@ -137,7 +140,8 @@ vi.mock("../../components/AppLayout", async () => {
       if (!serverSelected) return <Navigate to="/servers" replace />;
       return (
         <div data-testid="app-shell">
-          <Outlet />
+          <OfflineBanner />
+          <OfflineRoute><Outlet /></OfflineRoute>
         </div>
       );
     },
@@ -476,19 +480,20 @@ describe("boot/auth waterfall (W4 · pd1x.4)", () => {
   // ── Offline launch (H.2) ───────────────────────────────────────────────
   describe("offline launch", () => {
     it("boots to the app shell when the stored server is unreachable — no login flash, no half-auth", async () => {
+      vi.useRealTimers();
       setupValidAuth();
       // Probe fails and re-resolve finds nothing → serverUnreachable.
       mockReach.probeServerReachability.mockResolvedValue(false);
       mockReach.resolveServerFromDiscovery.mockReturnValue(null);
 
       renderApp();
-      await settleBoot();
 
-      // Optimistic restore keeps the user in the authenticated shell...
+      expect(await screen.findByTestId("downloads-page")).toBeTruthy();
       expect(screen.getByTestId("app-shell")).toBeTruthy();
+      expect(spies.dashboardRendered).not.toHaveBeenCalled();
       expect(spies.loginRendered).not.toHaveBeenCalled();
       // ...with the unreachable banner surfaced instead of a login bounce.
-      expect(screen.getByRole("alert")).toHaveTextContent("Server unreachable");
+      expect(screen.getByRole("status")).toHaveTextContent("Offline");
     });
   });
 

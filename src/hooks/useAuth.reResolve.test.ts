@@ -283,4 +283,44 @@ describe("useAuthState — server re-resolve", () => {
       );
     });
   });
+  it("detects a later outage and clears it when the server returns", async () => {
+    setupValidAuth();
+    mockReachability.probeServerReachability.mockResolvedValue(true);
+    const { result, unmount } = renderHook(() => useAuthState());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    vi.useFakeTimers();
+    // The first timer was installed before switching clocks; reselect the
+    // server so the monitor is installed on the controlled clock.
+    await act(async () => { await result.current.selectServer({ ...storedServer }); });
+    mockReachability.probeServerReachability.mockResolvedValue(false);
+    mockPlexApi.discoverServers.mockResolvedValue([]);
+    mockReachability.resolveServerFromDiscovery.mockReturnValue(null);
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+    expect(result.current.serverUnreachable).toBe(true);
+    expect(result.current.isAuthenticated).toBe(true);
+    mockReachability.probeServerReachability.mockResolvedValue(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+    expect(result.current.serverUnreachable).toBe(false);
+    unmount();
+    vi.useRealTimers();
+  });
+
+  it("ignores an in-flight health result after changing server", async () => {
+    setupValidAuth();
+    mockReachability.probeServerReachability.mockResolvedValue(true);
+    const { result, unmount } = renderHook(() => useAuthState());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    vi.useFakeTimers();
+    await act(async () => { await result.current.selectServer({ ...storedServer }); });
+    let finish!: (reachable: boolean) => void;
+    mockReachability.probeServerReachability.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+    await act(async () => { await result.current.changeServer(); });
+    await act(async () => { finish(false); });
+    expect(result.current.serverUnreachable).toBe(false);
+    expect(result.current.server).toBeNull();
+    unmount();
+    vi.useRealTimers();
+  });
+
 });
