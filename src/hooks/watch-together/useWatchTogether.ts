@@ -23,7 +23,8 @@ export function useWatchTogether(
     player,
     session.isInSession,
     session.setSyncStatus,
-    sessionId
+    sessionId,
+    !!session.lobby && session.syncStatus !== "disconnected"
   );
 
   const { participants, setParticipants } = useWatchParticipants(
@@ -55,6 +56,12 @@ export function useWatchTogether(
 
   return {
     isInSession: session.isInSession,
+    lobby: session.lobby,
+    sessionError: session.sessionError,
+    sessionEnded: session.sessionEnded,
+    startNow: session.startNow,
+    resendInvite: session.resendInvite,
+    removeParticipant: session.removeParticipant,
     isHost,
     participants,
     syncStatus: session.syncStatus,

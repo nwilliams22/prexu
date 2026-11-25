@@ -36,6 +36,7 @@ import { usePopOutPlayer } from "../hooks/player/usePopOutPlayer";
 import { usePlayerLifecycle } from "../hooks/player/usePlayerLifecycle";
 import { usePostPlay } from "../hooks/player/usePostPlay";
 import PlayerControls from "../components/PlayerControls";
+import WatchTogetherLobby from "../components/WatchTogetherLobby";
 import ParticipantOverlay from "../components/ParticipantOverlay";
 import SyncIndicator from "../components/SyncIndicator";
 import NextEpisodePrompt from "../components/NextEpisodePrompt";
@@ -72,7 +73,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   const playerSession = usePlayerSession();
   const playerMinimize = usePlayerMinimize();
 
-  const player = usePlayer(ratingKey, offset);
+  const player = usePlayer(ratingKey, offset, { initiallyPaused: !!watchTogether });
   // Resolved once per mount by usePlayer (see engineResolution.ts) — safe
   // to read every render since it never changes for the lifetime of this
   // component instance. Window-management affordances gate on
@@ -89,6 +90,8 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     watchTogether?.isHost ?? false,
     watchTogether?.relayUrl ?? null,
   );
+
+  const inLobby = wt.isInSession && wt.lobby?.phase !== "playback";
 
   const { preferences, updatePreferences } = usePreferences();
   const pb = preferences.playback;
@@ -608,7 +611,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     canChangeItem && (queue.currentIndex > 0 || (!wt.isInSession && episodeNav.handlePrevEpisode != null));
 
   usePlayerKeyboardShortcuts({
-    enabled: !browserPiPActive,
+    enabled: !browserPiPActive && !inLobby,
     togglePlay,
     seek,
     currentTime: player.currentTime,
@@ -629,6 +632,10 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     togglePiP,
     onToggleShortcuts: toggleShortcuts,
   });
+
+  useEffect(() => {
+    if (wt.sessionEnded) void lifecycle.exit();
+  }, [wt.sessionEnded, lifecycle.exit]);
 
   // Publish the same committed handlers used by the visible controls. The
   // bridge is mounted only in a native-authorized probe run.
@@ -748,7 +755,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
         // would occlude it. HTML5 path keeps black so the <video> letterbox
         // stays cinema-style.
         background: isNativeEngine ? "transparent" : styles.container?.background,
-        cursor: chromeVisible ? "default" : "none",
+        cursor: inLobby || chromeVisible ? "default" : "none",
       }}
       onMouseMove={(e) => {
         // A real pointer move means the drag-resize is over and the user is
@@ -784,6 +791,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
         />
       )}
 
+      <div inert={inLobby} aria-hidden={inLobby || undefined}>
       {/* Pop-out drag strip (prexu-6qz): hover-reveal handle for the
           borderless floating window. Native popout path only; follows the
           controls auto-hide state. See PopoutDragStrip for the rationale.
@@ -958,6 +966,25 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
           onClose={() => setQueuePanelOpen(false)}
           posterUrl={queuePanelPosterUrl}
         />
+      )}
+      </div>
+      {inLobby && (
+        <div style={{ position: "absolute", inset: 0, zIndex: 1000, overflowY: "auto", background: "var(--bg-primary)" }}>
+          <WatchTogetherLobby
+            snapshot={wt.lobby ?? {
+              sessionId: wt.sessionId ?? "", phase: "lobby", hostAway: false,
+              mediaTitle: player.title || "Watch Together", mediaRatingKey: ratingKey,
+              mediaType: player.itemType, participants: [],
+            }}
+            isHost={wt.isHost}
+            connected={wt.syncStatus !== "disconnected" && !!wt.lobby}
+            error={wt.sessionError ?? player.playbackError}
+            onStartNow={wt.startNow}
+            onResendInvite={wt.resendInvite}
+            onRemoveParticipant={wt.removeParticipant}
+            onLeave={lifecycle.exit}
+          />
+        </div>
       )}
     </div>
   );

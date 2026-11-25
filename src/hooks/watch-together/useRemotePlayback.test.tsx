@@ -14,7 +14,7 @@ vi.mock("../../services/watch-sync", () => ({ watchSync: {
 vi.mock("../useToast", () => ({ useToast: () => ({ toast }) }));
 const status = vi.fn();
 const makePlayer = (overrides = {}) => ({
-  isPlaying: true, currentTime: 20, duration: 100, isLoading: false,
+  isPrepared: true, isPlaying: true, currentTime: 20, duration: 100, isLoading: false,
   isBuffering: false, seek: vi.fn(), togglePlay: vi.fn(), ...overrides,
 }) as unknown as UsePlayerResult;
 const emit = (event: string, data: unknown) => act(() => listeners.get(event)?.(data));
@@ -95,4 +95,37 @@ it("holds lobby controls and follows the authoritative start transition", () => 
   expect(p.togglePlay).not.toHaveBeenCalled();
   emit("session_state", { session_id: "room", phase: "playback", playing: true, current_time: 0, timestamp: 10000 });
   expect(p.togglePlay).toHaveBeenCalledOnce();
+});
+
+ it("does not advertise readiness or apply a start until decoder preparation", () => {
+  const p = makePlayer({ isPrepared: false, isPlaying: false });
+  const { rerender } = renderHook(({ player }) => useRemotePlayback(player, true, status, "room"), { initialProps: { player: p } });
+  emit("session_state", { session_id: "room", phase: "playback", playing: true, current_time: 0, timestamp: 10000 });
+  expect(send).not.toHaveBeenCalled();
+  expect(p.togglePlay).not.toHaveBeenCalled();
+  rerender({ player: { ...p, isPrepared: true } });
+  expect(send).toHaveBeenCalledWith({ type: "ready", current_time: 20 });
+  expect(p.togglePlay).toHaveBeenCalledOnce();
+});
+
+it("waits for session membership before reporting readiness and reports again on reconnect", () => {
+  const p = makePlayer({ isPlaying: false });
+  const { rerender } = renderHook(({ joined }) => useRemotePlayback(p, true, status, "room", joined), { initialProps: { joined: false } });
+  expect(send).not.toHaveBeenCalled();
+  rerender({ joined: true });
+  expect(send).toHaveBeenCalledOnce();
+  rerender({ joined: false });
+  rerender({ joined: true });
+  expect(send).toHaveBeenCalledTimes(2);
+});
+
+it("reapplies the authoritative clock after reconnect without a phase change", () => {
+  const p = makePlayer();
+  renderHook(() => useRemotePlayback(p, true, status, "room"));
+  const snapshot = { session_id: "room", phase: "playback", playing: true, current_time: 35, timestamp: 10000 };
+  emit("session_state", snapshot);
+  emit("disconnected", null);
+  emit("session_state", { ...snapshot, current_time: 50 });
+  expect(p.seek).toHaveBeenLastCalledWith(50);
+  expect(p.seek).toHaveBeenCalledTimes(2);
 });

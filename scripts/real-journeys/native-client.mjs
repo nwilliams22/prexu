@@ -45,6 +45,7 @@ void (async () => { if (window.__TAURI_INTERNALS__) {
 } })();
 `;
   let authenticated = false;
+  let displayNumber;
   const plugin = {
     name: 'isolated-real-relay-native-guest',
     transformIndexHtml() { return [{ tag:'script', attrs:{type:'module',src:`${endpoint}/driver.js`}, injectTo:'body' }]; },
@@ -110,10 +111,16 @@ void (async () => { if (window.__TAURI_INTERNALS__) {
       const displayFile=`${root}/display`; const display=await open(displayFile,'wx',0o600);
       const xvfb=spawn('Xvfb',['-displayfd','3','-screen','0','1280x800x24','-nolisten','tcp','-ac'],{detached:true,stdio:['ignore','ignore','ignore',display.fd]}); children.push(xvfb); xvfb.on('error',()=>{}); await display.close();
       let number; await until(async()=>{number=(await readFile(displayFile,'utf8')).trim();return /^\d+$/.test(number);},5000);
+      displayNumber = number;
       const env={}; for(const key of ['PATH','LANG','LD_LIBRARY_PATH']) if(process.env[key]) env[key]=process.env[key];
       Object.assign(env,{PATH:`${root}/bin:${env.PATH}`,HOME:root,XDG_CONFIG_HOME:`${root}/config`,XDG_DATA_HOME:`${root}/data`,XDG_CACHE_HOME:`${root}/cache`,XDG_RUNTIME_DIR:root,DISPLAY:`:${number}`,GDK_BACKEND:'x11',LIBGL_ALWAYS_SOFTWARE:'1'});
       const app=spawn('dbus-run-session',['--',resolve(process.env.PREXU_JOURNEY_APP || 'src-tauri/target/debug/prexu')],{env,detached:true,stdio:'ignore'});children.push(app);app.on('error',()=>{});
       await until(()=>authenticated,100000);
+    },
+    async screenshot(path) {
+      if (!displayNumber) throw Error("native-not-started");
+      const result = spawnSync("import", ["-display", `:${displayNumber}`, "-window", "root", path], { stdio: "ignore" });
+      if (result.status !== 0) throw Error("native-screenshot");
     },
     async close() {
       let clean=true;

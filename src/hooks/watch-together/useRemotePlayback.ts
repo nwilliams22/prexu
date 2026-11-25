@@ -10,6 +10,7 @@ export function useRemotePlayback(
   isInSession: boolean,
   setSyncStatus: (status: SyncStatus) => void,
   sessionId?: string | null,
+  canReportReadiness = true,
 ) {
   const { toast } = useToast();
   const playerRef = useRef(player);
@@ -24,7 +25,7 @@ export function useRemotePlayback(
   const applySnapshot = useCallback(() => {
     const snapshot = pendingSnapshot.current;
     const p = playerRef.current;
-    if (!snapshot || p.isLoading || p.isBuffering || p.duration <= 0) return;
+    if (!snapshot || !p.isPrepared || p.isLoading || p.isBuffering || p.duration <= 0) return;
     const elapsed = snapshot.playing ? Math.max(0, (Date.now() - snapshot.timestamp) / 1000) : 0;
     const time = snapshot.current_time + elapsed;
     p.seek(time);
@@ -45,6 +46,12 @@ export function useRemotePlayback(
     if (!isInSession) return;
 
     const subscriptions = [
+      watchSync.on("disconnected", () => {
+        initialized.current = false;
+        pendingSnapshot.current = null;
+        lastRemoteSyncRef.current = null;
+        setSyncStatus("disconnected");
+      }),
       watchSync.on("session_state", (snapshot) => {
         if (sessionId && snapshot.session_id !== sessionId) return;
         const phaseChanged = phase.current !== snapshot.phase;
@@ -85,12 +92,12 @@ export function useRemotePlayback(
     return () => subscriptions.forEach((unsubscribe) => unsubscribe());
   }, [isInSession, sessionId, applySnapshot, setSyncStatus, toast]);
 
-  useEffect(() => { applySnapshot(); }, [player.isLoading, player.isBuffering, player.duration, applySnapshot]);
+  useEffect(() => { applySnapshot(); }, [player.isPrepared, player.isLoading, player.isBuffering, player.duration, applySnapshot]);
 
   useEffect(() => {
-    if (!isInSession || player.isLoading || player.duration <= 0) return;
+    if (!isInSession || !canReportReadiness || !player.isPrepared || player.isLoading || player.duration <= 0) return;
     watchSync.send({ type: player.isBuffering ? "buffering" : "ready", current_time: player.currentTime });
-  }, [isInSession, player.isLoading, player.isBuffering, player.duration]);
+  }, [isInSession, canReportReadiness, player.isPrepared, player.isLoading, player.isBuffering, player.duration]);
 
   const { togglePlay, seek } = player;
   const syncTogglePlay = useCallback(() => {

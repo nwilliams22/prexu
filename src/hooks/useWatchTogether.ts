@@ -4,11 +4,17 @@
  * so existing imports continue to work unchanged.
  */
 
-import type { WatchParticipant } from "../types/watch-together";
+import type { WatchParticipant, WatchLobbySnapshot } from "../types/watch-together";
 
 export interface UseWatchTogetherResult {
   // Session state
   isInSession: boolean;
+  lobby: WatchLobbySnapshot | null;
+  sessionError: string | null;
+  sessionEnded: boolean;
+  startNow: () => void;
+  resendInvite: (username: string) => void;
+  removeParticipant: (username: string) => void;
   isHost: boolean;
   catchingUp: boolean;
   participants: WatchParticipant[];

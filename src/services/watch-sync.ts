@@ -5,7 +5,7 @@
 
 import { logger } from "./logger";
 import type { ContentRequestMessage, ContentRequestResponseMessage } from "../types/content-request";
-import type { WatchInvite, WatchParticipant } from "../types/watch-together";
+import type { WatchInvite, WatchParticipant, WatchLobbyParticipantState } from "../types/watch-together";
 
 export type SyncEventType =
   | "connected"
@@ -18,6 +18,7 @@ export type SyncEventType =
   | "session_joined"
   | "session_error"
   | "participant_joined"
+  | "participant_removed"
   | "participant_left"
   | "session_destroyed"
   | "invite_received"
@@ -82,6 +83,11 @@ export interface PlaybackSnapshot {
   current_time: number;
   timestamp: number;
   host_away: boolean;
+  protocol_version?: number;
+  media_title?: string;
+  media_rating_key?: string;
+  media_type?: string;
+  participants?: (Omit<WireParticipant, "state"> & { state: WatchLobbyParticipantState })[];
 }
 
 export interface SyncEventPayloadMap {
@@ -95,6 +101,7 @@ export interface SyncEventPayloadMap {
   session_joined: { type: "session_joined"; session_id: string; participants: WireParticipant[] };
   session_error: { type: "session_error"; reason: string };
   participant_joined: { type: "participant_joined"; participant: WireParticipant };
+  participant_removed: { type: "participant_removed"; plex_username: string };
   participant_left: { type: "participant_left"; plex_username: string };
   session_destroyed: { type: "session_destroyed" };
   invite_received: InviteReceivedMsg;
@@ -118,6 +125,7 @@ const WIRE_TO_EVENT: Record<string, SyncEventType> = {
   auth_ok: "auth_ok", auth_error: "auth_error",
   session_created: "session_created", session_joined: "session_joined",
   session_error: "session_error", participant_joined: "participant_joined",
+  participant_removed: "participant_removed",
   participant_left: "participant_left", session_destroyed: "session_destroyed",
   invite_received: "invite_received", pending_invites: "pending_invites",
   play: "remote_play", pause: "remote_pause", seek: "remote_seek",

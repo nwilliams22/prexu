@@ -53,9 +53,10 @@ vi.mock("../hooks/usePlayer", () => ({
   }),
 }));
 
-const watchState = vi.hoisted(() => ({ isInSession: false, isHost: false, catchingUp: false }));
+const watchState = vi.hoisted(() => ({ isInSession: false, isHost: false, catchingUp: false, lobby: { phase: "playback" as "playback" | "lobby", sessionId: "room", mediaTitle: "QA movie", mediaRatingKey: "123", mediaType: "movie", hostAway: false, participants: [] } }));
 vi.mock("../hooks/useWatchTogether", () => ({
   useWatchTogether: () => ({
+    lobby: { phase: "playback" },
     ...watchState,
     participants: [],
     syncStatus: "idle",
@@ -690,5 +691,23 @@ it.each(["isLoading", "isBuffering"] as const)("keeps catch-up status visible du
     loadState[flag] = false;
     watchState.isInSession = false;
     watchState.catchingUp = false;
+  }
+});
+
+it("keeps the same video mounted while the authoritative lobby becomes playback", () => {
+  watchState.isInSession = true;
+  watchState.lobby.phase = "lobby";
+  try {
+    const props = { ratingKey: "123", offset: null, watchTogether: { sessionId: "room", isHost: true } };
+    const { container, queryByRole, rerender } = render(<MemoryRouter><Player {...props} /></MemoryRouter>);
+    const video = container.querySelector("video");
+    expect(queryByRole("heading", { name: "QA movie" })).toBeInTheDocument();
+    watchState.lobby.phase = "playback";
+    rerender(<MemoryRouter><Player {...props} /></MemoryRouter>);
+    expect(queryByRole("heading", { name: "QA movie" })).not.toBeInTheDocument();
+    expect(container.querySelector("video")).toBe(video);
+  } finally {
+    watchState.isInSession = false;
+    watchState.lobby.phase = "playback";
   }
 });

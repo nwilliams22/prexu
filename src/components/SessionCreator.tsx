@@ -99,22 +99,30 @@ function SessionCreator({
 
       // Wait for session_created confirmation
       const sessionCreated = new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error("Session creation timed out")), 5000);
-        const unsub = watchSync.on("session_created", () => {
+        const cleanup = () => {
           clearTimeout(timeout);
           unsub();
+          unsubErr();
+        };
+        const timeout = setTimeout(() => {
+          cleanup();
+          reject(new Error("Session creation timed out"));
+        }, 5000);
+        const unsub = watchSync.on("session_created", (data) => {
+          if (data.session_id !== sessionId) return;
+          cleanup();
           resolve();
         });
-        const unsubErr = watchSync.on("session_error", (data: { reason?: string }) => {
-          clearTimeout(timeout);
-          unsubErr();
-          reject(new Error(data.reason ?? "Session creation failed"));
+        const unsubErr = watchSync.on("session_error", (data) => {
+          cleanup();
+          reject(new Error(data.reason));
         });
       });
 
       // Create session
       watchSync.send({
         type: "create_session",
+        protocol_version: 2,
         session_id: sessionId,
         media_title: title,
         media_rating_key: ratingKey,
