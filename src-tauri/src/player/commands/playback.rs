@@ -48,6 +48,8 @@ fn redact_url(url: &str) -> String {
     crate::util::redact_url(url)
 }
 
+// Keep the flat IPC arguments compatible; three parameters are injected Tauri state.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn player_load_url(
     url: String,
