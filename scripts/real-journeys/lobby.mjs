@@ -104,7 +104,12 @@ try {
     return a.playing && b.playing && !a.lobby && !b.lobby && a.time > 1 && b.time > 1;
   });
   await screenshot(0, 'host-auto-playback'); await screenshot(1, 'guest-auto-playback'); add(stage, 'PASS');
-  await host.getByRole('button', { name: 'Stop' }).click();
+  stage = 'session-remove-guest';
+  await host.getByRole('button', { name: 'Manage session' }).click();
+  await host.getByRole('button', { name: `Remove ${accounts[1].user.username}` }).click();
+  await until(() => guest.evaluate(async () => !(await import('/src/services/probe-live.ts')).probeLive.player));
+  await screenshot(0, 'host-removed-guest'); add(stage, 'PASS');
+  await host.getByRole('button', { name: 'Cancel session' }).click();
   await until(() => guest.evaluate(async () => !(await import('/src/services/probe-live.ts')).probeLive.player));
   stage = 'lobby-start-now-no-show';
   await createLobby();

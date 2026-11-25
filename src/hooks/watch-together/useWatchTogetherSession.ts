@@ -10,6 +10,9 @@ import { getPlexUser } from "../../services/plex-api";
 import type { WatchLobbySnapshot } from "../../types/watch-together";
 import { logger } from "../../services/logger";
 
+// The relay is a singleton; a replacement session cancels a deferred old leave.
+let pendingLeave: ReturnType<typeof setTimeout> | null = null;
+
 export type SyncStatus = "synced" | "syncing" | "disconnected";
 
 export interface UseWatchTogetherSessionResult {
@@ -95,6 +98,8 @@ export function useWatchTogetherSession(
   useEffect(() => {
     if (!sessionId) return;
 
+    // StrictMode probes setup/cleanup/setup without leaving the player.
+    if (pendingLeave) clearTimeout(pendingLeave);
     let cancelled = false;
 
     const joinSession = async () => {
@@ -155,8 +160,8 @@ export function useWatchTogetherSession(
 
     return () => {
       cancelled = true;
-      // Leave session on unmount (navigating away from player)
-      watchSync.send({ type: "leave_session" });
+      // Defer the external leave until a real unmount survives the probe.
+      pendingLeave = setTimeout(() => watchSync.send({ type: "leave_session" }), 0);
     };
   }, [sessionId, isHost, relayUrl, authToken]);
 

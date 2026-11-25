@@ -91,6 +91,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     watchTogether?.relayUrl ?? null,
   );
 
+  const [showSessionRoster, setShowSessionRoster] = useState(false);
   const inLobby = wt.isInSession && wt.lobby?.phase !== "playback";
 
   const { preferences, updatePreferences } = usePreferences();
@@ -611,7 +612,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     canChangeItem && (queue.currentIndex > 0 || (!wt.isInSession && episodeNav.handlePrevEpisode != null));
 
   usePlayerKeyboardShortcuts({
-    enabled: !browserPiPActive && !inLobby,
+    enabled: !browserPiPActive && !inLobby && !showSessionRoster,
     togglePlay,
     seek,
     currentTime: player.currentTime,
@@ -755,7 +756,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
         // would occlude it. HTML5 path keeps black so the <video> letterbox
         // stays cinema-style.
         background: isNativeEngine ? "transparent" : styles.container?.background,
-        cursor: inLobby || chromeVisible ? "default" : "none",
+        cursor: inLobby || showSessionRoster || chromeVisible ? "default" : "none",
       }}
       onMouseMove={(e) => {
         // A real pointer move means the drag-resize is over and the user is
@@ -791,7 +792,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
         />
       )}
 
-      <div inert={inLobby} aria-hidden={inLobby || undefined}>
+      <div inert={inLobby || showSessionRoster} aria-hidden={inLobby || showSessionRoster || undefined}>
       {/* Pop-out drag strip (prexu-6qz): hover-reveal handle for the
           borderless floating window. Native popout path only; follows the
           controls auto-hide state. See PopoutDragStrip for the rationale.
@@ -968,8 +969,13 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
         />
       )}
       </div>
-      {inLobby && (
+      {wt.isInSession && !inLobby && !showSessionRoster && chromeVisible && (
+        <button type="button" style={{ position: "absolute", top: "4rem", right: "1rem", zIndex: 100 }}
+          onClick={() => setShowSessionRoster(true)}>Manage session</button>
+      )}
+      {(inLobby || showSessionRoster) && (
         <div style={{ position: "absolute", inset: 0, zIndex: 1000, overflowY: "auto", background: "var(--bg-primary)" }}>
+          {!inLobby && <button type="button" onClick={() => setShowSessionRoster(false)}>Back to playback</button>}
           <WatchTogetherLobby
             snapshot={wt.lobby ?? {
               sessionId: wt.sessionId ?? "", phase: "lobby", hostAway: false,

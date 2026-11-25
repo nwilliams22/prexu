@@ -137,3 +137,16 @@ solo load that autoplays. It does not exercise the Watch Together lobby or
 establish audible silence on a physical output device. The lobby acceptance
 must mount `usePlayer(key, offset, { initiallyPaused: true })`, report readiness
 from `isPrepared`, and explicitly start only on relay `phase=playback`.
+
+## Watch Together lobby
+
+`node scripts/real-journeys/lobby.mjs` runs two isolated native app clients with
+real QA PIN sign-in and the production relay. Build the current desktop commit
+first and set `PREXU_JOURNEY_APP` to that binary. Supply both protected QA
+credentials above. Port 1420 must be free. Set `PREXU_JOURNEY_SCREENSHOTS` to an
+external evidence directory and `PREXU_JOURNEY_REPORT` to a JSON output path.
+The journey exercises the actual creator, resend, guest join, all-ready start,
+participant removal and Start now with a no-show. It records stopped preparation
+for three seconds, advancing playback on both clients, and restores each QA
+account's fixture progress. It does not establish macOS acceptance or replace
+Downloads coverage. Missing prerequisites or interrupted checks are NOT_VERIFIED.

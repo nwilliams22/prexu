@@ -81,3 +81,11 @@ describe("WatchTogetherLobby", () => {
     expect((await axe(container)).violations).toEqual([]);
   });
 });
+
+it("keeps removal available during playback without offering another start", () => {
+  const p = props(); p.snapshot.phase = "playback";
+  render(<WatchTogetherLobby {...p} />);
+  expect(screen.queryByRole("button", { name: "Start now" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Remove joining" })).toBeEnabled();
+  expect(screen.getByRole("status")).toHaveTextContent("Session in progress.");
+});

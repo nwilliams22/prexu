@@ -37,6 +37,7 @@ export default function WatchTogetherLobby({
         <p role="status">
           {!connected ? "Reconnecting to the session…"
             : snapshot.hostAway ? "Waiting for the host to reconnect…"
+            : snapshot.phase === "playback" ? "Session in progress."
             : "Playback starts when everyone is ready."}
         </p>
       </header>
@@ -73,7 +74,7 @@ export default function WatchTogetherLobby({
       {error && <p role="alert">{error}</p>}
       <footer className="watch-lobby-actions">
         <button type="button" onClick={onLeave}>{isHost ? "Cancel session" : "Leave session"}</button>
-        {isHost && <button type="button" className="watch-lobby-start" disabled={!canManage}
+        {isHost && snapshot.phase === "lobby" && <button type="button" className="watch-lobby-start" disabled={!canManage}
           onClick={onStartNow}>Start now</button>}
       </footer>
     </section>

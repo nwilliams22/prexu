@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import type { ReactNode } from "react";
+import { type ReactNode } from "react";
 import { useWatchTogetherSession } from "./useWatchTogetherSession";
 
 const listeners = new Map<string, Set<(data?: Record<string, unknown>) => void>>();
@@ -125,4 +125,15 @@ describe("authoritative lobby", () => {
     emit("participant_removed", { plex_username: "tester" });
     expect(result.current.sessionEnded).toBe(true);
   });
+});
+
+it("does not destroy the creator session during StrictMode effect probing", async () => {
+  connected = true; listeners.clear(); send.mockClear();
+  const { unmount } = renderHook(() => useWatchTogetherSession("session-1", true), {
+    wrapper, reactStrictMode: true,
+  });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+  expect(send).not.toHaveBeenCalledWith({ type: "leave_session" });
+  unmount();
+  await waitFor(() => expect(send).toHaveBeenCalledWith({ type: "leave_session" }));
 });
