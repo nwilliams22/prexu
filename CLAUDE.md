@@ -188,3 +188,18 @@ repository-scoped tooling sees it directly. This is an explicit, standing reposi
   throwaway QA account. Agents may send it to `plex.tv` (including the PIN-link sign-in) and to the
   Prexu QA Test Server for automated QA sign-in and playback. Never print it, attach it, write it to
   a file in the repo, or send it anywhere else.
+
+### macOS test VM
+
+Owner-approved on 2026-11-24: agents may use the throwaway macOS test VM
+for automated build and playback checks. Read `/usr/local/share/mac-test/AGENTS.md`
+before use. Run `sudo mac-test wait 30 "BAD-xxx mac test"` before connecting,
+then use `ssh -n mac-host mac-vm start` and `ssh mac-vm` for the test.
+Always finish with `ssh -n mac-host mac-vm reset`. An unavailable laptop is
+an infrastructure wait, not a failed playback check.
+
+Use only the QA Plex server and the protected QA credential under the policy
+above. Drive the UI with `axui`, attach screenshots, and record codec decisions,
+moving picture, selected audio track and advancing playback state. Distinguish
+VM evidence from audible output or hardware-only acceptance; request a physical
+check only when a measured VM limitation prevents verification.
