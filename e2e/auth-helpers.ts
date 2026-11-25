@@ -83,6 +83,15 @@ export async function setupAuthenticatedState(page: Page) {
     }),
   );
 
+  // The authenticated fixture represents an online server. Startup routing
+  // and periodic health checks use this endpoint before showing the library.
+  await page.route("http://localhost:32400/identity", (route) =>
+    route.fulfill({
+      status: 200,
+      json: { MediaContainer: { machineIdentifier: "machine-id-123" } },
+    }),
+  );
+
   // Intercept Plex.tv resources endpoint
   await page.route("**/api/v2/resources*", (route) =>
     route.fulfill({
