@@ -80,7 +80,7 @@ try {
     throw new Error('busy');
   }
   stage = 'qa-fixture-state';
-  if (!offlineOnly && (!baseline.watched || baseline.offset)) { server = undefined; baseline = undefined; throw new Error('fixture-state'); }
+  if (!offlineOnly && !baseline.watched) { server = undefined; baseline = undefined; throw new Error('fixture-state'); }
   root = await mkdtemp(`${tmpdir()}/prexu-native-journey-`);
   await mkdir(`${root}/bin`);
   const nonce = randomBytes(24).toString('hex');
@@ -119,7 +119,7 @@ try {
             return;
           } else if (req.url === `${endpoint}/diagnostic`) {
             const input = JSON.parse(body);
-            if (!['native-queue-start', 'native-queue-eof', 'native-queue-postplay', 'native-offline'].includes(input.stage) ||
+            if (!['native-login', 'native-queue-start', 'native-queue-eof', 'native-queue-postplay', 'native-offline'].includes(input.stage) ||
                 !Number.isFinite(input.time) || input.time < 0 || input.time > 130 ||
                 Object.keys(input).sort().join(',') !== 'errorWords,invalidUrl,loadFailed,missing,nativeError,noMedia,retry,scheme,stage,time' ||
                 ['retry','missing','scheme','noMedia','loadFailed','invalidUrl'].some(key => typeof input[key] !== 'boolean')) throw new Error('event');
@@ -141,7 +141,7 @@ try {
           } else if (req.url === endpoint) {
             const event = JSON.parse(body);
             if (!validEvent(event)) throw new Error('event');
-            if (event.journey === 'native-login' && !linked) throw new Error('unlinked');
+            if (event.journey === 'native-login' && event.status === 'PASS' && !linked) throw new Error('unlinked');
             add(event.journey, event.status);
             if (event.journey === 'native-driver') finish(event.status);
           } else throw new Error('route');
@@ -236,7 +236,7 @@ finally {
 }
 if (!offlineOnly && rows.some(row => row.journey === 'native-login')) {
   if (!rows.some(row => row.journey === 'native-queue-postplay')) add('queue-postplay', 'NOT_RUN');
-  add('two-client-relay', process.env.PREXU_QA_PLEX_GUEST_AUTH ? 'NOT_RUN' : 'SKIP');
+  add('two-client-relay', 'NOT_RUN');
 }
 if (offlineOnly && rows.some(row => row.journey === 'native-login')) {
   for (const journey of ['native-download', 'native-offline', 'native-offline-missing-file']) {

@@ -201,6 +201,7 @@ async function run() {
       location.assign('/item/2');
     } finally { unlisten(); }
   } catch {
+    if (stage === 'native-login') await diagnose(stage, 0);
     await emit(stage, 'FAIL');
     await emit('native-driver', 'FAIL');
   }

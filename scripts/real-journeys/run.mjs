@@ -127,10 +127,10 @@ try {
       await until(async () => (await quality.inputValue()) === '720p');
     });
     add('login', 'NOT_RUN', 'Native shell PIN opening is not exercised by browser storage seeding');
-    add('play-resume-watch-state', 'NOT_RUN', 'Native playback and service watch-state restoration still need a desktop adapter');
-    add('queue-postplay', 'NOT_RUN', 'Playback completion and queue advancement still need a desktop adapter');
-    add('downloads-offline', 'UNSUPPORTED', 'Browser cannot invoke the Tauri download backend; desktop adapter required');
-    add('two-client-relay', process.env.PREXU_QA_PLEX_GUEST_AUTH ? 'NOT_RUN' : 'SKIP', 'Pending second account; relay acceptance remains required');
+    add('play-resume-watch-state', 'NOT_RUN', 'Covered by native.mjs in the full gate');
+    add('queue-postplay', 'NOT_RUN', 'Covered by native.mjs in the full gate');
+    add('downloads-offline', 'NOT_RUN', 'Covered by native.mjs in the full gate');
+    add('two-client-relay', 'NOT_RUN', 'Covered by relay.mjs in the full gate');
   }
 } catch {
   add('setup', 'FAIL', `Failed during ${stage}; raw errors suppressed`);
