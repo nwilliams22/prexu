@@ -314,7 +314,8 @@ jobs:
         env:
           MPV_SOURCE: ${{ github.workspace }}\src-tauri\ci\mpv
           RUST_LOG: debug
-        run: cargo test --lib -- --ignored --nocapture
+        # The QA download test requires its separate credentialed service run.
+        run: cargo test --lib -- --ignored --nocapture --skip downloads::tests::qa_server_range_resume_matches_original
 
   headless-mpv-linux:
     name: Headless mpv integration (Linux, libmpv 2.x)
@@ -385,7 +386,8 @@ jobs:
         working-directory: src-tauri
         env:
           RUST_LOG: debug
-        run: cargo test --lib -- --ignored --nocapture
+        # The QA download test requires its separate credentialed service run.
+        run: cargo test --lib -- --ignored --nocapture --skip downloads::tests::qa_server_range_resume_matches_original
 
   linux-build:
     name: Linux src-tauri build (native player + libmpv)
