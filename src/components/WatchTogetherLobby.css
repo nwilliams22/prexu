@@ -1,0 +1,38 @@
+.watch-lobby {
+  width: min(100%, 52rem);
+  margin-inline: auto;
+  padding: clamp(1rem, 4vw, 3rem);
+  color: var(--text-primary);
+  background: var(--bg-primary);
+}
+.watch-lobby h1 { overflow-wrap: anywhere; }
+.watch-lobby-eyebrow { color: var(--accent); font-weight: 600; }
+.watch-lobby header > p:last-child,
+.watch-lobby-state { color: var(--text-secondary); }
+.watch-lobby-participants { list-style: none; padding: 0; }
+.watch-lobby-participants > li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding-block: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.watch-lobby-person { display: flex; align-items: center; gap: .75rem; min-width: 0; }
+.watch-lobby-person img { width: 2.5rem; height: 2.5rem; border-radius: 50%; object-fit: cover; }
+.watch-lobby-person span { display: block; overflow-wrap: anywhere; }
+.watch-lobby-state { font-size: .875rem; margin-top: .25rem; }
+.watch-lobby-actions { display: flex; flex-wrap: wrap; gap: .75rem; }
+.watch-lobby footer { justify-content: flex-end; margin-top: 1.5rem; }
+.watch-lobby button {
+  padding: .65rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: .5rem;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.watch-lobby button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.watch-lobby button:disabled { opacity: .5; cursor: default; }
+.watch-lobby button.watch-lobby-start { background: var(--accent); color: #000; }

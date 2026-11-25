@@ -24,3 +24,27 @@ export interface WatchSession {
   isHost: boolean;
   participants: WatchParticipant[];
 }
+
+/** Protocol v2 roster states are distinct from the player's transport state. */
+export type WatchLobbyParticipantState =
+  | "invited"
+  | "joined-buffering"
+  | "ready"
+  | "reconnecting";
+
+export interface WatchLobbyParticipant {
+  plexUsername: string;
+  plexThumb: string;
+  isHost: boolean;
+  state: WatchLobbyParticipantState;
+}
+
+export interface WatchLobbySnapshot {
+  sessionId: string;
+  mediaTitle: string;
+  mediaRatingKey: string;
+  mediaType: string;
+  phase: "lobby" | "playback";
+  hostAway: boolean;
+  participants: WatchLobbyParticipant[];
+}
