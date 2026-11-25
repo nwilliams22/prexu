@@ -1,4 +1,6 @@
 import { useState } from "react";
+import DownloadQueue from "../components/downloads/DownloadQueue";
+import { formatBytes } from "../components/downloads/format";
 import { groupShows, groupSeasons, downloadSize, watchedDownloads } from "../components/downloads/groups";
 import DeleteDownloadsDialog from "../components/downloads/DeleteDownloadsDialog";
 import type { PlexEpisode } from "../types/library";
@@ -34,13 +36,6 @@ function OpenFolderButton() {
       Open folder
     </button>
   );
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  return `${(bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
 }
 
 function DownloadItemRow({ item, serverUri, serverToken }: {
@@ -174,9 +169,6 @@ function Downloads() {
 
   if (!server) return null;
 
-  const active = downloads.filter(
-    (d) => d.status === "downloading" || d.status === "queued",
-  );
   const completed = downloads.filter((d) => d.status === "complete");
   const movies = completed.filter((item) => item.type === "movie");
   const shows = groupShows(completed.filter((item) => item.type === "episode"));
@@ -227,21 +219,7 @@ function Downloads() {
         <OpenFolderButton />
       </div>
 
-      {active.length > 0 && (
-        <section style={styles.section}>
-          <h3 style={styles.sectionTitle}>
-            Downloading ({active.length})
-          </h3>
-          {active.map((item) => (
-            <DownloadItemRow
-              key={item.ratingKey}
-              item={item}
-              serverUri={server.uri}
-              serverToken={server.accessToken}
-            />
-          ))}
-        </section>
-      )}
+      <DownloadQueue />
 
       {failed.length > 0 && (
         <section style={styles.section}>

@@ -8,7 +8,7 @@ export function pinCode(value) {
   return codes[0];
 }
 
-export const JOURNEYS = ['native-login', 'native-session-restore',
+export const JOURNEYS = ['download-queue-paused', 'download-queue-reordered', 'download-queue-complete', 'download-queue-settings', 'native-login', 'native-session-restore',
   'native-play-advance', 'native-play-pause', 'native-early-stop-watch-state',
   'native-resume', 'native-resume-completion', 'native-queue-start', 'native-queue-eof', 'native-queue-postplay', 'native-download', 'native-offline', 'native-offline-missing-file', 'native-driver'];
 export function validEvent(event) {

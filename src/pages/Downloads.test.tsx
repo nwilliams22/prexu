@@ -110,7 +110,7 @@ describe("grouped downloads", () => {
   it("pins active items, retains failed Retry, and groups movies and TV seasons with size", () => {
     const context = showDownloads([fixture("movie", { type: "movie" }), fixture("episode-one"), fixture("episode-two", { parentIndex: 2 }), fixture("active", { status: "queued" }), fixture("failed", { status: "error" })]);
     const headings = screen.getAllByRole("heading").map((heading) => heading.textContent);
-    expect(headings).toEqual(["Downloads", "Downloading (1)", "Failed", "Movies (1)", "TV shows", "QA show — 2.0 KB"]);
+    expect(headings).toEqual(["Downloads", "Download queue (1)", "Failed", "Movies (1)", "TV shows", "QA show — 2.0 KB"]);
     expect(screen.getByText("Season 1 (1)")).toBeInTheDocument();
     expect(screen.getByText("Season 2 (1)")).toBeInTheDocument();
     fireEvent.click(screen.getByTitle("Retry download"));
