@@ -120,10 +120,13 @@ describe("grouped downloads", () => {
   it("requires confirmation, allows cancellation, and limits Delete all to this show", () => {
     const context = showDownloads([fixture("one"), fixture("two", { parentIndex: 2 }), fixture("movie", { type: "movie" }), fixture("other", { grandparentTitle: "Other" })]);
     const show = screen.getByRole("region", { name: "QA show" });
-    fireEvent.click(within(show).getByRole("button", { name: "Delete all" }));
+    const trigger = within(show).getByRole("button", { name: "Delete all" });
+    trigger.focus();
+    fireEvent.click(trigger);
     expect(context.deleteDownload).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
     fireEvent.click(within(show).getByRole("button", { name: "Delete all" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete downloads" }));
     expect(context.deleteDownload.mock.calls).toEqual([["one"], ["two"]]);
