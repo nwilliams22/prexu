@@ -113,11 +113,14 @@ PREXU_JOURNEY_DOWNLOAD_QUEUE=1 PREXU_JOURNEY_PROGRESS=1 \
 ```
 
 This mode uses the same isolated native profile and PIN sign-in, then downloads
-S01E01 and S01E02 from **Prexu QA Seasons** (show rating key 17). It clicks the
+**Prexu QA Lossless Surround** (13) and **Prexu QA Surround** (3). These
+existing synthetic Movies fixtures exceed 50 MB so navigation does not outlast
+the transfer; the smaller season episodes can finish before Pause appears. It clicks the
 real detail and Downloads controls, pauses both, moves the second item up,
-resumes, and checks both completion metadata and native file presence. It also
-changes the Settings concurrency selector from 1 to 3 and back. A full page reload
-between items checks persistence of paused state; it is not a process-restart test.
+resumes, checks both completion metadata and native file presence, then deletes
+both through the UI and checks native file absence. It also
+changes the Settings concurrency selector from 1 to 3 and back. The second fixture is selected through real in-app search, preserving the live
+queue context. This mode does not claim process-restart acceptance.
 Controls must be visible and unobscured before the driver clicks them. This mode
 requires `xdotool` and sizes the real app to 1900×1000 on a 1920×1080 display.
 Screenshots of the paused/reordered queue and completed files are required.

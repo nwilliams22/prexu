@@ -4,9 +4,9 @@ import { getLocalFilePath } from '/src/services/downloads.ts';
 const endpoint = __JOURNEY_ENDPOINT__;
 const fixtures = __QUEUE_FIXTURES__;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-async function until(fn, timeout = 60000) {
+async function until(fn, timeout = 60000, interval = 20) {
   const end = Date.now() + timeout;
-  while (Date.now() < end) { if (await fn()) return; await sleep(20); }
+  while (Date.now() < end) { if (await fn()) return; await sleep(interval); }
   throw new Error('deadline');
 }
 function visible(element) {
@@ -46,7 +46,8 @@ async function emit(journey, status = 'PASS') {
 }
 async function shot(label) {
   await until(() => button('Downloads'));
-  await sleep(300);
+  // Let WebKitGTK present the settled route before the X11 capture.
+  await sleep(2500);
   const response = await fetch(`${endpoint}/screenshot`, { method: 'POST', body: label });
   if (!response.ok) throw new Error('screenshot');
 }
@@ -59,14 +60,15 @@ async function run() {
       await click('Sign in with Plex');
       await emit(stage);
       stage = 'download-login-token';
-      await until(async () => Boolean((await getAuth())?.authToken));
+      await until(async () => Boolean((await getAuth())?.authToken), 120000, 200);
       await emit(stage);
       stage = 'download-login-server';
+      let selectedServer = false;
       await until(async () => {
         const server = [...document.querySelectorAll('button')].find(b => b.textContent.includes('Prexu QA Test Server'));
-        if (server) server.click();
+        if (server && !selectedServer) { selectedServer = true; server.click(); }
         return (await getServer())?.name === 'Prexu QA Test Server';
-      });
+      }, 60000, 200);
       await emit(stage);
       await emit('native-login');
       sessionStorage.setItem('download-queue-login', 'yes');
@@ -77,19 +79,31 @@ async function run() {
     const resized = await fetch(`${endpoint}/resize`, { method: 'POST' });
     if (!resized.ok) throw new Error('resize');
     await until(() => innerWidth >= 1800);
-    // Warm the real lazy page before starting a small local-network fixture.
-    // Otherwise cold Vite compilation can outlast the entire download.
-    await import('/src/pages/Downloads.tsx');
+    // Visit the actual lazy route before starting a local-network transfer.
+    await nav('/downloads');
+    await until(() => button('Open folder'));
+    await click('Go back');
+    await until(() => location.pathname === `/item/${fixtures[0].key}` && button('Download for offline'));
     stage = 'download-queue-paused';
-    if (!sessionStorage.getItem('download-queue-first')) {
-      await click('Download for offline');
-      await openAndPauseQueue(`Pause ${fixtures[0].title}`);
-      await until(async () => (await getDownloadItems()).some(d => d.ratingKey === fixtures[0].key && d.status === 'paused'));
-      sessionStorage.setItem('download-queue-first', 'yes');
-      // Reload into the second detail page also proves paused state survives a full page reload.
-      location.assign(`/item/${fixtures[1].key}`);
-      return;
-    }
+    await click('Download for offline');
+    await openAndPauseQueue(`Pause ${fixtures[0].title}`);
+    await until(async () => (await getDownloadItems()).some(d => d.ratingKey === fixtures[0].key && d.status === 'paused'));
+    await emit('download-queue-first-paused');
+    stage = 'download-queue-search';
+    // Use actual search navigation, keeping the same queue context alive.
+    const search = document.querySelector('input[aria-label="Search movies, shows, episodes"]');
+    if (!visible(search)) throw new Error('search');
+    search.focus();
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(search, fixtures[1].title);
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    const result = () => [...document.querySelectorAll('[role="option"], [role="button"]')].find(option => option.textContent.includes(fixtures[1].title) && option.querySelector('img') && visible(option));
+    await until(result);
+    await emit(stage);
+    result().click();
+    stage = 'download-queue-second-detail';
+    await until(() => location.pathname === `/item/${fixtures[1].key}`);
+    await emit(stage);
+    stage = 'download-queue-paused';
     await click('Download for offline');
     await openAndPauseQueue();
     await until(async () => {
@@ -112,6 +126,14 @@ async function run() {
     for (const fixture of fixtures) if (!await getLocalFilePath(fixture.key)) throw new Error('file');
     await shot('complete');
     await emit(stage);
+    stage = 'download-queue-delete';
+    for (const remaining of [1, 0]) {
+      await click('Delete download');
+      await until(async () => (await getDownloadItems()).length === remaining);
+    }
+    for (const fixture of fixtures) await until(async () => !await getLocalFilePath(fixture.key));
+    await until(async () => (await getDownloadItems()).length === 0);
+    await emit(stage);
     stage = 'download-queue-settings';
     await nav('/settings');
     await nav('/settings/connections');
@@ -127,6 +149,12 @@ async function run() {
     await emit(stage);
     await emit('native-driver');
   } catch {
+    if (stage === 'download-queue-search') {
+      const cards = [...document.querySelectorAll('[role="button"]')].filter(e => e.textContent.includes(fixtures[1].title));
+      await emit('download-card-match', cards.length ? 'PASS' : 'FAIL');
+      await emit('download-card-visible', cards.some(visible) ? 'PASS' : 'FAIL');
+      await emit('download-card-image', cards.some(e => e.querySelector('img')) ? 'PASS' : 'FAIL');
+    }
     if (stage.startsWith('download-queue') && (await getServer())?.name === 'Prexu QA Test Server') await shot('diagnostic').catch(() => {});
     await emit(stage, 'FAIL');
     await emit('native-driver', 'FAIL');

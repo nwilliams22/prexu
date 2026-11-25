@@ -86,11 +86,13 @@ try {
   if (!queueMode && !offlineOnly && !baseline.watched) { server = undefined; baseline = undefined; throw new Error('fixture-state'); }
   if (queueMode) {
     stage = 'qa-download-fixtures';
-    const data = await (await request(`${server.uri}/library/metadata/17/allLeaves`, { headers: { 'X-Plex-Token': server.token } })).json();
-    const episodes = data.MediaContainer.Metadata || [];
-    queueFixtures = episodes.filter(item => item.grandparentTitle === 'Prexu QA Seasons' && item.parentIndex === 1 && [1, 2].includes(item.index))
-      .sort((a, b) => a.index - b.index).map(item => ({ key: item.ratingKey, title: item.title }));
-    if (queueFixtures.length !== 2) throw new Error('fixtures');
+    queueFixtures = [];
+    for (const [key, title] of [['13', 'Prexu QA Lossless Surround'], ['3', 'Prexu QA Surround']]) {
+      const data = await (await request(`${server.uri}/library/metadata/${key}`, { headers: { 'X-Plex-Token': server.token } })).json();
+      const item = data.MediaContainer.Metadata?.[0];
+      if (item?.title !== title || item.type !== 'movie' || !(item.Media?.[0]?.Part?.[0]?.size > 50000000)) throw new Error('fixtures');
+      queueFixtures.push({ key, title });
+    }
   }
   root = await mkdtemp(`${tmpdir()}/prexu-native-journey-`);
   await mkdir(`${root}/bin`);
@@ -121,6 +123,7 @@ try {
             await request('https://plex.tv/api/v2/pins/link', { method: 'PUT',
               headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Plex-Product': 'Plex Web' }, body: new URLSearchParams({ code }) });
             linked = true;
+            if (queueMode) add('download-pin-linked', 'PASS');
           } else if (req.url === `${endpoint}/restart`) {
             if (!linked || !restartApp || !rows.some(row => row.journey === 'native-download' && row.status === 'PASS')) throw new Error('event');
             const restart = restartApp;
@@ -268,11 +271,11 @@ if (!queueMode && offlineOnly && rows.some(row => row.journey === 'native-login'
   }
 }
 if (queueMode && rows.some(row => row.journey === 'native-login')) {
-  for (const journey of ['download-queue-paused', 'download-queue-reordered', 'download-queue-complete', 'download-queue-settings']) {
+  for (const journey of ['download-queue-paused', 'download-queue-reordered', 'download-queue-complete', 'download-queue-delete', 'download-queue-settings']) {
     if (!rows.some(row => row.journey === journey)) add(journey, 'NOT_RUN');
   }
 }
-const report = { schema: 1, applicationSha256, fixtureDurationMs: baseline?.duration, watchComparison, watchComparisons, diagnostics, binarySourceRevision: 'not independently verified', scope: queueMode ? 'real desktop download queue controls with QA episodes' : offlineOnly ? 'native offline slice; NOT full journey acceptance' : queueOnly ? 'native queue/offline slice; NOT full journey acceptance' : 'native single-user slice; NOT full journey acceptance', rows };
+const report = { schema: 1, applicationSha256, fixtureDurationMs: baseline?.duration, watchComparison, watchComparisons, diagnostics, binarySourceRevision: 'not independently verified', scope: queueMode ? 'real desktop download queue controls with QA movies' : offlineOnly ? 'native offline slice; NOT full journey acceptance' : queueOnly ? 'native queue/offline slice; NOT full journey acceptance' : 'native single-user slice; NOT full journey acceptance', rows };
 const output = JSON.stringify(report, null, 2) + '\n';
 if (process.env.PREXU_JOURNEY_REPORT) await writeFile(process.env.PREXU_JOURNEY_REPORT, output, { mode: 0o600 });
 process.stdout.write(output);
