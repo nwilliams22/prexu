@@ -50,6 +50,7 @@ fn broadcast_to_session(
 pub fn create_session(
     state: &SharedState,
     session_id: String,
+    protocol_version: u8,
     username: &str,
     plex_thumb: &str,
     media_title: String,
@@ -57,6 +58,16 @@ pub fn create_session(
     media_type: String,
     sender: tokio::sync::mpsc::Sender<Arc<String>>,
 ) {
+    if !(1..=2).contains(&protocol_version) {
+        send_to_user(
+            state,
+            username,
+            &ServerMessage::SessionError {
+                reason: "Unsupported protocol version".into(),
+            },
+        );
+        return;
+    }
     // Check if session already exists
     if state.sessions.contains_key(&session_id) {
         send_to_user(
@@ -79,6 +90,15 @@ pub fn create_session(
         host_username: username.to_string(),
         participants: dashmap::DashMap::new(),
         created_at: now_ms(),
+        protocol_version,
+        invited: Default::default(),
+        removed: Default::default(),
+        disconnected: Default::default(),
+        started: false,
+        playing: false,
+        resume_after_host: false,
+        current_time: 0.0,
+        clock_updated: tokio::time::Instant::now(),
     };
 
     session.participants.insert(
@@ -87,7 +107,12 @@ pub fn create_session(
             plex_username: username.to_string(),
             plex_thumb: plex_thumb.to_string(),
             is_host: true,
-            state: "ready".to_string(),
+            state: if protocol_version >= 2 {
+                "joined-buffering"
+            } else {
+                "ready"
+            }
+            .to_string(),
             sender,
         },
     );
@@ -107,6 +132,7 @@ pub fn create_session(
         },
     );
 
+    broadcast_state(state, &session_id);
     info!(session_id = %session_id, host = %username, "Session created");
 }
 
@@ -118,6 +144,7 @@ pub fn join_session(
     plex_thumb: &str,
     sender: tokio::sync::mpsc::Sender<Arc<String>>,
 ) {
+    cleanup_disconnected_inner(state);
     let session = match state.sessions.get(session_id) {
         Some(s) => s,
         None => {
@@ -132,8 +159,29 @@ pub fn join_session(
         }
     };
 
+    if session.removed.contains(username) {
+        drop(session);
+        send_to_user(
+            state,
+            username,
+            &ServerMessage::SessionError {
+                reason: "Removed participant needs a new host invite".into(),
+            },
+        );
+        return;
+    }
+    if session.disconnected.contains_key(username) {
+        drop(session);
+        reconnect(state, session_id, username, sender);
+        return;
+    }
     // Check if already in session
     if session.participants.contains_key(username) {
+        if session.protocol_version >= 2 {
+            drop(session);
+            broadcast_state(state, session_id);
+            return;
+        }
         send_to_user(
             state,
             username,
@@ -145,8 +193,14 @@ pub fn join_session(
     }
     drop(session);
     leave_session(state, username);
-    let Some(session) = state.sessions.get(session_id) else {
+    let Some(mut session) = state.sessions.get_mut(session_id) else {
         return;
+    };
+    session.invited.remove(username);
+    let joined_state = if session.protocol_version >= 2 {
+        "joined-buffering"
+    } else {
+        "buffering"
     };
 
     // Collect existing participants for the join response
@@ -168,7 +222,7 @@ pub fn join_session(
             plex_username: username.to_string(),
             plex_thumb: plex_thumb.to_string(),
             is_host: false,
-            state: "buffering".to_string(),
+            state: joined_state.to_string(),
             sender,
         },
     );
@@ -200,12 +254,13 @@ pub fn join_session(
                 plex_username: username.to_string(),
                 plex_thumb: plex_thumb.to_string(),
                 is_host: false,
-                state: "buffering".to_string(),
+                state: joined_state.to_string(),
             },
         },
         Some(username),
     );
 
+    broadcast_state(state, session_id);
     info!(session_id = %session_id, user = %username, "User joined session");
 }
 
@@ -234,7 +289,50 @@ pub fn leave_session_for_disconnect(
     handle: &ConnectionHandle,
 ) {
     if let Some(session_id) = &handle.session_id {
-        leave_session_inner(state, username, session_id, &handle.sender);
+        let Some(mut session) = state.sessions.get_mut(session_id) else {
+            return;
+        };
+        if session.protocol_version < 2 {
+            drop(session);
+            leave_session_inner(state, username, session_id, &handle.sender);
+            return;
+        }
+        if !session
+            .participants
+            .get(username)
+            .is_some_and(|p| p.sender.same_channel(&handle.sender))
+        {
+            return;
+        }
+        let host = session.host_username == username;
+        if host {
+            freeze_clock(&mut session);
+            session.resume_after_host = session.playing;
+            session.playing = false;
+        }
+        let seconds = if host { 60 } else { 120 };
+        session.disconnected.insert(
+            username.to_string(),
+            tokio::time::Instant::now() + std::time::Duration::from_secs(seconds),
+        );
+        if let Some(mut p) = session.participants.get_mut(username) {
+            p.state = "reconnecting".into();
+        }
+        let position = session.current_time;
+        drop(session);
+        if host {
+            broadcast_to_session(
+                state,
+                session_id,
+                &ServerMessage::Pause {
+                    current_time: position,
+                    timestamp: now_ms(),
+                    from_user: username.into(),
+                },
+                None,
+            );
+        }
+        broadcast_state(state, session_id);
     }
 }
 
@@ -244,7 +342,7 @@ fn leave_session_inner(
     session_id: &str,
     sender: &tokio::sync::mpsc::Sender<Arc<String>>,
 ) {
-    let Some(session) = state.sessions.get(session_id) else {
+    let Some(mut session) = state.sessions.get_mut(session_id) else {
         return;
     };
     let removed = session.participants.remove_if(username, |_, participant| {
@@ -253,6 +351,7 @@ fn leave_session_inner(
     if removed.is_none() {
         return;
     }
+    session.disconnected.remove(username);
     let was_host = session.host_username == username;
     let remaining: Vec<String> = if was_host {
         session
@@ -284,6 +383,8 @@ fn leave_session_inner(
             },
             None,
         );
+        maybe_start(state, session_id, false);
+        broadcast_state(state, session_id);
         info!(session_id, user = %username, "User left session");
         return;
     }
@@ -325,7 +426,11 @@ pub fn handle_invite(
         .get(sender_username)
         .is_some_and(|conn| conn.session_id.as_deref() == Some(session_id));
     let pending = match state.sessions.get(session_id) {
-        Some(session) if in_session && session.participants.contains_key(sender_username) => {
+        Some(session)
+            if in_session
+                && session.participants.contains_key(sender_username)
+                && (session.protocol_version < 2 || session.host_username == sender_username) =>
+        {
             PendingInviteInfo {
                 session_id: session_id.to_string(),
                 media_title: session.media_title.clone(),
@@ -365,9 +470,19 @@ pub fn handle_invite(
             Ok(()) => {
                 info!(from = %sender_username, to = %target_username, "Invite queued or deduplicated")
             }
-            Err(reason) => reject(reason),
+            Err(reason) => {
+                reject(reason);
+                return;
+            }
         }
     }
+    if let Some(mut session) = state.sessions.get_mut(session_id) {
+        session.removed.remove(target_username);
+        if !session.participants.contains_key(target_username) {
+            session.invited.insert(target_username.into());
+        }
+    }
+    broadcast_state(state, session_id);
 }
 
 /// Relay a playback event to all other participants in the sender's session.
@@ -382,6 +497,53 @@ pub fn relay_playback_event(state: &SharedState, username: &str, msg: &ServerMes
         },
         None => return,
     };
+
+    if let Some(mut session) = state.sessions.get_mut(&session_id) {
+        if session.protocol_version >= 2 {
+            if !session.participants.contains_key(username)
+                || session.disconnected.contains_key(username)
+            {
+                return;
+            }
+            match msg {
+                ServerMessage::Ready { .. } | ServerMessage::Buffering { .. } => {
+                    if let Some(mut p) = session.participants.get_mut(username) {
+                        p.state = if matches!(msg, ServerMessage::Ready { .. }) {
+                            "ready"
+                        } else {
+                            "joined-buffering"
+                        }
+                        .into();
+                    }
+                }
+                ServerMessage::Play { current_time, .. }
+                | ServerMessage::Pause { current_time, .. }
+                | ServerMessage::Seek { current_time, .. } => {
+                    if !session.started
+                        || session.disconnected.contains_key(&session.host_username)
+                        || !current_time.is_finite()
+                        || *current_time < 0.0
+                    {
+                        return;
+                    }
+                    session.current_time = *current_time;
+                    session.clock_updated = tokio::time::Instant::now();
+                    if matches!(msg, ServerMessage::Play { .. }) {
+                        session.playing = true;
+                    }
+                    if matches!(msg, ServerMessage::Pause { .. }) {
+                        session.playing = false;
+                    }
+                }
+                _ => return,
+            }
+            drop(session);
+            broadcast_to_session(state, &session_id, msg, Some(username));
+            maybe_start(state, &session_id, false);
+            broadcast_state(state, &session_id);
+            return;
+        }
+    }
 
     // Update participant state in session
     if let Some(session) = state.sessions.get(&session_id) {
@@ -435,6 +597,17 @@ pub fn handle_new_media(
         session.media_rating_key = media_rating_key.to_string();
         session.media_title = media_title.to_string();
         session.media_type = media_type.to_string();
+        if session.protocol_version >= 2 {
+            session.started = false;
+            session.playing = false;
+            session.resume_after_host = false;
+            session.current_time = 0.0;
+            for mut p in session.participants.iter_mut() {
+                if !session.disconnected.contains_key(p.key()) {
+                    p.state = "joined-buffering".into();
+                }
+            }
+        }
     }
 
     let msg = ServerMessage::NewMedia {
@@ -447,6 +620,7 @@ pub fn handle_new_media(
     // Broadcast to everyone except the sender (sender navigates locally)
     broadcast_to_session(state, &session_id, &msg, Some(username));
 
+    broadcast_state(state, &session_id);
     info!(
         session_id = %session_id,
         user = %username,
@@ -458,4 +632,269 @@ pub fn handle_new_media(
 /// Clean up expired pending invites (older than 10 minutes).
 pub fn cleanup_expired_invites(state: &SharedState) {
     state.pending_invites.cleanup();
+}
+
+fn freeze_clock(session: &mut Session) {
+    if session.playing {
+        session.current_time += session.clock_updated.elapsed().as_secs_f64();
+    }
+    session.clock_updated = tokio::time::Instant::now();
+}
+
+fn broadcast_state(state: &SharedState, session_id: &str) {
+    let Some(session) = state.sessions.get(session_id) else {
+        return;
+    };
+    if session.protocol_version < 2 {
+        return;
+    }
+    let mut participants: Vec<_> = session
+        .participants
+        .iter()
+        .map(|p| ParticipantInfo {
+            plex_username: p.plex_username.clone(),
+            plex_thumb: p.plex_thumb.clone(),
+            is_host: p.is_host,
+            state: p.state.clone(),
+        })
+        .collect();
+    participants.extend(session.invited.iter().map(|name| ParticipantInfo {
+        plex_username: name.clone(),
+        plex_thumb: String::new(),
+        is_host: false,
+        state: "invited".into(),
+    }));
+    participants.sort_by(|a, b| a.plex_username.cmp(&b.plex_username));
+    let msg = ServerMessage::SessionState {
+        session_id: session_id.into(),
+        protocol_version: session.protocol_version,
+        media_title: session.media_title.clone(),
+        media_rating_key: session.media_rating_key.clone(),
+        media_type: session.media_type.clone(),
+        phase: if session.started { "playback" } else { "lobby" }.into(),
+        participants,
+        host_away: session.disconnected.contains_key(&session.host_username),
+        playing: session.playing,
+        current_time: session.current_time
+            + if session.playing {
+                session.clock_updated.elapsed().as_secs_f64()
+            } else {
+                0.0
+            },
+        timestamp: now_ms(),
+    };
+    drop(session);
+    broadcast_to_session(state, session_id, &msg, None);
+}
+
+fn maybe_start(state: &SharedState, session_id: &str, force: bool) {
+    let Some(mut session) = state.sessions.get_mut(session_id) else {
+        return;
+    };
+    if session.protocol_version < 2
+        || session.started
+        || session.disconnected.contains_key(&session.host_username)
+    {
+        return;
+    }
+    if !force
+        && (!session.invited.is_empty()
+            || !session.disconnected.is_empty()
+            || session.participants.iter().any(|p| p.state != "ready"))
+    {
+        return;
+    }
+    session.started = true;
+    session.playing = true;
+    session.clock_updated = tokio::time::Instant::now();
+    let msg = ServerMessage::SessionStarted {
+        current_time: session.current_time,
+        timestamp: now_ms(),
+    };
+    drop(session);
+    broadcast_to_session(state, session_id, &msg, None);
+}
+
+pub fn start_now(state: &SharedState, username: &str) {
+    let Some(id) = state
+        .connections
+        .get(username)
+        .and_then(|c| c.session_id.clone())
+    else {
+        return;
+    };
+    if state
+        .sessions
+        .get(&id)
+        .is_none_or(|s| s.host_username != username)
+    {
+        send_to_user(
+            state,
+            username,
+            &ServerMessage::SessionError {
+                reason: "Only the host can start playback".into(),
+            },
+        );
+        return;
+    }
+    maybe_start(state, &id, true);
+    broadcast_state(state, &id);
+}
+
+pub fn remove_participant(state: &SharedState, username: &str, target: &str) {
+    let Some(id) = state
+        .connections
+        .get(username)
+        .and_then(|c| c.session_id.clone())
+    else {
+        return;
+    };
+    let Some(mut session) = state.sessions.get_mut(&id) else {
+        return;
+    };
+    if session.protocol_version < 2 || session.host_username != username || target == username {
+        drop(session);
+        send_to_user(
+            state,
+            username,
+            &ServerMessage::SessionError {
+                reason: "Only the host can remove a guest".into(),
+            },
+        );
+        return;
+    }
+    session.invited.remove(target);
+    session.participants.remove(target);
+    session.disconnected.remove(target);
+    session.removed.insert(target.into());
+    drop(session);
+    if let Some(mut conn) = state.connections.get_mut(target) {
+        if conn.session_id.as_deref() == Some(&id) {
+            conn.session_id = None;
+        }
+    }
+    let msg = ServerMessage::ParticipantRemoved {
+        plex_username: target.into(),
+    };
+    send_to_user(state, target, &msg);
+    broadcast_to_session(state, &id, &msg, None);
+    maybe_start(state, &id, false);
+    broadcast_state(state, &id);
+}
+
+fn reconnect(
+    state: &SharedState,
+    id: &str,
+    username: &str,
+    sender: tokio::sync::mpsc::Sender<Arc<String>>,
+) {
+    // Expire first so a late reconnect cannot revive an expired slot.
+    cleanup_disconnected_inner(state);
+    leave_session(state, username);
+    let Some(mut session) = state.sessions.get_mut(id) else {
+        send_to_user(
+            state,
+            username,
+            &ServerMessage::SessionError {
+                reason: "Session not found".into(),
+            },
+        );
+        return;
+    };
+    if session.disconnected.remove(username).is_none() {
+        drop(session);
+        send_to_user(
+            state,
+            username,
+            &ServerMessage::SessionError {
+                reason: "Reconnect grace expired; join again".into(),
+            },
+        );
+        return;
+    }
+    if let Some(mut p) = session.participants.get_mut(username) {
+        p.sender = sender;
+        p.state = "joined-buffering".into();
+    }
+    let host = session.host_username == username;
+    if host {
+        session.playing = session.resume_after_host;
+        session.resume_after_host = false;
+        session.clock_updated = tokio::time::Instant::now();
+    }
+    let resume = session.playing && host;
+    let position = session.current_time;
+    let participants = session
+        .participants
+        .iter()
+        .map(|p| ParticipantInfo {
+            plex_username: p.plex_username.clone(),
+            plex_thumb: p.plex_thumb.clone(),
+            is_host: p.is_host,
+            state: p.state.clone(),
+        })
+        .collect();
+    drop(session);
+    if let Some(mut conn) = state.connections.get_mut(username) {
+        conn.session_id = Some(id.into());
+    }
+    send_to_user(
+        state,
+        username,
+        &ServerMessage::SessionJoined {
+            session_id: id.into(),
+            participants,
+        },
+    );
+    if resume {
+        broadcast_to_session(
+            state,
+            id,
+            &ServerMessage::Play {
+                current_time: position,
+                timestamp: now_ms(),
+                from_user: username.into(),
+            },
+            None,
+        );
+    }
+    broadcast_state(state, id);
+}
+
+/// Monotonic grace deadlines, independent of wall-clock changes.
+pub fn cleanup_disconnected(state: &SharedState) {
+    let _guard = state
+        .session_operations
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    cleanup_disconnected_inner(state);
+}
+
+fn cleanup_disconnected_inner(state: &SharedState) {
+    let now = tokio::time::Instant::now();
+    let expired: Vec<_> = state
+        .sessions
+        .iter()
+        .flat_map(|s| {
+            s.disconnected
+                .iter()
+                .filter(|(_, deadline)| **deadline <= now)
+                .filter_map(|(name, _)| {
+                    s.participants
+                        .get(name)
+                        .map(|p| (s.id.clone(), name.clone(), p.sender.clone()))
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    for (id, name, sender) in expired {
+        // Recheck: a reconnect may have replaced the sender since collection.
+        if state.sessions.get(&id).is_some_and(|s| {
+            s.disconnected
+                .get(&name)
+                .is_some_and(|deadline| *deadline <= now)
+        }) {
+            leave_session_inner(state, &name, &id, &sender);
+        }
+    }
 }

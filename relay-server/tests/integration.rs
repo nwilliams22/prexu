@@ -1561,3 +1561,96 @@ fn test_public_url_configuration_rejects_unsafe_or_unusable_endpoints() {
         );
     }
 }
+
+/// V2 emits authoritative snapshots in addition to the existing event stream.
+async fn ws_recv_type(ws: &mut WsStream, kind: &str) -> serde_json::Value {
+    timeout(RECV_TIMEOUT, async {
+        loop {
+            let msg = ws_recv(ws).await;
+            if msg["type"] == kind {
+                return msg;
+            }
+        }
+    })
+    .await
+    .expect("expected protocol event")
+}
+
+#[tokio::test]
+async fn test_v2_wire_lobby_controls_and_reconnect() {
+    let addr = start_test_server().await;
+    let mut host = ws_connect(addr).await;
+    let mut guest = ws_connect(addr).await;
+    authenticate(&mut host, "v2_host").await;
+    authenticate(&mut guest, "v2_guest").await;
+    ws_send(&mut host, &serde_json::json!({"type":"create_session", "protocol_version":2, "session_id":"v2", "media_title":"Fixture", "media_rating_key":"1", "media_type":"movie"})).await;
+    ws_recv_type(&mut host, "session_created").await;
+    assert_eq!(
+        ws_recv_type(&mut host, "session_state").await["phase"],
+        "lobby"
+    );
+    ws_send(
+        &mut host,
+        &serde_json::json!({"type":"invite", "session_id":"v2", "target_username":"v2_guest"}),
+    )
+    .await;
+    ws_recv_type(&mut guest, "invite_received").await;
+    ws_send(
+        &mut guest,
+        &serde_json::json!({"type":"join_session", "session_id":"v2"}),
+    )
+    .await;
+    ws_recv_type(&mut guest, "session_joined").await;
+    ws_send(
+        &mut host,
+        &serde_json::json!({"type":"ready", "current_time":0}),
+    )
+    .await;
+    ws_send(
+        &mut guest,
+        &serde_json::json!({"type":"ready", "current_time":0}),
+    )
+    .await;
+    ws_recv_type(&mut host, "session_started").await;
+    ws_recv_type(&mut guest, "session_started").await;
+    for kind in ["pause", "seek", "play"] {
+        ws_send(&mut guest, &serde_json::json!({"type":kind, "current_time":42, "timestamp":123, "from_user":"spoofed_host"})).await;
+        let event = ws_recv_type(&mut host, kind).await;
+        assert_eq!(event["from_user"], "v2_guest");
+        assert_eq!(event["current_time"].as_f64(), Some(42.0));
+    }
+    host.close(None).await.unwrap();
+    ws_recv_type(&mut guest, "pause").await;
+    // Earlier snapshots may still be queued; find the host-away state.
+    loop {
+        if ws_recv_type(&mut guest, "session_state").await["host_away"] == true {
+            break;
+        }
+    }
+    let mut host = ws_connect(addr).await;
+    authenticate(&mut host, "v2_host").await;
+    ws_send(
+        &mut host,
+        &serde_json::json!({"type":"join_session", "session_id":"v2"}),
+    )
+    .await;
+    ws_recv_type(&mut host, "session_joined").await;
+    let snapshot = ws_recv_type(&mut host, "session_state").await;
+    assert_eq!(snapshot["host_away"], false);
+    assert_eq!(snapshot["playing"], true);
+    ws_send(
+        &mut host,
+        &serde_json::json!({"type":"remove_participant", "plex_username":"v2_guest"}),
+    )
+    .await;
+    ws_recv_type(&mut guest, "participant_removed").await;
+    ws_send(
+        &mut guest,
+        &serde_json::json!({"type":"join_session", "session_id":"v2"}),
+    )
+    .await;
+    assert!(ws_recv_type(&mut guest, "session_error").await["reason"]
+        .as_str()
+        .unwrap()
+        .contains("new host invite"));
+}

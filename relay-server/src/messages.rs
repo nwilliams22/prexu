@@ -16,6 +16,8 @@ pub enum ClientMessage {
         plex_thumb: String,
     },
     CreateSession {
+        #[serde(default = "legacy_protocol")]
+        protocol_version: u8,
         session_id: String,
         media_title: String,
         media_rating_key: String,
@@ -25,6 +27,10 @@ pub enum ClientMessage {
         session_id: String,
     },
     LeaveSession,
+    StartNow,
+    RemoveParticipant {
+        plex_username: String,
+    },
     // Legacy identity, media and relay_url fields are ignored by serde.
     // The authenticated connection and server state supply these values.
     Invite {
@@ -63,6 +69,26 @@ pub enum ClientMessage {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
+    SessionState {
+        session_id: String,
+        protocol_version: u8,
+        media_title: String,
+        media_rating_key: String,
+        media_type: String,
+        phase: String,
+        participants: Vec<ParticipantInfo>,
+        host_away: bool,
+        playing: bool,
+        current_time: f64,
+        timestamp: u64,
+    },
+    SessionStarted {
+        current_time: f64,
+        timestamp: u64,
+    },
+    ParticipantRemoved {
+        plex_username: String,
+    },
     AuthOk {
         plex_username: String,
     },
@@ -149,4 +175,8 @@ pub struct PendingInviteInfo {
     pub sender_thumb: String,
     pub sent_at: u64,
     pub relay_url: String,
+}
+
+fn legacy_protocol() -> u8 {
+    1
 }

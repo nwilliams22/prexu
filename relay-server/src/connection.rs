@@ -70,29 +70,35 @@ pub async fn handle_connection(ws: WebSocket, state: SharedState) {
     info!(user = %username, "User authenticated via Plex token");
 
     // Register connection
-    let old = state.connections.insert(
-        username.clone(),
-        ConnectionHandle {
-            plex_username: username.clone(),
-            plex_thumb: thumb.clone(),
-            session_id: None,
-            sender: tx.clone(),
-        },
-    );
-    if let Some(old) = old {
-        if let Some(session_id) = old.session_id {
-            if let Some(session) = state.sessions.get(&session_id) {
-                if let Some(mut participant) = session.participants.get_mut(&username) {
-                    if participant.sender.same_channel(&old.sender) {
-                        participant.sender = tx.clone();
-                        if let Some(mut conn) = state.connections.get_mut(&username) {
-                            conn.session_id = Some(session_id);
+    {
+        let _guard = state
+            .session_operations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let old = state.connections.insert(
+            username.clone(),
+            ConnectionHandle {
+                plex_username: username.clone(),
+                plex_thumb: thumb.clone(),
+                session_id: None,
+                sender: tx.clone(),
+            },
+        );
+        if let Some(old) = old {
+            if let Some(session_id) = old.session_id {
+                if let Some(session) = state.sessions.get(&session_id) {
+                    if let Some(mut participant) = session.participants.get_mut(&username) {
+                        if participant.sender.same_channel(&old.sender) {
+                            participant.sender = tx.clone();
+                            if let Some(mut conn) = state.connections.get_mut(&username) {
+                                conn.session_id = Some(session_id);
+                            }
                         }
                     }
                 }
             }
+            info!(user = %username, "Superseded previous connection");
         }
-        info!(user = %username, "Superseded previous connection");
     }
 
     // Send auth_ok
@@ -201,13 +207,19 @@ pub async fn handle_connection(ws: WebSocket, state: SharedState) {
 
     // Cleanup on disconnect
     info!(user = %username, "User disconnected");
-    if let Some((_, handle)) = state
-        .connections
-        .remove_if(&username, |_, conn| conn.sender.same_channel(&tx))
     {
-        session::leave_session_for_disconnect(&state, &username, &handle);
-    } else {
-        info!(user = %username, "Skipping cleanup of superseded connection");
+        let _guard = state
+            .session_operations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some((_, handle)) = state
+            .connections
+            .remove_if(&username, |_, conn| conn.sender.same_channel(&tx))
+        {
+            session::leave_session_for_disconnect(&state, &username, &handle);
+        } else {
+            info!(user = %username, "Skipping cleanup of superseded connection");
+        }
     }
     writer_handle.abort();
 }
@@ -220,6 +232,17 @@ fn handle_client_message(
     raw: &str,
     sender: &mpsc::Sender<Arc<String>>,
 ) {
+    let _guard = state
+        .session_operations
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if !state
+        .connections
+        .get(username)
+        .is_some_and(|c| c.sender.same_channel(sender))
+    {
+        return;
+    }
     let msg: ClientMessage = match serde_json::from_str(raw) {
         Ok(m) => m,
         Err(e) => {
@@ -233,7 +256,12 @@ fn handle_client_message(
             // Already authenticated, ignore duplicate auth
         }
 
+        ClientMessage::StartNow => session::start_now(state, username),
+        ClientMessage::RemoveParticipant { plex_username } => {
+            session::remove_participant(state, username, &plex_username)
+        }
         ClientMessage::CreateSession {
+            protocol_version,
             session_id,
             media_title,
             media_rating_key,
@@ -242,6 +270,7 @@ fn handle_client_message(
             session::create_session(
                 state,
                 session_id,
+                protocol_version,
                 username,
                 thumb,
                 media_title,

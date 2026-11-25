@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -20,6 +20,8 @@ const TMDB_RATE_LIMIT_MAX: usize = 60;
 const TMDB_RATE_LIMIT_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
 
 pub struct AppState {
+    /// Serializes synchronous session operations and socket replacement; never held across await.
+    pub session_operations: Mutex<()>,
     /// session_id -> Session
     pub sessions: DashMap<String, Session>,
     /// plex_username -> ConnectionHandle
@@ -59,6 +61,7 @@ impl Default for AppState {
 impl AppState {
     pub fn new() -> Self {
         Self {
+            session_operations: Mutex::new(()),
             sessions: DashMap::new(),
             connections: DashMap::new(),
             pending_invites: PendingInvites::default(),
@@ -142,6 +145,15 @@ pub struct Session {
     pub host_username: String,
     pub participants: DashMap<String, Participant>,
     pub created_at: u64,
+    pub protocol_version: u8,
+    pub invited: HashSet<String>,
+    pub removed: HashSet<String>,
+    pub disconnected: HashMap<String, tokio::time::Instant>,
+    pub started: bool,
+    pub playing: bool,
+    pub resume_after_host: bool,
+    pub current_time: f64,
+    pub clock_updated: tokio::time::Instant,
 }
 
 /// Bounded channel capacity for per-connection message queues.

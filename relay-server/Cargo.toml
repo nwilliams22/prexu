@@ -29,7 +29,7 @@ urlencoding = "2"
 test-mode = []
 
 [dev-dependencies]
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["full", "test-util"] }
 tokio-tungstenite = "0.28"
 futures-util = "0.3"
 axum = { version = "0.8", features = ["ws"] }
