@@ -20,6 +20,7 @@ async function emit(journey, status = 'PASS') {
   await fetch(endpoint, { method: 'POST', body: JSON.stringify({ journey, status }) });
 }
 async function shot(label) {
+  await sleep(300);
   const response = await fetch(`${endpoint}/screenshot`, { method: 'POST', body: label });
   if (!response.ok) throw new Error('screenshot');
 }
@@ -47,7 +48,7 @@ async function run() {
       await click('Pause all');
       await until(async () => (await getDownloadItems()).some(d => d.ratingKey === fixtures[0].key && d.status === 'paused'));
       sessionStorage.setItem('download-queue-first', 'yes');
-      // Reload into the second detail page also proves paused state survives restart.
+      // Reload into the second detail page also proves paused state survives a full page reload.
       location.assign(`/item/${fixtures[1].key}`);
       return;
     }
@@ -76,7 +77,8 @@ async function run() {
     await emit(stage);
     stage = 'download-queue-settings';
     await nav('/settings');
-    await click('Connections & notifications');
+    await nav('/settings/connections');
+    await until(() => document.getElementById('download-concurrency'));
     const select = document.getElementById('download-concurrency');
     if (!select || select.value !== '1') throw new Error('setting');
     select.value = '3';

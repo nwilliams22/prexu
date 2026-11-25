@@ -100,3 +100,24 @@ the full launcher removes these flags. The native deadline is eight minutes.
 Missing browser credentials fail unless `--allow-missing-service` explicitly
 permits a SKIP; this option is never passed by the full gate. A passing diagnostic
 slice is not full acceptance.
+
+## Desktop download queue
+
+Build the debug app from the commit being checked, then run:
+
+```sh
+PREXU_JOURNEY_DOWNLOAD_QUEUE=1 PREXU_JOURNEY_PROGRESS=1 \
+  PREXU_JOURNEY_SCREENSHOTS=/tmp/prexu-queue-shots \
+  PREXU_JOURNEY_REPORT=/tmp/prexu-queue.json \
+  node scripts/real-journeys/native.mjs
+```
+
+This mode uses the same isolated native profile and PIN sign-in, then downloads
+S01E01 and S01E02 from **Prexu QA Seasons** (show rating key 17). It clicks the
+real detail and Downloads controls, pauses both, moves the second item up,
+resumes, and checks both completion metadata and native file presence. It also
+changes the Settings concurrency selector from 1 to 3 and back. A full page reload
+between items checks persistence of paused state; it is not a process-restart test.
+Screenshots of the paused/reordered queue and completed files are required.
+The profile and downloads are removed during cleanup; attach the JSON and PNGs
+to the task. No personal library or seeded download records are used.

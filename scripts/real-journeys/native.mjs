@@ -50,7 +50,7 @@ async function serviceIsExclusive() {
 }
 
 try {
-  if (process.env.DEBUG || !token || process.platform !== 'linux') throw new Error('prerequisites');
+  if (process.env.DEBUG || !token || process.platform !== 'linux' || (queueMode && !process.env.PREXU_JOURNEY_SCREENSHOTS)) throw new Error('prerequisites');
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(appPath)) hash.update(chunk);
   applicationSha256 = hash.digest('hex');
@@ -257,6 +257,11 @@ if (!queueMode && !offlineOnly && rows.some(row => row.journey === 'native-login
 }
 if (!queueMode && offlineOnly && rows.some(row => row.journey === 'native-login')) {
   for (const journey of ['native-download', 'native-offline', 'native-offline-missing-file']) {
+    if (!rows.some(row => row.journey === journey)) add(journey, 'NOT_RUN');
+  }
+}
+if (queueMode && rows.some(row => row.journey === 'native-login')) {
+  for (const journey of ['download-queue-paused', 'download-queue-reordered', 'download-queue-complete', 'download-queue-settings']) {
     if (!rows.some(row => row.journey === journey)) add(journey, 'NOT_RUN');
   }
 }
