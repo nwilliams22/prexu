@@ -16,7 +16,7 @@ those bundles link system libmpv without provisioning it (`prexu-axj4.7`).
 | --- | --- | --- |
 | Windows | Native by default; HTML5 selectable and runtime fallback supported | libmpv render API → ANGLE/D3D11 → DirectComposition, with composition-hosted WebView2 UI |
 | Linux | Native by default; HTML5 selectable and runtime fallback supported | libmpv OpenGL render API → GtkGLArea below transparent WebKitWebView in GtkOverlay |
-| macOS | HTML5 only in the application | WKWebView; native rendering proven in a separate spike, not integrated |
+| macOS | HTML5 default; native commands registered but availability is false | WKWebView; AppKit compositor remains pending (`prexu-ia6w.5`) |
 
 Engine choice is resolved once per player mount in
 [`engineResolution.ts`](../src/hooks/player/engineResolution.ts). A runtime

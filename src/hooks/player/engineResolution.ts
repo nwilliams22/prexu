@@ -3,8 +3,9 @@
  * hls.js) playback for a given Player mount.
  *
  * Native playback requires running under Tauri on a platform with a
- * libmpv backend (Windows or Linux — see IS_NATIVE_PLAYER_PLATFORM; both
- * vendor/bundle libmpv, see docs/adr-native-player-render-api.md). Even
+ * libmpv command surface (Windows, Linux, or macOS — see
+ * IS_NATIVE_PLAYER_PLATFORM). macOS reports unavailable until its compositor
+ * lands. Even
  * when the platform supports it, the *effective* engine for a given
  * playback session also depends on:
  *   - the user's `playerEngine` preference (auto | native | html5)
@@ -12,10 +13,9 @@
  *     session (`player://engine-failed`, or player_engine_status
  *     reporting unavailable) — see the session-fallback flag below.
  *
- * "auto" and "native" both resolve to native when the platform supports
- * it — they differ only in stated intent (auto = automatic best choice,
- * native = explicit opt-in), kept identical here for simplicity. "html5"
- * always forces the HTML5 backend.
+ * "auto" resolves to HTML5 on macOS and native on Windows/Linux.
+ * "native" explicitly opts in, subject to the availability probe and fallback.
+ * "html5" always forces the HTML5 backend.
  *
  * IMPORTANT — rules of hooks: usePlayer() dispatches to one of two
  * different hooks (useNativePlayer vs useHtml5Player) based on this
@@ -35,7 +35,7 @@ export type ResolvedEngine = "native" | "html5";
 
 /**
  * Platform capability: native playback is *possible* when running inside
- * Tauri AND the OS is Windows or Linux. This is a coarser check than the
+ * Tauri AND the OS is Windows, Linux, or macOS. This is a coarser check than the
  * *effective* per-session engine — see resolveEngineChoice. Kept as a
  * module-level constant (evaluated once at import time) exactly like the
  * original IS_NATIVE_PLAYER did, since the platform itself never changes
@@ -45,7 +45,9 @@ export const IS_NATIVE_PLAYER_PLATFORM =
   typeof window !== "undefined" &&
   "__TAURI_INTERNALS__" in window &&
   typeof navigator !== "undefined" &&
-  (navigator.userAgent.includes("Windows") || navigator.userAgent.includes("Linux"));
+  (navigator.userAgent.includes("Windows") ||
+    navigator.userAgent.includes("Linux") ||
+    navigator.userAgent.includes("Macintosh"));
 
 /** True when the current OS is Windows specifically (real UA string, not
  *  jsdom's default). Used to derive SUPPORTS_PLAYER_POPOUT, and alongside
@@ -97,7 +99,7 @@ export const SUPPORTS_PLAYER_POPOUT =
 
 /**
  * True when native playback is running on Linux specifically — narrower
- * than IS_NATIVE_PLAYER_PLATFORM (which is also true on Windows). Drives
+ * than IS_NATIVE_PLAYER_PLATFORM (also true on Windows/macOS). Drives
  * the Linux-only reveal-mute workaround in useNativePlayer.ts: ~1s of
  * audio is audible under the loading screen before the first video frame
  * reveals on Linux; Windows does not exhibit this (user-confirmed,
@@ -105,6 +107,9 @@ export const SUPPORTS_PLAYER_POPOUT =
  * gates an audio workaround, not a UI/IPC feature affordance.
  */
 export const IS_LINUX_NATIVE_PLAYER = IS_NATIVE_PLAYER_PLATFORM && IS_LINUX_PLATFORM;
+
+const IS_MACOS_PLATFORM =
+  typeof navigator !== "undefined" && navigator.userAgent.includes("Macintosh");
 
 export interface EngineResolutionInput {
   /** Whether native playback is possible on this platform at all. */
@@ -127,7 +132,8 @@ export function resolveEngineChoice({
   if (!platformCapable) return "html5";
   if (sessionFallback) return "html5";
   if (playerEngine === "html5") return "html5";
-  // "auto" and "native" both resolve to native when the platform supports it.
+  // macOS keeps HTML5 as its default; native is an explicit opt-in.
+  if (playerEngine === "auto" && IS_MACOS_PLATFORM) return "html5";
   return "native";
 }
 

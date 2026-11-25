@@ -26,7 +26,7 @@ describe("resolveEngineChoice", () => {
     input: EngineResolutionInput;
     expected: ResolvedEngine;
   }> = [
-    // ── Platform incapable (web, or Tauri on macOS) — always HTML5 ──
+    // ── Platform incapable (web or unsupported OS) — always HTML5 ──
     {
       name: "platform incapable + auto pref + no fallback → html5",
       input: { platformCapable: false, playerEngine: "auto", sessionFallback: false },
@@ -238,13 +238,26 @@ describe("SUPPORTS_PLAYER_MINIMIZE / SUPPORTS_PLAYER_POPOUT platform matrix", ()
     expect(mod.IS_LINUX_NATIVE_PLAYER).toBe(false);
   });
 
-  it("Tauri on an unsupported OS (e.g. macOS): neither minimize nor popout supported", async () => {
+  it("macOS native capability keeps HTML5 default and windowing disabled", async () => {
     const mod = await loadEngineResolution(
       true,
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
     );
+    expect(mod.IS_NATIVE_PLAYER_PLATFORM).toBe(true);
     expect(mod.SUPPORTS_PLAYER_MINIMIZE).toBe(false);
     expect(mod.SUPPORTS_PLAYER_POPOUT).toBe(false);
     expect(mod.IS_LINUX_NATIVE_PLAYER).toBe(false);
+    for (const playerEngine of ["auto", "native", "html5"] as const) {
+      expect(mod.resolveEngineChoice({ platformCapable: true, playerEngine, sessionFallback: false }))
+        .toBe(playerEngine === "native" ? "native" : "html5");
+      expect(mod.resolveEngineChoice({ platformCapable: true, playerEngine, sessionFallback: true }))
+        .toBe("html5");
+    }
+  });
+
+  it("Safari on macOS is not a native platform", async () => {
+    const mod = await loadEngineResolution(false, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)");
+    expect(mod.IS_NATIVE_PLAYER_PLATFORM).toBe(false);
+    expect(mod.resolveEngineChoice({ platformCapable: false, playerEngine: "native", sessionFallback: false })).toBe("html5");
   });
 });

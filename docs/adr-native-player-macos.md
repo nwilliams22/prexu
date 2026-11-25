@@ -20,10 +20,18 @@ Tracked as beads epic `prexu-ia6w`. Evidence: spikes `prexu-ia6w.1`
 (`spike/macos-webkit-codec-gap/FINDINGS.md`) and `prexu-ia6w.2`
 (`spike/macos-render-compositing/FINDINGS.md` + `evidence/`).
 
-Implementation audit (2026-09-20): this is an accepted design, not shipped
-macOS native support. `IS_NATIVE_PLAYER_PLATFORM` currently includes only
-Windows and Linux. `prexu-ttz9` and native integration remain open. The
-architecture and engine-selection sections below describe intended work.
+Implementation update (2026-11-25): the HTML5 codec gate (`prexu-ttz9`) has
+landed. macOS now compiles the native command surface and is recognized by
+`IS_NATIVE_PLAYER_PLATFORM`, but `player_engine_status` returns unavailable
+until the compositor (`prexu-ia6w.5`) lands. `auto` remains HTML5; native
+windowing capabilities remain disabled. This is not shipped native playback.
+
+For development, install `mpv` and `pkg-config` with Homebrew and set
+`PKG_CONFIG_PATH="$(brew --prefix)/lib/pkgconfig:$(brew --prefix libarchive)/lib/pkgconfig"`
+before building (Homebrew libarchive is keg-only, but mpv.pc needs its metadata). The build
+script requires libmpv API >= 2.5.0. These builds dynamically link Homebrew
+libmpv; removing its dylibs prevents app startup before the HTML5 fallback
+can run. Distribution and bundled dylibs remain `prexu-ia6w.9` work.
 
 ## Context
 

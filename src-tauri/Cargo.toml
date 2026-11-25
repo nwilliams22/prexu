@@ -15,6 +15,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2.5.4", features = [] }
 
+[target.'cfg(target_os = "macos")'.build-dependencies]
+pkg-config = "0.3"
+
 [dependencies]
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
@@ -34,11 +37,9 @@ tauri-plugin-store = "2"
 tauri-plugin-updater = "2.14.1"
 url = "2"
 
-# libmpv2 backs the native player, which is compiled on Windows AND Linux
-# (see src/lib.rs — the `player` module is gated to `any(windows, linux)`).
-# macOS and other targets still omit it: a base dependency would emit
-# `cargo:rustc-link-lib=mpv` and fail their link with `-lmpv not found`, so the
-# dependency lives in per-target tables only.
+# libmpv2 backs the native player on Windows, Linux, and macOS. Other
+# targets omit it to avoid an unresolved -lmpv link dependency. macOS compiles
+# the command surface but reports unavailable until its compositor lands.
 #
 #   - Windows: vendored `libmpv-2.dll`; the `build_libmpv` feature wires
 #     MPV_SOURCE into the link search path (see src-tauri/build.rs).
@@ -114,6 +115,14 @@ libloading = "0.8"
 # mirror of the Windows composition-hosting entry above); resolves to
 # vendor/wry via [patch].
 wry = "0.57.1"
+
+# macOS development uses Homebrew libmpv through pkg-config (see build.rs).
+# Native playback remains unavailable until the AppKit compositor lands.
+[target.'cfg(target_os = "macos")'.dependencies]
+libmpv2 = "4"
+libc = "0.2"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSView", "NSWindow", "NSOpenGL", "NSOpenGLView"] }
 
 # Path C3c (prexu-60mz.3): vendored fork of wry to add a WebView2 composition-
 # controller hosting path (CreateCoreWebView2CompositionController +

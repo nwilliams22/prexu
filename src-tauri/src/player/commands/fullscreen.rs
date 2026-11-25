@@ -74,6 +74,11 @@ pub async fn player_set_fullscreen(
         fs_result
     };
 
+    #[cfg(target_os = "macos")]
+    let fs_result = main
+        .set_fullscreen(fullscreen)
+        .map_err(|e| format!("set_fullscreen failed: {}", e));
+
     #[cfg(target_os = "windows")]
     let fs_result = {
     state.set_fullscreen_transition(true);

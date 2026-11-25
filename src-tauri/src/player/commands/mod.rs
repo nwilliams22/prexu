@@ -27,3 +27,9 @@ pub use playback::*;
 pub use minimize::*;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 pub use popout::*;
+
+// Keep the IPC contract registered while macOS windowing remains unavailable.
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::*;

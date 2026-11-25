@@ -7,6 +7,8 @@
 //!   - **Linux**: the mpv render API compositing a `GtkGLArea` under the
 //!     transparent WebKitWebView (`linux_compositor`, prexu-axj4.3).
 
+pub(crate) const MACOS_UNAVAILABLE_REASON: &str = "macOS native compositor is not implemented";
+
 pub mod commands;
 pub mod events;
 pub(crate) mod lifecycle;
@@ -541,6 +543,11 @@ impl PlayerState {
     /// warnings are upstream noise tied to WebView2 init timing and do not
     /// affect playback or geometry sync. Revisit on a tao version bump.
     pub(crate) fn ensure_init(&self, app: &AppHandle) -> Result<(), String> {
+        // Do not start decode/audio without a compositor, even if a caller
+        // bypasses the frontend availability probe.
+        if cfg!(target_os = "macos") {
+            return Err(MACOS_UNAVAILABLE_REASON.into());
+        }
         log::info!("[player] ensure_init called");
         {
             let guard = self.inner.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
@@ -713,7 +720,7 @@ impl PlayerState {
     /// Cross-platform: on Linux the render context stays alive across a soft
     /// stop (only `player_unload`/`destroy` tears it down), so the next
     /// `loadfile` reuses the same mpv handle + GtkGLArea render path.
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub(crate) fn stop_playback(&self) -> Result<(), String> {
         let guard = self.inner.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
         let Some(inner) = guard.as_ref() else {
@@ -1203,7 +1210,7 @@ impl PlayerState {
         self.apply_host_geometry(x, y, width, height);
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(all(debug_assertions, any(target_os = "windows", target_os = "linux")))]
     pub(crate) fn probe_snapshot(
         &self,
         expected_path: &str,

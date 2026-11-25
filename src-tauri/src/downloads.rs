@@ -482,7 +482,7 @@ pub async fn get_local_file_path(
 /// Resolve a downloaded item for native playback without accepting a webview
 /// file path. Canonical containment also rejects symlinks outside this item's
 /// directory (or an item directory symlink outside the downloads root).
-#[cfg(any(target_os = "windows", target_os = "linux", test))]
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos", test))]
 pub(crate) async fn playback_file(
     rating_key: &str,
     manager: &DownloadManager,

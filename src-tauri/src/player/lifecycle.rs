@@ -20,10 +20,10 @@ use tauri::AppHandle;
 
 use super::Inner;
 
-/// Force `LC_NUMERIC=C` exactly once, before the first `mpv_create()` on Linux.
+/// Force `LC_NUMERIC=C` exactly once, before the first `mpv_create()` on Linux/macOS.
 /// libmpv aborts initialization under any locale whose numeric formatting uses
 /// a non-'.' decimal separator; the C locale is the one it mandates.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn ensure_c_numeric_locale() {
     use std::sync::Once;
     static ONCE: Once = Once::new();
@@ -34,7 +34,7 @@ fn ensure_c_numeric_locale() {
         unsafe {
             libc::setlocale(libc::LC_NUMERIC, c"C".as_ptr());
         }
-        log::info!("[player:linux] setlocale(LC_NUMERIC, \"C\") applied before mpv_create");
+        log::info!("[player:lifecycle] setlocale(LC_NUMERIC, \"C\") applied before mpv_create");
     });
 }
 
@@ -58,11 +58,11 @@ fn ensure_c_numeric_locale() {
 /// isolation; the perf-tuning rationale lives with the properties it explains.
 pub(super) fn configure_mpv_properties(wid: Option<i64>, composition: bool) -> Result<Mpv, String> {
     // libmpv refuses `mpv_create()` under a non-C `LC_NUMERIC` (it requires the
-    // '.' decimal separator). On Linux force `LC_NUMERIC=C` process-wide, once,
+    // '.' decimal separator). On Linux/macOS force `LC_NUMERIC=C` process-wide, once,
     // before the handle is created (prexu-axj4.3 / spike gotcha #4). Windows
     // ships a C locale by default and links a vendored libmpv, so this is a
-    // Linux-only guard.
-    #[cfg(target_os = "linux")]
+    // Unix desktop guard.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     ensure_c_numeric_locale();
 
     let mpv = Mpv::with_initializer(|init| {

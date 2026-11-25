@@ -14,10 +14,10 @@ mod probe_commands;
 mod probe_snapshot;
 // The native libmpv player compiles on Windows (wid/HWND + DirectComposition)
 // and Linux (render API + GtkGLArea under the transparent WebKitWebView — see
-// docs/adr-native-player-render-api.md, prexu-axj4.3). macOS and any other
-// target omit it and use the HTML5 <video> engine, keeping libmpv out of their
-// link line (see Cargo.toml per-target dependency tables + prexu-nesp).
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+// docs/adr-native-player-render-api.md, prexu-axj4.3). macOS compiles the
+// command surface with an unavailable compositor; HTML5 remains its default.
+// Other targets omit libmpv (see Cargo.toml per-target dependency tables).
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 mod player;
 mod util;
 
@@ -691,15 +691,13 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_updater::Builder::default().build());
 
-    // PlayerState owns the libmpv handle — managed on Windows and Linux.
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    // PlayerState owns the libmpv handle on Windows/Linux; macOS stays uninitialized.
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     let builder = builder.manage(player::PlayerState::new());
 
-    // The player_* commands exist on Windows (native libmpv player) and Linux
-    // (render-API player, prexu-axj4.3). macOS and other targets omit them so
-    // the player module — and therefore libmpv — need not compile there. The
-    // frontend gates invocation on the native-player probe, so other platforms
-    // never call these.
+    // All desktop targets register the player_* contract. macOS reports
+    // available=false and rejects native initialization until its compositor
+    // lands. Other targets omit the commands and use HTML5.
     #[cfg(target_os = "windows")]
     let builder = builder.invoke_handler(tauri::generate_handler![
         player::composition_host::ime_set_composing,
@@ -747,8 +745,9 @@ pub fn run() {
     // Wayland floats without placement/keep-above, see `commands::popout`).
     // Fullscreen maps to a plain Tauri window toggle (no host geometry).
     // `player_engine_status` + `player://engine-failed` are the
-    // HTML5-fallback probe contract with the TS side.
-    #[cfg(target_os = "linux")]
+    // HTML5-fallback probe contract with the TS side. macOS registers the
+    // same surface here with explicit unavailable windowing stubs.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let builder = builder.invoke_handler(tauri::generate_handler![
         #[cfg(debug_assertions)]
         probe_commands::probe_driver,
@@ -785,7 +784,7 @@ pub fn run() {
         player::commands::player_exit_minimize,
         player::commands::player_update_mini_geometry,
     ]);
-    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     let builder = builder.invoke_handler(tauri::generate_handler![
         #[cfg(debug_assertions)]
         probe_commands::probe_driver,

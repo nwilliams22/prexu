@@ -28,6 +28,12 @@ fn main() {
         println!("cargo:rustc-link-arg=/DEFAULTLIB:delayimp.lib");
     }
 
+    #[cfg(target_os = "macos")]
+    pkg_config::Config::new()
+        .atleast_version("2.5.0")
+        .probe("mpv")
+        .expect("macOS dev builds require libmpv: brew install mpv pkg-config; set PKG_CONFIG_PATH to Homebrew lib/pkgconfig");
+
     tauri_build::build();
 }
 

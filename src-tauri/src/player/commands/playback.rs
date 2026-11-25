@@ -452,7 +452,12 @@ pub async fn player_engine_status() -> Result<EngineStatus, String> {
             reason,
         }
     };
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    let status = EngineStatus {
+        available: false,
+        reason: Some(crate::player::MACOS_UNAVAILABLE_REASON.into()),
+    };
+    #[cfg(target_os = "windows")]
     let status = EngineStatus {
         available: true,
         reason: None,
