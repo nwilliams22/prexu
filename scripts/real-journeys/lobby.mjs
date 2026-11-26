@@ -47,6 +47,8 @@ async function observe(page) {
       playing: !!p?.isPlaying, time: p?.currentTime ?? 0, error: !!p?.playbackError, inviteEvents: window.lobbyInviteEvents || 0,
       invited: [...document.querySelectorAll('.watch-lobby-state')].some(e => e.textContent === 'Invited'),
       recoveryLabels: window.recoveryLabels || [],
+      rosterHistory: window.rosterHistory || [],
+      reconnectingText: document.body.textContent.includes("Reconnecting"),
       ready: [...document.querySelectorAll('.watch-lobby-state')].filter(e => e.textContent === 'Ready').length };
   });
 }
@@ -183,11 +185,17 @@ try {
     await until(async () => (await observe(host)).playing && (await observe(guest)).playing);
     await until(async () => Math.abs((await observe(host)).time - (await observe(guest)).time) < 2);
     add(stage, 'PASS');
-    stage = 'guest-grace-rejoin'; operation = 'guest-drop-rejoin';
-    await drop(guest, 8000);
+    stage = 'guest-grace-rejoin'; operation = 'guest-drop-label';
+    await host.evaluate(async () => {
+      window.rosterHistory = [];
+      (await import('/src/services/watch-sync.ts')).watchSync.on('session_state', state => {
+        if (window.rosterHistory.length < 12) window.rosterHistory.push(state.participants.map(p => ({ host: p.is_host, state: p.state })));
+      });
+    });
+    await drop(guest, 20000);
     await clients[0].revealControls();
     await until(() => text(host, 'Reconnecting'));
-    await screenshot(0, 'host-guest-reconnecting');
+    await screenshot(0, 'host-guest-reconnecting'); operation = 'guest-auto-rejoin';
     check((await observe(host)).playing);
     await until(async () => (await observe(guest)).playing && !await text(host, 'Reconnecting'));
     await until(async () => Math.abs((await observe(host)).time - (await observe(guest)).time) < 2);
