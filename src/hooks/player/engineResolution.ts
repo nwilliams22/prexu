@@ -4,9 +4,8 @@
  *
  * Native playback requires running under Tauri on a platform with a
  * libmpv command surface (Windows, Linux, or macOS — see
- * IS_NATIVE_PLAYER_PLATFORM). macOS reports unavailable until its compositor
- * lands. Even
- * when the platform supports it, the *effective* engine for a given
+ * IS_NATIVE_PLAYER_PLATFORM). Availability is checked before native playback.
+ * Even when the platform supports it, the *effective* engine for a given
  * playback session also depends on:
  *   - the user's `playerEngine` preference (auto | native | html5)
  *   - whether a runtime fallback has already been triggered this app

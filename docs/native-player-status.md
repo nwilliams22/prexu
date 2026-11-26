@@ -88,6 +88,12 @@ Initialization/render failures latch an unavailable reason and emit
 `player://engine-failed`; HTML5 remains the default. Minimize/popout parity is
 still unavailable. Debug host checks can set `PREXU_QA_SILENT=1` for `ao=null`.
 
+Settings identifies Auto as HTML5 on macOS; Native remains an explicit opt-in.
+Render-init failures use the existing session fallback and player remount.
+Missing-dylib fallback is not implemented: macOS development builds currently
+link Homebrew libmpv as a required loader dependency, so removing it can prevent
+app startup before the engine-status probe runs (`prexu-ia6w.6`).
+
 Synthetic HEVC 10-bit checks on an Apple M3 Pro exercised VideoToolbox, framebuffer
 readback, HiDPI resize and three attach/detach cycles. These do not establish
 visible React-overlay composition, fullscreen/display transitions, audio, or

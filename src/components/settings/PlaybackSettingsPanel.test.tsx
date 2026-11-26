@@ -86,3 +86,43 @@ describe("PlaybackSettingsPanel — platform capable of native (Tauri + Windows/
     expect(updatePlayback).toHaveBeenCalledWith({ playerEngine: "html5" });
   });
 });
+
+
+describe("PlaybackSettingsPanel — macOS", () => {
+  const originalUserAgent = navigator.userAgent;
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.doUnmock("../../hooks/player/engineResolution");
+    Object.defineProperty(navigator, "userAgent", {
+      value: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)", configurable: true,
+    });
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(navigator, "userAgent", { value: originalUserAgent, configurable: true });
+    Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+  });
+
+  it("labels Auto as HTML5 and allows native opt-in and explicit HTML5", async () => {
+    const { PlaybackSettingsPanel: Panel } = await import("./PlaybackSettingsPanel");
+    const updatePlayback = vi.fn();
+    render(<Panel playback={makePlayback()} updatePlayback={updatePlayback} />);
+    const select = screen.getByDisplayValue("Auto — HTML5 on macOS");
+    fireEvent.change(select, { target: { value: "native" } });
+    expect(updatePlayback).toHaveBeenLastCalledWith({ playerEngine: "native" });
+    fireEvent.change(select, { target: { value: "html5" } });
+    expect(updatePlayback).toHaveBeenLastCalledWith({ playerEngine: "html5" });
+  });
+
+  it("explains that native stays unavailable after a session fallback", async () => {
+    const engine = await import("../../hooks/player/engineResolution");
+    engine.setSessionFallbackActive(true);
+    const { PlaybackSettingsPanel: Panel } = await import("./PlaybackSettingsPanel");
+    render(<Panel playback={makePlayback({ playerEngine: "native" })} updatePlayback={vi.fn()} />);
+    expect(screen.getByText(/HTML5 is in use after a player error/)).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Native (mpv)")).toBeInTheDocument();
+    expect(screen.getByText(/Your choice applies after restarting Prexu/)).toBeInTheDocument();
+  });
+});

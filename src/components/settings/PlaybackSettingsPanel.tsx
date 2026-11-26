@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import type { PlaybackPreferences } from "../../types/preferences";
-import { IS_NATIVE_PLAYER_PLATFORM, isSessionFallbackActive, subscribeToEngineFallback } from "../../hooks/player/engineResolution";
+import { IS_NATIVE_PLAYER_PLATFORM, isSessionFallbackActive, resolveEngineChoice, subscribeToEngineFallback } from "../../hooks/player/engineResolution";
 import { PreferenceRow } from "./PreferenceRow";
 import { SettingsSection } from "./SettingsPrimitives";
 
@@ -11,11 +11,12 @@ interface PlaybackSettingsPanelProps {
 
 export function PlaybackSettingsPanel({ playback: pb, updatePlayback }: PlaybackSettingsPanelProps) {
   const fallback = useSyncExternalStore(subscribeToEngineFallback, isSessionFallbackActive);
+  const automaticEngine = resolveEngineChoice({ platformCapable: IS_NATIVE_PLAYER_PLATFORM, playerEngine: "auto", sessionFallback: false });
   return <>
     <SettingsSection title="Video">
       {IS_NATIVE_PLAYER_PLATFORM ? <PreferenceRow path="playback.playerEngine" help={`Applies the next time you open the player.${fallback ? " HTML5 is in use after a player error. Your choice applies after restarting Prexu." : ""}`}>
         {(props) => <select {...props} value={pb.playerEngine} onChange={(e) => updatePlayback({ playerEngine: e.target.value as PlaybackPreferences["playerEngine"] })}>
-          <option value="auto">Auto — native when available</option><option value="native">Native (mpv)</option><option value="html5">HTML5 (browser)</option>
+          <option value="auto">Auto — {automaticEngine === "html5" ? "HTML5 on macOS" : "native when available"}</option><option value="native">Native (mpv)</option><option value="html5">HTML5 (browser)</option>
         </select>}
       </PreferenceRow> : <p>Player: HTML5</p>}
       <PreferenceRow path="playback.quality" help="Direct play depends on format support and your Direct Play preference.">
