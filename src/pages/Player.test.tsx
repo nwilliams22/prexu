@@ -53,6 +53,7 @@ vi.mock("../hooks/usePlayer", () => ({
   }),
 }));
 
+const sharedControls = vi.hoisted(() => ({ togglePlay: vi.fn(), seek: vi.fn() }));
 const chromeState = vi.hoisted(() => ({ visible: true }));
 const watchState = vi.hoisted(() => ({ participants: [] as import("../types/watch-together").WatchParticipant[], resyncing: false, struggling: false, isInSession: false, isHost: false, catchingUp: false, lobby: { phase: "playback" as "playback" | "lobby", sessionId: "room", mediaTitle: "QA movie", mediaRatingKey: "123", mediaType: "movie", hostAway: false, participants: [] } }));
 vi.mock("../hooks/useWatchTogether", () => ({
@@ -60,8 +61,8 @@ vi.mock("../hooks/useWatchTogether", () => ({
     lobby: { phase: "playback" },
     ...watchState,
     syncStatus: "idle",
-    syncTogglePlay: vi.fn(),
-    syncSeek: vi.fn(),
+    syncTogglePlay: sharedControls.togglePlay,
+    syncSeek: sharedControls.seek,
     showNextEpisodePrompt: false,
     loadNextEpisode: vi.fn(),
     leaveSession: vi.fn(),
@@ -174,6 +175,8 @@ vi.mock("../services/logger", () => ({
 // the deeper memo-defeat behavior with the real component stack.
 vi.mock("../components/PlayerControls", () => ({
   default: ({
+    onTogglePlay,
+    onSeek,
     reflowTick,
     visible,
     suppressTransition,
@@ -182,6 +185,8 @@ vi.mock("../components/PlayerControls", () => ({
     queue,
     pip,
   }: {
+    onTogglePlay: () => void;
+    onSeek: (time: number) => void;
     reflowTick?: number;
     visible?: boolean;
     suppressTransition?: boolean;
@@ -199,6 +204,8 @@ vi.mock("../components/PlayerControls", () => ({
       data-visible={String(visible)}
       data-suppress-transition={String(suppressTransition)}
     >
+      <button data-testid="transport-toggle" onClick={onTogglePlay} />
+      <button data-testid="transport-seek" onClick={() => onSeek(30)} />
       <button data-testid="pip-toggle" onClick={() => pip?.onToggle?.()} />
     </div>
   ),
@@ -732,4 +739,17 @@ it("shows reconnecting participants even after the playback controls auto-hide",
     const { getByTestId } = render(<MemoryRouter><Player ratingKey="123" offset={null} /></MemoryRouter>);
     expect(getByTestId("participant-overlay")).toHaveAttribute("data-visible", "true");
   } finally { chromeState.visible = true; watchState.isInSession = false; watchState.participants = []; }
+});
+
+it("routes transport controls through shared playback actions", () => {
+  watchState.isInSession = true;
+  sharedControls.togglePlay.mockClear();
+  sharedControls.seek.mockClear();
+  try {
+    const { getByTestId } = render(<MemoryRouter><Player ratingKey="123" offset={null} /></MemoryRouter>);
+    act(() => getByTestId("transport-toggle").click());
+    act(() => getByTestId("transport-seek").click());
+    expect(sharedControls.togglePlay).toHaveBeenCalledOnce();
+    expect(sharedControls.seek).toHaveBeenCalledWith(30);
+  } finally { watchState.isInSession = false; }
 });

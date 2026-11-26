@@ -908,6 +908,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
       {!player.isLoading && !player.playbackError && (
         <PlayerControls
           player={player}
+          onTogglePlay={togglePlay}
           onExit={lifecycle.exit}
           onPrevious={hasPrevious ? handlePreviousFromTopBar : undefined}
           visible={chromeVisible && !isResizing}

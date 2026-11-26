@@ -117,9 +117,9 @@ vi.mock("./player/SeekBar", () => ({
 }));
 
 vi.mock("./player/SkipButtons", () => ({
-  default: () => {
+  default: ({ togglePlay }: { togglePlay: () => void }) => {
     counters.skipButtons++;
-    return <div data-testid="skip-buttons" />;
+    return <button data-testid="skip-buttons" onClick={togglePlay} />;
   },
 }));
 
@@ -191,9 +191,9 @@ function fireTimePos(seconds: number) {
 
 const noop = () => {};
 
-function Harness({ ratingKey, reflowTick }: { ratingKey: string; reflowTick?: number }) {
+function Harness({ ratingKey, reflowTick, onTogglePlay }: { ratingKey: string; reflowTick?: number; onTogglePlay?: () => void }) {
   const player = useNativePlayer(ratingKey);
-  return <PlayerControls player={player} onExit={noop} visible reflowTick={reflowTick} />;
+  return <PlayerControls player={player} onExit={noop} visible reflowTick={reflowTick} onTogglePlay={onTogglePlay} />;
 }
 
 describe("player chrome render counts on time-pos ticks (prexu-bgz.5)", () => {
@@ -268,4 +268,12 @@ describe("player chrome render counts on time-pos ticks (prexu-bgz.5)", () => {
     expect(counters.skipButtons).toBeGreaterThan(skipButtonsBefore);
     expect(getByTestId("skip-buttons")).toBeTruthy();
   });
+});
+
+
+it("forwards the shared toggle through the memoized bottom bar", () => {
+  const toggle = vi.fn();
+  const { getByTestId } = render(<Harness ratingKey="123" onTogglePlay={toggle} />);
+  act(() => getByTestId("skip-buttons").click());
+  expect(toggle).toHaveBeenCalledOnce();
 });

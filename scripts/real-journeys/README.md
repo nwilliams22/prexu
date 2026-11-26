@@ -409,3 +409,14 @@ from Downloads after pause/reorder. Earlier reports grouped waiting for Resume
 controls with transfer completion, so that timeout alone did not prove Resume
 was clicked. Screenshots and reports must be read together. Record the tested
 source revision separately; the runner's binary hash does not establish it.
+
+## Shared playback controls
+
+Set `PREXU_JOURNEY_SHARED_CONTROL=1` when running `lobby.mjs` to add real
+native guest pause, seek and resume checks with host-side attributed toasts.
+The journey also checks unavailable guest item controls and joins an already
+playing host after 12 seconds, requiring matching positions, a catch-up label,
+and no host pause during joining. It uses the same QA-only login, production
+relay, screenshots, and fixture restoration as the lobby runner. The movie
+fixture establishes shared transport behavior; episode navigation availability
+is additionally covered by the Player regression tests.

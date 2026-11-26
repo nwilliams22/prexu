@@ -98,10 +98,12 @@ interface ControlsBottomBarProps {
    *  fixed/absolute root to repaint at the new size. Optional/defaulted so
    *  callers that never resize (most tests) can ignore it. */
   reflowTick?: number;
+  onTogglePlay?: () => void;
 }
 
 function ControlsBottomBar({
   player,
+  onTogglePlay,
   currentTimeRef,
   seekFn,
   mobile,
@@ -346,7 +348,7 @@ function ControlsBottomBar({
           >
             <SkipButtons
               isPlaying={player.isPlaying}
-              togglePlay={player.togglePlay}
+              togglePlay={onTogglePlay ?? player.togglePlay}
               duration={player.duration}
               currentTimeRef={currentTimeRef}
               chapters={chapters}

@@ -59,6 +59,7 @@ interface PlayerControlsProps {
   syncIndicator?: React.ReactNode;
   chapters?: PlexChapter[];
   onSeek?: (time: number) => void;
+  onTogglePlay?: () => void;
   /** Called on any user interaction to keep controls visible */
   onActivity?: () => void;
   onNextEpisode?: () => void;
@@ -92,7 +93,7 @@ interface PlayerControlsProps {
   reflowTick?: number;
 }
 
-function PlayerControls({ player, onExit, onPrevious, visible, suppressTransition, syncIndicator, chapters, onSeek, onActivity, onNextEpisode, onPrevEpisode, audioEnhancements, onAudioEnhancementChange, pip, minimize, queue, subtitleSearch, onPanelPinChange, onToggleFullscreen, reflowTick = 0 }: PlayerControlsProps) {
+function PlayerControls({ player, onExit, onPrevious, visible, suppressTransition, syncIndicator, chapters, onSeek, onTogglePlay, onActivity, onNextEpisode, onPrevEpisode, audioEnhancements, onAudioEnhancementChange, pip, minimize, queue, subtitleSearch, onPanelPinChange, onToggleFullscreen, reflowTick = 0 }: PlayerControlsProps) {
   const bp = useBreakpoint();
   const mobile = isMobile(bp);
   const [previousHovered, setPreviousHovered] = useState(false);
@@ -196,6 +197,7 @@ function PlayerControls({ player, onExit, onPrevious, visible, suppressTransitio
         />
         <ControlsBottomBar
           player={player.chrome}
+          onTogglePlay={onTogglePlay}
           currentTimeRef={currentTimeRef}
           seekFn={seekFn}
           mobile={mobile}

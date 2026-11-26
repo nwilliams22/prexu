@@ -49,6 +49,7 @@ async function observe(page) {
       recoveryLabels: window.recoveryLabels || [],
       rosterHistory: window.rosterHistory || [],
       reconnectingText: document.body.textContent.includes("Reconnecting"),
+      controlTrace: window.controlTrace || [],
       ready: [...document.querySelectorAll('.watch-lobby-state')].filter(e => e.textContent === 'Ready').length };
   });
 }
@@ -165,6 +166,38 @@ try {
   });
   await screenshot(0, 'host-auto-playback'); await screenshot(1, 'guest-auto-playback'); add(stage, 'PASS');
   if (process.env.PREXU_JOURNEY_WATCH_INVITES === '1') add('pending-invite-join', 'PASS');
+  if (process.env.PREXU_JOURNEY_SHARED_CONTROL === '1') {
+    const attributed = action => host.evaluate(({ username, action }) =>
+      document.body.textContent.includes(`${username} ${action}`), { username: accounts[1].user.username, action });
+    for (const page of [host, guest]) await page.evaluate(async () => {
+      window.controlTrace = [];
+      const { watchSync } = await import('/src/services/watch-sync.ts');
+      for (const event of ['remote_pause', 'remote_play', 'remote_seek', 'session_state']) watchSync.on(event, data => {
+        if (window.controlTrace.length < 30) window.controlTrace.push({ event, playing: data.playing, time: data.current_time });
+      });
+    });
+    stage = 'guest-pause-attributed'; operation = 'guest-pause-click';
+    await clients[1].revealControls();
+    await guest.getByRole('button', { name: 'Pause' }).click();
+    operation = 'guest-pause-observe';
+    await until(async () => !(await observe(host)).playing && !(await observe(guest)).playing && await attributed('paused'), 10000);
+    const paused = await observe(host); await sleep(1000);
+    check(Math.abs((await observe(host)).time - paused.time) < .2);
+    await screenshot(0, 'host-guest-pause'); add(stage, 'PASS');
+    stage = 'guest-seek-attributed';
+    await guest.getByRole('button', { name: 'Forward 30 seconds' }).click();
+    await until(async () => (await observe(host)).time > paused.time + 25 && await attributed('sought to'));
+    check(Math.abs((await observe(host)).time - (await observe(guest)).time) < 2);
+    await screenshot(0, 'host-guest-seek'); add(stage, 'PASS');
+    stage = 'guest-resume-attributed';
+    await guest.getByRole('button', { name: 'Play' }).click();
+    await until(async () => (await observe(host)).playing && (await observe(guest)).playing && await attributed('resumed playback'));
+    await screenshot(0, 'host-guest-resume'); add(stage, 'PASS');
+    stage = 'guest-item-controls-hidden';
+    check(await guest.evaluate(() => ![...document.querySelectorAll('button')].some(b =>
+      !b.disabled && ['Next episode', 'Previous episode', 'Next Episode'].includes(b.getAttribute('aria-label')))));
+    await screenshot(1, 'guest-shared-controls'); add(stage, 'PASS');
+  }
   if (process.env.PREXU_JOURNEY_WATCH_CONNECTIONS === '1') {
     const text = (page, label) => page.evaluate(label => document.body.textContent.includes(label), label);
     const drop = (page, delay) => page.evaluate(async delay => {
@@ -270,6 +303,30 @@ try {
   await host.getByRole('button', { name: 'Start now' }).click();
   await until(async () => { const s = await observe(host); return !s.lobby && s.playing && s.time > 1; });
   await screenshot(0, 'host-start-now'); add(stage, 'PASS');
+  if (process.env.PREXU_JOURNEY_SHARED_CONTROL === '1') {
+    stage = 'late-join-position-no-host-pause';
+    await until(async () => (await observe(host)).time > 12);
+    await guest.evaluate(() => {
+      window.sawCatchUp = false;
+      new MutationObserver(() => { if (document.body.textContent.includes('Catching up')) window.sawCatchUp = true; })
+        .observe(document.body, { subtree: true, childList: true, characterData: true });
+    });
+    const before = await observe(host);
+    await host.evaluate(async () => {
+      window.joinPausedHost = false;
+      window.joinWatch = setInterval(async () => {
+        const p = (await import('/src/services/probe-live.ts')).probeLive.player?.player;
+        if (p && !p.isPlaying) window.joinPausedHost = true;
+      }, 50);
+    });
+    await guest.getByRole('button', { name: 'Join Session' }).click();
+    await until(async () => (await observe(guest)).playing && Math.abs((await observe(host)).time - (await observe(guest)).time) < 2);
+    check((await observe(guest)).time >= before.time);
+    check(await host.evaluate(() => { clearInterval(window.joinWatch); return !window.joinPausedHost; }));
+    check(await guest.evaluate(() => window.sawCatchUp));
+    await screenshot(1, 'guest-late-join'); add(stage, 'PASS');
+  }
+
   await host.getByRole('button', { name: 'Stop' }).click();
   stage = 'lobby-cancel-invite';
   await createLobby();
