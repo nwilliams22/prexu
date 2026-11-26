@@ -162,3 +162,14 @@ describe("grouped downloads", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });
+
+
+it("renders saved artwork when Plex is unavailable", () => {
+  mockUseDownloads.mockReturnValue(downloadsCtx([{
+    ratingKey: "2", title: "Offline movie", subtitle: "2026", type: "movie",
+    thumb: "/remote-thumb", artworkDataUrl: "data:image/jpeg;base64,/9j/",
+    serverUri: "https://server.example:32400", status: "complete", fileSize: 10,
+  }]));
+  const { container } = render(<MemoryRouter><Downloads /></MemoryRouter>);
+  expect(container.querySelector("img")).toHaveAttribute("src", "data:image/jpeg;base64,/9j/");
+});

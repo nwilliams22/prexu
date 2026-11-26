@@ -1,6 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 
+const mockLoadArtwork = vi.fn().mockResolvedValue(undefined);
+const mockDeleteArtwork = vi.fn().mockResolvedValue(undefined);
+vi.mock("../services/download-artwork", () => ({
+  pruneDownloadArtwork: vi.fn().mockResolvedValue(undefined),
+  artworkKey: (item: { serverUri: string; ratingKey: string }) => JSON.stringify([item.serverUri, item.ratingKey]),
+  loadDownloadArtwork: (...args: unknown[]) => mockLoadArtwork(...args),
+  deleteDownloadArtwork: (...args: unknown[]) => mockDeleteArtwork(...args),
+}));
+
 const mockStartDownload = vi.fn();
 const mockCancelDownload = vi.fn().mockResolvedValue(undefined);
 const mockDeleteDownload = vi.fn().mockResolvedValue(undefined);
@@ -66,6 +75,8 @@ const mockToast = vi.fn();
 
 beforeEach(() => {
   localStorage.clear();
+  mockLoadArtwork.mockReset().mockResolvedValue(undefined);
+  mockDeleteArtwork.mockClear();
   mockStartDownload.mockReset();
   mockSaveDownloadItems.mockClear();
   mockGetDownloadItems.mockResolvedValue([]);
@@ -382,5 +393,26 @@ describe("download queue controls", () => {
     await act(async () => fail(new Error("interrupted")));
     expect(result.current.getDownload("a")?.status).toBe("paused");
     expect(mockToast).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("persistent download artwork integration", () => {
+  it("loads artwork for restored downloads and removes its cache on deletion", async () => {
+    const item = { ...makeItem("cached"), status: "complete" as const };
+    mockGetDownloadItems.mockResolvedValue([item]);
+    mockLoadArtwork.mockResolvedValue("data:image/jpeg;base64,/9j/");
+    const { result } = await renderSettled();
+    await waitFor(() => expect(result.current.downloads[0]?.artworkDataUrl).toBe("data:image/jpeg;base64,/9j/"));
+    expect(mockLoadArtwork).toHaveBeenCalledTimes(1);
+    act(() => result.current.deleteDownload("cached"));
+    expect(mockDeleteArtwork).toHaveBeenCalledWith(expect.objectContaining({ ratingKey: "cached", serverUri: SERVER.uri }));
+    expect(result.current.downloads).toEqual([]);
+  });
+
+  it("does not supply a different server's token to fill an artwork miss", async () => {
+    mockGetDownloadItems.mockResolvedValue([{ ...makeItem("other"), serverUri: "http://other.example", status: "complete" }]);
+    await renderSettled();
+    await waitFor(() => expect(mockLoadArtwork).toHaveBeenCalledWith(expect.objectContaining({ ratingKey: "other" }), undefined));
   });
 });

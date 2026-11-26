@@ -13,6 +13,8 @@ export interface DownloadItem {
   subtitle: string;
   type: "movie" | "episode";
   thumb: string;
+  /** In-memory image loaded from the separate persistent artwork cache. */
+  artworkDataUrl?: string;
   partKey: string;
   fileName: string;
   /** File size in bytes */

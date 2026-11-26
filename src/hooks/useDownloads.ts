@@ -14,6 +14,7 @@ import {
   deleteDownload as deleteDownloadService,
 } from "../services/downloads";
 import { getDownloadItems, saveDownloadItems } from "../services/storage";
+import { artworkKey, loadDownloadArtwork, deleteDownloadArtwork, pruneDownloadArtwork } from "../services/download-artwork";
 import { logger } from "../services/logger";
 import type { DownloadItem, DownloadProgressEvent } from "../types/downloads";
 import type { ToastVariant } from "../types/toast";
@@ -121,7 +122,10 @@ export function useDownloadsState(
 
   // Load saved download metadata on mount
   useEffect(() => {
-    getDownloadItems().then((saved) => {
+    getDownloadItems().then(async (saved) => {
+      await pruneDownloadArtwork(saved).catch(() => {
+        logger.warn("downloads", "Artwork cache cleanup unavailable");
+      });
       // The native engine uses the actual .part length when this item resumes.
       const restored = saved.map((item) =>
         item.status === "downloading"
@@ -132,6 +136,28 @@ export function useDownloadsState(
       setLoaded(true);
     });
   }, []);
+
+  // One attempt per item/server session, independent of progress updates. Cache
+  // reads also work with no connected server; existing downloads backfill online.
+  const artworkAttempts = useRef(new Set<string>());
+  useEffect(() => {
+    for (const item of downloads) {
+      const key = artworkKey(item);
+      const attempt = `${key}:${server?.uri === item.serverUri ? server.accessToken : "offline"}`;
+      if (item.artworkDataUrl || artworkAttempts.current.has(attempt)) continue;
+      artworkAttempts.current.add(attempt);
+      void loadDownloadArtwork(item, server?.uri === item.serverUri ? server.accessToken : undefined)
+        .then((artworkDataUrl) => {
+          if (!artworkDataUrl) return;
+          setDownloads((items) => items.map((current) =>
+            artworkKey(current) === key ? { ...current, artworkDataUrl } : current,
+          ));
+        }).catch(() => {
+          // Never log the request/error: it may contain a credential-bearing URL.
+          logger.warn("downloads", "Artwork cache unavailable");
+        });
+    }
+  }, [downloads, server]);
 
   // Persist downloads to storage when membership or status changes.
   // Progress events mutate bytesDownloaded many times per second — writing
@@ -361,6 +387,17 @@ export function useDownloadsState(
 
   const deleteDownloadFn = useCallback((ratingKey: string) => {
     intentRef.current.set(ratingKey, "cancelled");
+    const item = downloadsRef.current.find((d) => d.ratingKey === ratingKey);
+    if (item) {
+      void deleteDownloadArtwork(item).catch(() => {
+        logger.warn("downloads", "Artwork cache removal failed");
+        toastRef.current("Could not remove downloaded artwork", "error");
+      });
+      const prefix = `${artworkKey(item)}:`;
+      for (const attempt of artworkAttempts.current) {
+        if (attempt.startsWith(prefix)) artworkAttempts.current.delete(attempt);
+      }
+    }
     deleteDownloadService(ratingKey).catch(() => {});
     setDownloads((prev) => prev.filter((d) => d.ratingKey !== ratingKey));
   }, []);

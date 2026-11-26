@@ -10,5 +10,5 @@ export async function getDownloadItems(): Promise<DownloadItem[]> {
 }
 
 export async function saveDownloadItems(items: DownloadItem[]): Promise<void> {
-  await localStore.set(STORAGE_KEYS.DOWNLOADS, items);
+  await localStore.set(STORAGE_KEYS.DOWNLOADS, items.map(({ artworkDataUrl: _artwork, ...item }) => item));
 }

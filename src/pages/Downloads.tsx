@@ -47,7 +47,7 @@ function DownloadItemRow({ item, serverUri, serverToken }: {
   const navigate = useNavigate();
   const { play } = usePlayerSession();
   const progress = item.fileSize > 0 ? item.bytesDownloaded / item.fileSize : 0;
-  const thumbUrl = getImageUrl(serverUri, serverToken, item.thumb, 80, 120);
+  const thumbUrl = item.artworkDataUrl ?? getImageUrl(item.serverUri, item.serverUri === serverUri ? serverToken : "", item.thumb, 80, 120);
 
   return (
     <div style={styles.row}>
