@@ -19,6 +19,10 @@ async function emit(journey, status = 'PASS') {
   await fetch(endpoint, { method: 'POST', body: JSON.stringify({ journey, status }) });
 }
 async function shot(label) {
+  await until(() => !document.querySelector('.loading-screen'));
+  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  // The native compositor can lag DOM updates under software rendering.
+  await sleep(2500);
   const response = await fetch(`${endpoint}/screenshot`, { method: 'POST', body: label });
   if (!response.ok) throw new Error('screenshot');
 }
