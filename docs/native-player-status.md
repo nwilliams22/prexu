@@ -93,8 +93,11 @@ Render-init failures use the existing session fallback and player remount.
 macOS weak-links libmpv and checks `mpv_create` availability before compositor
 setup. An absent dylib records an unavailable reason for the engine-status probe
 and prevents native initialization. Build-time Homebrew libmpv is still required.
-Real-app missing-dylib launch/playback acceptance remains unverified
-(`prexu-ia6w.6`); a standalone linker probe is not that acceptance evidence.
+Mac VM acceptance on 2026-11-26 verified the actual app weak-load command,
+launch with libmpv absent, Settings Auto/Native/HTML5 choices, and real QA Movies
+HTML5 playback after native unavailability. A saved 62.087-second QA Pattern
+offset survived the missing-dylib fallback remount and advanced to 1:04.
+This verifies fallback, not native GPU rendering (`prexu-ia6w.6`).
 
 Synthetic HEVC 10-bit checks on an Apple M3 Pro exercised VideoToolbox, framebuffer
 readback, HiDPI resize and three attach/detach cycles. These do not establish
