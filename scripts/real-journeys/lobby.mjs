@@ -149,6 +149,15 @@ try {
   await until(async () => { const s = await observe(host); return !s.lobby && s.playing && s.time > 1; });
   await screenshot(0, 'host-start-now'); add(stage, 'PASS');
   await host.getByRole('button', { name: 'Stop' }).click();
+  stage = 'lobby-cancel-invite';
+  await createLobby();
+  await guest.getByRole('button', { name: 'Join Session' }).waitFor();
+  await host.getByRole('button', { name: `Cancel invite for ${accounts[1].user.username}` }).click();
+  await guest.getByRole('button', { name: 'Join Session' }).waitFor({ state: 'detached' });
+  await until(async () => { const s = await observe(host); return !s.lobby && s.playing; });
+  add(stage, 'PASS');
+  await clients[0].revealControls();
+  await host.getByRole('button', { name: 'Stop' }).click();
 } catch {
   add(stage, 'NOT_VERIFIED');
   diagnostic = [];
@@ -167,7 +176,7 @@ finally {
     for (let i = 0; i < accounts.length; i++) {
       try {
         const { server, baseline } = accounts[i];
-        const sessions = await request(`${server.uri}/status/sessions`, server.token);
+        const sessions = await request(`${accounts[0].server.uri}/status/sessions`, accounts[0].server.token);
         check(!(sessions.MediaContainer.Metadata || []).some(s => s.Player?.state !== 'stopped' && !clients.some(c => c.clientIdentifier() === s.Player?.machineIdentifier)));
         const q = new URLSearchParams({ ratingKey: '2', key: '/library/metadata/2', state: 'stopped', time: String(baseline.offset), duration: String(baseline.duration) });
         const r = i === 1 && !rows.some(row => row.journey === 'lobby-all-ready-auto-start') ? { ok: true } : await fetch(`${server.uri}/:/timeline?${q}`, { headers: { 'X-Plex-Token': server.token, 'X-Plex-Client-Identifier': clients[i].clientIdentifier() }, redirect: 'error', signal: AbortSignal.timeout(15000) });

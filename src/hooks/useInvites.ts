@@ -96,6 +96,10 @@ export function useInviteState(
       }
     );
 
+    const unsubRevoked = watchSync.on("invite_revoked", (data) => {
+      setInvites((prev) => prev.filter((invite) => invite.sessionId !== data.session_id));
+    });
+
     const unsubPendingInvites = watchSync.on(
       "pending_invites",
       (data) => {
@@ -118,6 +122,7 @@ export function useInviteState(
       unsubConnected();
       unsubDisconnected();
       unsubInviteReceived();
+      unsubRevoked();
       unsubPendingInvites();
     };
   }, []);

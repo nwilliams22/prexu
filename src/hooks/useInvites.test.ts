@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
+import { parseInvite } from "../services/watch-sync";
 import { useInvites, useInviteState } from "./useInvites";
 
 // ── Mocks ──
@@ -13,7 +14,8 @@ const mockWatchSyncOn = vi.fn((event: string, cb: (data?: unknown) => void) => {
 });
 const mockWatchSyncConnect = vi.fn();
 const mockWatchSyncDisconnect = vi.fn();
-vi.mock("../services/watch-sync", () => ({
+vi.mock("../services/watch-sync", async (original) => ({
+  parseInvite: (await original<typeof import("../services/watch-sync")>()).parseInvite,
   watchSync: {
     on: (...args: [string, (data?: unknown) => void]) => mockWatchSyncOn(...args),
     connect: (...args: unknown[]) => mockWatchSyncConnect(...args),
@@ -90,4 +92,16 @@ describe("useInviteState — context value identity (prexu-9f4s.1)", () => {
     expect(result.current.isRelayConnected).toBe(true);
     expect(result.current).not.toBe(before);
   });
+});
+
+it("revokes only the matching pending invite", () => {
+  const { result } = renderHook(() => useInviteState(null));
+  const raw = { type: "invite_received" as const, session_id: "one", media_title: "QA", media_rating_key: "2", media_type: "movie", sender_username: "host", sender_thumb: "", sent_at: 1, relay_url: "ws://relay.test" };
+  act(() => {
+    registeredHandlers.invite_received(raw);
+    registeredHandlers.invite_received({ ...raw, session_id: "two" });
+  });
+  expect(result.current.invites).toHaveLength(2);
+  act(() => registeredHandlers.invite_revoked({ session_id: "one" }));
+  expect(result.current.invites).toEqual([parseInvite({ ...raw, session_id: "two" })]);
 });

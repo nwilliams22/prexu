@@ -145,6 +145,9 @@ real QA PIN sign-in and the production relay. Build the current desktop commit
 first and set `PREXU_JOURNEY_APP` to that binary. Supply both protected QA
 credentials above. Port 1420 must be free. Set `PREXU_JOURNEY_SCREENSHOTS` to an
 external evidence directory and `PREXU_JOURNEY_REPORT` to a JSON output path.
+Build the relay with an isolated `CARGO_TARGET_DIR` and `--no-default-features`;
+never reuse the shared test-mode executable. The journey requires invalid-token
+rejection before either real QA client starts.
 The journey exercises the actual creator, resend, guest join, all-ready start,
 participant removal and Start now with a no-show. It records stopped preparation
 for three seconds, advancing playback on both clients, and restores each QA

@@ -21,6 +21,7 @@ export type SyncEventType =
   | "participant_removed"
   | "participant_left"
   | "session_destroyed"
+  | "invite_revoked"
   | "invite_received"
   | "pending_invites"
   | "remote_play"
@@ -105,6 +106,7 @@ export interface SyncEventPayloadMap {
   participant_left: { type: "participant_left"; plex_username: string };
   session_destroyed: { type: "session_destroyed" };
   invite_received: InviteReceivedMsg;
+  invite_revoked: { type: "invite_revoked"; session_id: string };
   pending_invites: { type: "pending_invites"; invites: InviteReceivedMsg[] };
   remote_play: { type: "play"; current_time: number; timestamp: number; from_user: string };
   remote_pause: { type: "pause"; current_time: number; timestamp: number; from_user: string };
@@ -127,6 +129,7 @@ const WIRE_TO_EVENT: Record<string, SyncEventType> = {
   session_error: "session_error", participant_joined: "participant_joined",
   participant_removed: "participant_removed",
   participant_left: "participant_left", session_destroyed: "session_destroyed",
+  invite_revoked: "invite_revoked",
   invite_received: "invite_received", pending_invites: "pending_invites",
   play: "remote_play", pause: "remote_pause", seek: "remote_seek",
   buffering: "remote_buffering", ready: "remote_ready", new_media: "new_media",
