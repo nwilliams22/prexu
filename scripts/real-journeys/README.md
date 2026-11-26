@@ -383,3 +383,29 @@ Record reset and process cleanup results in the report. The final closure
 requires reviewed Mac visual evidence, both restoration comparisons equal,
 no run-owned processes left, the pushed harness commit with successful CI, and
 its app revision. A draft procedure or `REQUIRES_REVIEW` report is not acceptance.
+
+## Downloads queue acceptance
+
+```sh
+PREXU_JOURNEY_APP=<debug-app-built-from-the-tested-commit> \
+PREXU_JOURNEY_DOWNLOAD_QUEUE=1 PREXU_JOURNEY_PROGRESS=1 \
+PREXU_JOURNEY_REPORT=/tmp/download-queue.json \
+PREXU_JOURNEY_SCREENSHOTS=/tmp/download-queue-shots \
+node scripts/real-journeys/native.mjs
+```
+
+This uses Season 1 episodes 1 and 2 of **Prexu QA Seasons** (show key `17`).
+It pauses each queued transfer, visits the second episode through the season's
+real detail controls, reorders it first, sets concurrency to 2, and clicks its
+Resume button followed by Resume all. Separate report rows identify those two
+clicks. Completion requires both stored byte counts to equal their positive
+file sizes and both native local paths to exist. The driver then deletes both
+entries/files and restores concurrency to 1. Cleanup verifies the episodes'
+watch flags and offsets are unchanged and removes the isolated profile/processes.
+
+Do not use a pending global search to navigate between these episodes: episode
+titles are not global search results, and the search debounce can navigate away
+from Downloads after pause/reorder. Earlier reports grouped waiting for Resume
+controls with transfer completion, so that timeout alone did not prove Resume
+was clicked. Screenshots and reports must be read together. Record the tested
+source revision separately; the runner's binary hash does not establish it.

@@ -89,17 +89,16 @@ async function run() {
     await openAndPauseQueue(`Pause ${fixtures[0].title}`);
     await until(async () => (await getDownloadItems()).some(d => d.ratingKey === fixtures[0].key && d.status === 'paused'));
     await emit('download-queue-first-paused');
-    stage = 'download-queue-search';
-    // Use actual search navigation, keeping the same queue context alive.
-    const search = document.querySelector('input[aria-label="Search movies, shows, episodes"]');
-    if (!visible(search)) throw new Error('search');
-    search.focus();
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(search, fixtures[1].title);
-    search.dispatchEvent(new Event('input', { bubbles: true }));
-    const result = () => [...document.querySelectorAll('[role="option"], [role="button"]')].find(option => option.textContent.includes(fixtures[1].title) && option.querySelector('img') && visible(option));
-    await until(result);
-    await emit(stage);
-    result().click();
+    // Navigate within the season. Episode titles are not global search results,
+    // and a pending search debounce can navigate away after opening Downloads.
+    await click('Go back');
+    await until(() => location.pathname === `/item/${fixtures[0].key}`);
+    await click('Season 1');
+    await until(() => location.pathname === `/item/${fixtures[0].seasonKey}`);
+    const episodeDetails = () => document.querySelector(`button[aria-label="View details for ${fixtures[1].title}"]`);
+    await until(episodeDetails);
+    episodeDetails().scrollIntoView({ block: 'center' });
+    await click(`View details for ${fixtures[1].title}`);
     stage = 'download-queue-second-detail';
     await until(() => location.pathname === `/item/${fixtures[1].key}`);
     await emit(stage);
@@ -116,9 +115,22 @@ async function run() {
     await until(async () => (await getDownloadItems())[0]?.ratingKey === fixtures[1].key);
     await shot('paused');
     await emit(stage);
-    stage = 'download-queue-complete';
+    // Exercise two available transfer slots through the real settings control.
+    await nav('/settings');
+    await nav('/settings/connections');
+    await until(() => document.getElementById('download-concurrency'));
+    const concurrency = document.getElementById('download-concurrency');
+    concurrency.value = '2';
+    concurrency.dispatchEvent(new Event('change', { bubbles: true }));
+    await until(() => localStorage.getItem('prexu.downloadConcurrency') === '2');
+    await nav('/downloads');
+    stage = 'download-queue-resume-item';
     await click(`Resume ${fixtures[1].title}`);
+    await emit(stage);
+    stage = 'download-queue-resume-all';
     await click('Resume all');
+    await emit(stage);
+    stage = 'download-queue-complete';
     await until(async () => {
       const items = await getDownloadItems();
       return fixtures.every(f => items.some(d => d.ratingKey === f.key && d.status === 'complete' && d.bytesDownloaded === d.fileSize && d.fileSize > 0));
@@ -139,7 +151,7 @@ async function run() {
     await nav('/settings/connections');
     await until(() => document.getElementById('download-concurrency'));
     const select = document.getElementById('download-concurrency');
-    if (!select || select.value !== '1') throw new Error('setting');
+    if (!select || select.value !== '2') throw new Error('setting');
     select.value = '3';
     select.dispatchEvent(new Event('change', { bubbles: true }));
     await until(() => localStorage.getItem('prexu.downloadConcurrency') === '3');
@@ -149,12 +161,6 @@ async function run() {
     await emit(stage);
     await emit('native-driver');
   } catch {
-    if (stage === 'download-queue-search') {
-      const cards = [...document.querySelectorAll('[role="button"]')].filter(e => e.textContent.includes(fixtures[1].title));
-      await emit('download-card-match', cards.length ? 'PASS' : 'FAIL');
-      await emit('download-card-visible', cards.some(visible) ? 'PASS' : 'FAIL');
-      await emit('download-card-image', cards.some(e => e.querySelector('img')) ? 'PASS' : 'FAIL');
-    }
     if (stage.startsWith('download-queue') && (await getServer())?.name === 'Prexu QA Test Server') await shot('diagnostic').catch(() => {});
     await emit(stage, 'FAIL');
     await emit('native-driver', 'FAIL');

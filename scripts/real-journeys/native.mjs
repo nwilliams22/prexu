@@ -87,7 +87,7 @@ try {
   }
   stage = 'qa-fixture-state';
   if (!queueMode && !storageMode && !offlineOnly && !baseline.watched) { server = undefined; baseline = undefined; throw new Error('fixture-state'); }
-  if (queueMode) {
+  if (moveMode) {
     stage = 'qa-download-fixtures';
     queueFixtures = [];
     for (const [key, title] of [['13', 'Prexu QA Lossless Surround'], ['3', 'Prexu QA Surround']]) {
@@ -97,12 +97,12 @@ try {
       queueFixtures.push({ key, title });
     }
   }
-  if (storageMode) {
-    stage = 'qa-storage-fixtures';
+  if (storageMode || (queueMode && !moveMode)) {
+    stage = queueMode ? 'qa-download-fixtures' : 'qa-storage-fixtures';
     const data = await (await request(`${server.uri}/library/metadata/17/allLeaves`, { headers: { 'X-Plex-Token': server.token } })).json();
     const episodes = data.MediaContainer.Metadata || [];
     queueFixtures = episodes.filter(item => item.grandparentTitle === 'Prexu QA Seasons' && item.parentIndex === 1 && [1, 2].includes(item.index))
-      .sort((a, b) => a.index - b.index).map(item => ({ key: item.ratingKey, title: item.title, seasonKey: item.parentRatingKey }));
+      .sort((a, b) => a.index - b.index).map(item => ({ key: item.ratingKey, title: item.title, seasonKey: item.parentRatingKey, offset: item.viewOffset || 0, watched: Boolean(item.viewCount) }));
     if (queueFixtures.length !== 2 || !queueFixtures[0].seasonKey) throw new Error('fixtures');
   }
   root = await mkdtemp(`${tmpdir()}/prexu-native-journey-`);
@@ -289,6 +289,18 @@ finally {
       }
     } catch { add('service-state-restored', 'FAIL'); clean = false; }
   }
+  if (queueMode && !moveMode && queueFixtures && server && app) {
+    try {
+      let unchanged = await serviceIsExclusive();
+      for (const fixture of queueFixtures) {
+        const data = await (await request(`${server.uri}/library/metadata/${fixture.key}`, { headers: { 'X-Plex-Token': server.token } })).json();
+        const item = data.MediaContainer.Metadata?.[0];
+        unchanged &&= item?.title === fixture.title && (item.viewOffset || 0) === fixture.offset && Boolean(item.viewCount) === fixture.watched;
+      }
+      add('service-state-restored', unchanged ? 'PASS' : 'FAIL');
+      if (!unchanged) clean = false;
+    } catch { add('service-state-restored', 'FAIL'); clean = false; }
+  }
   try { if (root) { spawnSync('fusermount3', ['-u', `${root}/doc`], { stdio: 'ignore' }); await rm(root, { recursive: true, force: true, maxRetries: 3 }); } } catch (error) { add('profile-cleanup-' + (/^[A-Z_]+$/.test(error.code || '') ? error.code : 'error'), 'FAIL'); clean = false; }
   add('cleanup', clean ? 'PASS' : 'FAIL');
 }
@@ -306,7 +318,7 @@ if (queueMode && !moveMode && rows.some(row => row.journey === 'native-login')) 
     if (!rows.some(row => row.journey === journey)) add(journey, 'NOT_RUN');
   }
 }
-const report = { schema: 1, applicationSha256, fixtureDurationMs: baseline?.duration, watchComparison, watchComparisons, diagnostics, binarySourceRevision: 'not independently verified', scope: moveMode ? 'real desktop folder picker, verified move, open-folder dispatch and local playback from QA download' : storageMode ? 'real desktop storage summary and QA season warning/cancel; debug free-space override of 1 byte' : pausedMode ? 'real desktop native IPC paused preparation; lobby integration not exercised' : queueMode ? 'real desktop download queue controls with QA movies' : offlineOnly ? 'native offline slice; NOT full journey acceptance' : queueOnly ? 'native queue/offline slice; NOT full journey acceptance' : 'native single-user slice; NOT full journey acceptance', rows };
+const report = { schema: 1, applicationSha256, fixtureDurationMs: baseline?.duration, watchComparison, watchComparisons, diagnostics, binarySourceRevision: 'not independently verified', scope: moveMode ? 'real desktop folder picker, verified move, open-folder dispatch and local playback from QA download' : storageMode ? 'real desktop storage summary and QA season warning/cancel; debug free-space override of 1 byte' : pausedMode ? 'real desktop native IPC paused preparation; lobby integration not exercised' : queueMode ? 'real desktop download queue controls with QA season episodes' : offlineOnly ? 'native offline slice; NOT full journey acceptance' : queueOnly ? 'native queue/offline slice; NOT full journey acceptance' : 'native single-user slice; NOT full journey acceptance', rows };
 const output = JSON.stringify(report, null, 2) + '\n';
 if (process.env.PREXU_JOURNEY_REPORT) await writeFile(process.env.PREXU_JOURNEY_REPORT, output, { mode: 0o600 });
 process.stdout.write(output);
