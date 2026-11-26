@@ -714,6 +714,8 @@ function ItemHeroSection({
           <div style={{
             ...styles.heroInfo,
             gap: "0.75rem",
+            minWidth: 0,
+            flex: 1,
             ...(mobile ? { alignItems: "center" } : {}),
           }}>
             <div style={{
@@ -775,6 +777,7 @@ function ItemHeroSection({
             <div style={{
               ...styles.buttonRow,
               marginTop: "0.5rem",
+              flexWrap: "wrap",
               ...(mobile ? { justifyContent: "center" } : {}),
             }}>
               {ep.viewOffset && ep.viewOffset > 0 ? (

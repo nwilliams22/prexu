@@ -287,3 +287,51 @@ test.describe("Item Detail: responsive", () => {
     await expect(page.getByRole("heading", { name: "Test Movie 1", level: 1 })).toBeVisible();
   });
 });
+
+test.describe("Item Detail: episode actions", () => {
+  for (const viewOffset of [0, 90000]) {
+    test(`wraps actions within 1280x800 and keeps tab order (offset ${viewOffset})`, async ({ page }) => {
+      await page.route("http://localhost:32400/identity*", route => route.fulfill({ json: { MediaContainer: {} } }));
+      await page.setViewportSize({ width: 1280, height: 800 });
+      const episode = {
+        ...mockPlexData.movieDetail.MediaContainer.Metadata[0],
+        ratingKey: "493",
+        key: "/library/metadata/493",
+        type: "episode",
+        title: "Episode 1",
+        grandparentTitle: "Prexu QA Seasons",
+        grandparentRatingKey: "200",
+        parentTitle: "Season 1",
+        parentRatingKey: "201",
+        parentIndex: 1,
+        index: 1,
+        viewOffset,
+      };
+      await page.route(/\/library\/metadata\/493(?:\?.*)?$/, route =>
+        route.fulfill({ json: { MediaContainer: { size: 1, Metadata: [episode] } } })
+      );
+      await page.goto("/item/493");
+      const download = page.getByTitle("Download for offline", { exact: true });
+      await expect(download).toBeVisible({ timeout: 20000 });
+      const actions = download.locator("..").getByRole("button");
+      expect(await actions.count()).toBe(viewOffset ? 6 : 5);
+      const boxes = await actions.evaluateAll(buttons => buttons.map(button => {
+        const { x, y, width, height } = button.getBoundingClientRect();
+        return { x, y, width, height };
+      }));
+      for (const box of boxes) {
+        expect(box.x).toBeGreaterThanOrEqual(0);
+        expect(box.x + box.width).toBeLessThanOrEqual(1280);
+        expect(box.y).toBeGreaterThanOrEqual(0);
+        expect(box.y + box.height).toBeLessThanOrEqual(800);
+      }
+      expect(new Set(boxes.map(box => Math.round(box.y))).size).toBeGreaterThan(1);
+      await actions.first().focus();
+      for (let index = 0; index < await actions.count(); index++) {
+        await expect(actions.nth(index)).toBeFocused();
+        if (index + 1 < await actions.count()) await page.keyboard.press("Tab");
+      }
+      await expect(download).toBeFocused();
+    });
+  }
+});
