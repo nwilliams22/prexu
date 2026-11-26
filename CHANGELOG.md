@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Choose a download folder in Settings. Existing downloads move with progress
+  and byte verification before source removal; transfers stay paused until resumed.
+
 - Opt-in macOS native rendering through libmpv and an AppKit OpenGL view,
   including HiDPI resizing, ordered teardown and HTML5 fallback on compositor
   failure. HTML5 remains the default; full on-hardware acceptance is pending.

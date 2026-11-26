@@ -12,7 +12,8 @@ const pausedMode = process.env.PREXU_JOURNEY_PAUSED_LOAD === '1';
 const offlineOnly = process.env.PREXU_JOURNEY_OFFLINE_ONLY === '1';
 const queueOnly = process.env.PREXU_JOURNEY_QUEUE_ONLY === '1';
 const storageMode = process.env.PREXU_JOURNEY_DOWNLOAD_STORAGE === '1';
-const queueMode = process.env.PREXU_JOURNEY_DOWNLOAD_QUEUE === '1';
+const moveMode = process.env.PREXU_JOURNEY_DOWNLOAD_MOVE === '1';
+const queueMode = moveMode || process.env.PREXU_JOURNEY_DOWNLOAD_QUEUE === '1';
 let queueFixtures;
 let displayNumber;
 const rows = [];
@@ -119,13 +120,16 @@ try {
         try {
           if (req.url === `${endpoint}/driver.js` && req.method === 'GET') {
             res.setHeader('Content-Type', 'text/javascript');
-            res.end((await readFile(new URL(storageMode ? './download-storage-driver.js' : pausedMode ? './paused-load-driver.js' : queueMode ? './download-queue-driver.js' : './native-driver.js', import.meta.url), 'utf8')).replace('__JOURNEY_ENDPOINT__', JSON.stringify(endpoint)).replace('__QUEUE_FIXTURES__', JSON.stringify(queueFixtures)).replace('__JOURNEY_BASELINE__', JSON.stringify(baseline)).replace('__JOURNEY_OFFLINE_ONLY__', JSON.stringify(offlineOnly)).replace('__JOURNEY_QUEUE_ONLY__', JSON.stringify(queueOnly)).replace('__JOURNEY_RESTARTED__', JSON.stringify(restarted)));
+            res.end((await readFile(new URL(moveMode ? './download-move-driver.js' : storageMode ? './download-storage-driver.js' : pausedMode ? './paused-load-driver.js' : queueMode ? './download-queue-driver.js' : './native-driver.js', import.meta.url), 'utf8')).replace('__MOVE_DIRECTORY__', JSON.stringify(`${root}/moved`)).replace('__JOURNEY_ENDPOINT__', JSON.stringify(endpoint)).replace('__QUEUE_FIXTURES__', JSON.stringify(queueFixtures)).replace('__JOURNEY_BASELINE__', JSON.stringify(baseline)).replace('__JOURNEY_OFFLINE_ONLY__', JSON.stringify(offlineOnly)).replace('__JOURNEY_QUEUE_ONLY__', JSON.stringify(queueOnly)).replace('__JOURNEY_RESTARTED__', JSON.stringify(restarted)));
             return;
           }
           if (req.method !== 'POST') throw new Error('method');
           let body = '';
           for await (const chunk of req) { body += chunk; if (body.length > 4096) throw new Error('size'); }
           if (req.url === `${endpoint}/open`) {
+            if (moveMode && body === `${root}/moved/Prexu`) {
+              add('download-move-open-folder', 'PASS'); res.end('ok'); return;
+            }
             if (linked) throw new Error('duplicate');
             const code = pinCode(body);
             appClient = new URLSearchParams(new URL(body).hash.slice(2)).get('clientID');
@@ -134,6 +138,19 @@ try {
               headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Plex-Product': 'Plex Web' }, body: new URLSearchParams({ code }) });
             linked = true;
             if (queueMode) add('download-pin-linked', 'PASS');
+          } else if (moveMode && req.url === `${endpoint}/choose-folder`) {
+            await mkdir(`${root}/moved`, { recursive: true });
+            await sleep(1500);
+            const env = { ...process.env, DISPLAY: `:${displayNumber}` };
+            const dialog = spawnSync('xdotool', ['search', '--onlyvisible', '--name', '^Choose an empty folder for downloads$'], { env, encoding: 'utf8', timeout: 5000 }).stdout?.trim().split('\n').at(-1);
+            if (!/^\d+$/.test(dialog || '')) throw new Error('event');
+            spawnSync('xdotool', ['windowfocus', dialog], { env, stdio: 'ignore', timeout: 5000 });
+            for (const args of [['key', 'ctrl+l'], ['type', '--clearmodifiers', `${root}/moved`], ['key', 'Return']]) {
+              if (spawnSync('xdotool', args, { env, stdio: 'ignore', timeout: 5000 }).status !== 0) throw new Error('event');
+              await sleep(500);
+            }
+            await sleep(1000);
+            spawnSync('xdotool', ['key', 'Return'], { env, stdio: 'ignore', timeout: 5000 });
           } else if (req.url === `${endpoint}/restart`) {
             if (!linked || !restartApp || !rows.some(row => row.journey === 'native-download' && row.status === 'PASS')) throw new Error('event');
             const restart = restartApp;
@@ -170,7 +187,7 @@ try {
             const resized = spawnSync('xdotool', ['windowsize', windowId, '1900', '1000', 'windowmove', windowId, '0', '0'], { env, stdio: 'ignore', timeout: 1000 });
             if (resized.status !== 0) throw new Error('event');
           } else if ((queueMode || storageMode) && req.url === `${endpoint}/screenshot`) {
-            if (!['paused', 'complete', 'diagnostic', 'storage-summary', 'storage-warning'].includes(body) || !displayNumber || !process.env.PREXU_JOURNEY_SCREENSHOTS) throw new Error('event');
+            if (!['paused', 'complete', 'diagnostic', 'storage-summary', 'storage-warning', 'move-confirm', 'move-complete', 'move-playback'].includes(body) || !displayNumber || !process.env.PREXU_JOURNEY_SCREENSHOTS) throw new Error('event');
             await mkdir(process.env.PREXU_JOURNEY_SCREENSHOTS, { recursive: true });
             const shot = spawnSync('import', ['-display', `:${displayNumber}`, '-window', 'root', resolve(process.env.PREXU_JOURNEY_SCREENSHOTS, `${body}.png`)], { stdio: 'ignore', timeout: 10000 });
             if (shot.status !== 0) throw new Error('event');
@@ -281,12 +298,12 @@ if (!queueMode && offlineOnly && rows.some(row => row.journey === 'native-login'
     if (!rows.some(row => row.journey === journey)) add(journey, 'NOT_RUN');
   }
 }
-if (queueMode && rows.some(row => row.journey === 'native-login')) {
+if (queueMode && !moveMode && rows.some(row => row.journey === 'native-login')) {
   for (const journey of ['download-queue-paused', 'download-queue-reordered', 'download-queue-complete', 'download-queue-delete', 'download-queue-settings']) {
     if (!rows.some(row => row.journey === journey)) add(journey, 'NOT_RUN');
   }
 }
-const report = { schema: 1, applicationSha256, fixtureDurationMs: baseline?.duration, watchComparison, watchComparisons, diagnostics, binarySourceRevision: 'not independently verified', scope: storageMode ? 'real desktop storage summary and QA season warning/cancel; debug free-space override of 1 byte' : pausedMode ? 'real desktop native IPC paused preparation; lobby integration not exercised' : queueMode ? 'real desktop download queue controls with QA movies' : offlineOnly ? 'native offline slice; NOT full journey acceptance' : queueOnly ? 'native queue/offline slice; NOT full journey acceptance' : 'native single-user slice; NOT full journey acceptance', rows };
+const report = { schema: 1, applicationSha256, fixtureDurationMs: baseline?.duration, watchComparison, watchComparisons, diagnostics, binarySourceRevision: 'not independently verified', scope: moveMode ? 'real desktop folder picker, verified move, open-folder dispatch and local playback from QA download' : storageMode ? 'real desktop storage summary and QA season warning/cancel; debug free-space override of 1 byte' : pausedMode ? 'real desktop native IPC paused preparation; lobby integration not exercised' : queueMode ? 'real desktop download queue controls with QA movies' : offlineOnly ? 'native offline slice; NOT full journey acceptance' : queueOnly ? 'native queue/offline slice; NOT full journey acceptance' : 'native single-user slice; NOT full journey acceptance', rows };
 const output = JSON.stringify(report, null, 2) + '\n';
 if (process.env.PREXU_JOURNEY_REPORT) await writeFile(process.env.PREXU_JOURNEY_REPORT, output, { mode: 0o600 });
 process.stdout.write(output);

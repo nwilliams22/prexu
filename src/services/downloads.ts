@@ -67,3 +67,21 @@ export interface DownloadStorage {
 export function getDownloadStorage(): Promise<DownloadStorage> {
   return invoke("get_download_storage");
 }
+
+export interface DownloadMoveProgress {
+  copiedBytes: number;
+  totalBytes: number;
+}
+
+export async function chooseDownloadsFolder(): Promise<string | null> {
+  return invoke<string | null>("choose_downloads_folder");
+}
+
+export async function moveDownloadsFolder(destination: string): Promise<string> {
+  return invoke<string>("move_downloads_folder", { destination });
+}
+
+export async function onDownloadMoveProgress(callback: (progress: DownloadMoveProgress) => void): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<DownloadMoveProgress>("download-move-progress", (event) => callback(event.payload));
+}

@@ -167,13 +167,9 @@ fn start_proxy(
     {
         let mut dl_dir = state.downloads_dir.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
         if dl_dir.is_none() {
-            let base = dirs::video_dir()
-                .or_else(dirs::data_local_dir);
-            if let Some(base) = base {
-                let dir = base.join("Prexu");
-                let _ = std::fs::create_dir_all(&dir);
-                *dl_dir = Some(dir.to_string_lossy().to_string());
-            }
+            let dir = downloads::relocation::configured_directory()?;
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            *dl_dir = Some(dir.to_string_lossy().to_string());
         }
     }
 
@@ -667,6 +663,7 @@ pub fn run() {
     };
     let builder = builder.plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_log::Builder::default()
                 .level(if cfg!(debug_assertions) {
@@ -706,6 +703,8 @@ pub fn run() {
         start_proxy,
         app_ready,
         downloads::get_downloads_dir,
+        downloads::relocation::choose_downloads_folder,
+        downloads::relocation::move_downloads_folder,
         downloads::get_download_storage,
         downloads::open_downloads_dir,
         downloads::download_media,
@@ -756,6 +755,8 @@ pub fn run() {
         start_proxy,
         app_ready,
         downloads::get_downloads_dir,
+        downloads::relocation::choose_downloads_folder,
+        downloads::relocation::move_downloads_folder,
         downloads::get_download_storage,
         downloads::open_downloads_dir,
         downloads::download_media,
@@ -795,6 +796,8 @@ pub fn run() {
         start_proxy,
         app_ready,
         downloads::get_downloads_dir,
+        downloads::relocation::choose_downloads_folder,
+        downloads::relocation::move_downloads_folder,
         downloads::get_download_storage,
         downloads::open_downloads_dir,
         downloads::download_media,

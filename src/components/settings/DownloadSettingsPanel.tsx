@@ -1,3 +1,4 @@
+import { DownloadFolderSetting } from "./DownloadFolderSetting";
 import { useAutoDeleteDownloads } from "../../hooks/useAutoDeleteDownloads";
 import { useDownloads } from "../../hooks/useDownloads";
 import { SettingsSection, SettingsRow } from "./SettingsPrimitives";
@@ -7,6 +8,7 @@ export function DownloadSettingsPanel() {
   const { concurrency, setConcurrency } = useDownloads();
   return (
     <SettingsSection title="Downloads">
+      <DownloadFolderSetting />
       <SettingsRow id="download-concurrency" label="Simultaneous downloads" help="Applies to this device. Lower limits take effect as current downloads finish.">
         {(props) => <select {...props} value={concurrency} onChange={(event) => setConcurrency(Number(event.target.value))}>
           <option value={1}>1 (default)</option>

@@ -3,7 +3,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use tauri::{AppHandle, Emitter};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
+
+pub(crate) mod relocation;
 
 use crate::validate_server_url;
 
@@ -111,6 +113,8 @@ pub struct DownloadManager {
     active: Arc<ActiveMap>,
     downloads_dir: Mutex<Option<PathBuf>>,
     queue: Arc<Queue>,
+    filesystem: RwLock<()>,
+    moving: std::sync::atomic::AtomicBool,
 }
 
 /// Shared map from an in-flight download's rating_key to its cancel `Sender`.
@@ -229,6 +233,8 @@ impl DownloadManager {
             active: Arc::new(std::sync::Mutex::new(HashMap::new())),
             downloads_dir: Mutex::new(None),
             queue: Arc::new(Queue::new()),
+            filesystem: RwLock::new(()),
+            moving: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -248,10 +254,7 @@ struct DownloadProgress {
 
 /// Resolve the downloads directory, creating it if needed.
 async fn resolve_downloads_dir() -> Result<PathBuf, String> {
-    let base = dirs::video_dir()
-        .or_else(dirs::data_local_dir)
-        .ok_or("Cannot determine downloads directory")?;
-    let dir = base.join("Prexu");
+    let dir = relocation::configured_directory()?;
     tokio::fs::create_dir_all(&dir)
         .await
         .map_err(|e| format!("Failed to create downloads directory: {}", e))?;
@@ -337,6 +340,7 @@ pub async fn download_media(
     file_size: u64,
     state: tauri::State<'_, DownloadManager>,
 ) -> Result<(), String> {
+    let _filesystem = state.filesystem.read().await;
     validate_server_url(&server_url)?;
 
     // Guard against path traversal via attacker-influenced rating_key / file_name.
@@ -650,6 +654,9 @@ fn control_queue(
     order: Option<&[String]>,
     limit: Option<usize>,
 ) -> Result<(), String> {
+    if manager.moving.load(std::sync::atomic::Ordering::SeqCst) && action == "resumeAll" {
+        return Err("Wait for the download folder move to finish".into());
+    }
     if action == "reorder" {
         manager.queue.reorder(order.ok_or("Missing order")?);
         return Ok(());
@@ -717,6 +724,7 @@ pub async fn delete_download(
 
 /// Testable core of [`delete_download`] (no `tauri::State` dependency).
 async fn delete_download_impl(rating_key: &str, manager: &DownloadManager) -> Result<(), String> {
+    let _filesystem = manager.filesystem.read().await;
     // Guard against path traversal via attacker-influenced rating_key: without
     // this, `join("..")` / an absolute path escapes the downloads dir and
     // remove_dir_all would recursively delete an arbitrary directory. Log the

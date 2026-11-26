@@ -179,3 +179,21 @@ outage; authentication and session restoration use the real service. Set
 `PREXU_JOURNEY_SCREENSHOTS` and `PREXU_JOURNEY_REPORT` to capture evidence. Use a
 fresh desktop build and the isolated production relay described above. The run
 restores both QA accounts' fixture progress and stops both desktops and servers.
+
+## Download folder migration
+
+Build the Linux desktop binary from the revision under test, then run:
+
+```sh
+PREXU_JOURNEY_DOWNLOAD_MOVE=1 PREXU_JOURNEY_PROGRESS=1 \
+  PREXU_JOURNEY_SCREENSHOTS=/tmp/prexu-download-move \
+  PREXU_JOURNEY_REPORT=/tmp/prexu-download-move.json \
+  node scripts/real-journeys/native.mjs
+```
+
+This uses the QA movie fixtures, the native folder picker, Settings confirmation,
+local playback and screenshots in an isolated profile. The open-folder row checks
+the path dispatched to the desktop handler; it does not inspect a file manager.
+The runner cleans up its profile, moved files and child processes. Attach reports
+and screenshots to the task before temporary evidence expires. macOS acceptance
+requires a separate real-app run in the Mac VM.
