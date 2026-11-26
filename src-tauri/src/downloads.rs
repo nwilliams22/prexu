@@ -2,7 +2,7 @@ use futures_util::StreamExt;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{Mutex, RwLock};
 
 pub(crate) mod relocation;
@@ -800,10 +800,19 @@ pub async fn open_downloads_dir(state: tauri::State<'_, DownloadManager>) -> Res
 /// Check if a local file exists for a given ratingKey and return its path.
 #[tauri::command]
 pub async fn get_local_file_path(
+    app: AppHandle,
     rating_key: String,
     state: tauri::State<'_, DownloadManager>,
 ) -> Result<Option<String>, String> {
-    get_local_file_path_impl(&rating_key, &state).await
+    let Some(path) = validated_local_file(&rating_key, &state).await? else {
+        return Ok(None);
+    };
+    // The asset protocol starts with an empty scope. Grant just the validated
+    // file, never a webview-supplied path or a recursive download directory.
+    app.asset_protocol_scope()
+        .allow_file(&path)
+        .map_err(|_| "Could not authorize downloaded file playback".to_string())?;
+    Ok(Some(path))
 }
 
 /// Resolve a downloaded item for native playback without accepting a webview
@@ -814,10 +823,20 @@ pub(crate) async fn playback_file(
     rating_key: &str,
     manager: &DownloadManager,
 ) -> Result<String, String> {
-    let missing = || "Downloaded file is missing or unavailable".to_string();
-    let path = get_local_file_path_impl(rating_key, manager)
+    validated_local_file(rating_key, manager)
         .await?
-        .ok_or_else(missing)?;
+        .ok_or_else(|| "Downloaded file is missing or unavailable".to_string())
+}
+
+/// Shared containment check for native playback and HTML5 asset grants.
+async fn validated_local_file(
+    rating_key: &str,
+    manager: &DownloadManager,
+) -> Result<Option<String>, String> {
+    let missing = || "Downloaded file is missing or unavailable".to_string();
+    let Some(path) = get_local_file_path_impl(rating_key, manager).await? else {
+        return Ok(None);
+    };
     let root = {
         let cached = manager.downloads_dir.lock().await;
         match &*cached {
@@ -827,7 +846,9 @@ pub(crate) async fn playback_file(
     };
     let root = tokio::fs::canonicalize(root).await.map_err(|_| missing())?;
     let item = root.join(rating_key);
-    let canonical_item = tokio::fs::canonicalize(&item).await.map_err(|_| missing())?;
+    let canonical_item = tokio::fs::canonicalize(&item)
+        .await
+        .map_err(|_| missing())?;
     let file = tokio::fs::canonicalize(path).await.map_err(|_| missing())?;
     if canonical_item != item
         || file.parent() != Some(canonical_item.as_path())
@@ -836,7 +857,9 @@ pub(crate) async fn playback_file(
     {
         return Err(missing());
     }
-    file.to_str().map(str::to_owned).ok_or_else(missing)
+    file.to_str()
+        .map(|path| Some(path.to_owned()))
+        .ok_or_else(missing)
 }
 
 /// Testable core of [`get_local_file_path`] (no `tauri::State` dependency).
@@ -1623,6 +1646,51 @@ mod tests {
         );
         std::fs::remove_file(video).unwrap();
         assert!(super::playback_file("123", &manager).await.is_err());
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[tokio::test]
+    async fn html5_file_lookup_tracks_relocated_downloads() {
+        let base = unique_temp_dir("html5-relocation");
+        let old_root = base.join("original downloads");
+        let new_root = base.join("custom [downloads]");
+        let item = old_root.join("123");
+        std::fs::create_dir_all(&item).unwrap();
+        let name = "video with spaces.mp4";
+        std::fs::write(item.join(name), b"complete").unwrap();
+        let manager = DownloadManager::new();
+        *manager.downloads_dir.lock().await = Some(old_root.clone());
+        assert_eq!(
+            super::validated_local_file("123", &manager).await.unwrap(),
+            Some(
+                std::fs::canonicalize(item.join(name))
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .to_owned()
+            ),
+        );
+        std::fs::rename(&old_root, &new_root).unwrap();
+        *manager.downloads_dir.lock().await = Some(new_root.clone());
+        assert_eq!(
+            super::validated_local_file("123", &manager).await.unwrap(),
+            Some(
+                std::fs::canonicalize(new_root.join("123").join(name))
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .to_owned()
+            ),
+        );
+        assert_eq!(
+            super::validated_local_file("missing", &manager)
+                .await
+                .unwrap(),
+            None
+        );
+        assert!(super::validated_local_file("../secret", &manager)
+            .await
+            .is_err());
         std::fs::remove_dir_all(base).unwrap();
     }
 
