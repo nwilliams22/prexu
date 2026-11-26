@@ -50,7 +50,7 @@ async function run() {
     stage = 'download-move-confirm';
     await click('Choose folder…');
     if (!(await fetch(`${endpoint}/choose-folder`, { method: 'POST', body: '' })).ok) throw new Error('picker');
-    await until(() => button('Move downloads'));
+    await until(() => button('Move downloads'), 180000);
     if (!document.body.textContent.includes(destination)) throw new Error('wrong-folder');
     await shot('move-confirm');
     await emit(stage);

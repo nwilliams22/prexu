@@ -182,7 +182,9 @@ restores both QA accounts' fixture progress and stops both desktops and servers.
 
 ## Download folder migration
 
-Build the Linux desktop binary from the revision under test, then run:
+Build the Linux desktop binary from the revision under test. Use a libmpv runtime
+with the scaler LUT fix described in `docs/linux-dev.md`; if the host library is
+unpatched, set `LD_LIBRARY_PATH` to the verified private runtime. Then run:
 
 ```sh
 PREXU_JOURNEY_DOWNLOAD_MOVE=1 PREXU_JOURNEY_PROGRESS=1 \

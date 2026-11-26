@@ -145,12 +145,15 @@ try {
             const dialog = spawnSync('xdotool', ['search', '--onlyvisible', '--name', '^Choose an empty folder for downloads$'], { env, encoding: 'utf8', timeout: 5000 }).stdout?.trim().split('\n').at(-1);
             if (!/^\d+$/.test(dialog || '')) throw new Error('event');
             spawnSync('xdotool', ['windowfocus', dialog], { env, stdio: 'ignore', timeout: 5000 });
-            for (const args of [['key', 'ctrl+l'], ['type', '--clearmodifiers', `${root}/moved`], ['key', 'Return']]) {
+            // GTK's Recent view does not accept an empty typed folder reliably.
+            // Home is the isolated profile; select its existing moved folder.
+            for (const args of [['key', 'alt+Home'], ['key', 'ctrl+l'], ['type', '--clearmodifiers', `${root}/moved`]]) {
               if (spawnSync('xdotool', args, { env, stdio: 'ignore', timeout: 5000 }).status !== 0) throw new Error('event');
               await sleep(500);
             }
-            await sleep(1000);
             spawnSync('xdotool', ['key', 'Return'], { env, stdio: 'ignore', timeout: 5000 });
+            await sleep(1000);
+            spawnSync('xdotool', ['key', 'alt+o'], { env, stdio: 'ignore', timeout: 5000 });
           } else if (req.url === `${endpoint}/restart`) {
             if (!linked || !restartApp || !rows.some(row => row.journey === 'native-download' && row.status === 'PASS')) throw new Error('event');
             const restart = restartApp;
