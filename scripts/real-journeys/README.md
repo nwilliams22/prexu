@@ -153,3 +153,20 @@ participant removal and Start now with a no-show. It records stopped preparation
 for three seconds, advancing playback on both clients, and restores each QA
 account's fixture progress. It does not establish macOS acceptance or replace
 Downloads coverage. Missing prerequisites or interrupted checks are NOT_VERIFIED.
+
+## Downloads storage warning
+
+Build the debug app from the commit under test, then run:
+
+```sh
+PREXU_JOURNEY_DOWNLOAD_STORAGE=1 PREXU_JOURNEY_SCREENSHOTS=/tmp/prexu-storage-shots \
+  PREXU_JOURNEY_REPORT=/tmp/prexu-storage-report.json node scripts/real-journeys/native.mjs
+```
+
+This uses the real PIN sign-in and QA Seasons season page, checks the Downloads
+storage summary, requests the whole season, captures the insufficient-space
+warning, and cancels it. It verifies that cancellation leaves the queue empty.
+The launcher sets `PREXU_QA_DOWNLOAD_FREE_BYTES=1` only in its isolated app
+process; the override exists only in debug builds. Actual directory usage still
+comes from the filesystem. Screenshots and the report must be attached to the
+tracking issue. The launcher stops its processes and removes its profile on exit.

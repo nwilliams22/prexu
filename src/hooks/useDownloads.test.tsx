@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { renderHook, act, waitFor } from "@testing-library/react";
+import { renderHook, act, waitFor, screen, fireEvent } from "@testing-library/react";
 
 const mockLoadArtwork = vi.fn().mockResolvedValue(undefined);
 const mockDeleteArtwork = vi.fn().mockResolvedValue(undefined);
@@ -10,6 +10,7 @@ vi.mock("../services/download-artwork", () => ({
   deleteDownloadArtwork: (...args: unknown[]) => mockDeleteArtwork(...args),
 }));
 
+const mockStorage = vi.fn().mockResolvedValue({ usedBytes: 0, freeBytes: 1e12 });
 const mockStartDownload = vi.fn();
 const mockCancelDownload = vi.fn().mockResolvedValue(undefined);
 const mockDeleteDownload = vi.fn().mockResolvedValue(undefined);
@@ -17,6 +18,7 @@ const mockSaveDownloadItems = vi.fn().mockResolvedValue(undefined);
 const mockGetDownloadItems = vi.fn().mockResolvedValue([]);
 
 vi.mock("../services/downloads", () => ({
+  getDownloadStorage: (...args: unknown[]) => mockStorage(...args),
   controlDownloadQueue: vi.fn().mockResolvedValue(undefined),
   startDownload: (...args: unknown[]) => mockStartDownload(...args),
   cancelDownload: (...args: unknown[]) => mockCancelDownload(...args),
@@ -74,7 +76,10 @@ function makeItem(ratingKey: string): DownloadItem {
 const mockToast = vi.fn();
 
 beforeEach(() => {
+  HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
+  HTMLDialogElement.prototype.close = function () { this.removeAttribute("open"); };
   localStorage.clear();
+  mockStorage.mockReset().mockResolvedValue({ usedBytes: 0, freeBytes: 1e12 });
   mockLoadArtwork.mockReset().mockResolvedValue(undefined);
   mockDeleteArtwork.mockClear();
   mockStartDownload.mockReset();
@@ -272,6 +277,7 @@ describe("useDownloadsState download-progress event toasts", () => {
     mockStartDownload.mockReturnValue(new Promise(() => {}));
     const { result } = await renderSettledWithListener();
     act(() => { result.current.queueDownload(makeItem("a")); result.current.queueDownload(makeItem("b")); });
+    await waitFor(() => expect(result.current.downloads).toHaveLength(2));
     const writes = mockSaveDownloadItems.mock.calls.length;
     act(() => fireProgress({ ratingKey: "a", bytesDownloaded: 400, totalBytes: 1000, status: "downloading", bytesPerSecond: 200, etaSeconds: 3 }));
     expect(result.current.getDownload("a")).toMatchObject({ bytesPerSecond: 200, etaSeconds: 3 });
@@ -414,5 +420,45 @@ describe("persistent download artwork integration", () => {
     mockGetDownloadItems.mockResolvedValue([{ ...makeItem("other"), serverUri: "http://other.example", status: "complete" }]);
     await renderSettled();
     await waitFor(() => expect(mockLoadArtwork).toHaveBeenCalledWith(expect.objectContaining({ ratingKey: "other" }), undefined));
+  });
+});
+
+
+describe("download capacity before queueing", () => {
+  beforeEach(() => { (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}; });
+  afterEach(() => { delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__; });
+
+  it("warns for a whole season and cancellation queues no episodes", async () => {
+    mockStorage.mockResolvedValue({ usedBytes: 0, freeBytes: 1500 });
+    const { result } = await renderSettled();
+    act(() => result.current.queueDownload([makeItem("a"), makeItem("b")]));
+    await screen.findByRole("dialog", { name: "Download storage warning" });
+    expect(screen.getByText(/Only 1.5 KB is free/)).toBeInTheDocument();
+    expect(mockStartDownload).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await act(async () => {});
+    expect(result.current.downloads).toEqual([]);
+  });
+
+  it("lets the user continue a single oversized download", async () => {
+    mockStorage.mockResolvedValue({ usedBytes: 0, freeBytes: 1 });
+    mockStartDownload.mockReturnValue(new Promise(() => {}));
+    const { result } = await renderSettled();
+    act(() => result.current.queueDownload(makeItem("a")));
+    await screen.findByRole("dialog");
+    fireEvent.click(screen.getByRole("button", { name: "Download anyway" }));
+    await waitFor(() => expect(mockStartDownload).toHaveBeenCalledTimes(1));
+  });
+
+  it("reserves space for an earlier request when clicks overlap", async () => {
+    mockStorage.mockResolvedValue({ usedBytes: 0, freeBytes: 1500 });
+    mockStartDownload.mockReturnValue(new Promise(() => {}));
+    const { result } = await renderSettled();
+    act(() => { result.current.queueDownload(makeItem("a")); result.current.queueDownload(makeItem("b")); });
+    await screen.findByRole("dialog");
+    expect(screen.getByText(/need 2.0 KB/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await act(async () => {});
+    expect(result.current.downloads.map(d => d.ratingKey)).toEqual(["a"]);
   });
 });

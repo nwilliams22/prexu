@@ -63,7 +63,7 @@ export default function BulkDownloadButton({
   const handleConfirm = () => {
     if (!pending) return;
     logger.info("downloads", "bulk download confirmed", { count: pending.length });
-    pending.forEach(queueDownload);
+    queueDownload(pending);
     setPending(null);
   };
 

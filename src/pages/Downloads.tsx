@@ -1,4 +1,5 @@
 import { useState } from "react";
+import StorageSummary from "../components/downloads/StorageSummary";
 import DownloadQueue from "../components/downloads/DownloadQueue";
 import { formatBytes } from "../components/downloads/format";
 import { groupShows, groupSeasons, downloadSize, watchedDownloads } from "../components/downloads/groups";
@@ -183,6 +184,7 @@ function Downloads() {
           <h2 style={styles.title}>Downloads</h2>
           <OpenFolderButton />
         </div>
+        <StorageSummary />
         <div style={{
           position: "absolute",
           top: 0,
@@ -219,6 +221,7 @@ function Downloads() {
         <OpenFolderButton />
       </div>
 
+      <StorageSummary />
       <DownloadQueue />
 
       {failed.length > 0 && (

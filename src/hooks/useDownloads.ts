@@ -13,6 +13,7 @@ import {
   cancelDownload as cancelDownloadService,
   deleteDownload as deleteDownloadService,
 } from "../services/downloads";
+import { confirmDownloadCapacity } from "../services/download-capacity";
 import { getDownloadItems, saveDownloadItems } from "../services/storage";
 import { artworkKey, loadDownloadArtwork, deleteDownloadArtwork, pruneDownloadArtwork } from "../services/download-artwork";
 import { logger } from "../services/logger";
@@ -44,7 +45,7 @@ export interface DownloadsContextValue {
   isDownloaded: (ratingKey: string) => boolean;
   isDownloading: (ratingKey: string) => boolean;
   getDownload: (ratingKey: string) => DownloadItem | undefined;
-  queueDownload: (item: DownloadItem) => void;
+  queueDownload: (item: DownloadItem | DownloadItem[]) => void;
   cancelDownload: (ratingKey: string) => void;
   deleteDownload: (ratingKey: string) => void;
   retryDownload: (ratingKey: string) => void;
@@ -364,12 +365,33 @@ export function useDownloadsState(
     [downloads],
   );
 
-  const queueDownload = useCallback((item: DownloadItem) => {
-    autoRetriesRef.current.delete(item.ratingKey);
-    setDownloads((prev) => {
-      // Don't add duplicates
-      if (prev.some((d) => d.ratingKey === item.ratingKey)) return prev;
-      return [...prev, { ...item, status: allPausedRef.current ? "paused" : "queued", bytesDownloaded: 0 }];
+  const capacityCheckRef = useRef(Promise.resolve());
+  const queueDownload = useCallback((input: DownloadItem | DownloadItem[]) => {
+    const candidates = Array.isArray(input) ? input : [input];
+    const freshItems = () => {
+      const keys = new Set(downloadsRef.current.map((item) => item.ratingKey));
+      return candidates.filter((item) => {
+        if (keys.has(item.ratingKey)) return false;
+        keys.add(item.ratingKey);
+        return true;
+      });
+    };
+    const enqueue = (items: DownloadItem[]) => {
+      const additions = items.map((item): DownloadItem => ({
+        ...item, status: allPausedRef.current ? "paused" : "queued", bytesDownloaded: 0,
+      }));
+      for (const item of additions) autoRetriesRef.current.delete(item.ratingKey);
+      downloadsRef.current = [...downloadsRef.current, ...additions];
+      setDownloads((prev) => [...prev, ...additions.filter((item) => !prev.some((d) => d.ratingKey === item.ratingKey))]);
+    };
+    if (!isTauriRuntime()) { enqueue(freshItems()); return; }
+    // Serialize requests so simultaneous clicks cannot each spend the same free space.
+    capacityCheckRef.current = capacityCheckRef.current.then(async () => {
+      const items = freshItems();
+      if (!items.length) return;
+      if (await confirmDownloadCapacity(items, downloadsRef.current)) enqueue(freshItems());
+    }).catch(() => {
+      toastRef.current("Could not check download storage. Try again.", "error");
     });
   }, []);
 

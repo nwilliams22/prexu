@@ -270,6 +270,59 @@ pub async fn get_downloads_dir(state: tauri::State<'_, DownloadManager>) -> Resu
     Ok(dir.to_string_lossy().to_string())
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadStorage {
+    used_bytes: u64,
+    free_bytes: u64,
+}
+
+// Include completed and partial files; never follow symlinks outside the folder.
+fn storage_usage(dir: &std::path::Path) -> std::io::Result<u64> {
+    let mut total = 0u64;
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let metadata = entry.metadata()?;
+        if entry.file_type()?.is_symlink() {
+            continue;
+        }
+        let size = if metadata.is_dir() {
+            storage_usage(&entry.path())?
+        } else if metadata.is_file() {
+            metadata.len()
+        } else {
+            0
+        };
+        total = total.saturating_add(size);
+    }
+    Ok(total)
+}
+
+#[tauri::command]
+pub async fn get_download_storage(
+    state: tauri::State<'_, DownloadManager>,
+) -> Result<DownloadStorage, String> {
+    let dir = PathBuf::from(get_downloads_dir(state).await?);
+    tauri::async_runtime::spawn_blocking(move || {
+        let free_bytes = fs2::available_space(&dir)
+            .map_err(|_| "Could not read available download space".to_string())?;
+        // Debug builds only: exercise low-space UI on the isolated QA profile.
+        #[cfg(debug_assertions)]
+        let free_bytes = std::env::var("PREXU_QA_DOWNLOAD_FREE_BYTES")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(free_bytes);
+        let used_bytes =
+            storage_usage(&dir).map_err(|_| "Could not read download storage usage".to_string())?;
+        Ok(DownloadStorage {
+            used_bytes,
+            free_bytes,
+        })
+    })
+    .await
+    .map_err(|_| "Storage check failed".to_string())?
+}
+
 /// Download a media file from Plex to local storage.
 // reason: tauri command; args map 1:1 to the frontend download invocation
 #[allow(clippy::too_many_arguments)]
@@ -1583,5 +1636,21 @@ mod tests {
         symlink(&base, &item).unwrap();
         assert!(super::playback_file("123", &manager).await.is_err());
         std::fs::remove_dir_all(base).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod storage_tests {
+    use super::*;
+
+    #[test]
+    fn storage_counts_complete_and_partial_files() {
+        let dir = std::env::temp_dir().join(format!("prexu-storage-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("episode")).unwrap();
+        std::fs::write(dir.join("complete.mkv"), [0; 12]).unwrap();
+        std::fs::write(dir.join("episode/partial.part"), [0; 7]).unwrap();
+        assert_eq!(storage_usage(&dir).unwrap(), 19);
+        assert!(fs2::available_space(&dir).unwrap() > 0);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

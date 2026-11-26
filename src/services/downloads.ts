@@ -58,3 +58,12 @@ export async function controlDownloadQueue(
 ): Promise<void> {
   return invoke("control_download_queue", { action, ...options });
 }
+
+export interface DownloadStorage {
+  usedBytes: number;
+  freeBytes: number;
+}
+
+export function getDownloadStorage(): Promise<DownloadStorage> {
+  return invoke("get_download_storage");
+}
