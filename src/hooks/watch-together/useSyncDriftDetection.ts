@@ -2,7 +2,7 @@
  * Detects and corrects playback drift between participants.
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { UsePlayerResult } from "../usePlayer";
 import type { SyncStatus } from "./useWatchTogetherSession";
 
@@ -14,8 +14,12 @@ export function useSyncDriftDetection(
   lastRemoteSyncRef: React.MutableRefObject<{
     time: number;
     localTimestamp: number;
-  } | null>
-): void {
+  } | null>,
+  isHost = false,
+): { resyncing: boolean; struggling: boolean } {
+  const [resyncing, setResyncing] = useState(false);
+  const [struggling, setStruggling] = useState(false);
+  const corrections = useRef<number[]>([]);
   // Use refs so the interval callback always reads the latest values without
   // needing them in the effect dependency array. playerRef also lets us drift-
   // correct via player.seek() which works on both HTML5 (videoRef populated)
@@ -27,9 +31,15 @@ export function useSyncDriftDetection(
   playerRef.current = player;
 
   useEffect(() => {
-    if (!isInSession || !player.isPlaying) return;
+    setResyncing(false);
+    setStruggling(false);
+    corrections.current = [];
+    if (!isInSession || isHost) return;
+    let badgeTimer: ReturnType<typeof setTimeout> | undefined;
 
     const driftCheck = setInterval(() => {
+      const p = playerRef.current;
+      if (!p.isPlaying || p.isLoading || p.isBuffering) return;
       const sync = lastRemoteSyncRef.current;
       if (!sync) return;
 
@@ -40,17 +50,26 @@ export function useSyncDriftDetection(
       if (drift > 2) {
         remoteActionRef.current = true;
         playerRef.current.seek(expectedTime);
-        setSyncStatus("syncing");
-        setTimeout(() => setSyncStatus("synced"), 500);
+        const now = Date.now();
+        corrections.current = corrections.current.filter((time) => now - time < 30000);
+        corrections.current.push(now);
+        setStruggling(corrections.current.length >= 3);
+        setResyncing(true);
+        clearTimeout(badgeTimer);
+        badgeTimer = setTimeout(() => setResyncing(false), 1500);
+      } else {
+        corrections.current = corrections.current.filter((time) => Date.now() - time < 30000);
+        setStruggling(corrections.current.length >= 3);
       }
     }, 2000);
 
-    return () => clearInterval(driftCheck);
+    return () => { clearInterval(driftCheck); clearTimeout(badgeTimer); };
   }, [
     isInSession,
-    player.isPlaying,
+    isHost,
     setSyncStatus,
     remoteActionRef,
     lastRemoteSyncRef,
   ]);
+  return { resyncing, struggling };
 }

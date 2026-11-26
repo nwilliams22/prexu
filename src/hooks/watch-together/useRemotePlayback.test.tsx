@@ -129,3 +129,52 @@ it("reapplies the authoritative clock after reconnect without a phase change", (
   expect(p.seek).toHaveBeenLastCalledWith(50);
   expect(p.seek).toHaveBeenCalledTimes(2);
 });
+
+it("pauses in host grace, blocks controls, and resumes from the returned snapshot", () => {
+  const p = makePlayer();
+  const { result, rerender } = renderHook(({ player }) => useRemotePlayback(player, true, status, "room"), { initialProps: { player: p } });
+  const snapshot = { session_id: "room", phase: "playback", playing: true, current_time: 35, timestamp: 10000, host_away: false };
+  emit("session_state", snapshot);
+  emit("session_state", { ...snapshot, host_away: true, playing: false });
+  expect(p.togglePlay).toHaveBeenCalledOnce();
+  expect(result.current.lastRemoteSyncRef.current).toBeNull();
+  send.mockClear();
+  act(() => { result.current.syncSeek(90); result.current.syncTogglePlay(); });
+  expect(send).not.toHaveBeenCalled();
+  rerender({ player: { ...p, isPlaying: false } });
+  emit("session_state", { ...snapshot, current_time: 40 });
+  expect(p.seek).toHaveBeenLastCalledWith(40);
+  expect(p.togglePlay).toHaveBeenCalledTimes(2);
+});
+
+it("rejoins at the host snapshot after its connection returns", () => {
+  const p = makePlayer();
+  renderHook(() => useRemotePlayback(p, true, status, "room"));
+  const snapshot = { session_id: "room", phase: "playback", playing: true, current_time: 35, timestamp: 10000, host_away: false };
+  emit("session_state", snapshot);
+  emit("disconnected", null);
+  emit("session_state", { ...snapshot, current_time: 55 });
+  expect(p.seek).toHaveBeenLastCalledWith(55);
+  emit("session_destroyed", {});
+  expect(toast).toHaveBeenLastCalledWith("Session ended - host left");
+});
+
+it("takes periodic clock samples only from the identified host", () => {
+  const p = makePlayer();
+  const { result } = renderHook(() => useRemotePlayback(p, true, status, "room"));
+  emit("session_state", { session_id: "room", phase: "playback", playing: true, current_time: 20, timestamp: 10000, host_away: false, participants: [{ plex_username: "Host", is_host: true }] });
+  emit("remote_ready", { from_user: "Guest", current_time: 70 });
+  expect(result.current.lastRemoteSyncRef.current?.time).toBe(20);
+  emit("remote_ready", { from_user: "Host", current_time: 25 });
+  expect(result.current.lastRemoteSyncRef.current?.time).toBe(25);
+  expect(p.seek).toHaveBeenCalledOnce();
+});
+
+it("publishes the host player position without seeking or broadcasting controls", () => {
+  const p = makePlayer();
+  renderHook(() => useRemotePlayback(p, true, status, "room", true, true));
+  emit("session_state", { session_id: "room", phase: "playback", playing: true, current_time: 20, timestamp: 10000, host_away: false });
+  send.mockClear();
+  act(() => vi.advanceTimersByTime(2000));
+  expect(send.mock.calls).toEqual([[{ type: "ready", current_time: 20 }]]);
+});

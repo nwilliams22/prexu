@@ -2,7 +2,7 @@ export interface WatchParticipant {
   plexUsername: string;
   plexThumb: string;
   isHost: boolean;
-  state: "buffering" | "ready" | "playing" | "paused";
+  state: "buffering" | "ready" | "playing" | "paused" | "reconnecting";
 }
 
 export interface WatchInvite {

@@ -22,6 +22,14 @@ export function useWatchParticipants(
   useEffect(() => {
     if (!isInSession) return;
 
+    const unsubState = watchSync.on("session_state", (data) => {
+      if (data.session_id !== sessionId || !data.participants) return;
+      setParticipants(data.participants.filter((p) => p.state !== "invited").map((p) => ({
+        plexUsername: p.plex_username, plexThumb: p.plex_thumb, isHost: p.is_host,
+        state: p.state === "joined-buffering" ? "buffering" : p.state === "reconnecting" ? "reconnecting" : "ready",
+      })));
+    });
+
     const unsubParticipantJoined = watchSync.on(
       "participant_joined",
       (data) => {
@@ -87,6 +95,7 @@ export function useWatchParticipants(
     });
 
     return () => {
+      unsubState();
       unsubParticipantJoined();
       unsubParticipantLeft();
       unsubSessionJoined();

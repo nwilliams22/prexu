@@ -170,3 +170,12 @@ The launcher sets `PREXU_QA_DOWNLOAD_FREE_BYTES=1` only in its isolated app
 process; the override exists only in debug builds. Actual directory usage still
 comes from the filesystem. Screenshots and the report must be attached to the
 tracking issue. The launcher stops its processes and removes its profile on exit.
+
+For Watch Together drift and connection grace acceptance, run the two-native-client
+lobby journey with `PREXU_JOURNEY_WATCH_CONNECTIONS=1`. It adds local guest drift
+(three corrections), host socket loss/return, guest reconnect/rejoin, and host
+absence beyond 60 seconds. Socket closure and a delayed first retry induce the
+outage; authentication and session restoration use the real service. Set
+`PREXU_JOURNEY_SCREENSHOTS` and `PREXU_JOURNEY_REPORT` to capture evidence. Use a
+fresh desktop build and the isolated production relay described above. The run
+restores both QA accounts' fixture progress and stops both desktops and servers.

@@ -17,6 +17,8 @@ export interface UseWatchTogetherResult {
   removeParticipant: (username: string) => void;
   isHost: boolean;
   catchingUp: boolean;
+  resyncing?: boolean;
+  struggling?: boolean;
   participants: WatchParticipant[];
   syncStatus: "synced" | "syncing" | "disconnected";
   sessionId: string | null;

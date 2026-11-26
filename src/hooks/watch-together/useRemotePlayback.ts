@@ -11,6 +11,7 @@ export function useRemotePlayback(
   setSyncStatus: (status: SyncStatus) => void,
   sessionId?: string | null,
   canReportReadiness = true,
+  isHost = false,
 ) {
   const { toast } = useToast();
   const playerRef = useRef(player);
@@ -19,6 +20,8 @@ export function useRemotePlayback(
   const lastRemoteSyncRef = useRef<{ time: number; localTimestamp: number } | null>(null);
   const pendingSnapshot = useRef<PlaybackSnapshot | null>(null);
   const initialized = useRef(false);
+  const hostAway = useRef(false);
+  const hostUsername = useRef<string | null>(null);
   const phase = useRef<"lobby" | "playback" | null>(null);
   const [catchingUp, setCatchingUp] = useState(false);
 
@@ -40,6 +43,8 @@ export function useRemotePlayback(
   useEffect(() => {
     initialized.current = false;
     phase.current = null;
+    hostAway.current = false;
+    hostUsername.current = null;
     pendingSnapshot.current = null;
     lastRemoteSyncRef.current = null;
     setCatchingUp(false);
@@ -47,20 +52,44 @@ export function useRemotePlayback(
 
     const subscriptions = [
       watchSync.on("disconnected", () => {
+        const p = playerRef.current;
+        if (p.isPlaying) p.togglePlay();
         initialized.current = false;
         pendingSnapshot.current = null;
         lastRemoteSyncRef.current = null;
         setSyncStatus("disconnected");
       }),
+      watchSync.on("session_destroyed", () => {
+        lastRemoteSyncRef.current = null;
+        pendingSnapshot.current = null;
+        const p = playerRef.current;
+        if (p.isPlaying) p.togglePlay();
+        toast("Session ended - host left");
+      }),
       watchSync.on("session_state", (snapshot) => {
         if (sessionId && snapshot.session_id !== sessionId) return;
+        hostUsername.current = snapshot.participants?.find((p) => p.is_host)?.plex_username ?? hostUsername.current;
         const phaseChanged = phase.current !== snapshot.phase;
+        const hostChanged = hostAway.current !== snapshot.host_away;
+        hostAway.current = snapshot.host_away;
         phase.current = snapshot.phase;
-        if (!initialized.current || pendingSnapshot.current || phaseChanged) {
+        if (snapshot.host_away) {
+          lastRemoteSyncRef.current = null;
+          pendingSnapshot.current = null;
+          setCatchingUp(false);
+          const p = playerRef.current;
+          if (p.isPlaying && hostChanged) p.togglePlay();
+          return;
+        }
+        if (!initialized.current || pendingSnapshot.current || phaseChanged || hostChanged) {
           pendingSnapshot.current = snapshot;
           setCatchingUp(snapshot.phase === "playback");
           applySnapshot();
         }
+      }),
+      watchSync.on("remote_ready", (data) => {
+        if (isHost || hostAway.current || data.from_user !== hostUsername.current || !playerRef.current.isPlaying) return;
+        lastRemoteSyncRef.current = { time: data.current_time, localTimestamp: Date.now() };
       }),
       watchSync.on("remote_play", (data) => {
         const p = playerRef.current;
@@ -90,7 +119,7 @@ export function useRemotePlayback(
       }),
     ];
     return () => subscriptions.forEach((unsubscribe) => unsubscribe());
-  }, [isInSession, sessionId, applySnapshot, setSyncStatus, toast]);
+  }, [isInSession, sessionId, applySnapshot, setSyncStatus, toast, isHost]);
 
   useEffect(() => { applySnapshot(); }, [player.isPrepared, player.isLoading, player.isBuffering, player.duration, applySnapshot]);
 
@@ -99,10 +128,22 @@ export function useRemotePlayback(
     watchSync.send({ type: player.isBuffering ? "buffering" : "ready", current_time: player.currentTime });
   }, [isInSession, canReportReadiness, player.isPrepared, player.isLoading, player.isBuffering, player.duration]);
 
+  // Reuse the host's readiness position as a clock sample. A viewer never
+  // publishes automatic corrections, and guest samples cannot move this clock.
+  useEffect(() => {
+    if (!isInSession || !isHost || !canReportReadiness) return;
+    const timer = setInterval(() => {
+      const p = playerRef.current;
+      if (phase.current !== "playback" || hostAway.current || !p.isPlaying || !p.isPrepared || p.isLoading || p.isBuffering) return;
+      watchSync.send({ type: "ready", current_time: p.currentTime });
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [isInSession, isHost, canReportReadiness]);
+
   const { togglePlay, seek } = player;
   const syncTogglePlay = useCallback(() => {
     const p = playerRef.current;
-    if (isInSession && (phase.current === "lobby" || pendingSnapshot.current)) return;
+    if (isInSession && (phase.current === "lobby" || hostAway.current || pendingSnapshot.current)) return;
     togglePlay();
     if (isInSession) {
       watchSync.send({ type: p.isPlaying ? "pause" : "play", current_time: p.currentTime, timestamp: Date.now() });
@@ -110,7 +151,7 @@ export function useRemotePlayback(
     }
   }, [togglePlay, isInSession]);
   const syncSeek = useCallback((time: number) => {
-    if (isInSession && (phase.current === "lobby" || pendingSnapshot.current)) return;
+    if (isInSession && (phase.current === "lobby" || hostAway.current || pendingSnapshot.current)) return;
     seek(time);
     if (isInSession) {
       watchSync.send({ type: "seek", current_time: time, timestamp: Date.now() });

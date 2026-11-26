@@ -24,7 +24,8 @@ export function useWatchTogether(
     session.isInSession,
     session.setSyncStatus,
     sessionId,
-    !!session.lobby && session.syncStatus !== "disconnected"
+    !!session.lobby && session.syncStatus !== "disconnected",
+    isHost
   );
 
   const { participants, setParticipants } = useWatchParticipants(
@@ -33,12 +34,13 @@ export function useWatchTogether(
     session.setSyncStatus
   );
 
-  useSyncDriftDetection(
+  const drift = useSyncDriftDetection(
     player,
-    session.isInSession,
+    session.isInSession && !session.lobby?.hostAway && session.syncStatus !== "disconnected",
     session.setSyncStatus,
     playback.remoteActionRef,
-    playback.lastRemoteSyncRef
+    playback.lastRemoteSyncRef,
+    isHost
   );
 
   const mediaSwitch = useRemoteMediaSwitch(
@@ -66,6 +68,8 @@ export function useWatchTogether(
     participants,
     syncStatus: session.syncStatus,
     catchingUp: playback.catchingUp,
+    resyncing: drift.resyncing,
+    struggling: drift.struggling,
     sessionId,
     showNextEpisodePrompt: mediaSwitch.showNextEpisodePrompt,
     nextEpisodeInfo: mediaSwitch.nextEpisodeInfo,

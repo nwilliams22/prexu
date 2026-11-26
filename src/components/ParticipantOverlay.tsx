@@ -42,6 +42,7 @@ function ParticipantOverlay({
                 {p.plexUsername[0]?.toUpperCase()}
               </div>
             )}
+            {p.state === "reconnecting" && <span>Reconnecting</span>}
             {p.isHost && <span style={styles.hostBadge}>★</span>}
           </div>
         );

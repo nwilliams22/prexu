@@ -135,6 +135,54 @@ try {
     return a.playing && b.playing && !a.lobby && !b.lobby && a.time > 1 && b.time > 1;
   });
   await screenshot(0, 'host-auto-playback'); await screenshot(1, 'guest-auto-playback'); add(stage, 'PASS');
+  if (process.env.PREXU_JOURNEY_WATCH_CONNECTIONS === '1') {
+    const text = (page, label) => page.evaluate(label => document.body.textContent.includes(label), label);
+    const drop = (page, delay) => page.evaluate(async delay => {
+      const { watchSync } = await import('/src/services/watch-sync.ts');
+      // Close a real socket and defer its first retry to exercise both grace
+      // windows. The production authentication/rejoin path remains unchanged.
+      watchSync.reconnectDelay = delay;
+      watchSync.ws.close();
+    }, delay);
+    stage = 'drift-viewer-only';
+    for (let i = 0; i < 3; i++) {
+      await until(async () => (await observe(host)).time > 10);
+      const before = await observe(host);
+      await guest.evaluate(async () => {
+        const p = (await import('/src/services/probe-live.ts')).probeLive.player.player;
+        p.seek(Math.max(0, p.currentTime - 8));
+      });
+      await clients[1].revealControls();
+      await until(() => text(guest, i === 2 ? 'Having trouble keeping up' : 'Re-syncing'));
+      const after = await observe(host);
+      check(after.time >= before.time && after.time - before.time < 6);
+      await until(async () => Math.abs((await observe(host)).time - (await observe(guest)).time) < 2);
+    }
+    await screenshot(1, 'guest-repeated-correction'); add(stage, 'PASS');
+    stage = 'host-grace-return';
+    await drop(host, 8000);
+    await clients[1].revealControls();
+    await until(async () => await text(guest, 'Waiting for host...') && !(await observe(guest)).playing);
+    await screenshot(1, 'guest-waiting-for-host');
+    await until(async () => (await observe(host)).playing && (await observe(guest)).playing);
+    await until(async () => Math.abs((await observe(host)).time - (await observe(guest)).time) < 2);
+    add(stage, 'PASS');
+    stage = 'guest-grace-rejoin';
+    await drop(guest, 8000);
+    await clients[0].revealControls();
+    await until(() => text(host, 'Reconnecting'));
+    await screenshot(0, 'host-guest-reconnecting');
+    check((await observe(host)).playing);
+    await until(async () => (await observe(guest)).playing && !await text(host, 'Reconnecting'));
+    await until(async () => Math.abs((await observe(host)).time - (await observe(guest)).time) < 2);
+    add(stage, 'PASS');
+    stage = 'host-grace-expiry';
+    await drop(host, 70000);
+    await until(async () => await text(guest, 'Waiting for host...') && !(await observe(guest)).playing);
+    await until(() => text(guest, 'Session ended - host left'), 75000);
+    await screenshot(1, 'guest-host-left');
+    check(!(await observe(guest)).playing); add(stage, 'PASS');
+  } else {
   stage = 'session-remove-guest';
   await clients[0].revealControls();
   await host.getByRole('button', { name: 'Manage session' }).click();
@@ -158,6 +206,7 @@ try {
   add(stage, 'PASS');
   await clients[0].revealControls();
   await host.getByRole('button', { name: 'Stop' }).click();
+  }
 } catch {
   add(stage, 'NOT_VERIFIED');
   diagnostic = [];

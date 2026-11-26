@@ -672,12 +672,15 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     () =>
       wt.isInSession ? (
         <SyncIndicator
+          waitingForHost={wt.lobby?.hostAway || (wt.isHost && wt.syncStatus === "disconnected")}
+          resyncing={wt.resyncing}
+          struggling={wt.struggling}
           catchingUp={wt.catchingUp}
           syncStatus={wt.syncStatus}
-          participantCount={wt.participants.length + 1}
+          participantCount={wt.lobby ? wt.participants.length : wt.participants.length + 1}
         />
       ) : undefined,
-    [wt.isInSession, wt.syncStatus, wt.participants.length, wt.catchingUp],
+    [wt.isInSession, wt.syncStatus, wt.participants.length, wt.catchingUp, wt.lobby, wt.isHost, wt.resyncing, wt.struggling],
   );
 
   // Memoized URL builders and derived post-play props — stable across the

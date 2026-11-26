@@ -77,3 +77,12 @@ describe("SyncIndicator", () => {
     expect(dot!.style.background).toBe("var(--error)");
   });
 });
+
+it("shows drift recovery and gives host grace priority", () => {
+  const { rerender } = render(<SyncIndicator syncStatus="synced" participantCount={2} resyncing />);
+  expect(screen.getByText("Re-syncing")).toBeInTheDocument();
+  rerender(<SyncIndicator syncStatus="synced" participantCount={2} struggling />);
+  expect(screen.getByText("Having trouble keeping up")).toBeInTheDocument();
+  rerender(<SyncIndicator syncStatus="synced" participantCount={2} waitingForHost struggling catchingUp />);
+  expect(screen.getByText("Waiting for host...")).toBeInTheDocument();
+});

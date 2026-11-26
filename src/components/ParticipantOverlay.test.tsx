@@ -89,3 +89,8 @@ describe("ParticipantOverlay", () => {
     expect(screen.getByText("U")).toBeInTheDocument(); // placeholder for user3
   });
 });
+
+ it("labels a guest retained during connection grace", () => {
+  renderOverlay([createWatchParticipant({ state: "reconnecting" })]);
+  expect(screen.getByText("Reconnecting")).toBeInTheDocument();
+});
