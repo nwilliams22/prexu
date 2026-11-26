@@ -8,6 +8,7 @@ import { resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 const rows = [], accounts = [], clients = [];
 const cacheDir = resolve(`.journey-cache/node_modules/.vite-${randomUUID()}`);
+let diagnostic, operation = "setup";
 let vite, relay, stage = 'prerequisites', active = 0, touched = false, applicationSha256;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const check = value => { if (!value) throw Error('assertion'); };
@@ -25,6 +26,9 @@ async function observe(page) {
   return page.evaluate(async () => {
     const p = (await import('/src/services/probe-live.ts')).probeLive.player?.player;
     return { lobby: !!document.querySelector('.watch-lobby'), prepared: !!p?.isPrepared,
+      creatorOpen: !!document.querySelector('[aria-labelledby="session-creator-title"]'),
+      friendCount: document.querySelectorAll('[role="checkbox"]').length,
+      errorWords: ['timed out', 'not connected', 'failed', 'session not found'].filter(t => document.body.textContent.toLowerCase().includes(t)),
       playing: !!p?.isPlaying, time: p?.currentTime ?? 0, error: !!p?.playbackError,
       invited: [...document.querySelectorAll('.watch-lobby-state')].some(e => e.textContent === 'Invited'),
       ready: [...document.querySelectorAll('.watch-lobby-state')].filter(e => e.textContent === 'Ready').length };
@@ -45,7 +49,7 @@ async function createLobby() {
   }, accounts[1].user.username));
   await host.getByRole('button', { name: 'Start Session' }).click();
   touched = true;
-  await until(async () => { const s = await observe(host); check(!s.error); return s.lobby && s.prepared && s.invited && s.ready === 1; });
+  await until(async () => { const s = await observe(host); check(!s.error); return s.lobby && s.prepared && s.invited && s.ready === 1 && s.time < .1; });
 }
 try {
   check(!process.env.DEBUG && process.env.PREXU_QA_PLEX_AUTH && process.env.PREXU_QA_PLEX_GUEST_AUTH);
@@ -90,10 +94,11 @@ try {
   add(stage, 'PASS');
   const [host, guest] = clients.map(c => c.page);
   stage = 'lobby-stopped-no-show';
-  await createLobby();
+  operation = 'create-lobby'; await createLobby();
+  operation = 'measure-stopped';
   const before = await observe(host); await sleep(3000); const after = await observe(host);
   check(!before.playing && !after.playing && Math.abs(after.time - before.time) < .1 && after.lobby);
-  await screenshot(0, 'host-lobby-no-show'); add(stage, 'PASS');
+  operation = 'capture-host-lobby'; await screenshot(0, 'host-lobby-no-show'); add(stage, 'PASS');
   stage = 'lobby-resend';
   await host.getByRole('button', { name: `Resend invite to ${accounts[1].user.username}` }).click();
   await guest.getByRole('button', { name: 'Join Session' }).waitFor(); add(stage, 'PASS');
@@ -117,12 +122,19 @@ try {
   await until(async () => { const s = await observe(host); return !s.lobby && s.playing && s.time > 1; });
   await screenshot(0, 'host-start-now'); add(stage, 'PASS');
   await host.getByRole('button', { name: 'Stop' }).click();
-} catch { add(stage, 'NOT_VERIFIED'); }
+} catch {
+  add(stage, 'NOT_VERIFIED');
+  diagnostic = [];
+  for (let i = 0; i < clients.length; i++) {
+    if (!clients[i].diagnostics().authenticated) continue;
+    try { diagnostic.push({ client: i, ...await observe(clients[i].page) }); await screenshot(i, `incomplete-${i}`); } catch { /* No raw errors or identities in reports. */ }
+  }
+}
 finally {
   let clean = true;
   for (const client of clients) {
     try { await client.page.evaluate(async () => { const p = (await import('/src/services/probe-live.ts')).probeLive.player; if (p) await p.stop(); }); } catch { /* Startup may not have reached the driver. */ }
-    try { await client.close(); } catch { clean = false; }
+    try { await client.close(); } catch { add("client-cleanup", "NOT_VERIFIED"); clean = false; }
   }
   if (touched) {
     for (let i = 0; i < accounts.length; i++) {
@@ -134,15 +146,18 @@ finally {
         const r = await fetch(`${server.uri}/:/timeline?${q}`, { headers: { 'X-Plex-Token': server.token, 'X-Plex-Client-Identifier': clients[i].clientIdentifier() }, redirect: 'error', signal: AbortSignal.timeout(15000) });
         check(r.ok);
         const d = await request(`${server.uri}/library/metadata/2`, server.token), item = d.MediaContainer.Metadata[0];
-        check((item.viewOffset || 0) === baseline.offset && Boolean(item.viewCount) === baseline.watched);
-      } catch { clean = false; }
+        const comparison = { client: i, beforeOffset: baseline.offset, afterOffset: item.viewOffset || 0,
+          beforeWatched: baseline.watched, afterWatched: Boolean(item.viewCount) };
+        diagnostic ??= []; diagnostic.push({ restoration: comparison });
+        check(comparison.afterOffset === comparison.beforeOffset && comparison.afterWatched === comparison.beforeWatched);
+      } catch { add(`restore-client-${i}`, "NOT_VERIFIED"); clean = false; }
     }
   }
   if (relay?.exitCode === null) { const ended = new Promise(ok => relay.once('close', ok)); relay.kill('SIGKILL'); await ended; }
   await vite?.close(); await rm(cacheDir, { recursive: true, force: true });
   add('cleanup-and-restore', clean ? 'PASS' : 'NOT_VERIFIED');
 }
-const report = { schema: 1, applicationSha256, scope: 'Two real native clients, UI creator/invite/join/start/stop, QA fixture 2, production relay', rows };
+const report = { schema: 1, applicationSha256, operation, diagnostic, scope: 'Two real native clients, UI creator/invite/join/start/stop, QA fixture 2, production relay', rows };
 const output = JSON.stringify(report, null, 2) + '\n';
 if (process.env.PREXU_JOURNEY_REPORT) await writeFile(process.env.PREXU_JOURNEY_REPORT, output, { mode: 0o600 });
 process.stdout.write(output);

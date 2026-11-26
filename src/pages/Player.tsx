@@ -73,7 +73,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   const playerSession = usePlayerSession();
   const playerMinimize = usePlayerMinimize();
 
-  const player = usePlayer(ratingKey, offset, { initiallyPaused: !!watchTogether });
+  const player = usePlayer(ratingKey, watchTogether ? 0 : offset, { initiallyPaused: !!watchTogether });
   // Resolved once per mount by usePlayer (see engineResolution.ts) — safe
   // to read every render since it never changes for the lifetime of this
   // component instance. Window-management affordances gate on
