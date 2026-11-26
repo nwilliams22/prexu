@@ -3,6 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { axe } from "vitest-axe";
 import WatchTogetherLobby, { type WatchTogetherLobbyProps } from "./WatchTogetherLobby";
 
+const writeText = vi.fn();
+vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => true }));
+vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ writeText: (...args: unknown[]) => writeText(...args) }));
+
 function props(): WatchTogetherLobbyProps {
   return {
     snapshot: {
@@ -88,4 +92,19 @@ it("keeps removal available during playback without offering another start", () 
   expect(screen.queryByRole("button", { name: "Start now" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Remove joining" })).toBeEnabled();
   expect(screen.getByRole("status")).toHaveTextContent("Session in progress.");
+});
+
+it("copies an identifier-only link through the native clipboard", async () => {
+  const p = props(); p.snapshot.sessionId = "AB12CD34";
+  render(<WatchTogetherLobby {...p} />);
+  await userEvent.setup().click(screen.getByRole("button", { name: "Copy invite link" }));
+  expect(writeText).toHaveBeenCalledWith("prexu://join/AB12CD34?media=2");
+  expect(screen.getByText(/Invite link copied/)).toBeInTheDocument();
+});
+it("reports clipboard errors without claiming the link was copied", async () => {
+  writeText.mockRejectedValueOnce(new Error("clipboard unavailable"));
+  const p = props(); p.snapshot.sessionId = "AB12CD34";
+  render(<WatchTogetherLobby {...p} />);
+  await userEvent.setup().click(screen.getByRole("button", { name: "Copy invite link" }));
+  expect(screen.getByText(/Could not copy/)).toBeInTheDocument();
 });

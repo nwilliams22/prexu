@@ -1,6 +1,8 @@
 import { useId, useState, type ReactNode } from "react";
 import type { WatchLobbySnapshot, WatchLobbyParticipantState } from "../types/watch-together";
 import "./WatchTogetherLobby.css";
+import { isTauri } from "@tauri-apps/api/core";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { createInviteLink } from "../services/watch-invites";
 
 const participantLabels: Record<WatchLobbyParticipantState, string> = {
@@ -80,7 +82,9 @@ export default function WatchTogetherLobby({
       <footer className="watch-lobby-actions">
         {isHost && <button type="button" disabled={!canManage} onClick={async () => {
           try {
-            await navigator.clipboard.writeText(createInviteLink(snapshot.sessionId, snapshot.mediaRatingKey));
+            const link = createInviteLink(snapshot.sessionId, snapshot.mediaRatingKey);
+            if (isTauri()) await writeText(link);
+            else await navigator.clipboard.writeText(link);
             setCopyMessage("Invite link copied. It works while this session exists.");
           } catch { setCopyMessage("Could not copy the invite link. Please try again."); }
         }}>Copy invite link</button>}

@@ -6,6 +6,8 @@ let auth = { isLoading: false, isAuthenticated: false, serverSelected: false };
 let receive: (urls: string[]) => void;
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => true }));
 vi.mock("react-router-dom", () => ({ useNavigate: () => navigate }));
+const dismissInvite = vi.fn();
+vi.mock("../hooks/useInvites", () => ({ useInvites: () => ({ dismissInvite }) }));
 vi.mock("../hooks/useAuth", () => ({ useAuth: () => auth }));
 vi.mock("@tauri-apps/plugin-deep-link", () => ({
   getCurrent: async () => ["prexu://join/AB12CD34?media=17"],

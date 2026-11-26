@@ -8,6 +8,7 @@
   "permissions": [
     "core:default",
     "deep-link:default",
+    "clipboard-manager:allow-write-text",
     "core:window:allow-start-dragging",
     "core:window:allow-set-decorations",
     "shell:allow-open",

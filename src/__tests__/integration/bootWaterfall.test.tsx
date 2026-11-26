@@ -55,7 +55,10 @@ const spies = vi.hoisted(() => ({
 
 // ── Boundary mocks ────────────────────────────────────────────────────────
 // Tauri IPC: App fires invoke("app_ready") on mount.
+vi.mock("../../components/InviteLinkBridge", () => ({ default: () => null }));
+
 vi.mock("@tauri-apps/api/core", () => ({
+  isTauri: () => false,
   invoke: vi.fn().mockResolvedValue(undefined),
 }));
 

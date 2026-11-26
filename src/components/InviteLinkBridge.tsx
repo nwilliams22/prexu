@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { useNavigate } from "react-router-dom";
+import { useInvites } from "../hooks/useInvites";
 import { useAuth } from "../hooks/useAuth";
 import { parseInviteLink } from "../services/watch-invites";
 
@@ -11,6 +12,7 @@ export default function InviteLinkBridge() {
   const [error, setError] = useState(false);
   const { isLoading, isAuthenticated, serverSelected } = useAuth();
   const navigate = useNavigate();
+  const { dismissInvite } = useInvites();
   useEffect(() => {
     if (!isTauri()) return;
     let active = true;
@@ -31,8 +33,9 @@ export default function InviteLinkBridge() {
   }, []);
   useEffect(() => {
     if (!pending || isLoading || !isAuthenticated || !serverSelected) return;
+    dismissInvite(pending.sessionId);
     navigate(`/play/${pending.ratingKey}?session=${pending.sessionId}`);
     setPending(null);
-  }, [pending, isLoading, isAuthenticated, serverSelected, navigate]);
+  }, [pending, isLoading, isAuthenticated, serverSelected, navigate, dismissInvite]);
   return error ? <div role="alert">This invite link is invalid. Ask the host for a new link. <button onClick={() => setError(false)}>Dismiss</button></div> : null;
 }

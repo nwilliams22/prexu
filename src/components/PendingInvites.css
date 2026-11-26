@@ -1,0 +1,17 @@
+.pending-invites { position: relative; font-size: .875rem; }
+.pending-invites summary { cursor: pointer; padding: .5rem; border-radius: .5rem; white-space: nowrap; }
+.pending-invites-panel {
+  position: absolute; right: 0; top: calc(100% + .5rem); z-index: 1050;
+  width: min(24rem, calc(100vw - 2rem)); max-height: 70vh; overflow-y: auto;
+  background: var(--bg-secondary); color: var(--text-primary); padding: 1rem;
+  border: 1px solid var(--border); border-radius: .75rem; box-shadow: 0 8px 24px rgba(0,0,0,.2);
+}
+.pending-invites form, .pending-invites label { display: flex; flex-direction: column; gap: .5rem; }
+.pending-invites article { border-top: 1px solid var(--border); margin-top: 1rem; padding-top: .75rem; }
+.pending-invites p { margin: 0 0 .75rem; line-height: 1.5; overflow-wrap: anywhere; }
+.pending-invites input { width: 100%; box-sizing: border-box; padding: .6rem; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border); border-radius: .4rem; }
+.pending-invites button { padding: .6rem .8rem; border: 1px solid var(--border); border-radius: .4rem; color: var(--text-primary); background: var(--bg-primary); cursor: pointer; }
+.pending-invites button[type="submit"] { background: var(--accent); color: #000; font-weight: 600; }
+.pending-invites-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.pending-invites :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pending-invites button:disabled { opacity: .5; cursor: default; }

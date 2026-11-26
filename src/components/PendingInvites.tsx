@@ -1,3 +1,4 @@
+import "./PendingInvites.css";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useInvites } from "../hooks/useInvites";
@@ -13,14 +14,15 @@ export default function PendingInvites() {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
-  return <details>
+  return <details className="pending-invites">
     <summary>Pending invites ({invites.length})</summary>
-    <section aria-label="Pending Watch Together invites" style={{ position: "absolute", zIndex: 1050, background: "var(--bg-secondary)", padding: "1rem", border: "1px solid var(--border)", borderRadius: "8px" }}>
+    <section aria-label="Pending Watch Together invites" className="pending-invites-panel">
       <form onSubmit={(event) => {
         event.preventDefault();
         const parsed = parseInviteLink(link);
         setInvalid(!parsed);
         if (parsed) {
+          dismissInvite(parsed.sessionId);
           navigate(`/play/${parsed.ratingKey}?session=${parsed.sessionId}`);
           setLink("");
         }
@@ -33,11 +35,11 @@ export default function PendingInvites() {
       {invites.map((invite) => <article key={invite.sessionId}>
         <p><strong>{invite.senderUsername}</strong> invited you to {invite.mediaTitle}</p>
         <p>{Math.ceil(inviteTimeLeft(invite.sentAt, now) / 1000)} seconds left</p>
-        <button disabled={inviteTimeLeft(invite.sentAt, now) === 0} onClick={() => {
+        <div className="pending-invites-actions"><button disabled={inviteTimeLeft(invite.sentAt, now) === 0} onClick={() => {
           navigate(`/play/${invite.mediaRatingKey}?${new URLSearchParams({ session: invite.sessionId, relay: invite.relayUrl })}`);
           dismissInvite(invite.sessionId);
         }}>Join {invite.mediaTitle}</button>
-        <button onClick={() => dismissInvite(invite.sessionId)}>Decline</button>
+        <button onClick={() => dismissInvite(invite.sessionId)}>Decline</button></div>
       </article>)}
     </section>
   </details>;
