@@ -17,7 +17,7 @@ test.describe("Requests: admin view", () => {
   test("shows filter tabs", async ({ page }) => {
     await page.goto("/requests");
     await expect(page.getByText("All")).toBeVisible();
-    await expect(page.getByText("Pending")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Pending", exact: true })).toBeVisible();
     await expect(page.getByText("Approved")).toBeVisible();
     await expect(page.getByText("Declined")).toBeVisible();
   });
