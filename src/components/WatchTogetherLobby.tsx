@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useId, type ReactNode } from "react";
 import type { WatchLobbySnapshot, WatchLobbyParticipantState } from "../types/watch-together";
 import "./WatchTogetherLobby.css";
 
@@ -11,6 +11,7 @@ const participantLabels: Record<WatchLobbyParticipantState, string> = {
 
 export interface WatchTogetherLobbyProps {
   snapshot: WatchLobbySnapshot;
+  mediaDetails?: ReactNode;
   isHost: boolean;
   connected: boolean;
   error?: string | null;
@@ -22,7 +23,7 @@ export interface WatchTogetherLobbyProps {
 
 /** Shared host/guest view. Only a relay snapshot may dismiss the lobby. */
 export default function WatchTogetherLobby({
-  snapshot, isHost, connected, error,
+  snapshot, isHost, connected, error, mediaDetails,
   onStartNow, onResendInvite, onRemoveParticipant, onLeave,
 }: WatchTogetherLobbyProps) {
   const titleId = useId();
@@ -41,6 +42,7 @@ export default function WatchTogetherLobby({
             : "Playback starts when everyone is ready."}
         </p>
       </header>
+      {mediaDetails}
       <section aria-labelledby={participantsId}>
         <h2 id={participantsId}>Participants</h2>
         <ul className="watch-lobby-participants" aria-live="polite" aria-relevant="all">

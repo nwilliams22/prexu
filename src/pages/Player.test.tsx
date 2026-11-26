@@ -147,6 +147,8 @@ vi.mock("../hooks/useBreakpoint", () => ({
   isMobile: () => false,
 }));
 
+vi.mock("../components/WatchTogetherMediaDetails", () => ({ default: () => null }));
+
 vi.mock("../services/plex-library", () => ({
   getImageUrl: vi.fn(() => "http://img.test/poster.jpg"),
 }));

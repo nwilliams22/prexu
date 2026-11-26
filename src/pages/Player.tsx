@@ -36,6 +36,7 @@ import { usePopOutPlayer } from "../hooks/player/usePopOutPlayer";
 import { usePlayerLifecycle } from "../hooks/player/usePlayerLifecycle";
 import { usePostPlay } from "../hooks/player/usePostPlay";
 import PlayerControls from "../components/PlayerControls";
+import WatchTogetherMediaDetails from "../components/WatchTogetherMediaDetails";
 import WatchTogetherLobby from "../components/WatchTogetherLobby";
 import ParticipantOverlay from "../components/ParticipantOverlay";
 import SyncIndicator from "../components/SyncIndicator";
@@ -982,6 +983,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
               mediaTitle: player.title || "Watch Together", mediaRatingKey: ratingKey,
               mediaType: player.itemType, participants: [],
             }}
+            mediaDetails={<WatchTogetherMediaDetails ratingKey={ratingKey} />}
             isHost={wt.isHost}
             connected={wt.syncStatus !== "disconnected" && !!wt.lobby}
             error={wt.sessionError ?? player.playbackError}

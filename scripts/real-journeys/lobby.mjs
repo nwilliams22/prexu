@@ -178,6 +178,14 @@ finally {
         const { server, baseline } = accounts[i];
         const sessions = await request(`${accounts[0].server.uri}/status/sessions`, accounts[0].server.token);
         check(!(sessions.MediaContainer.Metadata || []).some(s => s.Player?.state !== 'stopped' && !clients.some(c => c.clientIdentifier() === s.Player?.machineIdentifier)));
+        const current = (await request(`${server.uri}/library/metadata/2`, server.token)).MediaContainer.Metadata[0];
+        if (Boolean(current.viewCount) !== baseline.watched) {
+          const action = baseline.watched ? 'scrobble' : 'unscrobble';
+          const response = await fetch(`${server.uri}/:/${action}?key=2&identifier=com.plexapp.plugins.library`, {
+            headers: { 'X-Plex-Token': server.token }, redirect: 'error', signal: AbortSignal.timeout(15000),
+          });
+          check(response.ok);
+        }
         const q = new URLSearchParams({ ratingKey: '2', key: '/library/metadata/2', state: 'stopped', time: String(baseline.offset), duration: String(baseline.duration) });
         const r = i === 1 && !rows.some(row => row.journey === 'lobby-all-ready-auto-start') ? { ok: true } : await fetch(`${server.uri}/:/timeline?${q}`, { headers: { 'X-Plex-Token': server.token, 'X-Plex-Client-Identifier': clients[i].clientIdentifier() }, redirect: 'error', signal: AbortSignal.timeout(15000) });
         check(r.ok);
