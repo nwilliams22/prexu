@@ -117,6 +117,13 @@ void (async () => { if (window.__TAURI_INTERNALS__) {
       const app=spawn('dbus-run-session',['--',resolve(process.env.PREXU_JOURNEY_APP || 'src-tauri/target/debug/prexu')],{env,detached:true,stdio:'ignore'});children.push(app);app.on('error',()=>{});
       await until(()=>authenticated,100000);
     },
+    async revealControls() {
+      if (!displayNumber) throw Error("native-not-started");
+      for (const [x, y] of [[640, 400], [650, 410]]) {
+        const result = spawnSync("xdotool", ["mousemove", "--sync", String(x), String(y)], { env: { PATH: process.env.PATH, DISPLAY: `:${displayNumber}` }, stdio: "ignore" });
+        if (result.status !== 0) throw Error("native-pointer");
+      }
+    },
     async screenshot(path) {
       if (!displayNumber) throw Error("native-not-started");
       const result = spawnSync("import", ["-display", `:${displayNumber}`, "-window", "root", path], { stdio: "ignore" });

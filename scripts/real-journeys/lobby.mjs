@@ -22,6 +22,21 @@ async function request(url, token) {
   const r = await fetch(url, { headers: { Accept: 'application/json', 'X-Plex-Token': token, 'X-Plex-Client-Identifier': 'prexu-lobby-journey' }, redirect: 'error', signal: AbortSignal.timeout(15000) });
   check(r.ok); return r.json();
 }
+async function rejectsInvalidCredential(url) {
+  const socket = new WebSocket(url);
+  try {
+    return await new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(false), 15000);
+      const done = value => { clearTimeout(timer); resolve(value); };
+      socket.onopen = () => socket.send(JSON.stringify({ type: 'auth', plex_token: 'prexu-qa-invalid-credential' }));
+      socket.onmessage = event => {
+        try { const data = JSON.parse(event.data); if (data.type === 'auth_error') done(true); else if (data.type === 'auth_ok') done(false); }
+        catch { done(false); }
+      };
+      socket.onerror = () => done(false);
+    });
+  } finally { socket.close(); }
+}
 async function observe(page) {
   return page.evaluate(async () => {
     const p = (await import('/src/services/probe-live.ts')).probeLive.player?.player;
@@ -29,7 +44,7 @@ async function observe(page) {
       creatorOpen: !!document.querySelector('[aria-labelledby="session-creator-title"]'),
       friendCount: document.querySelectorAll('[role="checkbox"]').length,
       errorWords: ['timed out', 'not connected', 'failed', 'session not found'].filter(t => document.body.textContent.toLowerCase().includes(t)),
-      playing: !!p?.isPlaying, time: p?.currentTime ?? 0, error: !!p?.playbackError,
+      playing: !!p?.isPlaying, time: p?.currentTime ?? 0, error: !!p?.playbackError, inviteEvents: window.lobbyInviteEvents || 0,
       invited: [...document.querySelectorAll('.watch-lobby-state')].some(e => e.textContent === 'Invited'),
       ready: [...document.querySelectorAll('.watch-lobby-state')].filter(e => e.textContent === 'Ready').length };
   });
@@ -79,6 +94,8 @@ try {
   relay = spawn(resolve(process.env.PREXU_JOURNEY_RELAY || 'relay-server/target/debug/prexu-relay'), ['--host', '127.0.0.1', '--port', String(port), '--public-url', relayUrl], { env: { PATH: process.env.PATH, RUST_LOG: 'off' }, stdio: 'ignore' });
   relay.on('error', () => {});
   await until(async () => { try { return (await fetch(`http://127.0.0.1:${port}/health`)).ok; } catch { return false; } });
+  stage = 'relay-production-auth';
+  check(await rejectsInvalidCredential(relayUrl)); add(stage, 'PASS');
   accounts.forEach(a => clients.push(nativeClient(a.token, relayUrl)));
   vite = await createServer({ logLevel: 'silent', cacheDir, plugins: clients.map((client, i) => ({
     ...client.plugin, name: `native-lobby-${i}`,
@@ -90,7 +107,16 @@ try {
     active = i; await clients[i].start();
     await clients[i].page.goto('http://127.0.0.1:1420/item/2');
     await until(() => clients[i].page.evaluate(async () => (await import('/src/services/watch-sync.ts')).watchSync.isConnected));
+    check(await clients[i].page.evaluate(async expected => {
+      const auth = await (await import('/src/services/storage/index.ts')).getAuth();
+      const user = await (await import('/src/services/plex-api.ts')).getPlexUser(auth.authToken);
+      const { watchSync } = await import('/src/services/watch-sync.ts');
+      window.lobbyInviteEvents = 0;
+      watchSync.on('invite_received', () => { window.lobbyInviteEvents++; });
+      return user.username === expected;
+    }, accounts[i].user.username));
   }
+  check(await (await fetch(`http://127.0.0.1:${port}/health`)).text() === 'OK — 0 sessions, 2 connections');
   add(stage, 'PASS');
   const [host, guest] = clients.map(c => c.page);
   stage = 'lobby-stopped-no-show';
@@ -110,6 +136,7 @@ try {
   });
   await screenshot(0, 'host-auto-playback'); await screenshot(1, 'guest-auto-playback'); add(stage, 'PASS');
   stage = 'session-remove-guest';
+  await clients[0].revealControls();
   await host.getByRole('button', { name: 'Manage session' }).click();
   await host.getByRole('button', { name: `Remove ${accounts[1].user.username}` }).click();
   await until(() => guest.evaluate(async () => !(await import('/src/services/probe-live.ts')).probeLive.player));
@@ -143,7 +170,7 @@ finally {
         const sessions = await request(`${server.uri}/status/sessions`, server.token);
         check(!(sessions.MediaContainer.Metadata || []).some(s => s.Player?.state !== 'stopped' && !clients.some(c => c.clientIdentifier() === s.Player?.machineIdentifier)));
         const q = new URLSearchParams({ ratingKey: '2', key: '/library/metadata/2', state: 'stopped', time: String(baseline.offset), duration: String(baseline.duration) });
-        const r = await fetch(`${server.uri}/:/timeline?${q}`, { headers: { 'X-Plex-Token': server.token, 'X-Plex-Client-Identifier': clients[i].clientIdentifier() }, redirect: 'error', signal: AbortSignal.timeout(15000) });
+        const r = i === 1 && !rows.some(row => row.journey === 'lobby-all-ready-auto-start') ? { ok: true } : await fetch(`${server.uri}/:/timeline?${q}`, { headers: { 'X-Plex-Token': server.token, 'X-Plex-Client-Identifier': clients[i].clientIdentifier() }, redirect: 'error', signal: AbortSignal.timeout(15000) });
         check(r.ok);
         const d = await request(`${server.uri}/library/metadata/2`, server.token), item = d.MediaContainer.Metadata[0];
         const comparison = { client: i, beforeOffset: baseline.offset, afterOffset: item.viewOffset || 0,
