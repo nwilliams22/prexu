@@ -16,6 +16,16 @@ export function useRemotePlayback(
   const { toast } = useToast();
   const playerRef = useRef(player);
   playerRef.current = player;
+  // Relay controls and their authoritative snapshot can arrive before the
+  // engine reports the first command. Do not toggle twice against stale state.
+  const commandedPlaying = useRef<boolean | null>(null);
+  if (commandedPlaying.current === player.isPlaying) commandedPlaying.current = null;
+  const ensurePlaying = useCallback((playing: boolean) => {
+    const p = playerRef.current;
+    if ((commandedPlaying.current ?? p.isPlaying) === playing) return;
+    commandedPlaying.current = playing;
+    p.togglePlay();
+  }, []);
   const remoteActionRef = useRef(false);
   const lastRemoteSyncRef = useRef<{ time: number; localTimestamp: number } | null>(null);
   const pendingSnapshot = useRef<PlaybackSnapshot | null>(null);
@@ -32,13 +42,13 @@ export function useRemotePlayback(
     const elapsed = snapshot.playing ? Math.max(0, (Date.now() - snapshot.timestamp) / 1000) : 0;
     const time = snapshot.current_time + elapsed;
     p.seek(time);
-    if (p.isPlaying !== snapshot.playing) p.togglePlay();
+    ensurePlaying(snapshot.playing);
     lastRemoteSyncRef.current = snapshot.playing ? { time, localTimestamp: Date.now() } : null;
     pendingSnapshot.current = null;
     initialized.current = true;
     setCatchingUp(false);
     setSyncStatus("synced");
-  }, [setSyncStatus]);
+  }, [setSyncStatus, ensurePlaying]);
 
   useEffect(() => {
     initialized.current = false;
@@ -52,8 +62,7 @@ export function useRemotePlayback(
 
     const subscriptions = [
       watchSync.on("disconnected", () => {
-        const p = playerRef.current;
-        if (p.isPlaying) p.togglePlay();
+        ensurePlaying(false);
         initialized.current = false;
         pendingSnapshot.current = null;
         lastRemoteSyncRef.current = null;
@@ -62,8 +71,7 @@ export function useRemotePlayback(
       watchSync.on("session_destroyed", () => {
         lastRemoteSyncRef.current = null;
         pendingSnapshot.current = null;
-        const p = playerRef.current;
-        if (p.isPlaying) p.togglePlay();
+        ensurePlaying(false);
         toast("Session ended - host left");
       }),
       watchSync.on("session_state", (snapshot) => {
@@ -77,8 +85,7 @@ export function useRemotePlayback(
           lastRemoteSyncRef.current = null;
           pendingSnapshot.current = null;
           setCatchingUp(false);
-          const p = playerRef.current;
-          if (p.isPlaying && hostChanged) p.togglePlay();
+          ensurePlaying(false);
           return;
         }
         if (!initialized.current || pendingSnapshot.current || phaseChanged || hostChanged) {
@@ -95,7 +102,7 @@ export function useRemotePlayback(
         const p = playerRef.current;
         const time = data.current_time + Math.max(0, Math.min((Date.now() - data.timestamp) / 1000, 2));
         p.seek(time);
-        if (!p.isPlaying) p.togglePlay();
+        ensurePlaying(true);
         lastRemoteSyncRef.current = { time, localTimestamp: Date.now() };
         toast(`${data.from_user} resumed playback`);
         setSyncStatus("synced");
@@ -103,7 +110,7 @@ export function useRemotePlayback(
       watchSync.on("remote_pause", (data) => {
         const p = playerRef.current;
         p.seek(data.current_time);
-        if (p.isPlaying) p.togglePlay();
+        ensurePlaying(false);
         lastRemoteSyncRef.current = null;
         toast(`${data.from_user} paused`);
         setSyncStatus("synced");
@@ -119,7 +126,7 @@ export function useRemotePlayback(
       }),
     ];
     return () => subscriptions.forEach((unsubscribe) => unsubscribe());
-  }, [isInSession, sessionId, applySnapshot, setSyncStatus, toast, isHost]);
+  }, [isInSession, sessionId, applySnapshot, setSyncStatus, toast, isHost, ensurePlaying]);
 
   useEffect(() => { applySnapshot(); }, [player.isPrepared, player.isLoading, player.isBuffering, player.duration, applySnapshot]);
 
@@ -144,6 +151,7 @@ export function useRemotePlayback(
   const syncTogglePlay = useCallback(() => {
     const p = playerRef.current;
     if (isInSession && (!canReportReadiness || phase.current === "lobby" || hostAway.current || pendingSnapshot.current)) return;
+    commandedPlaying.current = null;
     togglePlay();
     if (isInSession) {
       watchSync.send({ type: p.isPlaying ? "pause" : "play", current_time: p.currentTime, timestamp: Date.now() });

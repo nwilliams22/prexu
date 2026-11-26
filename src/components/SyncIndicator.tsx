@@ -9,7 +9,9 @@ interface SyncIndicatorProps {
 
 function SyncIndicator({ syncStatus, participantCount, catchingUp, waitingForHost, resyncing, struggling }: SyncIndicatorProps) {
   const dotColor =
-    syncStatus === "synced"
+    waitingForHost || resyncing || struggling
+      ? "var(--accent)"
+      : syncStatus === "synced"
       ? "var(--success)"
       : syncStatus === "syncing"
         ? "var(--accent)"
@@ -50,12 +52,12 @@ const styles: Record<string, React.CSSProperties> = {
   },
   label: {
     fontSize: "0.75rem",
-    color: "var(--text-primary)",
+    color: "#fff",
     fontWeight: 500,
   },
   count: {
     fontSize: "0.7rem",
-    color: "var(--text-secondary)",
+    color: "rgba(255, 255, 255, 0.8)",
     marginLeft: "0.25rem",
   },
 };

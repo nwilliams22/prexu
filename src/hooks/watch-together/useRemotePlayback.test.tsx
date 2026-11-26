@@ -178,3 +178,17 @@ it("publishes the host player position without seeking or broadcasting controls"
   act(() => vi.advanceTimersByTime(2000));
   expect(send.mock.calls).toEqual([[{ type: "ready", current_time: 20 }]]);
 });
+
+it("does not toggle twice when host grace controls and snapshots precede engine updates", () => {
+  const p = makePlayer();
+  const { rerender } = renderHook(({ player }) => useRemotePlayback(player, true, status, "room"), { initialProps: { player: p } });
+  const snapshot = { session_id: "room", phase: "playback", playing: true, current_time: 20, timestamp: 10000, host_away: false };
+  emit("session_state", snapshot);
+  emit("remote_pause", { current_time: 20, timestamp: 10000, from_user: "Host" });
+  emit("session_state", { ...snapshot, playing: false, host_away: true });
+  expect(p.togglePlay).toHaveBeenCalledTimes(1);
+  rerender({ player: { ...p, isPlaying: false } });
+  emit("remote_play", { current_time: 20, timestamp: 10000, from_user: "Host" });
+  emit("session_state", snapshot);
+  expect(p.togglePlay).toHaveBeenCalledTimes(2);
+});

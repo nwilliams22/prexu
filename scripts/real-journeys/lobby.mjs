@@ -173,15 +173,15 @@ try {
     }
     await clients[1].revealControls();
     await screenshot(1, 'guest-repeated-correction'); add(stage, 'PASS');
-    stage = 'host-grace-return';
+    stage = 'host-grace-return'; operation = 'host-drop-waiting';
     await drop(host, 8000);
     await clients[1].revealControls();
     await until(async () => await text(guest, 'Waiting for host...') && !(await observe(guest)).playing);
-    await screenshot(1, 'guest-waiting-for-host');
+    await screenshot(1, 'guest-waiting-for-host'); operation = 'host-return-resume';
     await until(async () => (await observe(host)).playing && (await observe(guest)).playing);
     await until(async () => Math.abs((await observe(host)).time - (await observe(guest)).time) < 2);
     add(stage, 'PASS');
-    stage = 'guest-grace-rejoin';
+    stage = 'guest-grace-rejoin'; operation = 'guest-drop-rejoin';
     await drop(guest, 8000);
     await clients[0].revealControls();
     await until(() => text(host, 'Reconnecting'));
@@ -190,7 +190,7 @@ try {
     await until(async () => (await observe(guest)).playing && !await text(host, 'Reconnecting'));
     await until(async () => Math.abs((await observe(host)).time - (await observe(guest)).time) < 2);
     add(stage, 'PASS');
-    stage = 'host-grace-expiry';
+    stage = 'host-grace-expiry'; operation = 'host-timeout';
     await drop(host, 70000);
     await until(async () => await text(guest, 'Waiting for host...') && !(await observe(guest)).playing);
     await until(() => text(guest, 'Session ended - host left'), 75000);
