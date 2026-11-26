@@ -143,21 +143,21 @@ export function useRemotePlayback(
   const { togglePlay, seek } = player;
   const syncTogglePlay = useCallback(() => {
     const p = playerRef.current;
-    if (isInSession && (phase.current === "lobby" || hostAway.current || pendingSnapshot.current)) return;
+    if (isInSession && (!canReportReadiness || phase.current === "lobby" || hostAway.current || pendingSnapshot.current)) return;
     togglePlay();
     if (isInSession) {
       watchSync.send({ type: p.isPlaying ? "pause" : "play", current_time: p.currentTime, timestamp: Date.now() });
       lastRemoteSyncRef.current = p.isPlaying ? null : { time: p.currentTime, localTimestamp: Date.now() };
     }
-  }, [togglePlay, isInSession]);
+  }, [togglePlay, isInSession, canReportReadiness]);
   const syncSeek = useCallback((time: number) => {
-    if (isInSession && (phase.current === "lobby" || hostAway.current || pendingSnapshot.current)) return;
+    if (isInSession && (!canReportReadiness || phase.current === "lobby" || hostAway.current || pendingSnapshot.current)) return;
     seek(time);
     if (isInSession) {
       watchSync.send({ type: "seek", current_time: time, timestamp: Date.now() });
       lastRemoteSyncRef.current = playerRef.current.isPlaying ? { time, localTimestamp: Date.now() } : null;
     }
-  }, [seek, isInSession]);
+  }, [seek, isInSession, canReportReadiness]);
 
   return { syncTogglePlay, syncSeek, remoteActionRef, lastRemoteSyncRef, catchingUp: catchingUp || (isInSession && player.isBuffering) };
 }
