@@ -123,6 +123,10 @@ pub enum ServerMessage {
         sent_at: u64,
         relay_url: String,
     },
+    /// Dismiss only the recipient's invitation for this session.
+    InviteRevoked {
+        session_id: String,
+    },
     PendingInvites {
         invites: Vec<PendingInviteInfo>,
     },

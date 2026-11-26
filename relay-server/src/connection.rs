@@ -109,10 +109,19 @@ pub async fn handle_connection(ws: WebSocket, state: SharedState) {
         let _ = tx.try_send(Arc::new(json));
     }
 
-    // Deliver any pending invites
+    // Check and enqueue under the session lock, so cancellation either filters
+    // this invite or queues invite_revoked after it (never before a stale replay).
     if let Some(invites) = state.pending_invites.take(&username) {
-        if !invites.is_empty() {
-            let msg = ServerMessage::PendingInvites { invites };
+        for invite in invites {
+            let Some(session) = state.sessions.get(&invite.session_id) else {
+                continue;
+            };
+            if !session.invited.contains(&username) || session.removed.contains(&username) {
+                continue;
+            }
+            let msg = ServerMessage::PendingInvites {
+                invites: vec![invite],
+            };
             if let Ok(json) = serde_json::to_string(&msg) {
                 let _ = tx.try_send(Arc::new(json));
             }

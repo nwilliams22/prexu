@@ -352,3 +352,40 @@ async fn explicit_leave_is_immediate_and_old_disconnect_does_not_remove_rejoin()
         .iter()
         .any(|v| v["type"] == "session_destroyed"));
 }
+
+#[tokio::test(start_paused = true)]
+async fn cancelling_invite_does_not_remove_guest_from_another_session() {
+    let (s, _, mut guest) = setup();
+    let _other = connect(&s, "other");
+    create_session(
+        &s,
+        "other-room".into(),
+        2,
+        "other",
+        "",
+        "Fixture".into(),
+        "2".into(),
+        "movie".into(),
+        sender(&s, "other"),
+    );
+    join_session(&s, "other-room", "guest", "", sender(&s, "guest"));
+    handle_invite(&s, "guest", "room", "host", "");
+    drain(&mut guest);
+    remove_participant(&s, "host", "guest");
+    assert_eq!(
+        drain(&mut guest),
+        vec![serde_json::json!({"type":"invite_revoked", "session_id":"room"})]
+    );
+    assert_eq!(
+        s.connections.get("guest").unwrap().session_id.as_deref(),
+        Some("other-room")
+    );
+    assert!(s
+        .sessions
+        .get("other-room")
+        .unwrap()
+        .participants
+        .contains_key("guest"));
+    join(&s, "guest");
+    assert_eq!(drain(&mut guest).last().unwrap()["type"], "session_error");
+}

@@ -68,6 +68,17 @@ impl PendingInvites {
         entries.remove(target)
     }
 
+    /// Revoke one session without affecting invitations from other sessions.
+    pub fn revoke(&self, target: &str, session_id: &str) {
+        let mut entries = self.lock();
+        if let Some(invites) = entries.get_mut(target) {
+            invites.retain(|invite| invite.session_id != session_id);
+            if invites.is_empty() {
+                entries.remove(target);
+            }
+        }
+    }
+
     pub fn cleanup(&self) {
         Self::expire(&mut self.lock(), now_ms());
     }
@@ -95,6 +106,27 @@ mod tests {
             sent_at: now_ms(),
             relay_url: "wss://relay.example/ws".into(),
         }
+    }
+
+    #[test]
+    fn revoke_is_scoped_to_target_and_session_and_releases_capacity() {
+        let store = PendingInvites::default();
+        for n in 0..MAX_PER_TARGET {
+            store.insert("guest", invite("host", n)).unwrap();
+        }
+        store.insert("other", invite("host", 0)).unwrap();
+        store.revoke("guest", "0");
+        store.revoke("guest", "0"); // Idempotent.
+        store
+            .insert("guest", invite("host", MAX_PER_TARGET))
+            .unwrap();
+        let remaining = store.take("guest").unwrap();
+        assert_eq!(remaining.len(), MAX_PER_TARGET);
+        assert!(remaining.iter().all(|i| i.session_id != "0"));
+        assert_eq!(store.take("other").unwrap()[0].session_id, "0");
+        store.insert("only", invite("host", 0)).unwrap();
+        store.revoke("only", "0");
+        assert!(store.take("only").is_none());
     }
 
     #[test]

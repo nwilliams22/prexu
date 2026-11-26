@@ -1654,3 +1654,102 @@ async fn test_v2_wire_lobby_controls_and_reconnect() {
         .unwrap()
         .contains("new host invite"));
 }
+
+#[tokio::test]
+async fn test_cancelled_offline_invite_is_not_replayed_and_other_session_survives() {
+    let addr = start_test_server().await;
+    let mut first = ws_connect(addr).await;
+    let mut second = ws_connect(addr).await;
+    authenticate(&mut first, "first").await;
+    authenticate(&mut second, "second").await;
+    for (host, room) in [(&mut first, "first-room"), (&mut second, "second-room")] {
+        ws_send(host, &serde_json::json!({"type":"create_session", "protocol_version":2, "session_id":room, "media_title":"Fixture", "media_rating_key":"1", "media_type":"movie"})).await;
+        ws_recv_type(host, "session_state").await;
+        ws_send(
+            host,
+            &serde_json::json!({"type":"invite", "session_id":room, "target_username":"offline"}),
+        )
+        .await;
+        ws_recv_type(host, "session_state").await;
+    }
+    ws_send(
+        &mut first,
+        &serde_json::json!({"type":"remove_participant", "plex_username":"offline"}),
+    )
+    .await;
+    ws_recv_type(&mut first, "session_state").await;
+    let mut guest = ws_connect(addr).await;
+    authenticate(&mut guest, "offline").await;
+    let pending = ws_recv(&mut guest).await;
+    assert_eq!(pending["type"], "pending_invites");
+    assert_eq!(pending["invites"].as_array().unwrap().len(), 1);
+    assert_eq!(pending["invites"][0]["session_id"], "second-room");
+    assert!(ws_try_recv(&mut guest, Duration::from_millis(100))
+        .await
+        .is_none());
+    ws_send(
+        &mut guest,
+        &serde_json::json!({"type":"join_session", "session_id":"first-room"}),
+    )
+    .await;
+    assert_eq!(ws_recv(&mut guest).await["type"], "session_error");
+    ws_send(
+        &mut guest,
+        &serde_json::json!({"type":"join_session", "session_id":"second-room"}),
+    )
+    .await;
+    ws_recv_type(&mut guest, "session_joined").await;
+    ws_recv_type(&mut guest, "session_state").await;
+    // A second connection for the same identity must not replay consumed invites.
+    let mut reconnected = ws_connect(addr).await;
+    authenticate(&mut reconnected, "offline").await;
+    assert!(ws_try_recv(&mut reconnected, Duration::from_millis(100))
+        .await
+        .is_none());
+}
+
+#[tokio::test]
+async fn test_online_invite_revoked_and_reinvite_allows_join() {
+    let addr = start_test_server().await;
+    let mut host = ws_connect(addr).await;
+    let mut guest = ws_connect(addr).await;
+    authenticate(&mut host, "host").await;
+    authenticate(&mut guest, "guest").await;
+    ws_send(&mut host, &serde_json::json!({"type":"create_session", "protocol_version":2, "session_id":"room", "media_title":"Fixture", "media_rating_key":"1", "media_type":"movie"})).await;
+    ws_recv_type(&mut host, "session_state").await;
+    ws_send(
+        &mut host,
+        &serde_json::json!({"type":"invite", "session_id":"room", "target_username":"guest"}),
+    )
+    .await;
+    ws_recv_type(&mut guest, "invite_received").await;
+    ws_recv_type(&mut host, "session_state").await;
+    ws_send(
+        &mut host,
+        &serde_json::json!({"type":"remove_participant", "plex_username":"guest"}),
+    )
+    .await;
+    assert_eq!(
+        ws_recv(&mut guest).await,
+        serde_json::json!({"type":"invite_revoked", "session_id":"room"})
+    );
+    ws_recv_type(&mut host, "session_state").await;
+    ws_send(
+        &mut guest,
+        &serde_json::json!({"type":"join_session", "session_id":"room"}),
+    )
+    .await;
+    assert_eq!(ws_recv(&mut guest).await["type"], "session_error");
+    ws_send(
+        &mut host,
+        &serde_json::json!({"type":"invite", "session_id":"room", "target_username":"guest"}),
+    )
+    .await;
+    ws_recv_type(&mut guest, "invite_received").await;
+    ws_send(
+        &mut guest,
+        &serde_json::json!({"type":"join_session", "session_id":"room"}),
+    )
+    .await;
+    ws_recv_type(&mut guest, "session_joined").await;
+}

@@ -425,27 +425,29 @@ pub fn handle_invite(
         .connections
         .get(sender_username)
         .is_some_and(|conn| conn.session_id.as_deref() == Some(session_id));
-    let pending = match state.sessions.get(session_id) {
+    // Serialize invite delivery and roster updates with cancellation.
+    let mut session = match state.sessions.get_mut(session_id) {
         Some(session)
             if in_session
                 && session.participants.contains_key(sender_username)
                 && (session.protocol_version < 2 || session.host_username == sender_username) =>
         {
-            PendingInviteInfo {
-                session_id: session_id.to_string(),
-                media_title: session.media_title.clone(),
-                media_rating_key: session.media_rating_key.clone(),
-                media_type: session.media_type.clone(),
-                sender_username: sender_username.to_string(),
-                sender_thumb: sender_thumb.to_string(),
-                sent_at: now_ms(),
-                relay_url: relay_url.to_string(),
-            }
+            session
         }
         _ => {
             reject("Invite sender must belong to the session");
             return;
         }
+    };
+    let pending = PendingInviteInfo {
+        session_id: session_id.to_string(),
+        media_title: session.media_title.clone(),
+        media_rating_key: session.media_rating_key.clone(),
+        media_type: session.media_type.clone(),
+        sender_username: sender_username.to_string(),
+        sender_thumb: sender_thumb.to_string(),
+        sent_at: now_ms(),
+        relay_url: relay_url.to_string(),
     };
     // Bound string storage and delivery payloads, even for online recipients.
     if !crate::pending_invites::fits_size_limit(&pending) {
@@ -476,12 +478,11 @@ pub fn handle_invite(
             }
         }
     }
-    if let Some(mut session) = state.sessions.get_mut(session_id) {
-        session.removed.remove(target_username);
-        if !session.participants.contains_key(target_username) {
-            session.invited.insert(target_username.into());
-        }
+    session.removed.remove(target_username);
+    if !session.participants.contains_key(target_username) {
+        session.invited.insert(target_username.into());
     }
+    drop(session);
     broadcast_state(state, session_id);
 }
 
@@ -764,9 +765,17 @@ pub fn remove_participant(state: &SharedState, username: &str, target: &str) {
         return;
     }
     session.invited.remove(target);
-    session.participants.remove(target);
+    let was_participant = session.participants.remove(target).is_some();
     session.disconnected.remove(target);
     session.removed.insert(target.into());
+    state.pending_invites.revoke(target, &id);
+    send_to_user(
+        state,
+        target,
+        &ServerMessage::InviteRevoked {
+            session_id: id.clone(),
+        },
+    );
     drop(session);
     if let Some(mut conn) = state.connections.get_mut(target) {
         if conn.session_id.as_deref() == Some(&id) {
@@ -776,7 +785,11 @@ pub fn remove_participant(state: &SharedState, username: &str, target: &str) {
     let msg = ServerMessage::ParticipantRemoved {
         plex_username: target.into(),
     };
-    send_to_user(state, target, &msg);
+    // The legacy event has no session ID: never send it to a mere invitee
+    // who may currently be watching in a different session.
+    if was_participant {
+        send_to_user(state, target, &msg);
+    }
     broadcast_to_session(state, &id, &msg, None);
     maybe_start(state, &id, false);
     broadcast_state(state, &id);

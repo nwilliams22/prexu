@@ -115,9 +115,23 @@ replacement's slot. A repeated JoinSession for a connected v2 member returns
 a fresh snapshot.
 
 Removal broadcasts `{"type":"participant_removed","plex_username":"guest"}`
-to the room and the target and clears the target's active membership. It also
-cancels any reconnect grace. The target must exit the session UI. Only a new
-host invite permits rejoining.
+to the room and, for an actual member, the target. It clears membership only
+in that room and cancels reconnect grace. A removed member must exit that
+session UI. Only a new host invite permits rejoining.
+
+Removal also sends the target the additive event
+`{"type":"invite_revoked","session_id":"opaque-id"}` and deletes only that
+recipient/session's queued offline invites. Clients dismiss only invitations
+matching `session_id`; this event must not exit another active session.
+Pending-only invitees do not receive the unscoped `participant_removed` event.
+Stale links and notifications cannot bypass the removal ban. A fresh host
+invite clears the ban and can be accepted normally.
+
+On authentication, `pending_invites` may arrive in multiple batches (currently
+one valid invitation per batch); clients merge these into their invitation
+list. Delivery checks session validity under the same lock as cancellation:
+a cancelled invite is omitted, or its delivery precedes `invite_revoked`.
+Invites for destroyed sessions or consumed roster slots are not replayed.
 
 Host-only NewMedia retains its existing event payload, resets position to zero,
 pauses playback, and returns all connected members to `joined-buffering` in a
