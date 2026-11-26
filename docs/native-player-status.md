@@ -90,9 +90,11 @@ still unavailable. Debug host checks can set `PREXU_QA_SILENT=1` for `ao=null`.
 
 Settings identifies Auto as HTML5 on macOS; Native remains an explicit opt-in.
 Render-init failures use the existing session fallback and player remount.
-Missing-dylib fallback is not implemented: macOS development builds currently
-link Homebrew libmpv as a required loader dependency, so removing it can prevent
-app startup before the engine-status probe runs (`prexu-ia6w.6`).
+macOS weak-links libmpv and checks `mpv_create` availability before compositor
+setup. An absent dylib records an unavailable reason for the engine-status probe
+and prevents native initialization. Build-time Homebrew libmpv is still required.
+Real-app missing-dylib launch/playback acceptance remains unverified
+(`prexu-ia6w.6`); a standalone linker probe is not that acceptance evidence.
 
 Synthetic HEVC 10-bit checks on an Apple M3 Pro exercised VideoToolbox, framebuffer
 readback, HiDPI resize and three attach/detach cycles. These do not establish

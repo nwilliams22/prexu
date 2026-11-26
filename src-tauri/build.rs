@@ -29,10 +29,16 @@ fn main() {
     }
 
     #[cfg(target_os = "macos")]
-    pkg_config::Config::new()
-        .atleast_version("2.5.0")
-        .probe("mpv")
-        .expect("macOS dev builds require libmpv: brew install mpv pkg-config; set PKG_CONFIG_PATH to Homebrew lib/pkgconfig");
+    {
+        pkg_config::Config::new()
+            .atleast_version("2.5.0")
+            .probe("mpv")
+            .expect("macOS dev builds require libmpv: brew install mpv pkg-config; set PKG_CONFIG_PATH to Homebrew lib/pkgconfig");
+        // Override libmpv2-sys's -lmpv with weak imports. The app must launch
+        // without this optional backend; macos_compositor checks availability
+        // before any mpv call. Apple ld applies this even alongside -lmpv.
+        println!("cargo:rustc-link-arg=-Wl,-weak-lmpv");
+    }
 
     tauri_build::build();
 }

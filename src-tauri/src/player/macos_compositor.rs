@@ -114,6 +114,14 @@ fn get_proc_address(_: &(), name: &str) -> *mut c_void {
 
 /// Called from Tauri setup on the AppKit thread, before playback is possible.
 pub fn install(window: &WebviewWindow, app: AppHandle) {
+    // libmpv is weak-linked so dyld can launch the HTML5 app without it.
+    // Use dlsym instead of testing a Rust function pointer (which Rust assumes
+    // is non-null). ensure_init also checks this recorded failure before mpv.
+    // SAFETY: the symbol name is NUL-terminated; no pointer is dereferenced.
+    if unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"mpv_create".as_ptr()) }.is_null() {
+        failed(&app, "libmpv is unavailable; using HTML5 playback".into());
+        return;
+    }
     if MainThreadMarker::new().is_none() {
         failed(
             &app,
