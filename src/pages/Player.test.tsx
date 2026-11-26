@@ -53,7 +53,8 @@ vi.mock("../hooks/usePlayer", () => ({
   }),
 }));
 
-const watchState = vi.hoisted(() => ({ isInSession: false, isHost: false, catchingUp: false, lobby: { phase: "playback" as "playback" | "lobby", sessionId: "room", mediaTitle: "QA movie", mediaRatingKey: "123", mediaType: "movie", hostAway: false, participants: [] } }));
+const chromeState = vi.hoisted(() => ({ visible: true }));
+const watchState = vi.hoisted(() => ({ resyncing: false, struggling: false, isInSession: false, isHost: false, catchingUp: false, lobby: { phase: "playback" as "playback" | "lobby", sessionId: "room", mediaTitle: "QA movie", mediaRatingKey: "123", mediaType: "movie", hostAway: false, participants: [] } }));
 vi.mock("../hooks/useWatchTogether", () => ({
   useWatchTogether: () => ({
     lobby: { phase: "playback" },
@@ -102,7 +103,7 @@ vi.mock("../hooks/player/useSkipSegments", () => ({
 
 vi.mock("../hooks/player/usePlayerControlsVisibility", () => ({
   usePlayerControlsVisibility: () => ({
-    controlsVisible: true,
+    controlsVisible: chromeState.visible,
     resetHideTimer: vi.fn(),
     handleMouseMove: vi.fn(),
   }),
@@ -712,4 +713,14 @@ it("keeps the same video mounted while the authoritative lobby becomes playback"
     watchState.isInSession = false;
     watchState.lobby.phase = "playback";
   }
+});
+
+it.each(["resyncing", "struggling"] as const)("keeps %s visible while controls would auto-hide", (flag) => {
+  chromeState.visible = false;
+  watchState.isInSession = true;
+  watchState[flag] = true;
+  try {
+    const { getByTestId } = render(<MemoryRouter><Player ratingKey="123" offset={null} /></MemoryRouter>);
+    expect(getByTestId("player-controls")).toHaveAttribute("data-visible", "true");
+  } finally { chromeState.visible = true; watchState.isInSession = false; watchState[flag] = false; }
 });

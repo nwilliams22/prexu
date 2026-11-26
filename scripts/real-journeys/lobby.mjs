@@ -46,6 +46,7 @@ async function observe(page) {
       errorWords: ['timed out', 'not connected', 'failed', 'session not found'].filter(t => document.body.textContent.toLowerCase().includes(t)),
       playing: !!p?.isPlaying, time: p?.currentTime ?? 0, error: !!p?.playbackError, inviteEvents: window.lobbyInviteEvents || 0,
       invited: [...document.querySelectorAll('.watch-lobby-state')].some(e => e.textContent === 'Invited'),
+      recoveryLabels: window.recoveryLabels || [],
       ready: [...document.querySelectorAll('.watch-lobby-state')].filter(e => e.textContent === 'Ready').length };
   });
 }
@@ -144,19 +145,27 @@ try {
       watchSync.reconnectDelay = delay;
       watchSync.ws.close();
     }, delay);
+    await guest.evaluate(() => {
+      window.recoveryLabels = [];
+      new MutationObserver(() => {
+        for (const label of ['Re-syncing', 'Having trouble keeping up']) {
+          if (document.body.textContent.includes(label) && !window.recoveryLabels.includes(label)) window.recoveryLabels.push(label);
+        }
+      }).observe(document.body, { subtree: true, childList: true, characterData: true });
+    });
     stage = 'drift-viewer-only';
     for (let i = 0; i < 3; i++) {
       await until(async () => (await observe(host)).time > 10);
       operation = `drift-${i + 1}-inject`;
       const before = await observe(host);
       await guest.evaluate(async () => {
+        window.recoveryLabels = [];
         const p = (await import('/src/services/probe-live.ts')).probeLive.player.player;
         p.seek(Math.max(0, p.currentTime - 8));
       });
       await until(async () => (await observe(host)).time - (await observe(guest)).time > 4);
       operation = `drift-${i + 1}-badge`;
-      await clients[1].revealControls();
-      await until(() => text(guest, i === 2 ? 'Having trouble keeping up' : 'Re-syncing'));
+      await until(() => guest.evaluate(label => window.recoveryLabels.includes(label), i === 2 ? 'Having trouble keeping up' : 'Re-syncing'));
       const after = await observe(host);
       check(after.time >= before.time && after.time - before.time < 6);
       await until(async () => Math.abs((await observe(host)).time - (await observe(guest)).time) < 2);
