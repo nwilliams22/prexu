@@ -124,6 +124,14 @@ void (async () => { if (window.__TAURI_INTERNALS__) {
         if (result.status !== 0) throw Error("native-pointer");
       }
     },
+    async clipboardText() {
+      if (!displayNumber) throw Error("native-not-started");
+      const result = spawnSync("/usr/bin/python3", ["-c", "import gi; gi.require_version('Gtk', '3.0'); from gi.repository import Gtk,Gdk; print(Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).wait_for_text() or '', end='')"], {
+        env: { PATH: process.env.PATH, DISPLAY: `:${displayNumber}` }, encoding: 'utf8', timeout: 5000,
+      });
+      if (result.status !== 0) throw Error("native-clipboard");
+      return result.stdout;
+    },
     async screenshot(path) {
       if (!displayNumber) throw Error("native-not-started");
       const result = spawnSync("import", ["-display", `:${displayNumber}`, "-window", "root", path], { stdio: "ignore" });

@@ -4,6 +4,7 @@ import { getPlexUser } from "../services/plex-api";
 import { getRelayUrl } from "../services/storage";
 import { playNotificationSound } from "../utils/notificationSound";
 import { logger } from "../services/logger";
+import { inviteTimeLeft } from "../services/watch-invites";
 import type { WatchInvite } from "../types/watch-together";
 
 export interface InviteContextValue {
@@ -64,6 +65,17 @@ export function useInviteState(
     }, 500);
   }, [connectToRelay]);
 
+  // Expire all pending invites, including ones whose popup is not visible.
+  useEffect(() => {
+    const timer = setInterval(() => setInvites((previous) => {
+      const live = previous.filter((invite) => inviteTimeLeft(invite.sentAt) > 0);
+      return live.length === previous.length ? previous : live;
+    }), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => { setInvites([]); }, [authToken]);
+
   // Connect to relay on mount when authenticated
   useEffect(() => {
     if (!authToken) return;
@@ -87,6 +99,7 @@ export function useInviteState(
       "invite_received",
       (data) => {
         const invite = parseInvite(data);
+        if (inviteTimeLeft(invite.sentAt) === 0) return;
         setInvites((prev) => {
           // Avoid duplicate invites for same session
           if (prev.some((i) => i.sessionId === invite.sessionId)) return prev;
@@ -103,7 +116,7 @@ export function useInviteState(
     const unsubPendingInvites = watchSync.on(
       "pending_invites",
       (data) => {
-        const parsed: WatchInvite[] = (data.invites ?? []).map(parseInvite);
+        const parsed: WatchInvite[] = (data.invites ?? []).map(parseInvite).filter((invite: WatchInvite) => inviteTimeLeft(invite.sentAt) > 0);
         setInvites((prev) => {
           const existingIds = new Set(prev.map((i) => i.sessionId));
           const newInvites = parsed.filter(

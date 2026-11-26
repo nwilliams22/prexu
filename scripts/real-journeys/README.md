@@ -199,3 +199,10 @@ the path dispatched to the desktop handler; it does not inspect a file manager.
 The runner cleans up its profile, moved files and child processes. Attach reports
 and screenshots to the task before temporary evidence expires. macOS acceptance
 requires a separate real-app run in the Mac VM.
+
+For copyable links and pending invites, set `PREXU_JOURNEY_WATCH_INVITES=1` on
+`lobby.mjs`. This closes the guest popup with Later, joins from the pending list,
+then creates another session, copies its link through the host UI, reads the real
+X11 clipboard, and pastes it into the guest's Pending invites form. Capture and
+attach the screenshots and report. This covers pasted-link joining in the Linux
+app; OS scheme delivery and macOS installation still need separate verification.

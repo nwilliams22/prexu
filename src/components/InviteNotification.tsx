@@ -5,10 +5,13 @@ import { useFocusTrap } from "../hooks/useFocusTrap";
 import { playNotificationSound } from "../utils/notificationSound";
 import type { WatchInvite } from "../types/watch-together";
 
-const INVITE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+import { INVITE_TTL_MS, inviteTimeLeft } from "../services/watch-invites";
 
 function InviteNotification() {
-  const { invites, dismissInvite } = useInvites();
+  const { invites: pendingInvites, dismissInvite } = useInvites();
+  const [hidden, setHidden] = useState<string[]>([]);
+  const invites = pendingInvites.filter((invite) => !hidden.includes(`${invite.sessionId}:${invite.sentAt}`));
+  const hideInvite = (invite: WatchInvite) => setHidden((prev) => [...prev, `${invite.sessionId}:${invite.sentAt}`]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const cardRef = useRef<HTMLDivElement>(null);
   const hasInvites = invites.length > 0;
@@ -42,7 +45,7 @@ function InviteNotification() {
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         const inv = invites[Math.min(currentIndex, invites.length - 1)];
-        if (inv) handleDismiss(inv.sessionId);
+        if (inv) hideInvite(inv);
       }
     };
     window.addEventListener("keydown", handleKey);
@@ -67,6 +70,7 @@ function InviteNotification() {
           key={invite.sessionId}
           invite={invite}
           onDismiss={() => handleDismiss(invite.sessionId)}
+          onLater={() => hideInvite(invite)}
         />
 
         {/* Multi-invite navigation */}
@@ -111,30 +115,24 @@ function InviteNotification() {
 function InviteCard({
   invite,
   onDismiss,
+  onLater,
 }: {
   invite: WatchInvite;
   onDismiss: () => void;
+  onLater: () => void;
 }) {
   const navigate = useNavigate();
   const [remaining, setRemaining] = useState(INVITE_TTL_MS);
 
   // Countdown timer
   useEffect(() => {
-    const elapsed = Date.now() - invite.sentAt;
-    const initial = Math.max(INVITE_TTL_MS - elapsed, 0);
-    setRemaining(initial);
-
-    const interval = setInterval(() => {
-      setRemaining((prev) => {
-        const next = prev - 1000;
-        if (next <= 0) {
-          clearInterval(interval);
-          onDismiss();
-          return 0;
-        }
-        return next;
-      });
-    }, 1000);
+    const update = () => {
+      const next = inviteTimeLeft(invite.sentAt);
+      setRemaining(next);
+      if (next === 0) onDismiss();
+    };
+    update();
+    const interval = setInterval(update, 1000);
 
     return () => clearInterval(interval);
   }, [invite.sentAt, onDismiss]);
@@ -174,8 +172,10 @@ function InviteCard({
 
       {/* Countdown */}
       <div style={styles.countdown}>
-        Session starts in {timeStr}
+        Invite expires in {timeStr}
       </div>
+
+      <button onClick={onLater} style={styles.declineButton}>Later</button>
 
       {/* Actions */}
       <div style={styles.actions}>

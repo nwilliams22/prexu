@@ -96,7 +96,7 @@ describe("useInviteState — context value identity (prexu-9f4s.1)", () => {
 
 it("revokes only the matching pending invite", () => {
   const { result } = renderHook(() => useInviteState(null));
-  const raw = { type: "invite_received" as const, session_id: "one", media_title: "QA", media_rating_key: "2", media_type: "movie", sender_username: "host", sender_thumb: "", sent_at: 1, relay_url: "ws://relay.test" };
+  const raw = { type: "invite_received" as const, session_id: "one", media_title: "QA", media_rating_key: "2", media_type: "movie", sender_username: "host", sender_thumb: "", sent_at: Date.now(), relay_url: "ws://relay.test" };
   act(() => {
     registeredHandlers.invite_received(raw);
     registeredHandlers.invite_received({ ...raw, session_id: "two" });
@@ -104,4 +104,21 @@ it("revokes only the matching pending invite", () => {
   expect(result.current.invites).toHaveLength(2);
   act(() => registeredHandlers.invite_revoked({ session_id: "one" }));
   expect(result.current.invites).toEqual([parseInvite({ ...raw, session_id: "two" })]);
+});
+
+
+it("removes every invite at its ten-minute deadline without a mounted popup", () => {
+  vi.useFakeTimers();
+  try {
+    const { result, unmount } = renderHook(() => useInviteState(null));
+    const raw = { type: "invite_received", session_id: "one", media_title: "QA", media_rating_key: "17", media_type: "movie", sender_username: "host", sender_thumb: "", sent_at: Date.now(), relay_url: "" };
+    act(() => registeredHandlers.invite_received(raw));
+    act(() => vi.advanceTimersByTime(599_000));
+    expect(result.current.invites).toHaveLength(1);
+    act(() => vi.advanceTimersByTime(1000));
+    expect(result.current.invites).toHaveLength(0);
+    act(() => registeredHandlers.pending_invites({ invites: [raw] }));
+    expect(result.current.invites).toHaveLength(0);
+    unmount();
+  } finally { vi.useRealTimers(); }
 });

@@ -152,3 +152,20 @@ describe("InviteNotification", () => {
     );
   });
 });
+
+
+it("keeps a missed popup in pending invites when Later is clicked", async () => {
+  mockInvites = [createWatchInvite()];
+  renderWithProviders(<InviteNotification />);
+  await userEvent.setup().click(screen.getByRole("button", { name: "Later" }));
+  expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  expect(mockDismissInvite).not.toHaveBeenCalled();
+});
+
+it("keeps an escaped popup in pending invites", async () => {
+  mockInvites = [createWatchInvite()];
+  renderWithProviders(<InviteNotification />);
+  await userEvent.setup().keyboard("{Escape}");
+  expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  expect(mockDismissInvite).not.toHaveBeenCalled();
+});

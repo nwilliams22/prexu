@@ -52,6 +52,13 @@
       "endpoints": [
         "https://github.com/nwilliams22/prexu/releases/latest/download/latest.json"
       ]
+    },
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "prexu"
+        ]
+      }
     }
   }
 }

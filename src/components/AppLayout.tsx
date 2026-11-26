@@ -24,6 +24,7 @@ import SearchBar from "./SearchBar";
 import UserSwitcher from "./UserSwitcher";
 import RequestBell from "./RequestBell";
 import ActivityButton from "./ActivityButton";
+import PendingInvites from "./PendingInvites";
 import InviteNotification from "./InviteNotification";
 import ErrorBoundary from "./ErrorBoundary";
 import BottomNav from "./BottomNav";
@@ -276,6 +277,7 @@ function AppLayout() {
         <div style={styles.headerRight}>
           <ActivityButton />
           <RequestBell />
+          <PendingInvites />
           <UserSwitcher />
         </div>
       </header>

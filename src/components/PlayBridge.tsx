@@ -16,47 +16,20 @@
  * the URL hop entirely) — this bridge is only for the URL entry path.
  */
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { usePlayerSession, type PlayerWatchTogether } from "../contexts/PlayerContext";
 import { LAST_NON_PLAYER_ROUTE_KEY } from "../App";
-import { logger } from "../services/logger";
-
-/**
- * Validate a relay URL from an untrusted deep-link query param.
- *
- * Only ws:// and wss:// are accepted — http/https or arbitrary schemes
- * could redirect the WebSocket connection to an attacker-controlled host
- * that leaks session metadata or injects sync commands.
- *
- * Returns the validated URL string on success, or null if rejected.
- */
-function validateRelayUrl(raw: string): string | null {
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    logger.warn("ws", "relay URL from invite rejected: not a valid URL", {
-      relay: raw.substring(0, 80),
-    });
-    return null;
-  }
-
-  if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
-    logger.warn("ws", "relay URL from invite rejected: disallowed scheme", {
-      relay: raw.substring(0, 80),
-    });
-    return null;
-  }
-
-  return raw;
-}
+import { useAuth } from "../hooks/useAuth";
+import { getRelayUrl } from "../services/storage";
 
 export default function PlayBridge() {
   const { ratingKey } = useParams<{ ratingKey: string }>();
   const [searchParams] = useSearchParams();
   const { play } = usePlayerSession();
   const navigate = useNavigate();
+  const { server } = useAuth();
+  const [error, setError] = useState(false);
 
   useEffect(() => {
     if (!ratingKey) return;
@@ -67,19 +40,29 @@ export default function PlayBridge() {
     const sessionId = searchParams.get("session");
     const isHost = searchParams.get("host") === "true";
     const rawRelayUrl = searchParams.get("relay");
-    const relayUrl = rawRelayUrl != null ? validateRelayUrl(rawRelayUrl) : null;
-    const watchTogether: PlayerWatchTogether | undefined = sessionId
-      ? { sessionId, isHost, relayUrl: relayUrl ?? undefined }
-      : undefined;
+    let cancelled = false;
+    void (async () => {
+      const relayUrl = sessionId ? await getRelayUrl(server?.uri, true) : undefined;
+      if (cancelled) return;
+      if (sessionId && (!/^[0-9A-F]{8}$/.test(sessionId) ||
+          (rawRelayUrl && new URL(rawRelayUrl).href !== new URL(relayUrl!).href))) {
+        setError(true);
+        return;
+      }
+      const watchTogether: PlayerWatchTogether | undefined = sessionId
+        ? { sessionId, isHost, relayUrl: relayUrl ?? undefined }
+        : undefined;
 
-    play(ratingKey, { offset, watchTogether });
+      play(ratingKey, { offset, watchTogether });
 
-    // Replace history so the URL no longer references /play/* — the
-    // overlay handles the player visibly, the underlying URL points
-    // back at wherever the user was (or "/" for cold-start invite URLs).
-    const target = sessionStorage.getItem(LAST_NON_PLAYER_ROUTE_KEY) || "/";
-    navigate(target, { replace: true });
-  }, [ratingKey, searchParams, play, navigate]);
+      // Replace history so the URL no longer references /play/* — the
+      // overlay handles the player visibly, the underlying URL points
+      // back at wherever the user was (or "/" for cold-start invite URLs).
+      const target = sessionStorage.getItem(LAST_NON_PLAYER_ROUTE_KEY) || "/";
+      navigate(target, { replace: true });
+    })().catch(() => { if (!cancelled) setError(true); });
+    return () => { cancelled = true; };
+  }, [ratingKey, searchParams, play, navigate, server?.uri]);
 
-  return null;
+  return error ? <p role="alert">This invite is invalid or uses a different relay. <button onClick={() => navigate("/", { replace: true })}>Go back</button></p> : null;
 }

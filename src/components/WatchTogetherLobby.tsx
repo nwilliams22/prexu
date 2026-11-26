@@ -1,6 +1,7 @@
-import { useId, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import type { WatchLobbySnapshot, WatchLobbyParticipantState } from "../types/watch-together";
 import "./WatchTogetherLobby.css";
+import { createInviteLink } from "../services/watch-invites";
 
 const participantLabels: Record<WatchLobbyParticipantState, string> = {
   invited: "Invited",
@@ -26,6 +27,7 @@ export default function WatchTogetherLobby({
   snapshot, isHost, connected, error, mediaDetails,
   onStartNow, onResendInvite, onRemoveParticipant, onLeave,
 }: WatchTogetherLobbyProps) {
+  const [copyMessage, setCopyMessage] = useState("");
   const titleId = useId();
   const participantsId = useId();
   const canManage = isHost && connected && !snapshot.hostAway;
@@ -74,7 +76,14 @@ export default function WatchTogetherLobby({
         </ul>
       </section>
       {error && <p role="alert">{error}</p>}
+      {copyMessage && <p role="status">{copyMessage}</p>}
       <footer className="watch-lobby-actions">
+        {isHost && <button type="button" disabled={!canManage} onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(createInviteLink(snapshot.sessionId, snapshot.mediaRatingKey));
+            setCopyMessage("Invite link copied. It works while this session exists.");
+          } catch { setCopyMessage("Could not copy the invite link. Please try again."); }
+        }}>Copy invite link</button>}
         <button type="button" onClick={onLeave}>{isHost ? "Cancel session" : "Leave session"}</button>
         {isHost && snapshot.phase === "lobby" && <button type="button" className="watch-lobby-start" disabled={!canManage}
           onClick={onStartNow}>Start now</button>}

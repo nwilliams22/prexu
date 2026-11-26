@@ -72,6 +72,7 @@ vi.mock("./SearchBar", () => ({ default: () => <div data-testid="search-bar" /> 
 vi.mock("./UserSwitcher", () => ({ default: () => <div data-testid="user-switcher" /> }));
 vi.mock("./RequestBell", () => ({ default: () => <div data-testid="request-bell" /> }));
 vi.mock("./ActivityButton", () => ({ default: () => <div data-testid="activity-button" /> }));
+vi.mock("./PendingInvites", () => ({ default: () => null }));
 vi.mock("./InviteNotification", () => ({ default: () => null }));
 vi.mock("./BottomNav", () => ({ default: () => null }));
 vi.mock("./ErrorBoundary", () => ({

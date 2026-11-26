@@ -133,13 +133,22 @@ try {
   stage = 'lobby-resend';
   await host.getByRole('button', { name: `Resend invite to ${accounts[1].user.username}` }).click();
   await guest.getByRole('button', { name: 'Join Session' }).waitFor(); add(stage, 'PASS');
+  if (process.env.PREXU_JOURNEY_WATCH_INVITES === '1') {
+    stage = 'pending-invite-join';
+    await guest.getByRole('button', { name: 'Later' }).click();
+    await guest.evaluate(() => document.querySelector('summary')?.click());
+    await screenshot(1, 'guest-pending-invites');
+    await guest.getByRole('button', { name: 'Join Prexu QA Pattern' }).click();
+  } else {
+    await guest.getByRole('button', { name: 'Join Session' }).click();
+  }
   stage = 'lobby-all-ready-auto-start';
-  await guest.getByRole('button', { name: 'Join Session' }).click();
   await until(async () => {
     const a = await observe(host), b = await observe(guest); check(!a.error && !b.error);
     return a.playing && b.playing && !a.lobby && !b.lobby && a.time > 1 && b.time > 1;
   });
   await screenshot(0, 'host-auto-playback'); await screenshot(1, 'guest-auto-playback'); add(stage, 'PASS');
+  if (process.env.PREXU_JOURNEY_WATCH_INVITES === '1') add('pending-invite-join', 'PASS');
   if (process.env.PREXU_JOURNEY_WATCH_CONNECTIONS === '1') {
     const text = (page, label) => page.evaluate(label => document.body.textContent.includes(label), label);
     const drop = (page, delay) => page.evaluate(async delay => {
@@ -215,6 +224,31 @@ try {
   await screenshot(0, 'host-removed-guest'); add(stage, 'PASS');
   await host.getByRole('button', { name: 'Cancel session' }).click();
   await until(() => guest.evaluate(async () => !(await import('/src/services/probe-live.ts')).probeLive.player));
+  if (process.env.PREXU_JOURNEY_WATCH_INVITES === '1') {
+    stage = 'pasted-invite-link-join'; operation = 'copy-host-link';
+    await createLobby();
+    await host.getByRole('button', { name: 'Copy invite link' }).click();
+    await until(() => host.evaluate(() => document.body.textContent.includes('Invite link copied.')));
+    const link = await clients[0].clipboardText();
+    check(/^prexu:\/\/join\/[0-9A-F]{8}\?media=2$/.test(link));
+    await screenshot(0, 'host-copied-link');
+    await guest.getByRole('button', { name: 'Later' }).click();
+    operation = 'paste-guest-link';
+    await guest.evaluate(link => {
+      const summary = [...document.querySelectorAll('summary')].find(e => e.textContent.includes('Pending invites'));
+      if (!summary.parentElement.open) summary.click();
+      const input = [...document.querySelectorAll('input')].find(e => e.parentElement.textContent.includes('Paste invite link'));
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, link);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }, link);
+    await screenshot(1, 'guest-pasted-link');
+    await guest.getByRole('button', { name: 'Join by link' }).click();
+    await until(async () => (await observe(host)).playing && (await observe(guest)).playing);
+    await screenshot(1, 'guest-link-playback'); add(stage, 'PASS');
+    await clients[0].revealControls();
+    await host.getByRole('button', { name: 'Stop' }).click();
+    await until(() => guest.evaluate(async () => !(await import('/src/services/probe-live.ts')).probeLive.player));
+  }
   stage = 'lobby-start-now-no-show';
   await createLobby();
   await host.getByRole('button', { name: 'Start now' }).click();

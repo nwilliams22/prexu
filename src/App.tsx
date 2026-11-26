@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import AppLayout from "./components/AppLayout";
 import PlayerOverlay from "./components/PlayerOverlay";
+import InviteLinkBridge from "./components/InviteLinkBridge";
 import PlayBridge from "./components/PlayBridge";
 import ProbeBridge from "./components/ProbeBridge";
 import SplashScreen from "./components/SplashScreen";
@@ -266,6 +267,7 @@ function AppWithAuth({ auth, probe = false }: { auth: AuthContextValue; probe?: 
   return (
     <AuthProvider value={auth}>
       <AppProviders>
+        <InviteLinkBridge />
         <AppRoutes />
         {probe && <ProbeBridge />}
       </AppProviders>

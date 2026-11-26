@@ -661,7 +661,8 @@ pub fn run() {
             }
         }))
     };
-    let builder = builder.plugin(tauri_plugin_http::init())
+    let builder = builder.plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(
@@ -809,6 +810,13 @@ pub fn run() {
 
     builder
         .setup(move |app| {
+            #[cfg(target_os = "linux")]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                if let Err(error) = app.deep_link().register_all() {
+                    log::warn!("[watch:invite] could not register invite scheme: {error}");
+                }
+            }
             // First line of every session log — states the rotation outcome
             // (the rotation itself ran pre-logger at the top of run()).
             log::info!("{session_log_note}");
