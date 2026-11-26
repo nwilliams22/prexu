@@ -25,11 +25,32 @@ fallback URL uses port **9847**, so explicitly align the port or configure a
 client override. For a local-only development relay matching that fallback:
 
 ```bash
-cargo run --manifest-path relay-server/Cargo.toml -- --host 127.0.0.1 --port 9847 \
+cargo build --manifest-path relay-server/Cargo.toml --locked --no-default-features \
+  --bin prexu-relay --target-dir relay-server/target/production
+./relay-server/target/production/debug/prexu-relay --host 127.0.0.1 --port 9847 \
   --public-url ws://localhost:9847/ws
 curl http://127.0.0.1:9847/health
 curl http://127.0.0.1:9847/tmdb/status
 ```
+
+Reserve `relay-server/target/production` for production builds only. Do not run
+`cargo test`, `cargo clippy --all-targets`, or builds with `test-mode` in that
+directory. For an optimized binary add `--release` and launch
+`relay-server/target/production/release/prexu-relay`.
+
+The self development dependency enables `test-mode` for library integration
+tests: arbitrary tokens become mock participant names. Cargo can overwrite the
+ordinary `target/debug/prexu-relay` with a test-mode executable. Therefore
+`--no-default-features` alone is not artifact isolation, and a healthy HTTP
+endpoint does not prove real authentication. Test-mode executables refuse to
+start; only the integration-test library may use mock authentication.
+
+Before a production QA journey, send a WebSocket `auth` message with a deliberately
+invalid `plex_token` and require `auth_error`, then verify the QA account receives
+`auth_ok` with its Plex identity. Never accept an arbitrary token as a participant
+name. Keep credentials and account data out of captured logs and evidence.
+Record the binary hash and commit with the result. App acceptance remains a
+separate real-client check.
 
 For another machine to connect, bind the relay to the intended reachable
 interface and allow the chosen port in that host's network policy.

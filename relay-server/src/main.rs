@@ -66,6 +66,13 @@ fn load_tls_config(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Cargo tests enable mock authentication through the self dev-dependency.
+    // Never let that executable serve real clients, even if a shared target
+    // directory overwrites the normal binary after a production build.
+    if cfg!(feature = "test-mode") {
+        return Err("test-mode relay executable cannot start; build production without test-mode in an isolated target directory".into());
+    }
+
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(
