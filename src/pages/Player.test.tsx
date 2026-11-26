@@ -54,12 +54,11 @@ vi.mock("../hooks/usePlayer", () => ({
 }));
 
 const chromeState = vi.hoisted(() => ({ visible: true }));
-const watchState = vi.hoisted(() => ({ resyncing: false, struggling: false, isInSession: false, isHost: false, catchingUp: false, lobby: { phase: "playback" as "playback" | "lobby", sessionId: "room", mediaTitle: "QA movie", mediaRatingKey: "123", mediaType: "movie", hostAway: false, participants: [] } }));
+const watchState = vi.hoisted(() => ({ participants: [] as import("../types/watch-together").WatchParticipant[], resyncing: false, struggling: false, isInSession: false, isHost: false, catchingUp: false, lobby: { phase: "playback" as "playback" | "lobby", sessionId: "room", mediaTitle: "QA movie", mediaRatingKey: "123", mediaType: "movie", hostAway: false, participants: [] } }));
 vi.mock("../hooks/useWatchTogether", () => ({
   useWatchTogether: () => ({
     lobby: { phase: "playback" },
     ...watchState,
-    participants: [],
     syncStatus: "idle",
     syncTogglePlay: vi.fn(),
     syncSeek: vi.fn(),
@@ -229,7 +228,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 vi.mock("../components/ParticipantOverlay", () => ({
-  default: () => <div data-testid="participant-overlay" />,
+  default: ({ visible }: { visible: boolean }) => <div data-testid="participant-overlay" data-visible={String(visible)} />,
 }));
 
 vi.mock("../components/SyncIndicator", () => ({
@@ -723,4 +722,14 @@ it.each(["resyncing", "struggling"] as const)("keeps %s visible while controls w
     const { getByTestId } = render(<MemoryRouter><Player ratingKey="123" offset={null} /></MemoryRouter>);
     expect(getByTestId("player-controls")).toHaveAttribute("data-visible", "true");
   } finally { chromeState.visible = true; watchState.isInSession = false; watchState[flag] = false; }
+});
+
+it("shows reconnecting participants even after the playback controls auto-hide", () => {
+  chromeState.visible = false;
+  watchState.isInSession = true;
+  watchState.participants = [{ plexUsername: "Guest", plexThumb: "", isHost: false, state: "reconnecting" }];
+  try {
+    const { getByTestId } = render(<MemoryRouter><Player ratingKey="123" offset={null} /></MemoryRouter>);
+    expect(getByTestId("participant-overlay")).toHaveAttribute("data-visible", "true");
+  } finally { chromeState.visible = true; watchState.isInSession = false; watchState.participants = []; }
 });

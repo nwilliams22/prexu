@@ -54,7 +54,7 @@ function ParticipantOverlay({
 const styles: Record<string, React.CSSProperties> = {
   container: {
     position: "absolute",
-    top: "60px",
+    top: "100px",
     right: "16px",
     display: "flex",
     gap: "0.5rem",

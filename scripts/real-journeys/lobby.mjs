@@ -51,6 +51,8 @@ async function observe(page) {
   });
 }
 async function screenshot(index, name) {
+  // DOM acknowledgment can precede WebKitGTK's next composited frame.
+  await sleep(750);
   if (process.env.PREXU_JOURNEY_SCREENSHOTS) {
     await mkdir(process.env.PREXU_JOURNEY_SCREENSHOTS, { recursive: true });
     await clients[index].screenshot(resolve(process.env.PREXU_JOURNEY_SCREENSHOTS, `${name}.png`));

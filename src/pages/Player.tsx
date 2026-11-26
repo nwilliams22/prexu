@@ -255,7 +255,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
   // no mousemove, so without the pin the auto-hide timer would unmount the
   // popup mid-interaction.
   const [panelPinned, setPanelPinned] = useState(false);
-  const recoveryVisible = wt.isInSession && (wt.resyncing || wt.struggling || wt.lobby?.hostAway);
+  const recoveryVisible = wt.isInSession && (wt.resyncing || wt.struggling || wt.lobby?.hostAway || wt.participants.some((p) => p.state === "reconnecting"));
   const chromeVisible = controlsVisible || panelPinned || !!recoveryVisible;
 
   // Force chrome reflow when the WebView viewport changes (e.g. popout-exit,
@@ -882,7 +882,7 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
       {wt.isInSession && (
         <ParticipantOverlay
           participants={wt.participants}
-          visible={controlsVisible}
+          visible={chromeVisible}
         />
       )}
 
