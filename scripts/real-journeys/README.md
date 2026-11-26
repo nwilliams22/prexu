@@ -212,3 +212,174 @@ is offline, copy its link, and launch a fresh guest app with that native URI
 argument. The guest must complete real Plex PIN sign-in and server selection,
 then join automatically. This exercises Linux native cold-start URI delivery;
 macOS still requires opening the URI with the installed application in its VM.
+
+## Mac VM host with a Linux native guest
+
+This procedure uses the **Mac as host**, the protected `PREXU_QA_PLEX_AUTH`
+account, and a Linux guest signed in with `PREXU_QA_PLEX_GUEST_AUTH`. Both accounts
+must expose only **Prexu QA Test Server**. Only fixture `16`, **Prexu QA MP4 H264 AC3**,
+is used. Reserve the VM and both accounts with the current verifier first.
+An occupied local port or active QA session is a contention result, not a product
+failure. Do not stop someone else's process. Read `/usr/local/share/mac-test/AGENTS.md`.
+
+### Build and topology
+
+```sh
+sudo mac-test status
+ssh -n -o BatchMode=yes mac-host mac-vm status
+ssh -n -o BatchMode=yes mac-host mac-vm start
+```
+
+If the Mac is away, hold the run. Keep VM sound muted throughout. Use a clean VM;
+never reset one held by another ticket. The acceptance baseline is commit
+`51d528e47ebbab5190c36bf6529a8efa3d1f29a0`. Record the actual binary revision,
+not merely the harness revision. `macos-candidate.yml` accepts a branch ref:
+verify `main` points at the intended SHA before dispatch, and check the run's
+`headSha` and artifact `BUILD.txt`. A queued workflow is not a built app.
+
+Alternatively build that exact revision in the VM (the default native feature
+requires libmpv even though this test uses the macOS HTML5 engine):
+
+```sh
+git archive --format=tar 51d528e47ebbab5190c36bf6529a8efa3d1f29a0 -o /tmp/mac-source.tar
+scp -o BatchMode=yes /tmp/mac-source.tar mac-vm:/tmp/mac-source.tar
+ssh -n mac-vm 'mkdir -p /tmp/prexu-acceptance && cd /tmp/prexu-acceptance && tar xf /tmp/mac-source.tar'
+ssh -n mac-vm 'HOMEBREW_NO_AUTO_UPDATE=1 brew install mpv pkg-config'
+ssh -n mac-vm 'cd /tmp/prexu-acceptance && npm ci && npm run tauri -- build --ci --bundles app --config '\''{"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-"}}}'\'''
+ssh -n mac-vm 'cp -Rf /tmp/prexu-acceptance/src-tauri/target/release/bundle/macos/Prexu.app /Applications/ && open -a /Applications/Prexu.app'
+ssh -n mac-vm 'shasum -a 256 /Applications/Prexu.app/Contents/MacOS/prexu'
+```
+
+In an isolated checkout of the recorded revision on bd-server, run `npm ci`
+and build the Linux debug app with
+`cargo build --manifest-path src-tauri/Cargo.toml --target-dir /tmp/mac-lobby-app`.
+Use `/tmp/mac-lobby-app/debug/prexu` below. Build a dedicated production relay. Never substitute the shared
+relay target, which may have `test-mode` enabled by another job:
+
+```sh
+cargo build --manifest-path relay-server/Cargo.toml --target-dir /tmp/mac-lobby-relay --no-default-features
+ss -ltnp | grep -E ':1420|:18787'
+PREXU_JOURNEY_APP=/absolute/path/to/debug/prexu \
+PREXU_JOURNEY_RELAY=/tmp/mac-lobby-relay/debug/prexu-relay \
+PREXU_MAC_APP_REVISION=51d528e47ebbab5190c36bf6529a8efa3d1f29a0 \
+PREXU_MAC_EVIDENCE=/tmp/mac-lobby-evidence \
+node scripts/real-journeys/mac-lobby.mjs
+```
+
+Use a Linux debug binary from the recorded source; the helper also records its
+SHA-256. The Linux frontend comes from the harness checkout. The helper refuses
+occupied ports, snapshots both accounts' watched flag and resume offset,
+verifies that the relay rejects an invalid token, and opens a reverse SSH tunnel:
+`ssh -N -R 127.0.0.1:18787:127.0.0.1:18787 mac-vm`. Thus **both clients use
+`ws://127.0.0.1:18787/ws`**, with the VM loopback forwarded to bd-server's dedicated
+production relay. Nothing listens publicly; no real token is sent to the relay
+until its invalid-token check passes. Leave the helper running in its terminal.
+
+### Sign in, create, prepare and start
+
+Use a second terminal for Mac accessibility commands. Do not print or save
+Safari's authentication URL, PIN, app stores, raw accessibility dumps containing
+account details, or raw app logs. The helper's `pin` command reads the normal
+Safari handoff in memory, checks the Plex auth origin, and links that PIN with the
+protected host credential. It does not seed the app's auth store.
+
+```sh
+ssh -n mac-vm 'axui wait Prexu "Sign in with Plex" 30'
+ssh -n mac-vm 'axui click Prexu "Sign in with Plex"'
+```
+
+Enter `pin` at the helper prompt when Safari has opened the Plex authentication
+page. Return to Prexu, select the QA server if prompted, and confirm no other
+server is selected. Enter `guest` at the helper prompt to launch/sign in the
+isolated Linux counterpart. **Wait for `guest: PASS` before creating the lobby**.
+The guest waits on the fixture detail page. If an invitation was sent before
+that navigation completed, click `Resend invite to` on the Mac before `join`.
+
+Use `axui dump Prexu 25` locally to identify controls where needed; do not attach
+that raw dump. Matching is case-insensitive substring; use `--nth N` only after
+checking the tree. Open the account menu (the `AXPopUpButton` labelled with the QA host username),
+then Settings → Connections. Set `QA_HOST_LABEL` to that non-secret displayed
+label; no account token belongs in this variable. Do not open the sidebar menu.
+Configure the Mac through these commands:
+
+```sh
+ssh -n mac-vm 'open -a Prexu'
+ssh -n mac-vm "axui click Prexu '$QA_HOST_LABEL'"
+ssh -n mac-vm 'axui click Prexu "Settings"'
+ssh -n mac-vm 'axui click Prexu "Connections"'
+ssh -n mac-vm 'axui click Prexu "Use custom relay URL"'
+ssh -n mac-vm 'axui type Prexu "Custom relay URL" "ws://127.0.0.1:18787/ws"'
+ssh -n mac-vm 'axui click Prexu "Save"'
+ssh -n mac-vm 'axui wait Prexu "Connected to relay" 30'
+```
+
+The MKV Pattern fixture requires a different playback path on macOS; use this
+MP4 codec fixture for the lobby acceptance. Navigate to **Prexu QA MP4 H264 AC3**, rating key `16`, using app search. Open its detail
+page, click **Watch Together**, select only the QA guest in the friend chooser,
+and click **Start Session**. Set `QA_GUEST_LABEL` to its displayed checkbox label
+from the live accessibility tree. The exact search/creator sequence is:
+
+```sh
+ssh -n mac-vm 'axui type Prexu "Search movies, shows, episodes" "Prexu QA MP4 H264 AC3"'
+ssh -n mac-vm 'axui click Prexu "Prexu QA MP4 H264 AC3 Movie"'
+ssh -n mac-vm 'axui wait Prexu "Watch Together" 30'
+ssh -n mac-vm 'axui click Prexu "Watch Together"'
+ssh -n mac-vm "axui click Prexu '$QA_GUEST_LABEL'"
+ssh -n mac-vm 'axui click Prexu "Start Session"'
+ssh -n mac-vm 'axui wait Prexu "Playback starts when everyone is ready." 30'
+```
+
+There is **no manual Ready button**. Decoder preparation reports Ready through
+the production player hook. The Mac host must remain in the lobby, with its own
+state Ready and the guest Invited, until the guest joins. Wait three seconds and
+confirm the host still shows the lobby, not moving video. Enter `lobby` in the
+helper: it checks those accessibility labels and saves `mac-lobby.png`.
+
+Enter `join` in the helper to click **Join Session** through the Linux guest's
+real native UI. When the guest finishes preparation, the production relay must
+automatically transition both clients to playback. **Do not click Start now**
+for this all-ready check. On the Mac, observe that the lobby disappears and the
+synthetic pattern moves. Move the pointer over the player with `cliclick` to
+reveal controls if needed. The `join` command immediately captures two Mac
+frames three seconds apart because the fixture is only about 13 seconds long.
+Record the two burned-in fixture clock readings and whether the pattern changed. The helper checks Linux time advance but deliberately leaves Mac visual
+acceptance as `REQUIRES_REVIEW`: a Linux pass does not prove Mac playback.
+
+### Evidence and restoration
+
+Attach `mac-lobby.png`, `mac-playback.png`, `mac-playback-later.png`, `report.json`,
+and a text observation containing Mac clock readings, visible motion, app SHA,
+source revision, harness commit and engine (HTML5). Review screenshots for
+credentials/server addresses before uploading. QA account labels in the roster
+are expected; never attach personal library information.
+
+The helper writes `mac-log-excerpt.txt` with allowlisted, normalized relay and
+codec-decision messages (no URLs or raw JSON objects). For additional diagnostics,
+extract only relevant playback/relay lines from
+`~/Library/Logs/com.prexu.client/`. Keep the timestamp and module tag, but replace
+all URLs and token values before attachment. Prefer an allowlist of fixed
+messages (`Connected to relay`, `canDirectPlay` boolean, preparation/playback
+transitions) over publishing complete log objects. VM audio stays muted; do not
+claim audible output from this procedure.
+
+Enter `finish` in the helper. It quits the Mac app, kills its isolated Linux
+process groups, restores both accounts' prior watched flag and resume offset,
+reads the values back into `report.json`, closes its SSH tunnel, stops its relay
+and Vite, and deletes its Vite cache. A restoration row other than PASS blocks
+acceptance. If interrupted or crashed, stop only run-owned clients first; use
+`before.json` and the protected credentials to restore fixture `16`, then read
+metadata back and record the actual before/after comparison. Never restore over
+another client's active session. Do not discard `before.json` before comparison.
+
+After evidence has been copied and attached, always reset the VM:
+
+```sh
+ssh -n mac-host mac-vm reset
+ssh -n mac-host mac-vm status
+ss -ltnp | grep -E ':1420|:18787'
+```
+
+Record reset and process cleanup results in the report. The final closure
+requires reviewed Mac visual evidence, both restoration comparisons equal,
+no run-owned processes left, the pushed harness commit with successful CI, and
+its app revision. A draft procedure or `REQUIRES_REVIEW` report is not acceptance.
