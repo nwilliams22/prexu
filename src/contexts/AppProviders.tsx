@@ -30,6 +30,7 @@ import {
   DownloadsProvider,
 } from "../hooks/useDownloads";
 import { useToastState, ToastProvider } from "../hooks/useToast";
+import { DownloadCleanup } from "../components/downloads/DownloadCleanup";
 import ToastContainer from "../components/Toast";
 import {
   useParentalControlsState,
@@ -71,6 +72,7 @@ export default function AppProviders({ children }: AppProvidersProps) {
                 <DownloadsProvider value={downloadsState}>
                   <QueueProvider>
                     <PlayerProvider>
+                      <DownloadCleanup />
                       {children}
                     </PlayerProvider>
                   </QueueProvider>

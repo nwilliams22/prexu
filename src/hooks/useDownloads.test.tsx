@@ -411,7 +411,7 @@ describe("persistent download artwork integration", () => {
     const { result } = await renderSettled();
     await waitFor(() => expect(result.current.downloads[0]?.artworkDataUrl).toBe("data:image/jpeg;base64,/9j/"));
     expect(mockLoadArtwork).toHaveBeenCalledTimes(1);
-    act(() => result.current.deleteDownload("cached"));
+    await act(async () => { await result.current.deleteDownload("cached"); });
     expect(mockDeleteArtwork).toHaveBeenCalledWith(expect.objectContaining({ ratingKey: "cached", serverUri: SERVER.uri }));
     expect(result.current.downloads).toEqual([]);
   });
@@ -461,4 +461,14 @@ describe("download capacity before queueing", () => {
     await act(async () => {});
     expect(result.current.downloads.map(d => d.ratingKey)).toEqual(["a"]);
   });
+});
+
+ it("keeps metadata and artwork when native deletion fails", async () => {
+  mockGetDownloadItems.mockResolvedValue([{ ...makeItem("retained"), status: "complete" }]);
+  mockDeleteDownload.mockRejectedValueOnce(new Error("file busy"));
+  const { result } = await renderSettled();
+  await act(async () => { await result.current.deleteDownload("retained"); });
+  expect(result.current.downloads).toHaveLength(1);
+  expect(mockDeleteArtwork).not.toHaveBeenCalled();
+  expect(mockToast).toHaveBeenCalledWith("Could not delete download", "error");
 });

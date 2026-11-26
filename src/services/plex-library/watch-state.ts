@@ -3,6 +3,7 @@
  */
 
 import { serverFetch } from "../plex-api";
+import { emitWatchStateChanged } from "../watch-state-events";
 
 export async function markAsWatched(
   serverUri: string,
@@ -17,6 +18,7 @@ export async function markAsWatched(
   if (!response.ok) {
     throw new Error(`Failed to mark as watched: ${response.status}`);
   }
+  emitWatchStateChanged(ratingKey);
 }
 
 export async function markAsUnwatched(
@@ -32,4 +34,5 @@ export async function markAsUnwatched(
   if (!response.ok) {
     throw new Error(`Failed to mark as unwatched: ${response.status}`);
   }
+  emitWatchStateChanged(ratingKey);
 }

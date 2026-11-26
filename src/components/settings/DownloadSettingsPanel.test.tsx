@@ -11,3 +11,14 @@ it("offers the three supported device concurrency limits", () => {
   fireEvent.change(select, { target: { value: "3" } });
   expect(setConcurrency).toHaveBeenCalledWith(3);
 });
+it("keeps automatic deletion off by default and persists opt-in", () => {
+  localStorage.clear();
+  render(<DownloadSettingsPanel />);
+  const toggle = screen.getByRole("checkbox", { name: "Auto-delete watched downloads" });
+  expect(toggle).not.toBeChecked();
+  fireEvent.click(toggle);
+  expect(toggle).toBeChecked();
+  expect(localStorage.getItem("prexu.autoDeleteWatchedDownloads")).toBe("true");
+  fireEvent.click(toggle);
+  expect(localStorage.getItem("prexu.autoDeleteWatchedDownloads")).toBe("false");
+});

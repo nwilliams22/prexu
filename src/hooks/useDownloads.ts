@@ -407,8 +407,18 @@ export function useDownloadsState(
     );
   }, []);
 
-  const deleteDownloadFn = useCallback((ratingKey: string) => {
+  const deleteDownloadFn = useCallback(async (ratingKey: string) => {
+    const previousIntent = intentRef.current.get(ratingKey);
     intentRef.current.set(ratingKey, "cancelled");
+    try {
+      await deleteDownloadService(ratingKey);
+    } catch {
+      if (previousIntent) intentRef.current.set(ratingKey, previousIntent);
+      else intentRef.current.delete(ratingKey);
+      logger.warn("downloads", "Download removal failed");
+      toastRef.current("Could not delete download", "error");
+      return;
+    }
     const item = downloadsRef.current.find((d) => d.ratingKey === ratingKey);
     if (item) {
       void deleteDownloadArtwork(item).catch(() => {
@@ -420,7 +430,6 @@ export function useDownloadsState(
         if (attempt.startsWith(prefix)) artworkAttempts.current.delete(attempt);
       }
     }
-    deleteDownloadService(ratingKey).catch(() => {});
     setDownloads((prev) => prev.filter((d) => d.ratingKey !== ratingKey));
   }, []);
 
