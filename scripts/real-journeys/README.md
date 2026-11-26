@@ -206,3 +206,9 @@ then creates another session, copies its link through the host UI, reads the rea
 X11 clipboard, and pastes it into the guest's Pending invites form. Capture and
 attach the screenshots and report. This covers pasted-link joining in the Linux
 app; OS scheme delivery and macOS installation still need separate verification.
+
+Set `PREXU_JOURNEY_WATCH_COLD_LINK=1` instead to create a lobby while the guest
+is offline, copy its link, and launch a fresh guest app with that native URI
+argument. The guest must complete real Plex PIN sign-in and server selection,
+then join automatically. This exercises Linux native cold-start URI delivery;
+macOS still requires opening the URI with the installed application in its VM.

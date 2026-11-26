@@ -105,7 +105,7 @@ void (async () => { if (window.__TAURI_INTERNALS__) {
     async reload() { const before=generation; await evaluate(()=>{setTimeout(()=>location.reload(),100);}); await until(()=>generation>before && authenticated); },
   };
   return {plugin,page, clientIdentifier: () => clientIdentifier, diagnostics: () => ({openAttempted, linkStatus, linked, authenticated, generation}),
-    async start() {
+    async start(inviteLink) {
       root=await mkdtemp(`${tmpdir()}/prexu-relay-native-`); await mkdir(`${root}/bin`);
       await writeFile(`${root}/bin/xdg-open`, `#!/usr/bin/python3\nimport sys, urllib.request\ntry:\n r=urllib.request.Request('http://127.0.0.1:1420${endpoint}/open',data=sys.argv[1].encode(),method='POST')\n urllib.request.urlopen(r,timeout=20).read()\nexcept Exception:\n sys.exit(1)\n`,{mode:0o700});
       const displayFile=`${root}/display`; const display=await open(displayFile,'wx',0o600);
@@ -114,7 +114,7 @@ void (async () => { if (window.__TAURI_INTERNALS__) {
       displayNumber = number;
       const env={}; for(const key of ['PATH','LANG','LD_LIBRARY_PATH']) if(process.env[key]) env[key]=process.env[key];
       Object.assign(env,{PATH:`${root}/bin:${env.PATH}`,HOME:root,XDG_CONFIG_HOME:`${root}/config`,XDG_DATA_HOME:`${root}/data`,XDG_CACHE_HOME:`${root}/cache`,XDG_RUNTIME_DIR:root,DISPLAY:`:${number}`,GDK_BACKEND:'x11',LIBGL_ALWAYS_SOFTWARE:'1'});
-      const app=spawn('dbus-run-session',['--',resolve(process.env.PREXU_JOURNEY_APP || 'src-tauri/target/debug/prexu')],{env,detached:true,stdio:'ignore'});children.push(app);app.on('error',()=>{});
+      const app=spawn('dbus-run-session',['--',resolve(process.env.PREXU_JOURNEY_APP || 'src-tauri/target/debug/prexu'), ...(inviteLink ? [inviteLink] : [])],{env,detached:true,stdio:'ignore'});children.push(app);app.on('error',()=>{});
       await until(()=>authenticated,100000);
     },
     async revealControls() {

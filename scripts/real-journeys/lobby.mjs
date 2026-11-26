@@ -109,8 +109,17 @@ try {
   await vite.listen();
   stage = 'native-two-client-login';
   for (let i = 0; i < clients.length; i++) {
-    active = i; await clients[i].start();
-    await clients[i].page.goto('http://127.0.0.1:1420/item/2');
+    active = i;
+    let inviteLink;
+    if (i === 1 && process.env.PREXU_JOURNEY_WATCH_COLD_LINK === '1') {
+      await createLobby();
+      await clients[0].page.getByRole('button', { name: 'Copy invite link' }).click();
+      await until(() => clients[0].page.evaluate(() => document.body.textContent.includes('Invite link copied.')));
+      inviteLink = await clients[0].clipboardText();
+      check(/^prexu:\/\/join\/[0-9A-F]{8}\?media=2$/.test(inviteLink));
+    }
+    await clients[i].start(inviteLink);
+    if (!inviteLink) await clients[i].page.goto('http://127.0.0.1:1420/item/2');
     await until(() => clients[i].page.evaluate(async () => (await import('/src/services/watch-sync.ts')).watchSync.isConnected));
     check(await clients[i].page.evaluate(async expected => {
       const auth = await (await import('/src/services/storage/index.ts')).getAuth();
@@ -121,6 +130,13 @@ try {
       return user.username === expected;
     }, accounts[i].user.username));
   }
+  if (process.env.PREXU_JOURNEY_WATCH_COLD_LINK === '1') {
+    stage = 'linux-cold-deep-link-through-sign-in';
+    await until(async () => (await observe(clients[0].page)).playing && (await observe(clients[1].page)).playing);
+    await screenshot(1, 'guest-os-link-after-sign-in');
+    add(stage, 'PASS');
+    add('lobby-all-ready-auto-start', 'PASS');
+  } else {
   check(await (await fetch(`http://127.0.0.1:${port}/health`)).text() === 'OK — 0 sessions, 2 connections');
   add(stage, 'PASS');
   const [host, guest] = clients.map(c => c.page);
@@ -264,6 +280,7 @@ try {
   add(stage, 'PASS');
   await clients[0].revealControls();
   await host.getByRole('button', { name: 'Stop' }).click();
+  }
   }
 } catch {
   add(stage, 'NOT_VERIFIED');
