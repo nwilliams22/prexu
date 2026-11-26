@@ -55,3 +55,24 @@ it.each(["setting-off", "watch-event", "unmount"])("rechecks safety after async 
   await act(async () => { resolve({ ratingKey: "2", viewCount: 1, lastViewedAt: 1 }); });
   expect(state.remove).not.toHaveBeenCalled();
 });
+
+it("uses the original offline watch time when a previous session syncs on launch", async () => {
+  localStorage.setItem("prexu.autoDeleteWatchedDownloads", "true");
+  let resolve!: (value: unknown) => void;
+  state.metadata.mockReturnValue(new Promise(r => { resolve = r; }));
+  render(<DownloadCleanup />);
+  emitWatchStateChanged("2", undefined, 1);
+  await act(async () => { resolve({ ratingKey: "2", viewCount: 1, lastViewedAt: Date.now() / 1000 }); });
+  expect(state.remove).toHaveBeenCalledWith("2");
+});
+
+it("rechecks launch eligibility after an offline watch finishes syncing", async () => {
+  localStorage.setItem("prexu.autoDeleteWatchedDownloads", "true");
+  state.metadata.mockResolvedValueOnce({ ratingKey: "2", viewCount: 0 });
+  render(<DownloadCleanup />);
+  await act(async () => {});
+  expect(state.remove).not.toHaveBeenCalled();
+  state.metadata.mockResolvedValue({ ratingKey: "2", viewCount: 1, lastViewedAt: Date.now() / 1000 });
+  act(() => emitWatchStateChanged("2", undefined, 1));
+  await waitFor(() => expect(state.remove).toHaveBeenCalledWith("2"));
+});

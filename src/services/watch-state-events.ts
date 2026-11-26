@@ -15,6 +15,8 @@ const WATCH_STATE_CHANGED = "prexu:watch-state-changed";
 
 /** Payload carried on the watch-state-changed CustomEvent, when known. */
 export interface WatchStateChangedDetail {
+  /** Original watch time (epoch ms), preserved when offline watches sync later. */
+  watchedAt?: number;
   /** ratingKey of the item whose watch state just changed. */
   ratingKey?: string;
   /**
@@ -56,11 +58,12 @@ export interface WatchStateOffset {
 export function emitWatchStateChanged(
   ratingKey?: string,
   offset?: WatchStateOffset,
+  watchedAt?: number,
 ): void {
   if (typeof window === "undefined") return;
   const detail: WatchStateChangedDetail | undefined =
     ratingKey || offset
-      ? { ratingKey, viewOffsetMs: offset?.viewOffsetMs, reset: offset?.reset }
+      ? { ratingKey, viewOffsetMs: offset?.viewOffsetMs, reset: offset?.reset, ...(watchedAt === undefined ? {} : { watchedAt }) }
       : undefined;
   window.dispatchEvent(
     new CustomEvent<WatchStateChangedDetail | undefined>(WATCH_STATE_CHANGED, {

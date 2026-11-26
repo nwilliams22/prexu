@@ -1,10 +1,10 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../../hooks/useAuth";
 import { useDownloads } from "../../hooks/useDownloads";
 import { usePlayerSession } from "../../contexts/PlayerContext";
 import { autoDeleteDownloadsEnabled, useAutoDeleteDownloads } from "../../hooks/useAutoDeleteDownloads";
 import { getItemMetadata } from "../../services/plex-library";
-import { onWatchStateChanged } from "../../services/watch-state-events";
+import { onWatchStateChangedDetail } from "../../services/watch-state-events";
 import { isWatchedDownloadEligible } from "../../services/download-cleanup";
 import { logger } from "../../services/logger";
 
@@ -18,17 +18,27 @@ export function DownloadCleanup() {
   const { downloads, deleteDownload } = useDownloads();
   const { session } = usePlayerSession();
   const [enabled] = useAutoDeleteDownloads();
+  const [watchRevision, setWatchRevision] = useState(0);
   const latest = useRef({ downloads, session, deleteDownload });
   latest.current = { downloads, session, deleteDownload };
   const protectedKeys = useRef(new Set<string>());
   const startupKeys = useRef(new Set<string>());
+  const syncedWatchTimes = useRef(new Map<string, number>());
   const enabledAtLaunch = useRef(enabled);
 
-  useEffect(() => onWatchStateChanged((key) => {
+  useEffect(() => onWatchStateChangedDetail(({ ratingKey: key, watchedAt }) => {
     // Ambiguous events conservatively protect every current download.
     for (const item of latest.current.downloads) {
-      if (!key || key === item.ratingKey) protectedKeys.current.add(item.ratingKey);
+      if (key && key !== item.ratingKey) continue;
+      if (watchedAt !== undefined && Number.isFinite(watchedAt) && watchedAt < sessionStartedAt) {
+        // Syncing an offline watch does not make it a watch in this session.
+        syncedWatchTimes.current.set(item.ratingKey, watchedAt);
+        startupKeys.current.delete(JSON.stringify([item.serverUri, item.ratingKey]));
+      } else {
+        protectedKeys.current.add(item.ratingKey);
+      }
     }
+    setWatchRevision(value => value + 1);
   }), []);
   useEffect(() => {
     if (session) protectedKeys.current.add(session.ratingKey);
@@ -56,7 +66,8 @@ export function DownloadCleanup() {
             if (!isWatchedDownloadEligible({
               enabled: autoDeleteDownloadsEnabled(), complete: current.status === "complete",
               watched: (metadata.viewCount ?? 0) > 0,
-              watchedAt: metadata.lastViewedAt === undefined ? undefined : metadata.lastViewedAt * 1000,
+              watchedAt: syncedWatchTimes.current.get(item.ratingKey) ??
+                (metadata.lastViewedAt === undefined ? undefined : metadata.lastViewedAt * 1000),
               sessionStartedAt, startup, now: Date.now(),
               protectedThisSession: protectedKeys.current.has(item.ratingKey) ||
                 latest.current.session?.ratingKey === item.ratingKey ||
@@ -72,6 +83,6 @@ export function DownloadCleanup() {
     void check();
     const timer = setInterval(() => void check(), CHECK_INTERVAL_MS);
     return () => { controller.abort(); clearInterval(timer); };
-  }, [enabled, server, downloads.length]);
+  }, [enabled, server, downloads.length, watchRevision]);
   return null;
 }

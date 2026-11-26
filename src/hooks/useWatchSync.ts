@@ -30,7 +30,7 @@ export function useWatchSync(
 
         for (const item of pending) {
           try {
-            await markAsWatched(server.uri, server.accessToken, item.ratingKey);
+            await markAsWatched(server.uri, server.accessToken, item.ratingKey, item.watchedAt);
             await removePendingWatchSync(item.ratingKey);
           } catch {
             // Server may still be unreachable for this item — leave in queue

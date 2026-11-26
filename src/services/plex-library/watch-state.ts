@@ -8,7 +8,8 @@ import { emitWatchStateChanged } from "../watch-state-events";
 export async function markAsWatched(
   serverUri: string,
   serverToken: string,
-  ratingKey: string
+  ratingKey: string,
+  watchedAt = Date.now(),
 ): Promise<void> {
   const response = await serverFetch(
     serverUri,
@@ -18,7 +19,7 @@ export async function markAsWatched(
   if (!response.ok) {
     throw new Error(`Failed to mark as watched: ${response.status}`);
   }
-  emitWatchStateChanged(ratingKey);
+  emitWatchStateChanged(ratingKey, undefined, watchedAt);
 }
 
 export async function markAsUnwatched(
