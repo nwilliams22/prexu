@@ -363,6 +363,20 @@ fn leave_session_inner(
         Vec::new()
     };
     let empty = session.participants.is_empty();
+    if was_host || empty {
+        // Hold the session lock through revocation so reconnect replay cannot
+        // enqueue an obsolete invite after its dismissal event.
+        for invitee in session.invited.drain() {
+            send_to_user(
+                state,
+                &invitee,
+                &ServerMessage::InviteRevoked {
+                    session_id: session_id.to_string(),
+                },
+            );
+        }
+        state.pending_invites.revoke_session(session_id);
+    }
     drop(session);
 
     if was_host && !empty {

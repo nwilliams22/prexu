@@ -1753,3 +1753,61 @@ async fn test_online_invite_revoked_and_reinvite_allows_join() {
     .await;
     ws_recv_type(&mut guest, "session_joined").await;
 }
+
+#[tokio::test]
+async fn test_host_exit_revokes_online_no_show_and_preserves_other_pending_invites() {
+    let addr = start_test_server().await;
+    let mut first = ws_connect(addr).await;
+    let mut second = ws_connect(addr).await;
+    authenticate(&mut first, "first").await;
+    authenticate(&mut second, "second").await;
+    for (host, room) in [(&mut first, "first-room"), (&mut second, "second-room")] {
+        ws_send(host, &serde_json::json!({"type":"create_session", "protocol_version":2, "session_id":room, "media_title":"Fixture", "media_rating_key":"1", "media_type":"movie"})).await;
+        ws_recv_type(host, "session_state").await;
+        ws_send(
+            host,
+            &serde_json::json!({"type":"invite", "session_id":room, "target_username":"offline"}),
+        )
+        .await;
+        ws_recv_type(host, "session_state").await;
+    }
+    let mut online = ws_connect(addr).await;
+    authenticate(&mut online, "online").await;
+    ws_send(&mut first, &serde_json::json!({"type":"invite", "session_id":"first-room", "target_username":"online"})).await;
+    ws_recv_type(&mut online, "invite_received").await;
+    ws_send(&mut first, &serde_json::json!({"type":"start_now"})).await;
+    ws_recv_type(&mut first, "session_started").await;
+    ws_send(&mut first, &serde_json::json!({"type":"leave_session"})).await;
+    assert_eq!(
+        ws_recv(&mut online).await,
+        serde_json::json!({"type":"invite_revoked", "session_id":"first-room"})
+    );
+    let mut guest = ws_connect(addr).await;
+    authenticate(&mut guest, "offline").await;
+    let pending = ws_recv(&mut guest).await;
+    assert_eq!(pending["type"], "pending_invites");
+    assert_eq!(pending["invites"].as_array().unwrap().len(), 1);
+    assert_eq!(pending["invites"][0]["session_id"], "second-room");
+    assert!(ws_try_recv(&mut guest, Duration::from_millis(100))
+        .await
+        .is_none());
+    ws_send(
+        &mut guest,
+        &serde_json::json!({"type":"join_session", "session_id":"first-room"}),
+    )
+    .await;
+    assert_eq!(ws_recv(&mut guest).await["type"], "session_error");
+    ws_send(
+        &mut guest,
+        &serde_json::json!({"type":"join_session", "session_id":"second-room"}),
+    )
+    .await;
+    ws_recv_type(&mut guest, "session_joined").await;
+    ws_recv_type(&mut guest, "session_state").await;
+    // A second connection for the same identity must not replay consumed invites.
+    let mut reconnected = ws_connect(addr).await;
+    authenticate(&mut reconnected, "offline").await;
+    assert!(ws_try_recv(&mut reconnected, Duration::from_millis(100))
+        .await
+        .is_none());
+}

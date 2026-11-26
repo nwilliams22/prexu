@@ -79,6 +79,14 @@ impl PendingInvites {
         }
     }
 
+    /// Purge a destroyed session for every recipient, preserving other invites.
+    pub fn revoke_session(&self, session_id: &str) {
+        self.lock().retain(|_, invites| {
+            invites.retain(|invite| invite.session_id != session_id);
+            !invites.is_empty()
+        });
+    }
+
     pub fn cleanup(&self) {
         Self::expire(&mut self.lock(), now_ms());
     }
@@ -127,6 +135,24 @@ mod tests {
         store.insert("only", invite("host", 0)).unwrap();
         store.revoke("only", "0");
         assert!(store.take("only").is_none());
+    }
+
+    #[test]
+    fn destroyed_session_is_purged_across_recipients_and_releases_capacity() {
+        let store = PendingInvites::default();
+        for n in 0..MAX_PER_TARGET {
+            store.insert("guest", invite("host", n)).unwrap();
+        }
+        store.insert("only", invite("host", 0)).unwrap();
+        store.revoke_session("0");
+        store.revoke_session("0");
+        assert!(store.take("only").is_none());
+        store
+            .insert("guest", invite("host", MAX_PER_TARGET))
+            .unwrap();
+        let remaining = store.take("guest").unwrap();
+        assert_eq!(remaining.len(), MAX_PER_TARGET);
+        assert!(remaining.iter().all(|i| i.session_id != "0"));
     }
 
     #[test]

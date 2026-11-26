@@ -389,3 +389,53 @@ async fn cancelling_invite_does_not_remove_guest_from_another_session() {
     join(&s, "guest");
     assert_eq!(drain(&mut guest).last().unwrap()["type"], "session_error");
 }
+
+#[tokio::test(start_paused = true)]
+async fn host_exit_revokes_no_shows_and_purges_only_its_session() {
+    for expire in [false, true] {
+        let (s, _host, mut guest) = setup();
+        let _other = connect(&s, "other");
+        create_session(
+            &s,
+            "other-room".into(),
+            2,
+            "other",
+            "",
+            "Fixture".into(),
+            "2".into(),
+            "movie".into(),
+            sender(&s, "other"),
+        );
+        for room in ["room", "other-room"] {
+            let host = if room == "room" { "host" } else { "other" };
+            handle_invite(&s, "guest", room, host, "");
+            handle_invite(&s, "offline", room, host, "");
+        }
+        drain(&mut guest);
+        start_now(&s, "host");
+        if expire {
+            disconnect(&s, "host");
+            assert!(drain(&mut guest).is_empty());
+            tokio::time::advance(Duration::from_secs(61)).await;
+            cleanup_disconnected(&s);
+        } else {
+            leave_session(&s, "host");
+        }
+        assert!(!s.sessions.contains_key("room"));
+        assert_eq!(
+            drain(&mut guest),
+            vec![serde_json::json!({
+                "type": "invite_revoked", "session_id": "room"
+            })]
+        );
+        let pending = s.pending_invites.take("offline").unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].session_id, "other-room");
+        assert!(s
+            .sessions
+            .get("other-room")
+            .unwrap()
+            .invited
+            .contains("guest"));
+    }
+}
