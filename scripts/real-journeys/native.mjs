@@ -2,12 +2,15 @@
 import { createServer } from 'vite';
 import { pinCode, validEvent } from './native-contract.mjs';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, lstat } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
 
+const cleanupMode = process.env.PREXU_JOURNEY_DOWNLOAD_CLEANUP === '1';
+const fixtureKey = cleanupMode ? '12' : '2';
+const fixtureTitle = cleanupMode ? 'Prexu QA HEVC8' : 'Prexu QA Pattern';
 const searchMode = process.env.PREXU_JOURNEY_SEARCH_SELECTION === '1';
 const pausedMode = process.env.PREXU_JOURNEY_PAUSED_LOAD === '1';
 const offlineOnly = process.env.PREXU_JOURNEY_OFFLINE_ONLY === '1';
@@ -28,7 +31,7 @@ let server, baseline, watchComparison, appClient;
 let serviceContended = false;
 let root, vite, app, xvfb, stage = 'prerequisites';
 let finish, restartApp;
-let restarted = false, ending = false;
+let restarted = false, ending = false, restartCount = 0;
 const completed = new Promise(resolve => { finish = resolve; });
 for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => finish('interrupted'));
 const children = [];
@@ -54,7 +57,7 @@ async function serviceIsExclusive() {
 }
 
 try {
-  if (process.env.DEBUG || !token || process.platform !== 'linux' || (queueMode && !process.env.PREXU_JOURNEY_SCREENSHOTS)) throw new Error('prerequisites');
+  if (process.env.DEBUG || !token || process.platform !== 'linux' || ((cleanupMode || queueMode || storageMode) && !process.env.PREXU_JOURNEY_SCREENSHOTS)) throw new Error('prerequisites');
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(appPath)) hash.update(chunk);
   applicationSha256 = hash.digest('hex');
@@ -69,9 +72,9 @@ try {
       const uri = new URL(connection.uri);
       if (!['http:', 'https:'].includes(uri.protocol) || uri.username || uri.password) continue;
       const candidate = { uri: uri.origin, token: servers[0].accessToken };
-      const data = await (await request(`${candidate.uri}/library/metadata/2`, { headers: { 'X-Plex-Token': candidate.token } })).json();
+      const data = await (await request(`${candidate.uri}/library/metadata/${fixtureKey}`, { headers: { 'X-Plex-Token': candidate.token } })).json();
       const item = data.MediaContainer.Metadata?.[0];
-      if (item?.title !== 'Prexu QA Pattern' || item.duration < 30000 || item.duration >= 120000) continue;
+      if (item?.title !== fixtureTitle || item.duration < 30000 || item.duration >= 120000) continue;
       server = candidate;
       baseline = { offset: item.viewOffset || 0, duration: item.duration, watched: Boolean(item.viewCount) };
       break;
@@ -87,7 +90,7 @@ try {
     throw new Error('busy');
   }
   stage = 'qa-fixture-state';
-  if (!searchMode && !queueMode && !storageMode && !offlineOnly && !baseline.watched) { server = undefined; baseline = undefined; throw new Error('fixture-state'); }
+  if (!cleanupMode && !searchMode && !queueMode && !storageMode && !offlineOnly && !baseline.watched) { server = undefined; baseline = undefined; throw new Error('fixture-state'); }
   if (moveMode) {
     stage = 'qa-download-fixtures';
     queueFixtures = [];
@@ -121,7 +124,7 @@ try {
         try {
           if (req.url === `${endpoint}/driver.js` && req.method === 'GET') {
             res.setHeader('Content-Type', 'text/javascript');
-            res.end((await readFile(new URL(searchMode ? './search-selection-driver.js' : moveMode ? './download-move-driver.js' : storageMode ? './download-storage-driver.js' : pausedMode ? './paused-load-driver.js' : queueMode ? './download-queue-driver.js' : './native-driver.js', import.meta.url), 'utf8')).replace('__MOVE_DIRECTORY__', JSON.stringify(`${root}/moved`)).replace('__JOURNEY_ENDPOINT__', JSON.stringify(endpoint)).replace('__QUEUE_FIXTURES__', JSON.stringify(queueFixtures)).replace('__JOURNEY_BASELINE__', JSON.stringify(baseline)).replace('__JOURNEY_OFFLINE_ONLY__', JSON.stringify(offlineOnly)).replace('__JOURNEY_QUEUE_ONLY__', JSON.stringify(queueOnly)).replace('__JOURNEY_RESTARTED__', JSON.stringify(restarted)));
+            res.end((await readFile(new URL(cleanupMode ? './download-cleanup-driver.js' : searchMode ? './search-selection-driver.js' : moveMode ? './download-move-driver.js' : storageMode ? './download-storage-driver.js' : pausedMode ? './paused-load-driver.js' : queueMode ? './download-queue-driver.js' : './native-driver.js', import.meta.url), 'utf8')).replace('__MOVE_DIRECTORY__', JSON.stringify(`${root}/moved`)).replace('__JOURNEY_ENDPOINT__', JSON.stringify(endpoint)).replace('__QUEUE_FIXTURES__', JSON.stringify(queueFixtures)).replace('__JOURNEY_BASELINE__', JSON.stringify(baseline)).replace('__JOURNEY_OFFLINE_ONLY__', JSON.stringify(offlineOnly)).replace('__JOURNEY_QUEUE_ONLY__', JSON.stringify(queueOnly)).replace('__JOURNEY_RESTARTED__', JSON.stringify(restarted)));
             return;
           }
           if (req.method !== 'POST') throw new Error('method');
@@ -156,9 +159,9 @@ try {
             await sleep(1000);
             spawnSync('xdotool', ['key', 'alt+o'], { env, stdio: 'ignore', timeout: 5000 });
           } else if (req.url === `${endpoint}/restart`) {
-            if (!linked || !restartApp || !rows.some(row => row.journey === 'native-download' && row.status === 'PASS')) throw new Error('event');
+            if (!linked || !restartApp || restartCount >= (cleanupMode ? 2 : 1) || !rows.some(row => ['native-download', 'download-queue-reordered', 'cleanup-current-session-on', 'cleanup-current-session-off'].includes(row.journey) && row.status === 'PASS')) throw new Error('event');
             const restart = restartApp;
-            restartApp = undefined;
+            restartCount++;
             res.end('ok');
             await restart();
             return;
@@ -173,9 +176,9 @@ try {
             diagnostics.push(input);
           } else if (req.url === `${endpoint}/watch`) {
             if (!await serviceIsExclusive()) throw new Error('service-busy');
-            const data = await (await request(`${server.uri}/library/metadata/2`, { headers: { 'X-Plex-Token': server.token } })).json();
+            const data = await (await request(`${server.uri}/library/metadata/${fixtureKey}`, { headers: { 'X-Plex-Token': server.token } })).json();
             const item = data.MediaContainer.Metadata?.[0];
-            if (item?.title !== 'Prexu QA Pattern') throw new Error('event');
+            if (item?.title !== fixtureTitle) throw new Error('event');
             res.setHeader('Content-Type', 'application/json');
             const input = JSON.parse(body);
             if (!Number.isFinite(input.expectedMs) || input.expectedMs < 0 || input.expectedMs > 120000) throw new Error('event');
@@ -183,15 +186,15 @@ try {
             if (watchComparisons.length < 20 && JSON.stringify(watchComparisons.at(-1)) !== JSON.stringify(watchComparison)) watchComparisons.push(watchComparison);
             res.end(JSON.stringify({ offset: item.viewOffset || 0, watched: Boolean(item.viewCount) }));
             return;
-          } else if ((queueMode || storageMode || searchMode) && req.url === `${endpoint}/resize`) {
+          } else if ((cleanupMode || queueMode || storageMode || searchMode) && req.url === `${endpoint}/resize`) {
             const env = { PATH: process.env.PATH, DISPLAY: `:${displayNumber}` };
             const windows = spawnSync('xdotool', ['search', '--onlyvisible', '--name', '^Prexu$'], { env, encoding: 'utf8', timeout: 1000 });
             const windowId = windows.stdout?.trim().split('\n').at(-1);
             if (!/^\d+$/.test(windowId || '')) throw new Error('event');
             const resized = spawnSync('xdotool', ['windowsize', windowId, searchMode ? '1200' : '1900', searchMode ? '760' : '1000', 'windowmove', windowId, '0', '0'], { env, stdio: 'ignore', timeout: 1000 });
             if (resized.status !== 0) throw new Error('event');
-          } else if ((queueMode || storageMode || searchMode) && req.url === `${endpoint}/screenshot`) {
-            if (!['search-detail', 'paused', 'complete', 'diagnostic', 'storage-summary', 'storage-warning', 'move-confirm', 'move-complete', 'move-playback'].includes(body) || !displayNumber || !process.env.PREXU_JOURNEY_SCREENSHOTS) throw new Error('event');
+          } else if ((cleanupMode || queueMode || storageMode || searchMode) && req.url === `${endpoint}/screenshot`) {
+            if (!['setting-on', 'setting-off', 'same-session-on', 'same-session-off', 'enabled-removed', 'disabled-retained', 'failure', 'grouped', 'search-detail', 'paused', 'complete', 'diagnostic', 'storage-summary', 'storage-warning', 'move-confirm', 'move-complete', 'move-playback'].includes(body) || !displayNumber || !process.env.PREXU_JOURNEY_SCREENSHOTS) throw new Error('event');
             await mkdir(process.env.PREXU_JOURNEY_SCREENSHOTS, { recursive: true });
             const shot = spawnSync('import', ['-display', `:${displayNumber}`, '-window', 'root', resolve(process.env.PREXU_JOURNEY_SCREENSHOTS, `${body}.png`)], { stdio: 'ignore', timeout: 10000 });
             if (shot.status !== 0) throw new Error('event');
@@ -277,14 +280,15 @@ finally {
         add('service-state-restoration-skipped-busy', 'FAIL');
         clean = false;
       } else {
-      const query = new URLSearchParams({ ratingKey: '2', key: '/library/metadata/2', state: 'stopped',
+      if (cleanupMode) await request(`${server.uri}/:/${baseline.watched ? 'scrobble' : 'unscrobble'}?identifier=com.plexapp.plugins.library&key=${fixtureKey}`, { headers: { 'X-Plex-Token': server.token } });
+      const query = new URLSearchParams({ ratingKey: fixtureKey, key: `/library/metadata/${fixtureKey}`, state: 'stopped',
         time: String(baseline.offset), duration: String(baseline.duration), 'X-Plex-Client-Identifier': appClient });
       // The offline-only slice never plays against the live server. Verify
       // its state without issuing a synthetic timeline mutation.
       if (!offlineOnly) await request(`${server.uri}/:/timeline?${query}`, { headers: { 'X-Plex-Token': server.token, 'X-Plex-Client-Identifier': appClient } });
-      const data = await (await request(`${server.uri}/library/metadata/2`, { headers: { 'X-Plex-Token': server.token } })).json();
+      const data = await (await request(`${server.uri}/library/metadata/${fixtureKey}`, { headers: { 'X-Plex-Token': server.token } })).json();
       const item = data.MediaContainer.Metadata?.[0];
-      const restored = item?.title === 'Prexu QA Pattern' && (item.viewOffset || 0) === baseline.offset && Boolean(item.viewCount) === baseline.watched;
+      const restored = item?.title === fixtureTitle && (item.viewOffset || 0) === baseline.offset && Boolean(item.viewCount) === baseline.watched;
       add('service-state-restored', restored ? 'PASS' : 'FAIL');
       if (!restored) clean = false;
       }
@@ -302,10 +306,15 @@ finally {
       if (!unchanged) clean = false;
     } catch { add('service-state-restored', 'FAIL'); clean = false; }
   }
-  try { if (root) { spawnSync('fusermount3', ['-u', `${root}/doc`], { stdio: 'ignore' }); await rm(root, { recursive: true, force: true, maxRetries: 3 }); } } catch (error) { add('profile-cleanup-' + (/^[A-Z_]+$/.test(error.code || '') ? error.code : 'error'), 'FAIL'); clean = false; }
+  try { if (root) { spawnSync('fusermount3', ['-u', `${root}/doc`], { stdio: 'ignore' }); await rm(root, { recursive: true, force: true, maxRetries: 3 });
+    let absent = false;
+    try { await lstat(root); } catch (error) { if (error.code === 'ENOENT') absent = true; else throw error; }
+    if (!absent) throw new Error('profile-remains');
+    if (moveMode) add('download-move-folders-cleaned', 'PASS');
+  } } catch (error) { add('profile-cleanup-' + (/^[A-Z_]+$/.test(error.code || '') ? error.code : 'error'), 'FAIL'); clean = false; }
   add('cleanup', clean ? 'PASS' : 'FAIL');
 }
-if (!searchMode && !pausedMode && !queueMode && !storageMode && !offlineOnly && rows.some(row => row.journey === 'native-login')) {
+if (!cleanupMode && !searchMode && !pausedMode && !queueMode && !storageMode && !offlineOnly && rows.some(row => row.journey === 'native-login')) {
   if (!rows.some(row => row.journey === 'native-queue-postplay')) add('queue-postplay', 'NOT_RUN');
   add('two-client-relay', 'NOT_RUN');
 }
@@ -315,11 +324,11 @@ if (!queueMode && offlineOnly && rows.some(row => row.journey === 'native-login'
   }
 }
 if (queueMode && !moveMode && rows.some(row => row.journey === 'native-login')) {
-  for (const journey of ['download-queue-paused', 'download-queue-reordered', 'download-queue-complete', 'download-queue-delete', 'download-queue-settings']) {
+  for (const journey of ['download-queue-paused', 'download-queue-reordered', 'download-queue-restart', 'download-grouping', 'download-queue-complete', 'download-queue-delete', 'download-queue-settings']) {
     if (!rows.some(row => row.journey === journey)) add(journey, 'NOT_RUN');
   }
 }
-const report = { schema: 1, applicationSha256, fixtureDurationMs: baseline?.duration, watchComparison, watchComparisons, diagnostics, binarySourceRevision: 'not independently verified', scope: searchMode ? 'real desktop rapid search suggestion selection; detail retained after 500 ms' : moveMode ? 'real desktop folder picker, verified move, open-folder dispatch and local playback from QA download' : storageMode ? 'real desktop storage summary and QA season warning/cancel; debug free-space override of 1 byte' : pausedMode ? 'real desktop native IPC paused preparation; lobby integration not exercised' : queueMode ? 'real desktop download queue controls with QA season episodes' : offlineOnly ? 'native offline slice; NOT full journey acceptance' : queueOnly ? 'native queue/offline slice; NOT full journey acceptance' : 'native single-user slice; NOT full journey acceptance', rows };
+const report = { schema: 1, applicationSha256, fixtureDurationMs: baseline?.duration, watchComparison, watchComparisons, diagnostics, binarySourceRevision: 'not independently verified', scope: cleanupMode ? 'real desktop watched download cleanup across two process restarts; QA HEVC8 only' : searchMode ? 'real desktop rapid search suggestion selection; detail retained after 500 ms' : moveMode ? 'real desktop folder picker, verified move, open-folder dispatch and local playback from QA download' : storageMode ? 'real desktop storage summary and QA season warning/cancel; debug free-space override of 1 byte' : pausedMode ? 'real desktop native IPC paused preparation; lobby integration not exercised' : queueMode ? 'real desktop download queue controls with QA season episodes' : offlineOnly ? 'native offline slice; NOT full journey acceptance' : queueOnly ? 'native queue/offline slice; NOT full journey acceptance' : 'native single-user slice; NOT full journey acceptance', rows };
 const output = JSON.stringify(report, null, 2) + '\n';
 if (process.env.PREXU_JOURNEY_REPORT) await writeFile(process.env.PREXU_JOURNEY_REPORT, output, { mode: 0o600 });
 process.stdout.write(output);

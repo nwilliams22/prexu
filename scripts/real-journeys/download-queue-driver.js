@@ -3,6 +3,7 @@ import { getAuth, getServer, saveRelayUrl, getDownloadItems } from '/src/service
 import { getLocalFilePath } from '/src/services/downloads.ts';
 const endpoint = __JOURNEY_ENDPOINT__;
 const fixtures = __QUEUE_FIXTURES__;
+const restarted = __JOURNEY_RESTARTED__;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, timeout = 60000, interval = 20) {
   const end = Date.now() + timeout;
@@ -55,7 +56,7 @@ async function run() {
   let stage = 'native-login';
   try {
     await saveRelayUrl('ws://127.0.0.1:1/ws');
-    if (!sessionStorage.getItem('download-queue-login')) {
+    if (!localStorage.getItem('download-queue-login')) {
       stage = 'download-login-button';
       await click('Sign in with Plex');
       await emit(stage);
@@ -71,7 +72,7 @@ async function run() {
       }, 60000, 200);
       await emit(stage);
       await emit('native-login');
-      sessionStorage.setItem('download-queue-login', 'yes');
+      localStorage.setItem('download-queue-login', 'yes');
       location.assign(`/item/${fixtures[0].key}`);
       return;
     }
@@ -79,6 +80,7 @@ async function run() {
     const resized = await fetch(`${endpoint}/resize`, { method: 'POST' });
     if (!resized.ok) throw new Error('resize');
     await until(() => innerWidth >= 1800);
+    if (!restarted) {
     // Visit the actual lazy route before starting a local-network transfer.
     await nav('/downloads');
     await until(() => button('Open folder'));
@@ -115,11 +117,26 @@ async function run() {
     await until(async () => (await getDownloadItems())[0]?.ratingKey === fixtures[1].key);
     await shot('paused');
     await emit(stage);
+    const paused = await getDownloadItems();
+    if (!paused.some(d => d.bytesDownloaded > 0 && d.bytesDownloaded < d.fileSize)) throw new Error('no-partial-transfer');
+    localStorage.setItem('download-queue-paused-state', JSON.stringify(paused.map(d => ({ key: d.ratingKey, bytes: d.bytesDownloaded }))));
+    await fetch(`${endpoint}/restart`, { method: 'POST' });
+    return;
+    }
+    stage = 'download-queue-restart';
+    await nav('/downloads');
+    const saved = JSON.parse(localStorage.getItem('download-queue-paused-state'));
+    await until(async () => {
+      const items = await getDownloadItems();
+      return saved.length === 2 && saved.every((d, i) => items[i]?.ratingKey === d.key && items[i].status === 'paused' && items[i].bytesDownloaded === d.bytes);
+    });
+    await emit(stage);
     // Exercise two available transfer slots through the real settings control.
     await nav('/settings');
     await nav('/settings/connections');
     await until(() => document.getElementById('download-concurrency'));
     const concurrency = document.getElementById('download-concurrency');
+    if (concurrency.value !== '1') throw new Error('default-concurrency');
     concurrency.value = '2';
     concurrency.dispatchEvent(new Event('change', { bubbles: true }));
     await until(() => localStorage.getItem('prexu.downloadConcurrency') === '2');
@@ -138,11 +155,37 @@ async function run() {
     for (const fixture of fixtures) if (!await getLocalFilePath(fixture.key)) throw new Error('file');
     await shot('complete');
     await emit(stage);
-    stage = 'download-queue-delete';
-    for (const remaining of [1, 0]) {
-      await click('Delete download');
-      await until(async () => (await getDownloadItems()).length === remaining);
+    stage = 'download-grouping';
+    const show = document.querySelector('section[aria-label="Prexu QA Seasons"]');
+    if (!show || !show.querySelector('h4')?.textContent.match(/— .*B/) || !document.body.textContent.includes('TV shows')) throw new Error('show');
+    const season = [...show.querySelectorAll('details')].find(d => d.querySelector('summary')?.textContent === 'Season 1 (2)');
+    if (!season?.open || !fixtures.every(f => season.textContent.includes(f.title))) throw new Error('season');
+    season.querySelector('summary').click();
+    if (season.open) throw new Error('collapse');
+    season.querySelector('summary').click();
+    if (!season.open) throw new Error('expand');
+    await click('Delete all');
+    await until(() => document.querySelector('dialog[open]'));
+    if (document.querySelector('dialog').querySelectorAll('li').length !== 2) throw new Error('selection');
+    await click('Cancel');
+    if ((await getDownloadItems()).length !== 2) throw new Error('cancel');
+    await click('Delete watched');
+    const watchedCount = fixtures.filter(f => f.watched).length;
+    if (watchedCount) {
+      await until(() => document.querySelector('dialog[open]'));
+      const selected = [...document.querySelectorAll('dialog li')];
+      if (selected.length !== watchedCount || !fixtures.filter(f => f.watched).every(f => selected.some(li => li.textContent.includes(f.title)))) throw new Error('watched-selection');
+      await click('Cancel');
+    } else {
+      await until(() => document.body.textContent.includes('No watched downloads in this show.'));
     }
+    if ((await getDownloadItems()).length !== 2) throw new Error('watched-cancel');
+    await shot('grouped');
+    await emit(stage);
+    stage = 'download-queue-delete';
+    await click('Delete all');
+    await click('Delete downloads');
+    await until(async () => (await getDownloadItems()).length === 0);
     for (const fixture of fixtures) await until(async () => !await getLocalFilePath(fixture.key));
     await until(async () => (await getDownloadItems()).length === 0);
     await emit(stage);

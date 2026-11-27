@@ -2,6 +2,10 @@
 export const REQUIRED = {
   browser: ['qa-fixture', 'session-restore', 'browse-search-detail', 'settings-persistence', 'cleanup'],
   native: ['native-login', 'native-session-restore', 'native-play-advance', 'native-play-pause', 'native-early-stop-watch-state', 'native-resume', 'native-resume-completion', 'native-download', 'native-queue-start', 'native-queue-eof', 'native-queue-postplay', 'native-offline', 'native-offline-missing-file', 'native-driver', 'service-state-restored', 'cleanup'],
+  downloadQueue: ['native-login', 'download-queue-paused', 'download-queue-reordered', 'download-queue-restart', 'download-queue-resume-item', 'download-queue-resume-all', 'download-queue-complete', 'download-grouping', 'download-queue-delete', 'download-queue-settings', 'native-driver', 'service-state-restored', 'cleanup'],
+  downloadStorage: ['native-login', 'download-storage-summary', 'download-storage-warning-cancel', 'native-driver', 'cleanup'],
+  downloadMove: ['native-login', 'native-download', 'download-move-confirm', 'download-move-complete', 'download-move-open-folder', 'download-move-playback', 'download-move-folders-cleaned', 'native-driver', 'cleanup'],
+  downloadCleanup: ['native-login', 'download-movie-grouping', 'cleanup-download-on', 'cleanup-playback-on', 'cleanup-current-session-on', 'cleanup-enabled-relaunch', 'cleanup-download-off', 'cleanup-playback-off', 'cleanup-current-session-off', 'cleanup-disabled-relaunch', 'native-driver', 'service-state-restored', 'cleanup'],
   relay: ['relay-guest-login', 'relay-production-auth', 'relay-identities', 'relay-auth', 'relay-invite', 'relay-join', 'relay-leave', 'relay-disconnect', 'relay-reconnect', 'relay-network-failure', 'relay-service-state-restored', 'cleanup'],
 };
 const delegated = new Set(['login', 'play-resume-watch-state', 'queue-postplay', 'downloads-offline', 'two-client-relay']);

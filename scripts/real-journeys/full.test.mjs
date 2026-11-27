@@ -15,3 +15,14 @@ test('full gate requires every row and rejects failures and duplicate results', 
   const hidden = complete(); hidden.browser.rows.push({ journey: 'login', status: 'FAIL' }); assert.equal(assess(hidden).status, 'FAIL');
   assert.equal(assess({}).status, 'FAIL');
 });
+
+// Each Downloads behaviour must remain a gate, even when every other slice passes.
+test('every Downloads acceptance row is mandatory', () => {
+  for (const slice of ['downloadQueue', 'downloadStorage', 'downloadMove', 'downloadCleanup']) {
+    for (const journey of REQUIRED[slice]) {
+      const report = complete();
+      report[slice].rows = report[slice].rows.filter(row => row.journey !== journey);
+      assert.equal(assess(report).status, 'FAIL', `${slice}/${journey}`);
+    }
+  }
+});

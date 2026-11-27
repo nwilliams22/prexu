@@ -113,14 +113,12 @@ PREXU_JOURNEY_DOWNLOAD_QUEUE=1 PREXU_JOURNEY_PROGRESS=1 \
 ```
 
 This mode uses the same isolated native profile and PIN sign-in, then downloads
-**Prexu QA Lossless Surround** (13) and **Prexu QA Surround** (3). These
-existing synthetic Movies fixtures exceed 50 MB so navigation does not outlast
-the transfer; the smaller season episodes can finish before Pause appears. It clicks the
-real detail and Downloads controls, pauses both, moves the second item up,
-resumes, checks both completion metadata and native file presence, then deletes
-both through the UI and checks native file absence. It also
-changes the Settings concurrency selector from 1 to 3 and back. The second fixture is selected through real in-app search, preserving the live
-queue context. This mode does not claim process-restart acceptance.
+Season 1 episodes 1 and 2 from **Prexu QA Seasons** (show 17). It pauses
+both using the real Downloads controls, reorders the second item first, restarts
+the native process, and checks persisted order, paused state and partial bytes.
+It resumes, verifies completion and native file presence, checks show/season
+grouping, and deletes both files through the UI. The concurrency selector is
+checked at its default 1, set to 2 for transfers, then changed to 3 and back to 1.
 Controls must be visible and unobscured before the driver clicks them. This mode
 requires `xdotool` and sizes the real app to 1900×1000 on a 1920×1080 display.
 Screenshots of the paused/reordered queue and completed files are required.
@@ -428,3 +426,45 @@ the service suggestion remains visible, and clicks it before 300 ms elapses.
 It checks `/item/17` after 500 ms and captures `search-detail.png`. No playback
 or fixture mutation is performed. Build the selected native executable from the
 revision being verified; the report's binary hash alone does not establish it.
+
+## Downloads design gate (2026-11-25)
+
+The full runner also requires four sequential desktop Downloads slices:
+
+```sh
+PREXU_JOURNEY_APP=/path/to/built/debug/prexu \
+PREXU_JOURNEY_SCREENSHOTS=/path/to/evidence/screenshots \
+PREXU_JOURNEY_REPORT=/path/to/evidence/full.json \
+PREXU_JOURNEY_PROGRESS=1 node scripts/real-journeys/full.mjs
+```
+
+Build the native binary from the checkout being tested. Port 1420 and the QA
+accounts must be idle; do not reuse another run's server or test session. The
+runner clears slice-selection overrides, gives each slice its own screenshot
+directory, and rejects missing, duplicate, or non-PASS required rows.
+
+- `PREXU_JOURNEY_DOWNLOAD_QUEUE=1`: real QA season downloads, individual/all
+  pause/resume, queue reorder, a **process restart** preserving paused order and
+  byte counts (at least one partial file must be nonempty), completion, TV
+  show/season grouping and collapse/expand, delete-confirmation cancellation,
+  file deletion, and concurrency Settings values 2, 3 and 1.
+- `PREXU_JOURNEY_DOWNLOAD_STORAGE=1`: storage summary and bulk-season warning
+  cancellation. Uses the existing debug-only 1-byte free-space override; this
+  exercises the warning path, not a physically full disk.
+- `PREXU_JOURNEY_DOWNLOAD_MOVE=1`: real native folder picker, move confirmation,
+  verified destination, Open folder dispatch, playback from the moved file, and
+  removal of the isolated profile including both download locations.
+- `PREXU_JOURNEY_DOWNLOAD_CLEANUP=1`: real QA HEVC8 download, Movies grouping,
+  Settings default off, watched playback, current-session retention, enabled
+  deletion after process relaunch, and disabled retention after another relaunch.
+  The prior watched flag and resume offset are restored and checked.
+
+For a focused diagnosis, set exactly one flag above and run `native.mjs` with
+the same app, screenshot, report and protected credential variables. A focused
+pass does not replace the full gate. Offline playback and the missing-local-file
+error remain required in the existing native slice. The 24-hour cleanup branch
+is covered by the eligibility unit tests; this gate exercises the next-launch
+branch without changing the clock or seeding download records.
+
+Attach the aggregate JSON and screenshots to the task. Never attach a profile,
+raw account responses or token-bearing app logs.
