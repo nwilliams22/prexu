@@ -47,6 +47,10 @@ async function run() {
     await sleep(500);
     if (location.pathname !== '/item/17') throw new Error('route-overridden');
     await until(() => document.querySelector('main')?.textContent.includes('Prexu QA Seasons'));
+    const resized = await fetch(`${endpoint}/resize`, { method: 'POST' });
+    if (!resized.ok) throw new Error('resize');
+    await sleep(2000);
+    if (location.pathname !== '/item/17') throw new Error('route-overridden');
     const response = await fetch(`${endpoint}/screenshot`, { method: 'POST', body: 'search-detail' });
     if (!response.ok) throw new Error('screenshot');
     await emit(stage);

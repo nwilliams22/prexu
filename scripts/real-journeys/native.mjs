@@ -183,12 +183,12 @@ try {
             if (watchComparisons.length < 20 && JSON.stringify(watchComparisons.at(-1)) !== JSON.stringify(watchComparison)) watchComparisons.push(watchComparison);
             res.end(JSON.stringify({ offset: item.viewOffset || 0, watched: Boolean(item.viewCount) }));
             return;
-          } else if ((queueMode || storageMode) && req.url === `${endpoint}/resize`) {
+          } else if ((queueMode || storageMode || searchMode) && req.url === `${endpoint}/resize`) {
             const env = { PATH: process.env.PATH, DISPLAY: `:${displayNumber}` };
             const windows = spawnSync('xdotool', ['search', '--onlyvisible', '--name', '^Prexu$'], { env, encoding: 'utf8', timeout: 1000 });
             const windowId = windows.stdout?.trim().split('\n').at(-1);
             if (!/^\d+$/.test(windowId || '')) throw new Error('event');
-            const resized = spawnSync('xdotool', ['windowsize', windowId, '1900', '1000', 'windowmove', windowId, '0', '0'], { env, stdio: 'ignore', timeout: 1000 });
+            const resized = spawnSync('xdotool', ['windowsize', windowId, searchMode ? '1200' : '1900', searchMode ? '760' : '1000', 'windowmove', windowId, '0', '0'], { env, stdio: 'ignore', timeout: 1000 });
             if (resized.status !== 0) throw new Error('event');
           } else if ((queueMode || storageMode || searchMode) && req.url === `${endpoint}/screenshot`) {
             if (!['search-detail', 'paused', 'complete', 'diagnostic', 'storage-summary', 'storage-warning', 'move-confirm', 'move-complete', 'move-playback'].includes(body) || !displayNumber || !process.env.PREXU_JOURNEY_SCREENSHOTS) throw new Error('event');
