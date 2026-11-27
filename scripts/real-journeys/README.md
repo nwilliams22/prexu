@@ -123,7 +123,11 @@ Controls must be visible and unobscured before the driver clicks them. This mode
 requires `xdotool` and sizes the real app to 1900×1000 on a 1920×1080 display.
 Screenshots of the paused/reordered queue and completed files are required.
 The profile and downloads are removed during cleanup; attach the JSON and PNGs
-to the task. No personal library or seeded download records are used.
+to the task. No personal library or seeded download records are used. A run-owned loopback
+proxy forwards only to the selected QA server and limits file response speed,
+so the first pause occurs after bytes arrive. It preserves the native Range
+header and the upstream 206 response; a positive resume offset is required after
+restart. It never fabricates media bytes or metadata.
 
 
 For the native paused-load backend contract, use

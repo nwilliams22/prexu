@@ -1,9 +1,10 @@
 /** Actual desktop UI actions; only read-only storage/file checks use service imports. */
-import { getAuth, getServer, saveRelayUrl, getDownloadItems } from '/src/services/storage/index.ts';
+import { getAuth, getServer, saveRelayUrl, getDownloadItems, saveServer } from '/src/services/storage/index.ts';
 import { getLocalFilePath } from '/src/services/downloads.ts';
 const endpoint = __JOURNEY_ENDPOINT__;
 const fixtures = __QUEUE_FIXTURES__;
 const restarted = __JOURNEY_RESTARTED__;
+const queueProxy = __QUEUE_PROXY__;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, timeout = 60000, interval = 20) {
   const end = Date.now() + timeout;
@@ -29,18 +30,19 @@ async function nav(path) {
   await until(() => visible(document.querySelector(`a[href="${path}"]`)));
   document.querySelector(`a[href="${path}"]`).click();
 }
-async function openAndPauseQueue(label = 'Pause all') {
+async function openAndPauseQueue(label = 'Pause all', afterBytes = false) {
   // Act as soon as the real control mounts; tiny QA files can finish between polls.
-  let paused = false;
+  let paused = false, hasBytes = !afterBytes;
+  const progress = setInterval(async () => { hasBytes ||= (await getDownloadItems()).some(d => d.status === 'downloading' && d.bytesDownloaded > 0); }, 20);
   const observer = new MutationObserver(() => {
     const control = button(label);
-    if (control && !paused) { paused = true; control.click(); }
+    if (control && !paused && hasBytes) { paused = true; control.click(); }
   });
   observer.observe(document.body, { childList: true, subtree: true, attributes: true });
   try {
     await nav('/downloads');
     await until(() => paused);
-  } finally { observer.disconnect(); }
+  } finally { observer.disconnect(); clearInterval(progress); }
 }
 async function emit(journey, status = 'PASS') {
   await fetch(endpoint, { method: 'POST', body: JSON.stringify({ journey, status }) });
@@ -72,6 +74,7 @@ async function run() {
       }, 60000, 200);
       await emit(stage);
       await emit('native-login');
+      await saveServer({ ...await getServer(), uri: queueProxy });
       localStorage.setItem('download-queue-login', 'yes');
       location.assign(`/item/${fixtures[0].key}`);
       return;
@@ -88,7 +91,7 @@ async function run() {
     await until(() => location.pathname === `/item/${fixtures[0].key}` && button('Download for offline'));
     stage = 'download-queue-paused';
     await click('Download for offline');
-    await openAndPauseQueue(`Pause ${fixtures[0].title}`);
+    await openAndPauseQueue(`Pause ${fixtures[0].title}`, true);
     await until(async () => (await getDownloadItems()).some(d => d.ratingKey === fixtures[0].key && d.status === 'paused'));
     await emit('download-queue-first-paused');
     // Navigate within the season. Episode titles are not global search results,

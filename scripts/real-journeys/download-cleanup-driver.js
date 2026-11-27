@@ -57,7 +57,7 @@ async function run() {
    await nav('/downloads');
    if (phase === 'prepare-on') {
     stage = 'download-movie-grouping';
-    await until(() => [...document.querySelectorAll('h3')].some(h => h.textContent.trim() === 'Movies'));
+    await until(() => [...document.querySelectorAll('h3')].some(h => h.textContent.trim() === 'Movies (1)'));
     if (!document.body.textContent.includes('Prexu QA HEVC8') || document.querySelector('section[aria-label="Prexu QA HEVC8"]')) throw Error('movie-group');
     await emit(stage);
    }
@@ -81,6 +81,6 @@ async function run() {
   await until(present); await sleep(2000);
   if(!document.body.textContent.includes('Prexu QA HEVC8')) throw Error('not-listed');
   await shot('disabled-retained'); await emit(stage); await emit('native-driver');
- } catch { await shot('failure'); await emit(stage,'FAIL'); await emit('native-driver','FAIL'); }
+ } catch { await shot('failure').catch(() => {}); await emit(stage,'FAIL'); await emit('native-driver','FAIL'); }
 }
 void run();

@@ -1,5 +1,6 @@
 /** Linux native login slice. Raw app output and credentials are never exported. */
 import { createServer } from 'vite';
+import { downloadProxy } from './download-proxy.mjs';
 import { pinCode, validEvent } from './native-contract.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdtemp, mkdir, writeFile, readFile, rm, lstat } from 'node:fs/promises';
@@ -18,7 +19,8 @@ const queueOnly = process.env.PREXU_JOURNEY_QUEUE_ONLY === '1';
 const storageMode = process.env.PREXU_JOURNEY_DOWNLOAD_STORAGE === '1';
 const moveMode = process.env.PREXU_JOURNEY_DOWNLOAD_MOVE === '1';
 const queueMode = moveMode || process.env.PREXU_JOURNEY_DOWNLOAD_QUEUE === '1';
-let queueFixtures;
+let queueFixtures, queueProxy, queueProxyUrl;
+const resumedRanges = [];
 let displayNumber;
 const rows = [];
 const watchComparisons = [];
@@ -109,6 +111,12 @@ try {
       .sort((a, b) => a.index - b.index).map(item => ({ key: item.ratingKey, title: item.title, seasonKey: item.parentRatingKey, offset: item.viewOffset || 0, watched: Boolean(item.viewCount) }));
     if (queueFixtures.length !== 2 || !queueFixtures[0].seasonKey) throw new Error('fixtures');
   }
+  if (queueMode && !moveMode) {
+    // Real QA bytes, bounded to a repeatable speed so Pause can interrupt a
+    // nonempty transfer. No metadata, file contents, or download state is seeded.
+    queueProxy = await downloadProxy({ uri: server.uri, token: server.token, onResume: offset => resumedRanges.push(offset) });
+    queueProxyUrl = queueProxy.url;
+  }
   root = await mkdtemp(`${tmpdir()}/prexu-native-journey-`);
   await mkdir(`${root}/bin`);
   const nonce = randomBytes(24).toString('hex');
@@ -124,7 +132,7 @@ try {
         try {
           if (req.url === `${endpoint}/driver.js` && req.method === 'GET') {
             res.setHeader('Content-Type', 'text/javascript');
-            res.end((await readFile(new URL(cleanupMode ? './download-cleanup-driver.js' : searchMode ? './search-selection-driver.js' : moveMode ? './download-move-driver.js' : storageMode ? './download-storage-driver.js' : pausedMode ? './paused-load-driver.js' : queueMode ? './download-queue-driver.js' : './native-driver.js', import.meta.url), 'utf8')).replace('__MOVE_DIRECTORY__', JSON.stringify(`${root}/moved`)).replace('__JOURNEY_ENDPOINT__', JSON.stringify(endpoint)).replace('__QUEUE_FIXTURES__', JSON.stringify(queueFixtures)).replace('__JOURNEY_BASELINE__', JSON.stringify(baseline)).replace('__JOURNEY_OFFLINE_ONLY__', JSON.stringify(offlineOnly)).replace('__JOURNEY_QUEUE_ONLY__', JSON.stringify(queueOnly)).replace('__JOURNEY_RESTARTED__', JSON.stringify(restarted)));
+            res.end((await readFile(new URL(cleanupMode ? './download-cleanup-driver.js' : searchMode ? './search-selection-driver.js' : moveMode ? './download-move-driver.js' : storageMode ? './download-storage-driver.js' : pausedMode ? './paused-load-driver.js' : queueMode ? './download-queue-driver.js' : './native-driver.js', import.meta.url), 'utf8')).replace('__QUEUE_PROXY__', JSON.stringify(queueProxyUrl)).replace('__MOVE_DIRECTORY__', JSON.stringify(`${root}/moved`)).replace('__JOURNEY_ENDPOINT__', JSON.stringify(endpoint)).replace('__QUEUE_FIXTURES__', JSON.stringify(queueFixtures)).replace('__JOURNEY_BASELINE__', JSON.stringify(baseline)).replace('__JOURNEY_OFFLINE_ONLY__', JSON.stringify(offlineOnly)).replace('__JOURNEY_QUEUE_ONLY__', JSON.stringify(queueOnly)).replace('__JOURNEY_RESTARTED__', JSON.stringify(restarted)));
             return;
           }
           if (req.method !== 'POST') throw new Error('method');
@@ -272,6 +280,8 @@ finally {
     try { globalThis.process.kill(-process.pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') { add('process-cleanup-' + (['EPERM','EINVAL'].includes(error.code) ? error.code : 'error'), 'FAIL'); clean = false; } }
   }
   await Promise.all(children.map(p => p.exitCode !== null || p.signalCode !== null ? Promise.resolve() : new Promise(resolve => { p.once('close', resolve); setTimeout(resolve, 3000).unref(); })));
+  if (queueProxy) await queueProxy.close();
+  if (queueMode && !moveMode && rows.some(row => row.journey === 'download-queue-complete' && row.status === 'PASS')) add('download-queue-range-resume', resumedRanges.length ? 'PASS' : 'FAIL');
   try { await vite?.close(); } catch { clean = false; }
   if (server && baseline && app && !queueMode && !storageMode && !searchMode) {
     try {
