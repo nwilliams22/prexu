@@ -10,7 +10,7 @@ use libmpv2::Mpv;
 use objc2::encode::{Encode, Encoding};
 use objc2::runtime::AnyObject;
 use objc2::{class, msg_send, MainThreadMarker};
-use tauri::{AppHandle, Emitter, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -87,6 +87,7 @@ struct Compositor {
     timer: *mut c_void,
     dimensions: Option<(i32, i32)>,
     frames: u64,
+    fullscreen: Option<bool>,
 }
 
 pub fn engine_failure_reason() -> Option<String> {
@@ -170,6 +171,7 @@ pub fn install(window: &WebviewWindow, app: AppHandle) {
                 timer: std::ptr::null_mut(),
                 dimensions: None,
                 frames: 0,
+                fullscreen: None,
             })
         }
     })();
@@ -198,6 +200,14 @@ fn on_main(
     .map_err(|e| format!("Cannot dispatch compositor operation: {e}"))?;
     rx.recv()
         .map_err(|_| "Compositor operation was cancelled".to_string())?
+}
+
+/// Apply the inset in AppKit logical points, before reporting the transition ready.
+pub(crate) fn apply_margins_now(app: &AppHandle) -> Result<(), String> {
+    on_main(app, || COMPOSITOR.with(|slot| {
+        let slot = slot.try_borrow().map_err(|_| "macOS compositor is busy")?;
+        slot.as_ref().ok_or("macOS compositor is not installed")?.apply_margins()
+    }))
 }
 
 pub fn attach_mpv(app: &AppHandle, mpv: Arc<Mpv>) -> Result<(), String> {
@@ -306,7 +316,42 @@ extern "C" fn pump(_: *mut c_void, _: *mut c_void) {
 }
 
 impl Compositor {
+    fn apply_margins(&self) -> Result<(), String> {
+        let mpv = self.mpv.as_ref().ok_or("macOS player is not attached")?;
+        let bounds: Rect = unsafe { msg_send![self.view, bounds] };
+        let ratios = self.app.state::<super::PlayerState>()
+            .margin_ratios(bounds.size.width as i32, bounds.size.height as i32)
+            .unwrap_or((0.0, 0.0, 0.0, 0.0));
+        let (left, right, top, bottom) = ratios;
+        for (name, value) in [
+            ("video-margin-ratio-left", left), ("video-margin-ratio-right", right),
+            ("video-margin-ratio-top", top), ("video-margin-ratio-bottom", bottom),
+        ] {
+            mpv.set_property(name, value).map_err(|e| format!("{name}: {e}"))?;
+        }
+        let normal = ratios == (0.0, 0.0, 0.0, 0.0);
+        let scale = if normal { 1.0 } else { (1.0 - top - bottom).clamp(0.01, 1.0) };
+        mpv.set_property("sub-scale", scale).map_err(|e| e.to_string())?;
+        mpv.set_property("sub-use-margins", normal).map_err(|e| e.to_string())?;
+        self.dirty.store(true, Ordering::Release);
+        log::debug!("[player:cmd] macOS margins {ratios:?}, logical size {}x{}", bounds.size.width, bounds.size.height);
+        Ok(())
+    }
+
     fn frame(&mut self) -> Result<(), String> {
+        // Observe AppKit rather than assuming set_fullscreen completed inline.
+        // This also catches native green-button and Escape transitions.
+        let window: *mut AnyObject = unsafe { msg_send![self.view, window] };
+        if !window.is_null() {
+            let style: usize = unsafe { msg_send![window, styleMask] };
+            let fullscreen = style & (1 << 14) != 0; // NSWindowStyleMaskFullScreen
+            if self.fullscreen != Some(fullscreen) {
+                self.fullscreen = Some(fullscreen);
+                log::info!("[player:cmd] macOS native fullscreen actual={fullscreen}");
+                let _ = self.app.emit("player://fullscreen", fullscreen);
+            }
+        }
+
         let Some(render) = &self.render else {
             return Ok(());
         };
@@ -320,6 +365,9 @@ impl Compositor {
             return Ok(());
         };
         let resized = self.dimensions != Some(size);
+        if resized {
+            self.apply_margins()?;
+        }
         if !self.dirty.swap(false, Ordering::AcqRel) && !resized {
             return Ok(());
         }
@@ -342,6 +390,7 @@ impl Compositor {
         Ok(())
     }
     fn detach(&mut self) {
+        self.fullscreen = None;
         unsafe {
             if !self.timer.is_null() {
                 CFRunLoopTimerInvalidate(self.timer);

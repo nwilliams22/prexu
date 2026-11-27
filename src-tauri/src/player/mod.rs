@@ -7,8 +7,6 @@
 //!   - **Linux**: the mpv render API compositing a `GtkGLArea` under the
 //!     transparent WebKitWebView (`linux_compositor`, prexu-axj4.3).
 
-#[cfg(target_os = "macos")]
-pub(crate) const MACOS_UNAVAILABLE_REASON: &str = "macOS native windowing parity is not implemented";
 
 #[cfg(target_os = "macos")]
 pub mod macos_compositor;
@@ -221,7 +219,7 @@ pub struct PlayerState {
     /// whatever size the pop-out was at enter time caused stale-rect drift
     /// and WARN spam on every resize once the window no longer matched that
     /// frozen size.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     linux_margin: Mutex<Option<MarginState>>,
     /// Notification primitive shared between the window-event handler and the
     /// long-lived trailing-edge flusher task (prexu-bgz.24). The handler calls
@@ -320,13 +318,14 @@ pub struct MinimizeState {
 /// of bug structurally impossible for the pop-out case: there is no stored
 /// pixel rect to go stale, and no allocation-dependent math to warn about.
 #[derive(Debug, Clone, Copy)]
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) enum MarginState {
     Minimize(MinimizeState),
+    #[cfg(target_os = "linux")]
     PopoutBottomRatio(f64),
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl MarginState {
     /// Resolve to the four `video-margin-ratio-*` fractions (left, right,
     /// top, bottom) for the given LIVE GtkGLArea logical allocation. Pure —
@@ -344,6 +343,7 @@ impl MarginState {
                 window_logical_h,
                 *mini,
             ),
+            #[cfg(target_os = "linux")]
             MarginState::PopoutBottomRatio(ratio) => (0.0, 0.0, 0.0, *ratio),
         }
     }
@@ -386,7 +386,7 @@ impl PlayerState {
             #[cfg(target_os = "windows")]
             pending_focus_reassert: AtomicBool::new(false),
             timeline_ctx: Mutex::new(None),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             linux_margin: Mutex::new(None),
             #[cfg(target_os = "windows")]
             flusher_notify: Arc::new(Notify::new()),
@@ -455,7 +455,7 @@ impl PlayerState {
     /// bottom-ratio, prexu-axj4.5 / prexu-fgrt) so a fresh `ensure_init`
     /// after an exit-while-minimized/popped-out does not carry stale
     /// `video-margin-ratio-*` values into the next playback session.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn clear_minimize_snapshot(&self) -> bool {
         match self.linux_margin.lock() {
             Ok(mut g) => {
@@ -481,7 +481,7 @@ impl PlayerState {
     /// was active — this is also how `commands::popout` clears its OWN
     /// `PopoutBottomRatio` margin on exit (pop-out and minimize are mutually
     /// exclusive, see both modules' enter commands).
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn set_minimize(&self, state: Option<MinimizeState>) -> Result<(), String> {
         self.linux_margin
             .lock()
@@ -496,7 +496,7 @@ impl PlayerState {
     /// `player_enter_popout`'s mutual-exclusion guard). To check "is ANY
     /// margin active, regardless of variant" instead, use
     /// `margin_ratios(..).is_some()`.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", all(test, target_os = "macos")))]
     pub(crate) fn get_minimize(&self) -> Option<MinimizeState> {
         self.linux_margin.lock().ok().and_then(|g| match *g {
             Some(MarginState::Minimize(mini)) => Some(mini),
@@ -523,7 +523,7 @@ impl PlayerState {
     /// point `linux_compositor` uses (`apply_margins_now` and the GLArea
     /// `resize` handler) so it never has to know which kind of margin is in
     /// effect.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn margin_ratios(&self, window_logical_w: i32, window_logical_h: i32) -> Option<(f64, f64, f64, f64)> {
         let mini = self.linux_margin.lock().ok().and_then(|g| *g)?;
         Some(mini.ratios(window_logical_w, window_logical_h))
@@ -792,7 +792,6 @@ impl PlayerState {
         // mini inset, so a replay launches in mini even though the React
         // isMinimized flag was reset on exit. Cleared even on the "nothing to
         // destroy" path.
-        #[cfg(any(target_os = "windows", target_os = "linux"))]
         self.clear_minimize_snapshot();
 
         // Abort the long-lived trailing-edge flusher task (prexu-bgz.24).

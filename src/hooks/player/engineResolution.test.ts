@@ -238,13 +238,13 @@ describe("SUPPORTS_PLAYER_MINIMIZE / SUPPORTS_PLAYER_POPOUT platform matrix", ()
     expect(mod.IS_LINUX_NATIVE_PLAYER).toBe(false);
   });
 
-  it("macOS native capability keeps HTML5 default and windowing disabled", async () => {
+  it("macOS keeps HTML5 default, enables minimize and gates popout", async () => {
     const mod = await loadEngineResolution(
       true,
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
     );
     expect(mod.IS_NATIVE_PLAYER_PLATFORM).toBe(true);
-    expect(mod.SUPPORTS_PLAYER_MINIMIZE).toBe(false);
+    expect(mod.SUPPORTS_PLAYER_MINIMIZE).toBe(true);
     expect(mod.SUPPORTS_PLAYER_POPOUT).toBe(false);
     expect(mod.IS_LINUX_NATIVE_PLAYER).toBe(false);
     for (const playerEngine of ["auto", "native", "html5"] as const) {

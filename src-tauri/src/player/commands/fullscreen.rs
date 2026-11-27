@@ -23,6 +23,8 @@ pub async fn player_set_fullscreen(
     state: State<'_, PlayerState>,
 ) -> Result<(), String> {
     log::info!("[player:cmd] set_fullscreen {}", fullscreen);
+    #[cfg(target_os = "macos")]
+    log::info!("[player:cmd] fullscreen mode=native NSWindow");
     let main = app
         .get_webview_window("main")
         .ok_or_else(|| "main webview window not found".to_string())?;
@@ -75,9 +77,14 @@ pub async fn player_set_fullscreen(
     };
 
     #[cfg(target_os = "macos")]
-    let fs_result = main
-        .set_fullscreen(fullscreen)
-        .map_err(|e| format!("set_fullscreen failed: {}", e));
+    let fs_result = {
+        log::info!("[player:cmd] set_fullscreen: macOS native NSWindow fullscreen requested={fullscreen}");
+        let result = main.set_fullscreen(fullscreen)
+            .map_err(|e| format!("set_fullscreen failed: {e}"));
+        // AppKit animates the Space transition asynchronously. The compositor
+        // reports NSWindow state changes, including Escape and the green button.
+        result
+    };
 
     #[cfg(target_os = "windows")]
     let fs_result = {

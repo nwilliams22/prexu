@@ -166,3 +166,37 @@ engine every macOS user gets, whether or not they ever enable native.
 - `docs/adr-native-player-render-api.md` (Linux architecture mirrored).
 - `docs/adr-native-player-cross-platform.md` (macOS DEFER superseded).
 - prexu-duna.3 library-impact distribution (beads notes).
+
+## Windowing parity amendment (2026-11-27)
+
+macOS uses **native NSWindow fullscreen** through Tauri `set_fullscreen`,
+including the macOS Space transition. It does not simulate borderless fullscreen.
+The AppKit frame pump reports native fullscreen state changes to the frontend,
+including Escape and green-button transitions; the command logs the chosen mode.
+The video view and WKWebView remain children of the same window and resize together.
+
+In-window minimize shares Linux's `video-margin-ratio-*` calculation and stored
+inset. AppKit bounds are logical points, matching the frontend's CSS pixels;
+backing pixels are used only for rendering. The compositor reapplies the inset
+on drawable resize and restores subtitle scale/margin defaults on exit. Teardown
+clears the inset so it cannot leak into the next playback session.
+
+**Popout stays capability-gated for macOS v1.** `SUPPORTS_PLAYER_POPOUT` remains
+false on macOS, and direct IPC calls return an explicit unsupported error. Moving
+or morphing the window adds fullscreen, always-on-top and restore-state behavior
+that has not been validated on AppKit. This amendment does not claim those paths
+work. HTML5 remains the default; native playback remains opt-in.
+
+| Command | Windows | Linux | macOS |
+| --- | --- | --- | --- |
+| `player_set_fullscreen` | Tauri + host geometry sync | Tauri + GTK allocation | Native NSWindow + AppKit view allocation |
+| `player_enter_minimize` | Win32 host inset | mpv margins | Shared mpv margins in logical points |
+| `player_update_mini_geometry` | Host geometry update | Recompute margins | Recompute margins |
+| `player_exit_minimize` | Restore host | Clear margins | Clear margins and subtitle compensation |
+| `player_enter_popout` / `player_exit_popout` | Supported | Supported, compositor placement limits | Explicitly unsupported; UI gated |
+
+These are implementation decisions, not visual acceptance results. The Mac VM
+cannot create the required OpenGL 3.2 context. Native host logs and GL readback can
+verify rendering and geometry, but cannot prove WKWebView overlay visibility;
+that requires observation of the real desktop. Acceptance evidence is tracked in
+`prexu-ia6w.7`.

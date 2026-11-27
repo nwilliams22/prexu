@@ -27,6 +27,23 @@ use crate::player::{MinimizeCorner, MinimizeState, PlayerState};
 #[cfg(target_os = "windows")]
 use super::win32_monitor::resync_host;
 
+#[cfg(target_os = "linux")]
+fn apply_margins(app: &AppHandle) -> Result<(), String> {
+    crate::player::linux_compositor::apply_margins_now(app);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn clear_margins(app: &AppHandle) -> Result<(), String> {
+    crate::player::linux_compositor::clear_margins_now(app);
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+use crate::player::macos_compositor::apply_margins_now as apply_margins;
+#[cfg(target_os = "macos")]
+use crate::player::macos_compositor::apply_margins_now as clear_margins;
+
 const MINIMIZE_DEFAULT_PADDING: u32 = 16;
 
 /// Pure core: apply the optional-with-default IPC arguments and produce the
@@ -191,7 +208,7 @@ pub async fn player_exit_minimize(
 // main thread and blocks (with a timeout) until the properties are applied —
 // this keeps these commands synchronous like their Windows counterparts.
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[tauri::command]
 pub async fn player_enter_minimize(
     width: u32,
@@ -207,20 +224,19 @@ pub async fn player_enter_minimize(
     let _ = app.emit("player://host-window-busy", ());
     let new_state = compute_minimize_state(width, height, padding, corner);
     log::info!(
-        "[player:cmd] enter_minimize (linux) size={}x{} padding={} corner={:?}",
+        "[player:cmd] enter_minimize (render-api) size={}x{} padding={} corner={:?}",
         width, height, new_state.padding, new_state.corner
     );
-    state.set_minimize(Some(new_state))?;
-    crate::player::linux_compositor::apply_margins_now(&app);
+    let result = state.set_minimize(Some(new_state)).and_then(|()| apply_margins(&app));
     let _ = app.emit("player://host-window-ready", ());
-    Ok(())
+    result
 }
 
 /// Geometry-only update while already in minimize mode. Identical work to
 /// `player_enter_minimize` but WITHOUT the busy/ready event pair — see the
 /// Windows `player_update_mini_geometry` doc comment: per-tick drag/resize
 /// updates are not mode transitions and must not thrash body transparency.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[tauri::command]
 pub async fn player_update_mini_geometry(
     width: u32,
@@ -232,11 +248,11 @@ pub async fn player_update_mini_geometry(
 ) -> Result<(), String> {
     let new_state = compute_minimize_state(width, height, padding, corner);
     log::debug!(
-        "[player:cmd] update_mini_geometry (linux) size={}x{} padding={} corner={:?}",
+        "[player:cmd] update_mini_geometry (render-api) size={}x{} padding={} corner={:?}",
         width, height, new_state.padding, new_state.corner
     );
     state.set_minimize(Some(new_state))?;
-    crate::player::linux_compositor::apply_margins_now(&app);
+    apply_margins(&app)?;
     // Intentionally NO busy/ready emit here — matches the Windows contract.
     Ok(())
 }
@@ -244,22 +260,21 @@ pub async fn player_update_mini_geometry(
 /// Exit minimize mode: clear the stored inset and reset all four
 /// `video-margin-ratio-*` properties to 0.0 so mpv fills the whole GLArea
 /// again.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[tauri::command]
 pub async fn player_exit_minimize(
     app: AppHandle,
     state: State<'_, PlayerState>,
 ) -> Result<(), String> {
-    log::info!("[player:cmd] exit_minimize (linux)");
+    log::info!("[player:cmd] exit_minimize (render-api)");
     // Same busy/ready bracketing as enter_minimize above: restore is a
     // genuine mode transition, and the Windows exit path runs the pair via
     // resync_host. Without it useTransparentWindow never sees the
     // transition on Linux (prexu-7d3 contract).
     let _ = app.emit("player://host-window-busy", ());
-    state.set_minimize(None)?;
-    crate::player::linux_compositor::clear_margins_now(&app);
+    let result = state.set_minimize(None).and_then(|()| clear_margins(&app));
     let _ = app.emit("player://host-window-ready", ());
-    Ok(())
+    result
 }
 
 /// Fraction of a margin ratio (`video-margin-ratio-*`) beyond which the
@@ -268,7 +283,7 @@ pub async fn player_exit_minimize(
 /// than `1.0` so a degenerate request (window smaller than the requested
 /// rect + padding, or padding alone larger than the window) always leaves
 /// mpv with *some* visible video area instead of a fully collapsed one.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const MAX_MARGIN_RATIO: f64 = 0.99;
 
 /// One axis (width or height) of the margin computation. Returns
@@ -283,7 +298,7 @@ const MAX_MARGIN_RATIO: f64 = 0.99;
 /// degenerate case where the window is smaller than the requested rect plus
 /// padding — `far_side` is shrunk further so the pair never inverts or
 /// overlaps, and a `warn` is logged.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn axis_margins(total: f64, size: f64, padding: f64, axis: &str, corner: MinimizeCorner) -> (f64, f64) {
     let padding_side = (padding / total).clamp(0.0, MAX_MARGIN_RATIO);
     let far_side_raw = (total - size - padding) / total;
@@ -325,7 +340,7 @@ fn axis_margins(total: f64, size: f64, padding: f64, axis: &str, corner: Minimiz
 /// or overlap — worst case the video area collapses to a sliver rather than
 /// handing mpv a nonsensical negative or `>= 1.0` margin. Each occurrence is
 /// logged at `warn`.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) fn compute_margin_ratios(
     window_logical_w: i32,
     window_logical_h: i32,
@@ -493,7 +508,7 @@ mod tests {
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod linux_tests {
     use super::*;
 

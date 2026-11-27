@@ -30,7 +30,7 @@ export async function playerEnterPopOut(
   width?: number,
   height?: number,
 ): Promise<void> {
-  logger.info("player", "player_enter_popout", { corner, width, height });
+  logger.info("player:cmd", "player_enter_popout", { corner, width, height });
   await invoke("player_enter_popout", { corner, width, height });
 }
 
@@ -45,7 +45,7 @@ export async function playerEnterPopOut(
  * user-driven resize during pop-out is remembered for the next session.
  */
 export async function playerExitPopOut(): Promise<void> {
-  logger.info("player", "player_exit_popout");
+  logger.info("player:cmd", "player_exit_popout");
   await invoke("player_exit_popout");
 }
 
@@ -69,7 +69,7 @@ export async function playerEnterMinimize(
   padding?: number,
   corner?: MiniCorner,
 ): Promise<void> {
-  logger.info("player", "player_enter_minimize", { width, height, padding, corner });
+  logger.info("player:cmd", "player_enter_minimize", { width, height, padding, corner });
   await invoke("player_enter_minimize", { width, height, padding, corner });
 }
 
@@ -78,7 +78,7 @@ export async function playerEnterMinimize(
  * full WebView client area.
  */
 export async function playerExitMinimize(): Promise<void> {
-  logger.info("player", "player_exit_minimize");
+  logger.info("player:cmd", "player_exit_minimize");
   await invoke("player_exit_minimize");
 }
 

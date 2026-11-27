@@ -60,22 +60,9 @@ const IS_WINDOWS_PLATFORM =
 const IS_LINUX_PLATFORM =
   typeof navigator !== "undefined" && navigator.userAgent.includes("Linux");
 
-/**
- * In-window minimize / mini-player support — Windows AND Linux. Native
- * playback requires an actual mpv host window; the player_enter_minimize /
- * player_exit_minimize / player_update_mini_geometry commands are
- * registered in the Rust backend on both platforms as of prexu-axj4.5
- * (Linux brought up to parity with the Windows original from axj4.4 —
- * same command names/args). Gate every minimize affordance AND IPC call on
- * this constant so a platform lacking the Rust commands never invokes an
- * unregistered one.
- *
- * On Windows this is identical to the platform capability check, exactly
- * like the pre-split SUPPORTS_PLAYER_WINDOWING this replaces — Windows
- * behavior is therefore unchanged by construction.
- */
-export const SUPPORTS_PLAYER_MINIMIZE =
-  IS_NATIVE_PLAYER_PLATFORM && (IS_WINDOWS_PLATFORM || IS_LINUX_PLATFORM);
+/** In-window minimize uses a Win32 host inset or render-API video margins
+ * on Linux/macOS. The native engine alone consumes this capability. */
+export const SUPPORTS_PLAYER_MINIMIZE = IS_NATIVE_PLAYER_PLATFORM;
 
 /**
  * Pop-out (floating window) support — Windows and Linux native
@@ -91,7 +78,8 @@ export const SUPPORTS_PLAYER_MINIMIZE =
  * compositor-side); X11 has full Windows parity.
  *
  * Gate every pop-out affordance AND IPC call on this constant so
- * unsupported platforms never invoke an unregistered command.
+ * unsupported platforms never invoke an unregistered command. macOS v1 stays
+ * gated; see docs/adr-native-player-macos.md (windowing parity amendment).
  */
 export const SUPPORTS_PLAYER_POPOUT =
   IS_NATIVE_PLAYER_PLATFORM && (IS_WINDOWS_PLATFORM || IS_LINUX_PLATFORM);

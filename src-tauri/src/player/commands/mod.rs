@@ -7,7 +7,6 @@ pub mod playback;
 // WebView on one surface) so it insets mpv's own video area via the
 // `video-margin-ratio-*` properties instead — see `player::linux_compositor`.
 // Both platforms share the pure `compute_minimize_state` defaulting logic.
-#[cfg(any(target_os = "windows", target_os = "linux"))]
 pub mod minimize;
 
 // Pop-out (a floating, always-on-top mini window). Cross-platform since
@@ -23,7 +22,6 @@ pub mod win32_monitor;
 // in lib.rs continue to work without edits to the handler list.
 pub use fullscreen::*;
 pub use playback::*;
-#[cfg(any(target_os = "windows", target_os = "linux"))]
 pub use minimize::*;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 pub use popout::*;
