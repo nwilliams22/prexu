@@ -53,6 +53,7 @@ vi.mock("../hooks/usePlayer", () => ({
   }),
 }));
 
+const episodeEnd = vi.hoisted(() => ({ ended: false, next: null as { ratingKey: string; title: string } | null, load: vi.fn() }));
 const sharedControls = vi.hoisted(() => ({ togglePlay: vi.fn(), seek: vi.fn() }));
 const chromeState = vi.hoisted(() => ({ visible: true }));
 const watchState = vi.hoisted(() => ({ participants: [] as import("../types/watch-together").WatchParticipant[], resyncing: false, struggling: false, isInSession: false, isHost: false, catchingUp: false, lobby: { phase: "playback" as "playback" | "lobby", sessionId: "room", mediaTitle: "QA movie", mediaRatingKey: "123", mediaType: "movie", hostAway: false, participants: [] } }));
@@ -63,8 +64,8 @@ vi.mock("../hooks/useWatchTogether", () => ({
     syncStatus: "idle",
     syncTogglePlay: sharedControls.togglePlay,
     syncSeek: sharedControls.seek,
-    showNextEpisodePrompt: false,
-    loadNextEpisode: vi.fn(),
+    showNextEpisodePrompt: episodeEnd.ended,
+    loadNextEpisode: episodeEnd.load,
     leaveSession: vi.fn(),
   }),
 }));
@@ -125,7 +126,7 @@ vi.mock("../hooks/player/useQueueAutoPopulate", () => ({
 }));
 
 vi.mock("../hooks/player/useNextEpisodeDetection", () => ({
-  useNextEpisodeDetection: () => null,
+  useNextEpisodeDetection: () => episodeEnd.next,
 }));
 
 vi.mock("../hooks/player/usePlayerKeyboardShortcuts", () => ({
@@ -752,4 +753,25 @@ it("routes transport controls through shared playback actions", () => {
     expect(sharedControls.togglePlay).toHaveBeenCalledOnce();
     expect(sharedControls.seek).toHaveBeenCalledWith(30);
   } finally { watchState.isInSession = false; }
+});
+
+it("advances the host at EOF once next-episode metadata arrives without a confirmation prompt", () => {
+  watchState.isInSession = true;
+  watchState.isHost = true;
+  episodeEnd.ended = true;
+  episodeEnd.load.mockClear();
+  try {
+    const { rerender, queryByRole } = render(<MemoryRouter><Player ratingKey="18" offset={null} /></MemoryRouter>);
+    expect(episodeEnd.load).not.toHaveBeenCalled();
+    episodeEnd.next = { ratingKey: "19", title: "Next QA episode" };
+    rerender(<MemoryRouter><Player ratingKey="18" offset={null} /></MemoryRouter>);
+    expect(episodeEnd.load).toHaveBeenCalledExactlyOnceWith("19", "Next QA episode");
+    expect(queryByRole("alertdialog", { name: "Next episode" })).not.toBeInTheDocument();
+    episodeEnd.ended = false;
+    rerender(<MemoryRouter><Player ratingKey="19" offset={null} /></MemoryRouter>);
+    expect(episodeEnd.load).toHaveBeenCalledOnce();
+  } finally {
+    watchState.isInSession = false; watchState.isHost = false;
+    episodeEnd.ended = false; episodeEnd.next = null;
+  }
 });

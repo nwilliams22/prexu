@@ -40,7 +40,6 @@ import WatchTogetherMediaDetails from "../components/WatchTogetherMediaDetails";
 import WatchTogetherLobby from "../components/WatchTogetherLobby";
 import ParticipantOverlay from "../components/ParticipantOverlay";
 import SyncIndicator from "../components/SyncIndicator";
-import NextEpisodePrompt from "../components/NextEpisodePrompt";
 import ErrorOverlay from "../components/player/ErrorOverlay";
 import PopoutDragStrip from "../components/player/PopoutDragStrip";
 import PopoutExitButton from "../components/player/PopoutExitButton";
@@ -579,6 +578,14 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
     ratingKey,
   );
 
+  // The host alone advances the group. The relay resets readiness and both
+  // clients prepare the new episode behind the shared lobby before starting.
+  useEffect(() => {
+    if (wt.showNextEpisodePrompt && wt.isHost && nextEp) {
+      wt.loadNextEpisode(nextEp.ratingKey, nextEp.title);
+    }
+  }, [wt.showNextEpisodePrompt, wt.isHost, wt.loadNextEpisode, nextEp]);
+
   // Keyboard shortcuts overlay
   const [showShortcuts, setShowShortcuts] = useState(false);
   const toggleShortcuts = useCallback(() => setShowShortcuts((v) => !v), []);
@@ -883,18 +890,6 @@ function Player({ ratingKey, offset, watchTogether }: PlayerProps) {
         <ParticipantOverlay
           participants={wt.participants}
           visible={chromeVisible}
-        />
-      )}
-
-      {/* Next episode prompt (host only) */}
-      {wt.showNextEpisodePrompt && wt.isHost && nextEp && (
-        <NextEpisodePrompt
-          nextEpisodeTitle={nextEp.title}
-          participantCount={wt.participants.length}
-          onContinue={() =>
-            wt.loadNextEpisode(nextEp.ratingKey, nextEp.title)
-          }
-          onEndSession={wt.leaveSession}
         />
       )}
 

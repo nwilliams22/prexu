@@ -52,26 +52,13 @@ export function useRemoteMediaSwitch(
     };
   }, [isInSession, sessionId, isHost, navigate]);
 
-  // Detect episode end for next-episode prompt (host only)
+  // Only actual EOF advances a session. Pausing or seeking near the end
+  // must not change what everyone is watching.
+  const { subscribeToEof } = player;
   useEffect(() => {
     if (!isInSession || !isHost) return;
-    if (player.duration <= 0) return;
-
-    // Check if we're near the end (within 1 second)
-    if (
-      player.currentTime > 0 &&
-      player.duration - player.currentTime < 1 &&
-      !player.isPlaying
-    ) {
-      setShowNextEpisodePrompt(true);
-    }
-  }, [
-    player.currentTime,
-    player.duration,
-    player.isPlaying,
-    isInSession,
-    isHost,
-  ]);
+    return subscribeToEof(() => setShowNextEpisodePrompt(true));
+  }, [isInSession, isHost, subscribeToEof]);
 
   const loadNextEpisode = useCallback(
     (ratingKey: string, title: string, mediaType: "movie" | "episode" = "episode") => {
