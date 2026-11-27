@@ -52,6 +52,7 @@ function SearchBar() {
 
   const navigateToSearch = useCallback(
     (q: string) => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
       closeDropdown();
       if (q.trim()) {
         navigate(`/search?q=${encodeURIComponent(q.trim())}`, { replace: true });
@@ -63,6 +64,7 @@ function SearchBar() {
 
   const navigateToItem = useCallback(
     (suggestion: SearchSuggestion) => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
       closeDropdown();
       const path =
         suggestion.type === "episode" || suggestion.type === "clip"

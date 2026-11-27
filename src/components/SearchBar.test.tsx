@@ -1,9 +1,22 @@
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { BrowserRouter } from "react-router-dom";
 
 vi.mock("../hooks/useAuth", () => ({
   useAuth: () => ({ server: null, authToken: null, activeUser: null }),
+}));
+
+vi.mock("../hooks/useSearchSuggestions", () => ({
+  useSearchSuggestions: () => ({
+    suggestions: [{ ratingKey: "17", title: "Prexu QA Seasons", type: "show", thumb: "" }],
+    isLoading: false,
+  }),
+}));
+
+vi.mock("../services/storage", () => ({
+  getRecentSearches: vi.fn(async () => ["Prexu QA Pattern"]),
+  addRecentSearch: vi.fn(async () => []),
+  removeRecentSearch: vi.fn(async () => []),
 }));
 
 import SearchBar from "./SearchBar";
@@ -77,5 +90,54 @@ describe("SearchBar", () => {
   it("renders a magnifying glass SVG icon", () => {
     const { container } = renderSearchBar();
     expect(container.querySelector("svg")).toBeInTheDocument();
+  });
+});
+
+
+describe("SearchBar pending navigation", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    window.history.replaceState(null, "", "/");
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    window.history.replaceState(null, "", "/");
+  });
+
+  it.each(["pointer", "keyboard"])("keeps the selected detail route after %s selection", async (method) => {
+    renderSearchBar();
+    const input = screen.getByRole("combobox");
+    fireEvent.change(input, { target: { value: "Seasons" } });
+    await act(() => vi.advanceTimersByTimeAsync(250));
+    if (method === "pointer") {
+      fireEvent.click(screen.getByRole("option", { name: /Seasons.*Show/ }));
+    } else {
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      fireEvent.keyDown(input, { key: "Enter" });
+    }
+    expect(window.location.pathname).toBe("/item/17");
+    await act(() => vi.advanceTimersByTimeAsync(500));
+    expect(window.location.pathname).toBe("/item/17");
+  });
+
+  it("keeps a clicked recent search instead of the pending typed query", async () => {
+    renderSearchBar();
+    const input = screen.getByRole("combobox");
+    await act(async () => { fireEvent.focus(input); });
+    fireEvent.change(input, { target: { value: "Prexu" } });
+    fireEvent.click(screen.getByRole("option", { name: /QA Pattern/ }));
+    expect(new URLSearchParams(window.location.search).get("q")).toBe("Prexu QA Pattern");
+    await act(() => vi.advanceTimersByTimeAsync(500));
+    expect(new URLSearchParams(window.location.search).get("q")).toBe("Prexu QA Pattern");
+  });
+
+  it("still navigates automatically when no result is selected", async () => {
+    renderSearchBar();
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "Seasons" } });
+    await act(() => vi.advanceTimersByTimeAsync(299));
+    expect(window.location.pathname).toBe("/");
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(window.location.pathname + window.location.search).toBe("/search?q=Seasons");
   });
 });

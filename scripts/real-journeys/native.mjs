@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
 
+const searchMode = process.env.PREXU_JOURNEY_SEARCH_SELECTION === '1';
 const pausedMode = process.env.PREXU_JOURNEY_PAUSED_LOAD === '1';
 const offlineOnly = process.env.PREXU_JOURNEY_OFFLINE_ONLY === '1';
 const queueOnly = process.env.PREXU_JOURNEY_QUEUE_ONLY === '1';
@@ -120,7 +121,7 @@ try {
         try {
           if (req.url === `${endpoint}/driver.js` && req.method === 'GET') {
             res.setHeader('Content-Type', 'text/javascript');
-            res.end((await readFile(new URL(moveMode ? './download-move-driver.js' : storageMode ? './download-storage-driver.js' : pausedMode ? './paused-load-driver.js' : queueMode ? './download-queue-driver.js' : './native-driver.js', import.meta.url), 'utf8')).replace('__MOVE_DIRECTORY__', JSON.stringify(`${root}/moved`)).replace('__JOURNEY_ENDPOINT__', JSON.stringify(endpoint)).replace('__QUEUE_FIXTURES__', JSON.stringify(queueFixtures)).replace('__JOURNEY_BASELINE__', JSON.stringify(baseline)).replace('__JOURNEY_OFFLINE_ONLY__', JSON.stringify(offlineOnly)).replace('__JOURNEY_QUEUE_ONLY__', JSON.stringify(queueOnly)).replace('__JOURNEY_RESTARTED__', JSON.stringify(restarted)));
+            res.end((await readFile(new URL(searchMode ? './search-selection-driver.js' : moveMode ? './download-move-driver.js' : storageMode ? './download-storage-driver.js' : pausedMode ? './paused-load-driver.js' : queueMode ? './download-queue-driver.js' : './native-driver.js', import.meta.url), 'utf8')).replace('__MOVE_DIRECTORY__', JSON.stringify(`${root}/moved`)).replace('__JOURNEY_ENDPOINT__', JSON.stringify(endpoint)).replace('__QUEUE_FIXTURES__', JSON.stringify(queueFixtures)).replace('__JOURNEY_BASELINE__', JSON.stringify(baseline)).replace('__JOURNEY_OFFLINE_ONLY__', JSON.stringify(offlineOnly)).replace('__JOURNEY_QUEUE_ONLY__', JSON.stringify(queueOnly)).replace('__JOURNEY_RESTARTED__', JSON.stringify(restarted)));
             return;
           }
           if (req.method !== 'POST') throw new Error('method');
@@ -189,8 +190,8 @@ try {
             if (!/^\d+$/.test(windowId || '')) throw new Error('event');
             const resized = spawnSync('xdotool', ['windowsize', windowId, '1900', '1000', 'windowmove', windowId, '0', '0'], { env, stdio: 'ignore', timeout: 1000 });
             if (resized.status !== 0) throw new Error('event');
-          } else if ((queueMode || storageMode) && req.url === `${endpoint}/screenshot`) {
-            if (!['paused', 'complete', 'diagnostic', 'storage-summary', 'storage-warning', 'move-confirm', 'move-complete', 'move-playback'].includes(body) || !displayNumber || !process.env.PREXU_JOURNEY_SCREENSHOTS) throw new Error('event');
+          } else if ((queueMode || storageMode || searchMode) && req.url === `${endpoint}/screenshot`) {
+            if (!['search-detail', 'paused', 'complete', 'diagnostic', 'storage-summary', 'storage-warning', 'move-confirm', 'move-complete', 'move-playback'].includes(body) || !displayNumber || !process.env.PREXU_JOURNEY_SCREENSHOTS) throw new Error('event');
             await mkdir(process.env.PREXU_JOURNEY_SCREENSHOTS, { recursive: true });
             const shot = spawnSync('import', ['-display', `:${displayNumber}`, '-window', 'root', resolve(process.env.PREXU_JOURNEY_SCREENSHOTS, `${body}.png`)], { stdio: 'ignore', timeout: 10000 });
             if (shot.status !== 0) throw new Error('event');
@@ -269,7 +270,7 @@ finally {
   }
   await Promise.all(children.map(p => p.exitCode !== null || p.signalCode !== null ? Promise.resolve() : new Promise(resolve => { p.once('close', resolve); setTimeout(resolve, 3000).unref(); })));
   try { await vite?.close(); } catch { clean = false; }
-  if (server && baseline && app && !queueMode && !storageMode) {
+  if (server && baseline && app && !queueMode && !storageMode && !searchMode) {
     try {
       const exclusive = await serviceIsExclusive();
       if (!exclusive) {
@@ -304,7 +305,7 @@ finally {
   try { if (root) { spawnSync('fusermount3', ['-u', `${root}/doc`], { stdio: 'ignore' }); await rm(root, { recursive: true, force: true, maxRetries: 3 }); } } catch (error) { add('profile-cleanup-' + (/^[A-Z_]+$/.test(error.code || '') ? error.code : 'error'), 'FAIL'); clean = false; }
   add('cleanup', clean ? 'PASS' : 'FAIL');
 }
-if (!pausedMode && !queueMode && !storageMode && !offlineOnly && rows.some(row => row.journey === 'native-login')) {
+if (!searchMode && !pausedMode && !queueMode && !storageMode && !offlineOnly && rows.some(row => row.journey === 'native-login')) {
   if (!rows.some(row => row.journey === 'native-queue-postplay')) add('queue-postplay', 'NOT_RUN');
   add('two-client-relay', 'NOT_RUN');
 }
@@ -318,7 +319,7 @@ if (queueMode && !moveMode && rows.some(row => row.journey === 'native-login')) 
     if (!rows.some(row => row.journey === journey)) add(journey, 'NOT_RUN');
   }
 }
-const report = { schema: 1, applicationSha256, fixtureDurationMs: baseline?.duration, watchComparison, watchComparisons, diagnostics, binarySourceRevision: 'not independently verified', scope: moveMode ? 'real desktop folder picker, verified move, open-folder dispatch and local playback from QA download' : storageMode ? 'real desktop storage summary and QA season warning/cancel; debug free-space override of 1 byte' : pausedMode ? 'real desktop native IPC paused preparation; lobby integration not exercised' : queueMode ? 'real desktop download queue controls with QA season episodes' : offlineOnly ? 'native offline slice; NOT full journey acceptance' : queueOnly ? 'native queue/offline slice; NOT full journey acceptance' : 'native single-user slice; NOT full journey acceptance', rows };
+const report = { schema: 1, applicationSha256, fixtureDurationMs: baseline?.duration, watchComparison, watchComparisons, diagnostics, binarySourceRevision: 'not independently verified', scope: searchMode ? 'real desktop rapid search suggestion selection; detail retained after 500 ms' : moveMode ? 'real desktop folder picker, verified move, open-folder dispatch and local playback from QA download' : storageMode ? 'real desktop storage summary and QA season warning/cancel; debug free-space override of 1 byte' : pausedMode ? 'real desktop native IPC paused preparation; lobby integration not exercised' : queueMode ? 'real desktop download queue controls with QA season episodes' : offlineOnly ? 'native offline slice; NOT full journey acceptance' : queueOnly ? 'native queue/offline slice; NOT full journey acceptance' : 'native single-user slice; NOT full journey acceptance', rows };
 const output = JSON.stringify(report, null, 2) + '\n';
 if (process.env.PREXU_JOURNEY_REPORT) await writeFile(process.env.PREXU_JOURNEY_REPORT, output, { mode: 0o600 });
 process.stdout.write(output);

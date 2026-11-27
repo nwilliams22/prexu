@@ -420,3 +420,11 @@ and no host pause during joining. It uses the same QA-only login, production
 relay, screenshots, and fixture restoration as the lobby runner. The movie
 fixture establishes shared transport behavior; episode navigation availability
 is additionally covered by the Player regression tests.
+
+For the search debounce regression, run `PREXU_JOURNEY_SEARCH_SELECTION=1`
+with `PREXU_JOURNEY_SCREENSHOTS` set to an evidence directory. The real desktop
+signs into the QA server, searches for Prexu QA Seasons, changes the query while
+the service suggestion remains visible, and clicks it before 300 ms elapses.
+It checks `/item/17` after 500 ms and captures `search-detail.png`. No playback
+or fixture mutation is performed. Build the selected native executable from the
+revision being verified; the report's binary hash alone does not establish it.
