@@ -87,7 +87,7 @@ try {
     throw new Error('busy');
   }
   stage = 'qa-fixture-state';
-  if (!queueMode && !storageMode && !offlineOnly && !baseline.watched) { server = undefined; baseline = undefined; throw new Error('fixture-state'); }
+  if (!searchMode && !queueMode && !storageMode && !offlineOnly && !baseline.watched) { server = undefined; baseline = undefined; throw new Error('fixture-state'); }
   if (moveMode) {
     stage = 'qa-download-fixtures';
     queueFixtures = [];
