@@ -1341,33 +1341,46 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/fixture", listener.local_addr().unwrap());
         let (tx, mut rx) = tokio::sync::watch::channel(false);
+        let (finished_tx, finished_rx) = std::sync::mpsc::channel::<()>();
         let server = std::thread::spawn(move || {
             let (mut socket, _) = listener.accept().unwrap();
             let mut request = [0; 2048];
             assert!(socket.read(&mut request).unwrap() > 0);
             socket
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabc")
+                .write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n")
                 .unwrap();
-            // Keep the body open so cancellation, rather than EOF, ends the transfer.
-            std::thread::sleep(std::time::Duration::from_millis(250));
-            tx.send(true).unwrap();
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            // No terminating chunk: keep the body open until transfer returns.
+            // Dropping the sender also releases the server if the assertion fails.
+            let _ = finished_rx.recv_timeout(std::time::Duration::from_secs(10));
         });
+        // With no Content-Length, this size hint makes receipt of abc emit
+        // progress while all three bytes are still in the 256 KiB write buffer.
+        // The body stays open, so only pause can end this transfer successfully.
         assert_eq!(
-            transfer(
-                &url,
-                "",
-                &part,
-                &final_path,
-                6,
-                &mut rx,
-                &|_, _, _, _, _| {}
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                transfer(
+                    &url,
+                    "",
+                    &part,
+                    &final_path,
+                    3,
+                    &mut rx,
+                    &|bytes, _, _, _, _| {
+                        if bytes == 3 {
+                            tx.send(true).unwrap();
+                        }
+                    }
+                )
             )
             .await
+            .expect("transfer must pause after receiving the first chunk")
             .unwrap(),
             None
         );
+        finished_tx.send(()).unwrap();
         server.join().unwrap();
+        assert!(!final_path.exists());
         assert_eq!(std::fs::read(&part).unwrap(), b"abc");
         let (url, server) = fixture_server("HTTP/1.1 206 Partial Content\r\nContent-Length: 3\r\nContent-Range: bytes 3-5/6\r\nConnection: close\r\n\r\ndef", true);
         let (_tx, mut rx) = tokio::sync::watch::channel(false);

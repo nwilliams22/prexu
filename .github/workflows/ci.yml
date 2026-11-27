@@ -305,6 +305,18 @@ jobs:
           MPV_SOURCE: ${{ github.workspace }}\src-tauri\ci\mpv
         run: cargo test --lib -- --skip angle_dlls_match_sha256_pins --skip angle_dlls_authenticode_valid
 
+      - name: Repeat download pause/resume synchronization test
+        working-directory: src-tauri
+        shell: pwsh
+        env:
+          MPV_SOURCE: ${{ github.workspace }}\src-tauri\ci\mpv
+        run: |
+          for ($iteration = 1; $iteration -le 20; $iteration++) {
+            Write-Host "Pause/resume iteration $iteration/20"
+            cargo test --lib downloads::tests::pause_flushes_buffer_and_second_transfer_resumes -- --exact
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
       # The real-libmpv teardown tests in player::events are #[ignore]d so the
       # ubuntu-22.04 linux-build job (system libmpv 1.x) does not run them and
       # fail with VersionMismatch (BAD-282). They need API 2.x, which this job
