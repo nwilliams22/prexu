@@ -30,7 +30,13 @@ jobs:
           set -euo pipefail
           test "$(uname -m)" = arm64
           brew install mpv pkg-config
+          # Keg-only dependencies (notably libarchive) are not in the default
+          # pkg-config search path even though Homebrew installed them.
           export PKG_CONFIG_PATH="$(brew --prefix mpv)/lib/pkgconfig"
+          for formula in $(brew deps mpv); do
+            prefix="$(brew --prefix "$formula")"
+            PKG_CONFIG_PATH="$PKG_CONFIG_PATH:$prefix/lib/pkgconfig:$prefix/share/pkgconfig"
+          done
           echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
           pkg-config --print-errors --modversion mpv
           pkg-config --print-errors --atleast-version=2.5.0 mpv
