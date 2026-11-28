@@ -24,6 +24,13 @@ test('QA proxy preserves bytes and Range responses and refuses alternate destina
     assert.deepEqual(Buffer.from(await response.arrayBuffer()), bytes.subarray(2));
     assert.deepEqual(ranges, [2]);
     assert.deepEqual(seen, [{ token: 'test-only', range: undefined }, { token: 'test-only', range: 'bytes=2-' }]);
+    const preflight = await fetch(proxy.url + '/identity', { method: 'OPTIONS', headers: {
+      Origin: 'http://localhost:1420', 'Access-Control-Request-Method': 'GET', 'Access-Control-Request-Headers': 'x-plex-token',
+    } });
+    assert.equal(preflight.status, 204);
+    assert.equal(preflight.headers.get('access-control-allow-origin'), 'http://localhost:1420');
+    assert.equal(preflight.headers.get('access-control-allow-headers'), 'x-plex-token');
+    assert.equal((await fetch(proxy.url, { headers: { Origin: 'https://example.invalid' } })).status, 403);
     assert.equal((await fetch(proxy.url, { method: 'POST' })).status, 400);
     const status = await new Promise((resolve, reject) => {
       const req = request(proxy.url, { path: '//example.invalid/steal' }, res => { res.resume(); resolve(res.statusCode); });

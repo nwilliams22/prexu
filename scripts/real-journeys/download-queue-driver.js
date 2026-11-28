@@ -96,6 +96,7 @@ async function run() {
     await click('Go back');
     await until(() => location.pathname === `/item/${fixtures[0].key}` && button('Download for offline'));
     stage = 'download-queue-paused';
+    if ((await getServer())?.uri !== queueProxy) throw new Error('proxy-not-selected');
     await click('Download for offline');
     await openAndPauseQueue(`Pause ${fixtures[0].title}`, true);
     await until(async () => (await getDownloadItems()).some(d => d.ratingKey === fixtures[0].key && d.status === 'paused'));

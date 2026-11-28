@@ -6,6 +6,20 @@ export async function downloadProxy({ uri, token, onResume, delayMs = 30 }) {
   const origin = new URL(uri).origin;
   const server = createServer(async (req, res) => {
     try {
+      // Reachability and metadata use browser fetch. Preserve the run-owned
+      // endpoint across auth startup without exposing it to arbitrary origins.
+      if (req.headers.origin) {
+        if (!['http://localhost:1420', 'http://127.0.0.1:1420'].includes(req.headers.origin)) {
+          res.writeHead(403).end(); return;
+        }
+        res.setHeader('Access-Control-Allow-Origin', req.headers.origin);
+        res.setHeader('Vary', 'Origin');
+        if (req.method === 'OPTIONS') {
+          res.setHeader('Access-Control-Allow-Methods', 'GET');
+          res.setHeader('Access-Control-Allow-Headers', req.headers['access-control-request-headers'] || '');
+          res.writeHead(204).end(); return;
+        }
+      }
       if (req.method !== 'GET' || !req.url?.startsWith('/') || req.url.startsWith('//')) {
         res.writeHead(400).end(); return;
       }
