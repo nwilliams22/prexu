@@ -54,7 +54,6 @@ async function run() {
       await until(() => document.body.textContent.includes('0 B used by downloads · 1 B free on download drive'));
       await shot('storage-summary');
       await emit(stage);
-      await emit('native-login');
       sessionStorage.setItem('download-storage-summary', 'yes');
       location.assign(`/item/${fixtures[0].seasonKey}`);
       return;
