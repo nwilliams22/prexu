@@ -32,7 +32,8 @@ jobs:
           brew install mpv pkg-config
           export PKG_CONFIG_PATH="$(brew --prefix mpv)/lib/pkgconfig"
           echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
-          pkg-config --atleast-version=2.5.0 mpv
+          pkg-config --print-errors --modversion mpv
+          pkg-config --print-errors --atleast-version=2.5.0 mpv
           mkdir -p candidate
           brew list --versions mpv $(brew deps mpv) > candidate/homebrew-versions.txt
           brew info --json=v2 --installed > candidate/homebrew-installed.json
