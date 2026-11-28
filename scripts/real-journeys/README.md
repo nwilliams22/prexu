@@ -52,7 +52,8 @@ slice reports as well as the required-row verdict. Attach it to the task;
   time. This covers repeated-item queue handoff, not distinct-item identity,
   playlist creation or episode chaining.
 - Native download checks wait for completion and a real local file, replace the
-  isolated server address with an unreachable loopback address, restart the app,
+  isolated server address with an unreachable loopback address and an unmatched
+  saved server identity (so discovery cannot repair the deliberate outage), restart the app,
   and verify local playback. Deleting the downloaded file must produce the
   explicit missing-file error. Download success alone is not offline acceptance.
 - `relay.mjs`: an isolated browser host and a real PIN-authenticated Tauri guest use

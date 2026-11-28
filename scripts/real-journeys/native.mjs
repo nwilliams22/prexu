@@ -149,7 +149,7 @@ try {
             await request('https://plex.tv/api/v2/pins/link', { method: 'PUT',
               headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Plex-Product': 'Plex Web' }, body: new URLSearchParams({ code }) });
             linked = true;
-            if (queueMode) add('download-pin-linked', 'PASS');
+            if (queueMode || storageMode) add('download-pin-linked', 'PASS');
           } else if (moveMode && req.url === `${endpoint}/choose-folder`) {
             await mkdir(`${root}/moved`, { recursive: true });
             await sleep(1500);
@@ -175,10 +175,10 @@ try {
             return;
           } else if (req.url === `${endpoint}/diagnostic`) {
             const input = JSON.parse(body);
-            if (!['native-login', 'native-queue-start', 'native-queue-eof', 'native-queue-postplay', 'native-offline'].includes(input.stage) ||
+            if (!['native-login', 'native-queue-start', 'native-queue-eof', 'native-queue-postplay', 'native-offline', 'native-offline-missing-file'].includes(input.stage) ||
                 !Number.isFinite(input.time) || input.time < 0 || input.time > 130 ||
-                Object.keys(input).sort().join(',') !== 'errorWords,invalidUrl,loadFailed,missing,nativeError,noMedia,retry,scheme,stage,time' ||
-                ['retry','missing','scheme','noMedia','loadFailed','invalidUrl'].some(key => typeof input[key] !== 'boolean')) throw new Error('event');
+                Object.keys(input).sort().join(',') !== 'errorWords,invalidUrl,loadFailed,missing,nativeError,noMedia,offlineEndpointSelected,retry,scheme,stage,time' ||
+                ['retry','missing','scheme','noMedia','loadFailed','invalidUrl','offlineEndpointSelected'].some(key => typeof input[key] !== 'boolean')) throw new Error('event');
             if (!Array.isArray(input.errorWords) || input.errorWords.some(word => !['mpv','file','invalid','permission','denied','download','resolve','stream','load','format','argument','fetch','network','http','empty','scheme','protocol','channel','closed','ipc','undefined','null','cannot','video','media','abort','timeout','connection','refused','failed','error'].includes(word))) throw new Error('event');
             if (!/^Raw\(-?\d+\)$/.test(input.nativeError) && !['none','other','InvalidUtf8','Null'].includes(input.nativeError)) throw new Error('event');
             diagnostics.push(input);

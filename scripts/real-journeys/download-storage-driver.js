@@ -3,9 +3,9 @@ import { getAuth, getServer, saveRelayUrl, getDownloadItems } from '/src/service
 const endpoint = __JOURNEY_ENDPOINT__;
 const fixtures = __QUEUE_FIXTURES__;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-async function until(fn, timeout = 60000) {
+async function until(fn, timeout = 60000, interval = 20) {
   const end = Date.now() + timeout;
-  while (Date.now() < end) { if (await fn()) return; await sleep(20); }
+  while (Date.now() < end) { if (await fn()) return; await sleep(interval); }
   throw new Error('deadline');
 }
 const button = label => [...document.querySelectorAll('button')].find(b => !b.disabled &&
@@ -35,7 +35,7 @@ async function run() {
       await click('Sign in with Plex');
       await emit(stage);
       stage = 'download-login-token';
-      await until(async () => Boolean((await getAuth())?.authToken), 120000);
+      await until(async () => Boolean((await getAuth())?.authToken), 120000, 200);
       await emit(stage);
       stage = 'download-login-server';
       await until(async () => {

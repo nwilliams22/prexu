@@ -28,7 +28,7 @@ async function watch(expectedMs) { return (await fetch(`${endpoint}/watch`, { me
 async function diagnose(stage, time) {
   const text = document.body.textContent;
   await fetch(`${endpoint}/diagnostic`, { method: 'POST', body: JSON.stringify({
-    stage, time, nativeError, retry: Boolean(button('Retry')), missing: text.includes('Downloaded file is missing or unavailable'),
+    stage, time, nativeError, offlineEndpointSelected: (await getServer())?.uri === 'http://127.0.0.1:1', retry: Boolean(button('Retry')), missing: text.includes('Downloaded file is missing or unavailable'),
     scheme: text.includes('URL scheme'), noMedia: text.includes('No playable media'),
     loadFailed: text.includes('Failed to load'), invalidUrl: text.includes('Invalid URL'),
     errorWords: ['mpv','file','invalid','permission','denied','download','resolve','stream','load','format','argument','fetch','network','http','empty','scheme','protocol','channel','closed','ipc','undefined','null','cannot','video','media','abort','timeout','connection','refused','failed','error'].filter(word => text.toLowerCase().includes(word)),
@@ -85,7 +85,9 @@ async function run() {
         await emit(stage, 'FAIL');
         if (button('Stop')) button('Stop').click();
       } finally { unlistenTime(); unlistenEof(); }
-      await saveServer({ ...await getServer(), uri: 'http://127.0.0.1:1' });
+      // An unmatched saved identity prevents live QA discovery from repairing
+      // the deliberate unreachable endpoint during offline acceptance.
+      await saveServer({ ...await getServer(), uri: 'http://127.0.0.1:1', clientIdentifier: 'qa-offline-unavailable' });
       localStorage.setItem('journey-offline', 'yes');
       await fetch(`${endpoint}/restart`, { method: 'POST', body: '' });
       return;
@@ -94,6 +96,8 @@ async function run() {
       if ((await getServer())?.uri !== 'http://127.0.0.1:1') throw new Error('offline-server-not-restored');
       if (location.pathname !== '/downloads') { location.assign('/downloads'); return; }
       stage = 'native-offline';
+      await until(() => button('Downloads'));
+      if ((await getServer())?.uri !== 'http://127.0.0.1:1') throw new Error('offline-endpoint-recovered');
       let time = 0;
       const unlisten = await listen('player://time-pos', event => { time = event.payload; });
       try {
@@ -188,7 +192,7 @@ async function run() {
       if (!downloaded || downloaded.fileSize <= 0 || downloaded.bytesDownloaded !== downloaded.fileSize || !await getLocalFilePath('2')) throw new Error('download');
       await emit(stage, 'PASS');
       if (offlineOnly) {
-        await saveServer({ ...await getServer(), uri: 'http://127.0.0.1:1' });
+        await saveServer({ ...await getServer(), uri: 'http://127.0.0.1:1', clientIdentifier: 'qa-offline-unavailable' });
         localStorage.setItem('journey-offline', 'yes');
         await fetch(`${endpoint}/restart`, { method: 'POST', body: '' });
         return;
@@ -201,7 +205,7 @@ async function run() {
       location.assign('/item/2');
     } finally { unlisten(); }
   } catch {
-    if (stage === 'native-login') await diagnose(stage, 0);
+    if (stage === 'native-login' || stage === 'native-offline-missing-file') await diagnose(stage, 0);
     await emit(stage, 'FAIL');
     await emit('native-driver', 'FAIL');
   }
