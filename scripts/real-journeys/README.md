@@ -59,7 +59,10 @@ slice reports as well as the required-row verdict. Attach it to the task;
   the two identities and a fresh loopback production relay. Plain browser
   playback invokes native APIs, so the guest uses the supported native path. Session creation and invite dispatch use
   the production app service; the guest's visible invite, Join Session and Stop
-  controls exercise UI reception, joining and leaving. Relay events and health
+  controls exercise UI reception, joining and leaving. The service-only browser
+  host creates a protocol-v2 lobby and sends the production Start now message
+  after the guest enters; two-native-client all-ready behavior is covered by
+  `lobby.mjs`. Relay events and health
   counts provide bounded independent comparisons. Explicit service disconnect,
   reload/reconnect, relay process failure and restart are checked against both
   app connection state and visible Settings connection status. Relay restart

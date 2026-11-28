@@ -136,7 +136,7 @@ try {
   // reception is checked in the actual app UI, without mocking playback hooks.
   stage = 'relay-invite';
   const sessionId = randomUUID().slice(0, 8).toUpperCase();
-  await host.evaluate(async sessionId => { const { watchSync } = await import('/src/services/watch-sync.ts'); watchSync.send({ type: 'create_session', session_id: sessionId, media_title: 'Prexu QA Pattern', media_rating_key: '2', media_type: 'movie' }); }, sessionId);
+  await host.evaluate(async sessionId => { const { watchSync } = await import('/src/services/watch-sync.ts'); watchSync.send({ type: 'create_session', protocol_version: 2, session_id: sessionId, media_title: 'Prexu QA Pattern', media_rating_key: '2', media_type: 'movie' }); }, sessionId);
   await until(async () => await eventCount(host, 'session_created') === 1 && await health(1, 2));
   await host.evaluate(async ({ sessionId, target }) => { const { watchSync } = await import('/src/services/watch-sync.ts'); watchSync.send({ type: 'invite', target_username: target, session_id: sessionId, media_title: 'Prexu QA Pattern', media_rating_key: '2', media_type: 'movie' }); }, { sessionId, target: accounts[1].user.username });
   await guest.getByRole('button', { name: 'Join Session', exact: true }).waitFor();
@@ -153,6 +153,11 @@ try {
   operation = 'wait-stop-control';
   await until(async () => await guest.getByRole('button', { name: 'Stop', exact: true }).isVisible() || await guest.getByRole('button', { name: 'Retry', exact: true }).isVisible());
   check(await guest.getByRole('button', { name: 'Stop', exact: true }).isVisible());
+  // The service-only browser host has no decoder to become ready. Exercise
+  // the production host override after the real guest has entered its lobby.
+  operation = 'start-joined-guest';
+  await until(() => guest.evaluate(() => Boolean(document.querySelector('.watch-lobby'))));
+  await host.evaluate(async () => (await import('/src/services/watch-sync.ts')).watchSync.send({ type: 'start_now' }));
   operation = 'compare-join-events';
   await until(() => guest.evaluate(() => window.journeyTime > 1));
   await until(async () => await eventCount(guest, 'session_joined') >= 1 && await eventCount(guest, 'memberCount') === 1 && await eventCount(host, 'participant_joined') >= 1 && await health(1, 2)); add(stage, 'PASS');

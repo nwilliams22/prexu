@@ -31,14 +31,20 @@ async function run() {
   try {
     await saveRelayUrl('ws://127.0.0.1:1/ws');
     if (!sessionStorage.getItem('download-storage-login')) {
+      stage = 'download-login-button';
       await click('Sign in with Plex');
-      await until(async () => Boolean((await getAuth())?.authToken));
+      await emit(stage);
+      stage = 'download-login-token';
+      await until(async () => Boolean((await getAuth())?.authToken), 120000);
+      await emit(stage);
+      stage = 'download-login-server';
       await until(async () => {
         const server = [...document.querySelectorAll('button')].find(b => b.textContent.includes('Prexu QA Test Server'));
         if (server) server.click();
         return (await getServer())?.name === 'Prexu QA Test Server';
       });
       await emit(stage);
+      await emit('native-login');
       sessionStorage.setItem('download-storage-login', 'yes');
       location.assign('/downloads');
       return;
@@ -48,6 +54,7 @@ async function run() {
       await until(() => document.body.textContent.includes('0 B used by downloads · 1 B free on download drive'));
       await shot('storage-summary');
       await emit(stage);
+      await emit('native-login');
       sessionStorage.setItem('download-storage-summary', 'yes');
       location.assign(`/item/${fixtures[0].seasonKey}`);
       return;
@@ -66,6 +73,6 @@ async function run() {
     if ((await getDownloadItems()).length) throw new Error('queued-after-cancel');
     await emit(stage);
     await emit('native-driver');
-  } catch { await emit(stage, 'FAIL'); await emit('native-driver', 'FAIL'); }
+  } catch { await shot('failure').catch(() => {}); await emit(stage, 'FAIL'); await emit('native-driver', 'FAIL'); }
 }
 void run();
