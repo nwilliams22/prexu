@@ -10,6 +10,8 @@ permissions:
 jobs:
   bundle:
     runs-on: macos-15
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: 1
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
@@ -21,7 +23,22 @@ jobs:
 
       - name: Install targets for the repository toolchain
         # rust-toolchain.toml can select a different version from stable.
-        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+        run: rustup target add aarch64-apple-darwin
+
+      - name: Install native build prerequisites
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          brew install mpv pkg-config
+          export PKG_CONFIG_PATH="$(brew --prefix mpv)/lib/pkgconfig"
+          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
+          pkg-config --atleast-version=2.5.0 mpv
+          mkdir -p candidate
+          brew list --versions mpv $(brew deps mpv) > candidate/homebrew-versions.txt
+          brew info --json=v2 --installed > candidate/homebrew-installed.json
+          otool -D "$(brew --prefix mpv)/lib/libmpv.dylib" | tail -n 1 > candidate/libmpv-install-name.txt
+          otool -L "$(brew --prefix mpv)/lib/libmpv.dylib" > candidate/libmpv-dependencies.txt
+          pkg-config --modversion mpv > candidate/libmpv-api-version.txt
 
       - name: Setup Node
         uses: actions/setup-node@v5
@@ -35,29 +52,46 @@ jobs:
       - name: Verify playback gate
         run: npx vitest run src/services/plex-playback.test.ts src/services/plex-playback-prepare-source.test.ts
 
-      - name: Build universal test installer
+      - name: Build Apple Silicon test installer
         run: |
           # Ad-hoc signing needs no certificate or production signing secrets.
           # Updater artifacts are disabled for this non-release candidate.
           cat > candidate.conf.json <<'JSON'
           {"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-"}}}
           JSON
-          npm run tauri -- build --ci --target universal-apple-darwin --bundles app,dmg --config "$PWD/candidate.conf.json"
+          npm run tauri -- build --ci --target aarch64-apple-darwin --bundles app,dmg --config "$PWD/candidate.conf.json"
 
       - name: Inspect installer and collect provenance
         run: |
           set -euo pipefail
-          bundle=src-tauri/target/universal-apple-darwin/release/bundle
+          bundle=src-tauri/target/aarch64-apple-darwin/release/bundle
           app="$bundle/macos/Prexu.app"
           binary="$app/Contents/MacOS/prexu"
           mkdir -p candidate
-          lipo "$binary" -verify_arch arm64 x86_64
+          test "$(lipo -archs "$binary")" = arm64
           codesign --verify --deep --strict --verbose=2 "$app"
           otool -L "$binary" | tee candidate/dependencies.txt
-          if grep -E '/opt/homebrew/|/usr/local/|/Users/runner/' candidate/dependencies.txt; then
-            echo 'Unexpected build-machine dependency in packaged app' >&2
-            exit 1
-          fi
+          otool -l "$binary" > candidate/load-commands.txt
+          codesign -dvv "$app" 2> candidate/signature.txt
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import re
+          expected = Path("candidate/libmpv-install-name.txt").read_text().strip()
+          commands = Path("candidate/load-commands.txt").read_text()
+          found = False
+          for block in commands.split("Load command ")[1:]:
+              cmd = re.search(r"cmd (LC_\w+)", block)
+              name = re.search(r"name (.+) \(offset", block)
+              if not cmd or not name or "DYLIB" not in cmd[1]:
+                  continue
+              dependency = name[1]
+              if dependency == expected:
+                  assert cmd[1] == "LC_LOAD_WEAK_DYLIB", block
+                  found = True
+              else:
+                  assert dependency.startswith(("/System/Library/", "/usr/lib/")), block
+          assert found, "Expected optional libmpv weak load command missing"
+          PYTHON
           for dmg in "$bundle"/dmg/*.dmg; do
             hdiutil verify "$dmg"
             cp -f "$dmg" candidate/
@@ -68,7 +102,9 @@ jobs:
             echo "Commit: $GITHUB_SHA"
             echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             echo "Attempt: $GITHUB_RUN_ATTEMPT"
-            echo 'Architectures: arm64 and x86_64 (universal)'
+            echo 'Architecture: arm64 (Apple Silicon only; not universal)'
+            echo 'libmpv is an optional external Homebrew dependency, not bundled.'
+            echo 'HTML5 launch requires no Homebrew; native playback requires brew install mpv.'
             echo 'Ad-hoc signed; not Apple Developer ID signed or notarized.'
             echo 'Updater artifacts disabled; no production signing keys used.'
             sw_vers

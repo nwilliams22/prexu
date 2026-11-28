@@ -1,7 +1,8 @@
 # macOS test installer
 
-The manual **macOS candidate** Actions workflow builds a universal DMG for
-Apple Silicon and Intel Macs. It packages the macOS HTML5 player from the
+The manual **macOS candidate** Actions workflow builds an **Apple Silicon (arm64) DMG**, not
+an Intel or universal app. It packages the macOS HTML5 player and optional
+native backend from the
 selected workflow commit. It does not create a release or update feed.
 
 Run the workflow from `main`, then download its `macos-candidate-<commit>-<attempt>`
@@ -34,7 +35,29 @@ with the playback task. Add them to a Plex Other Videos library and scan it.
    `[playback] buildTranscodeUrl` for that playback. Send only these decision
    lines, not full logs containing server or account information.
 
-The workflow verifies both executable architectures, the app's ad-hoc
+The workflow verifies the arm64 executable architecture, the app's ad-hoc
 signature, the DMG integrity, and the focused playback tests. A successful
 build does not prove installation, launch, video output or sound on a Mac.
 Those checks remain the tester's responsibility.
+
+## Native dependency contract
+
+The runner installs Homebrew `mpv` and `pkg-config` and requires libmpv API
+2.5.0 or newer at build time. These arm64 libraries cannot satisfy an Intel
+build. A universal candidate needs a separate dependency build for each
+architecture; this workflow makes no universal claim.
+
+libmpv is **not bundled**. The executable retains its existing weak import of
+Homebrew libmpv. Without it, the app can launch with HTML5 playback; the native
+backend is unavailable. To test native playback on an Apple Silicon Mac,
+install `mpv` with Homebrew in its standard `/opt/homebrew` prefix before
+launching Prexu. Homebrew supplies libmpv's transitive dependencies. The VM
+install/launch check does not prove native GL playback (the VM lacks usable GL).
+
+The artifact records `dependencies.txt` and `load-commands.txt` for the app,
+`libmpv-install-name.txt`, `libmpv-dependencies.txt`, `libmpv-api-version.txt`,
+and the runner's Homebrew versions/installed formula metadata. These describe
+the build environment, not a locked or bundled native runtime. The inspection
+rejects every non-system app dependency except the recorded libmpv path,
+which must be `LC_LOAD_WEAK_DYLIB`. `signature.txt` records the ad-hoc signature;
+signing and notarization for distribution remain out of scope.
