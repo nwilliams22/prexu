@@ -1,3 +1,4 @@
+import { clickSignIn } from '/scripts/real-journeys/driver-ui.js';
 /** Real native UI folder picker/migration; service imports only inspect results. */
 import { getAuth, getServer, saveRelayUrl, getDownloadItems } from '/src/services/storage/index.ts';
 import { getDownloadsDir, getLocalFilePath } from '/src/services/downloads.ts';
@@ -26,7 +27,7 @@ async function run() {
   try {
     await saveRelayUrl('ws://127.0.0.1:1/ws');
     if (!sessionStorage.getItem('download-move-login')) {
-      await click('Sign in with Plex');
+      await clickSignIn();
       await until(async () => Boolean((await getAuth())?.authToken), 120000);
       await until(async () => {
         const server = [...document.querySelectorAll('button')].find(b => b.textContent.includes('Prexu QA Test Server'));

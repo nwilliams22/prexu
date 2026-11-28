@@ -1,3 +1,4 @@
+import { clickSignIn } from '/scripts/real-journeys/driver-ui.js';
 /** Actual desktop UI actions; only read-only storage/file checks use service imports. */
 import { getAuth, getServer, saveRelayUrl, getDownloadItems } from '/src/services/storage/index.ts';
 const endpoint = __JOURNEY_ENDPOINT__;
@@ -32,7 +33,7 @@ async function run() {
     await saveRelayUrl('ws://127.0.0.1:1/ws');
     if (!sessionStorage.getItem('download-storage-login')) {
       stage = 'download-login-button';
-      await click('Sign in with Plex');
+      await clickSignIn();
       await emit(stage);
       stage = 'download-login-token';
       await until(async () => Boolean((await getAuth())?.authToken), 120000, 200);

@@ -1,3 +1,4 @@
+import { clickSignIn } from '/scripts/real-journeys/driver-ui.js';
 /** Loaded only by the native journey launcher's private Vite instance. */
 import { getAuth, getServer, saveRelayUrl, getDownloadItems, saveServer } from '/src/services/storage/index.ts';
 import { listen } from '/node_modules/@tauri-apps/api/event.js';
@@ -40,8 +41,7 @@ async function run() {
     // Set only the relay destination; login and server selection use real UI/auth.
     await saveRelayUrl('ws://127.0.0.1:1/ws');
     if (!restarted && !localStorage.getItem('journey-login')) {
-      await until(() => [...document.querySelectorAll('button')].some(b => b.textContent.trim() === 'Sign in with Plex'));
-      [...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Sign in with Plex').click();
+      await clickSignIn();
       await until(async () => Boolean((await getAuth())?.authToken));
       await until(async () => {
         const button = [...document.querySelectorAll('button')].find(b => b.textContent.includes('Prexu QA Test Server'));

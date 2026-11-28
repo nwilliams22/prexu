@@ -1,3 +1,4 @@
+import { clickSignIn } from '/scripts/real-journeys/driver-ui.js';
 import { getAuth, getServer, saveRelayUrl, getDownloadItems } from '/src/services/storage/index.ts';
 import { getLocalFilePath } from '/src/services/downloads.ts';
 import { listen } from '/node_modules/@tauri-apps/api/event.js';
@@ -42,7 +43,7 @@ async function run() {
   await saveRelayUrl('ws://127.0.0.1:1/ws');
   const phase=localStorage.getItem('qa-cleanup-stage');
   if(!phase) {
-   await click('Sign in with Plex'); await until(async()=>Boolean((await getAuth())?.authToken));
+   await clickSignIn(); await until(async()=>Boolean((await getAuth())?.authToken));
    await until(async()=>{const b=[...document.querySelectorAll('button')].find(b=>b.textContent.includes('Prexu QA Test Server')); if(b)b.click(); return (await getServer())?.name==='Prexu QA Test Server';});
    await emit(stage); localStorage.setItem('qa-cleanup-stage','prepare-on'); location.assign('/item/12'); return;
   }
