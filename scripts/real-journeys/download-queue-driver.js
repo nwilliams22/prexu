@@ -1,6 +1,7 @@
 /** Actual desktop UI actions; only read-only storage/file checks use service imports. */
 import { getAuth, getServer, saveRelayUrl, getDownloadItems, saveServer } from '/src/services/storage/index.ts';
 import { getLocalFilePath } from '/src/services/downloads.ts';
+import { listen } from '/node_modules/@tauri-apps/api/event.js';
 const endpoint = __JOURNEY_ENDPOINT__;
 const fixtures = __QUEUE_FIXTURES__;
 const restarted = __JOURNEY_RESTARTED__;
@@ -33,16 +34,21 @@ async function nav(path) {
 async function openAndPauseQueue(label = 'Pause all', afterBytes = false) {
   // Act as soon as the real control mounts; tiny QA files can finish between polls.
   let paused = false, hasBytes = !afterBytes;
-  const progress = setInterval(async () => { hasBytes ||= (await getDownloadItems()).some(d => d.status === 'downloading' && d.bytesDownloaded > 0); }, 20);
-  const observer = new MutationObserver(() => {
+  // Storage snapshots update on status changes, not on each progress tick.
+  const unlisten = await listen('download-progress', ({ payload }) => {
+    if (fixtures.some(f => f.key === payload.ratingKey) && payload.status === 'downloading' && payload.bytesDownloaded > 0) hasBytes = true;
+  });
+  const pause = () => {
     const control = button(label);
     if (control && !paused && hasBytes) { paused = true; control.click(); }
-  });
+  };
+  const progress = setInterval(pause, 20);
+  const observer = new MutationObserver(pause);
   observer.observe(document.body, { childList: true, subtree: true, attributes: true });
   try {
     await nav('/downloads');
     await until(() => paused);
-  } finally { observer.disconnect(); clearInterval(progress); }
+  } finally { observer.disconnect(); clearInterval(progress); unlisten(); }
 }
 async function emit(journey, status = 'PASS') {
   await fetch(endpoint, { method: 'POST', body: JSON.stringify({ journey, status }) });
